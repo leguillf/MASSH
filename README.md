@@ -4,7 +4,7 @@ MApping SSH
 
 ## Examples
 ### 1. BFN-QG with SWOT & Nadir data
-![Image](relvort.png)
+![BFN-QG](images/BFN-QG.png)
 This example is taken from a [SSH Mapping Data Challenge (2020a)](https://github.com/ocean-data-challenges/2020a_SSH_mapping_NATL60).
 #### Download the data
 The data is hosted [here](https://ige-meom-opendap.univ-grenoble-alpes.fr/thredds/catalog/meomopendap/extract/ocean-data-challenges/dc_data1/catalog.html) with the following directory structure
