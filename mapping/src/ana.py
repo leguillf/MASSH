@@ -66,8 +66,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         new_bfn_window_size = config.final_date - config.init_date
     else:
         new_bfn_window_size = config.bfn_window_size
+    name_init = ""
     
-        
     # Main time loop
     while (middle_bfn_date <= config.final_date) and not bfn_last_window :
         print('\n*** BFN window ***')
@@ -89,7 +89,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         one_time_step = config.bfn_propation_timestep
         if bfn_first_window:
             present_date_forward0 = init_bfn_date
-
+        
         ########################
         # 2. Create BFN object #
         ########################
@@ -129,8 +129,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                         + str(init_bfn_date.minute).zfill(2) + '.nc'
             if not os.path.isfile(init_file) :
                 restart = False
-                print(init_file, " : Init file is not present for nudging."
-                      + "We will use the current state")
             else:
                 restart = True
                 print(init_file, " is used as initialization")
@@ -138,13 +136,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 
         elif config.bfn_window_overlap:
             # Use last state from the last forward loop as initialization
-            name_previous = config.path_save + '/' + config.name_exp_save\
-                            + '_y' + str(init_bfn_date.year)\
-                            + 'm' + str(init_bfn_date.month).zfill(2)\
-                            + 'd' + str(init_bfn_date.day).zfill(2)\
-                            + 'h' + str(init_bfn_date.hour).zfill(2)\
-                            + str(init_bfn_date.minute).zfill(2) + '.nc'
-            State.load(name_previous)
+            print(name_init)
+            State.load(name_init)
         
         ###################
         # 4. Observations #
@@ -217,31 +210,33 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 # Update model parameter
                 bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=1)
 
-                # Save output every *saveoutput_time_step*
-                if (((present_date_forward - config.init_date)/config.saveoutput_time_step)%1 == 0)\
-                   & (present_date_forward>config.init_date) :
-                        name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
-                        filename_forward = config.tmp_DA_path + '/BFN_forth_' + name_save
-                        State.save(filename_forward,present_date_forward)
-                        if config.save_bfn_trajectory:
-                            filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
-                                       + '_forth_' + str(bfn_iter) + '/' + name_save
+                # Save current state                 
+                name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
+                filename_forward = config.tmp_DA_path + '/BFN_forth_' + name_save
+                State.save(filename_forward,present_date_forward)
+                if config.save_bfn_trajectory:
+                    filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
+                               + '_forth_' + str(bfn_iter) + '/' + name_save
 
-                            if not os.path.exists(os.path.dirname(filename_traj)):
-                                os.makedirs(os.path.dirname(filename_traj))
-                            State.save(filename_traj,present_date_forward)
+                    if not os.path.exists(os.path.dirname(filename_traj)):
+                        os.makedirs(os.path.dirname(filename_traj))
+                    State.save(filename_traj,present_date_forward)
+                            
                             
                 # Time update
                 present_date_forward0 = present_date_forward
                 Nold_t = N_t
-
+            
+            # Init file for next loop
+            name_init = filename_forward
+            
             # Plot for debugging
             if config.flag_plot > 0:
                 ssh = State.getvar(0)
                 pv = State.getvar(1)
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=((10, 5)))
-                p1 = ax1.pcolormesh(State.lon, State.lat, ssh, shading='auto')
-                p2 = ax2.pcolormesh(State.lon, State.lat, pv, shading='auto')
+                p1 = ax1.pcolormesh(State.lon, State.lat, pv, shading='auto')
+                p2 = ax2.pcolormesh(State.lon, State.lat, ssh, shading='auto')
                 plt.colorbar(p1, ax=ax1)
                 plt.colorbar(p2, ax=ax2)
                 ax1.set_title('Potential vorticity')
@@ -282,20 +277,18 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
                     # Update model parameter
                     bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=-1)
+                    
+                    # Save current state            
+                    name_save = config.name_exp_save + '_' + str(ibackward).zfill(5) + '.nc'
+                    filename_backward = config.tmp_DA_path + '/BFN_back_' + name_save
+                    State.save(filename_backward,present_date_backward)
+                    if config.save_bfn_trajectory:
+                        filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
+                                   + '_back_' + str(bfn_iter) + '/' + name_save
 
-                    # Save output every *saveoutput_time_step*
-                    if (((present_date_backward - config.init_date)/config.saveoutput_time_step)%1 == 0)\
-                       & (present_date_backward>=config.init_date) :
-                            name_save = config.name_exp_save + '_' + str(ibackward).zfill(5) + '.nc'
-                            filename_backward = config.tmp_DA_path + '/BFN_back_' + name_save
-                            State.save(filename_backward,present_date_backward)
-                            if config.save_bfn_trajectory:
-                                filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
-                                           + '_back_' + str(bfn_iter) + '/' + name_save
-
-                                if not os.path.exists(os.path.dirname(filename_traj)):
-                                    os.makedirs(os.path.dirname(filename_traj))
-                                State.save(filename_traj,present_date_backward)
+                        if not os.path.exists(os.path.dirname(filename_traj)):
+                            os.makedirs(os.path.dirname(filename_traj))
+                        State.save(filename_traj,present_date_backward)
 
                     # Time update
                     present_date_backward0 = present_date_backward
