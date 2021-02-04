@@ -1,3 +1,5 @@
+![SWOT-DA Logo](images/SWOT-DA_logo.png)
+
 # MASSH
 MApping SSH 
 
