@@ -203,7 +203,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         else:
             flag = '2D'
         # Read and extract BC grid
-        bc_lon = ds[name_var_bc['lon']].values
+        bc_lon = ds[name_var_bc['lon']].values % 360
         bc_lat = ds[name_var_bc['lat']].values
         if len(bc_lon.shape)==1:
             # Meshgrid
@@ -238,7 +238,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         elif flag == '3D':
             bc_field_interp2d = np.zeros((bc_field.shape[0], ny, nx))
             for t in range(bc_field.shape[0]):
-                bc_field_interp2d[t] = interpolate.griddata((bc_lon,bc_lat), bc_field[t], (lon2d.ravel(),lat2d.ravel()),'cubic').reshape((ny,nx))
+                bc_field_interp2d[t] = interpolate.griddata((bc_lon,bc_lat), bc_field[t], (lon2d.ravel(),lat2d.ravel())).reshape((ny,nx))
 
         #####################
         # Time processing

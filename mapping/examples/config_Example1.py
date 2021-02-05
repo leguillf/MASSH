@@ -179,11 +179,11 @@ save_obs_proj = True
 
 flag_use_boundary_conditions = True
 
-file_boundary_conditions = None
+file_boundary_conditions = '../../data_Example1/2020a_SSH_mapping_NATL60_DUACS_swot_en_j1_tpn_g2.nc'
 
 lenght_bc = 20
 
-name_var_bc = None
+name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'gssh'}
 
 #################################################################################################################################
 # Observation parameters
