@@ -24,7 +24,7 @@ The data is hosted [here](https://ige-meom-opendap.univ-grenoble-alpes.fr/thredd
 
 ```
 
-To start out create a directory data_Example1
+To start out create a directory ```data_Example1```
 ```shell
 mkdir data_Example1
 ```
@@ -40,3 +40,7 @@ and the *reference* dataset (dc_ref, 11G) using (*this step may take several min
 wget https://ige-meom-opendap.univ-grenoble-alpes.fr/thredds/fileServer/meomopendap/extract/ocean-data-challenges/dc_data1/dc_ref.tar.gz --no-check-certificate
 ```
 Then uncompress the files using `tar -xvf <file>.tar.gz`. You may also use `ftp`, `rsync` or `curl`to donwload the data.  
+
+
+#### Run the notebook
+In ```mapping/example``` open the notebook ```Èxample1.ipynb```, associated with the configuration file called ```config_Example1.py```
