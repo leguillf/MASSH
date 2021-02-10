@@ -50,3 +50,6 @@ Then uncompress the files using `tar -xvf <file>.tar.gz`. You may also use `ftp`
 
 #### Run the notebook
 In ```mapping/example``` open the notebook ```Èxample1.ipynb```, associated with the configuration file called ```config_Example1.py```
+
+### 2. 4Dvar-SW with (idealized) 2D SSH data
+work in progress...
