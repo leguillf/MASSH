@@ -55,7 +55,7 @@ In ```mapping/example``` open the notebook ```Èxample1.ipynb```, associated wit
 #### Download the data
 ```shell
 mkdir data_Example2
-cd data_Example1
+cd data_Example2
 wget https://ige-meom-opendap.univ-grenoble-alpes.fr/thredds/fileServer/meomopendap/extract/LeGuillou/data_BM-IT_idealized.tar.gz  --no-check-certificate
 tar -xvf data_BM-IT_idealized.tar.gz
 ```
