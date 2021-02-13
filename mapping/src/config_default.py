@@ -49,7 +49,6 @@ name_domain = 'my_domain'
 # - datetime
 # - timedelta
 #################################################################################################################################
-import os
 from datetime import datetime,timedelta
 from math import pi
 #################################################################################################################################
@@ -81,7 +80,7 @@ dx = 1/10.                                            # zonal grid spatial step 
 
 dy = 1/10.                                            # meridional grid spatial step (in degree)
 
-
+g = 9.81
 #################################################################################################################################
 # Time parameters
 #################################################################################################################################
@@ -124,15 +123,13 @@ name_mod_lon = "nav_lon"
 
 name_mod_lat = "nav_lat"
 
-####################################
-### Function-specific parameters ### 
-#################################### 
+
 # - parameters specific to QG model
 #    * qgiter: number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
 #    * c: first baroclinic gravity-wave phase speed (in m/s) related to Rossby Radius of deformation
 #    * dtmodel: timestep of the model (in seconds). Typical values: between 200s and 1000s. If the model crashes, reduce its value.
 
-dir_model = os.path.dirname(os.path.abspath(__file__)) + '../models/model_qgsw/'
+dir_model =  '../models/model_qg1l/'
 
 dtmodel = 300   
 
@@ -143,6 +140,29 @@ c = 2.7
 cdiffus = 0. 
 
 only_diffusion = False
+
+
+# - parameters specific to SW model
+
+sw_time_scheme = 'lf' # Time scheme of the model (e.g. Euler,rk4,lf)
+
+bc_kind = '1d'
+
+w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
+
+He_init = 0.9 # Mean height (in m)
+
+Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
+
+D_He = 200e3 # Space scale of gaussian decomposition for He (in m)
+
+T_He = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for He (in m)
+
+D_bc = 200e3 # Space scale of gaussian decomposition for boundary conditions (in m)
+
+T_bc = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for boundary conditions (in m)
+
+He_data = None # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
 
 #################################################################################################################################
 # Analysis parameters
@@ -209,32 +229,13 @@ scalenudg = None
 
 path_init_4Dvar = None 
 
-sw_time_scheme = 'lf' # Time scheme of the model (e.g. Euler,rk4,lf,ab3)
-
-bc_kind = '1d'
-
-w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
-
-He_init = 0.9 # Mean height (in m)
-
-Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
-
-D_He = 200e3 # Space scale of gaussian decomposition for He (in m)
-
-T_He = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for He (in m)
-
-D_bc = 200e3 # Space scale of gaussian decomposition for boundary conditions (in m)
-
-T_bc = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for boundary conditions (in m)
+checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
 
 sigma_R = 1e-2 # Observational standard deviation
 
 sigma_B_He = 0.2 # Background variance for He
 
 sigma_B_bc = 1e-2 # Background variance for bc
-
-He_data = None#{'path':'/Users/leguillou/WORK/Developpement/Studies/DA_IGWs/data/wp6_He_16km_mean.nc',
-           #'time':None,'lon':'lon','lat':'lat','var':'He'}  # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
 
 gtol = 1e-5 # Gradient norm must be less than gtol before successful termination.
 

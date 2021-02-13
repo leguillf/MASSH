@@ -94,11 +94,66 @@ class Swm_adj(Swm_tgl):
         return adu,adv,adHe2d
     
     ###########################################################################
+    #                 Auxillary functions for step_adj_rk*                    #
+    ###########################################################################
+    
+    def kv_adj(self,kv2,adu,adh,ku1=None,kh1=None,c=1):
+    
+        adu_tmp,adh_tmp = self.rhs_v_adj(kv2)
+        adu_tmp = self.u_on_v_adj(adu_tmp)
+        adu += adu_tmp*self.dt
+        adh += adh_tmp*self.dt
+        kv2 = 0.
+        res = [kv2,adu,adh]
+        if ku1 is not None:
+            ku1 += c*adu_tmp*self.dt
+            res.append(ku1)
+        if kh1 is not None:
+            kh1 += c*adh_tmp*self.dt
+            res.append(kh1)
+        
+        return res
+    
+    def ku_adj(self,ku2,adv,adh,kv1=None,kh1=None,c=1):
+    
+        adv_tmp,adh_tmp = self.rhs_u_adj(ku2)
+        adv_tmp = self.v_on_u_adj(adv_tmp)
+        adv += adv_tmp*self.dt
+        adh += adh_tmp*self.dt
+        ku2 = 0.
+        res = [ku2,adv,adh]
+        if kv1 is not None:
+            kv1 += c*adv_tmp*self.dt
+            res.append(kv1)
+        if kh1 is not None:
+            kh1 += c*adh_tmp*self.dt
+            res.append(kh1)
+        
+        return res
+    
+    def kh_adj(self,t,kh2,adu,adv,adHe,u,v,He,ku1=None,kv1=None,c=1):
+        adu_tmp,adv_tmp,adHe_tmp = self.rhs_h_adj(t,kh2,u,v,He)
+        adu += adu_tmp*self.dt
+        adv += adv_tmp*self.dt
+        adHe += adHe_tmp*self.dt
+        kh2 = 0
+        res = [kh2,adu,adv,adHe]
+        if ku1 is not None:
+            ku1 += c*adu_tmp*self.dt
+            res.append(ku1)
+        if kv1 is not None:
+            kv1 += c*adv_tmp*self.dt
+            res.append(kv1)
+        
+        return res
+    
+    
+    ###########################################################################
     #                            One time step                                #
     ###########################################################################
 
-    def step_adj_euler(self,t,adu0,adv0,adh0, u0,v0,h0, 
-                       He=None,hbcx=None,hbcy=None,step=None):
+    def step_euler_adj(self,t,adu0,adv0,adh0, u0,v0,h0, 
+                       He=None,hbcx=None,hbcy=None,first=False):
         
         ########################
         #         Init         #
@@ -113,7 +168,7 @@ class Swm_adj(Swm_tgl):
         adhbcx = 0
         adhbcy = 0
         
-        if step==0:
+        if first:
             init_bc(self,u1,v1,h1,He,hbcx,hbcy,t0=t)
         
         #######################
@@ -161,7 +216,7 @@ class Swm_adj(Swm_tgl):
         #######################
         #       Init bc       #
         #######################
-        if step==0:
+        if first:
             adHe_tmp,adhbcx_tmp,adhbcy_tmp = init_bc_adj(
                 self,adu,adv,adh,He,hbcx,hbcy,t0=t)
             adHe += adHe_tmp
@@ -172,8 +227,8 @@ class Swm_adj(Swm_tgl):
         return adu,adv,adh,adHe,adhbcx,adhbcy
     
         
-    def step_adj_lf(self,t,adu0,adv0,adh0, u0,v0,h0, 
-                       He=None,hbcx=None,hbcy=None,step=None):
+    def step_lf_adj(self,t,adu0,adv0,adh0, u0,v0,h0, 
+                       He=None,hbcx=None,hbcy=None,first=False):
         
         ########################
         #         Init         #
@@ -188,7 +243,7 @@ class Swm_adj(Swm_tgl):
         adhbcx = 0
         adhbcy = 0
         
-        if step==0:
+        if first:
             init_bc(self,u1,v1,h1,He,hbcx,hbcy,t0=t)
         
         #######################
@@ -206,7 +261,7 @@ class Swm_adj(Swm_tgl):
         #######################
         #   Time propagation  #
         #######################
-        if step==0:
+        if first:
             # forward euler
             adku = self.dt*adu0
             adkv = self.dt*adv0
@@ -243,7 +298,7 @@ class Swm_adj(Swm_tgl):
         #######################
         #       Init bc       #
         #######################
-        if step==0:
+        if first:
             # Init
             adHe_tmp,adhbcx_tmp,adhbcy_tmp = init_bc_adj(
                 self,adu,adv,adh,He,hbcx,hbcy,t0=t)
@@ -252,7 +307,7 @@ class Swm_adj(Swm_tgl):
             adhbcy += adhbcy_tmp
         
         
-        if step==0:                    
+        if first:                    
             adu += adu0 
             adv += adv0 
             adh += adh0 
@@ -264,4 +319,138 @@ class Swm_adj(Swm_tgl):
         return adu,adv,adh,adHe,adhbcx,adhbcy
     
    
+    def step_rk4_adj(self,t,adu0,adv0,adh0, u0,v0,h0, 
+                       He=None,hbcx=None,hbcy=None,first=False):
+        
+        ########################
+        #         Init         #
+        ########################
+        u1 = deepcopy(u0)
+        v1 = deepcopy(v0)
+        h1 = deepcopy(h0)
+        adu = 0
+        adv = 0
+        adh = 0
+        adHe = 0
+        adhbcx = 0
+        adhbcy = 0
+        
+        if first:
+            init_bc(self,u1,v1,h1,He,hbcx,hbcy,t0=t)
+        
+        #######################
+        # Boundary conditions #
+        #######################
+        adu_tmp,adv_tmp,adh_tmp,adHe_tmp,adhbcx_tmp,adhbcy_tmp = \
+            obcs_adj(self,t,adu0,adv0,adh0,u1,v1,h1,He,hbcx,hbcy)
+        adu += adu_tmp
+        adv += adv_tmp
+        adh += adh_tmp
+        adHe += adHe_tmp
+        adhbcx += adhbcx_tmp
+        adhbcy += adhbcy_tmp
+            
+        #######################
+        #   Time propagation  #
+        #######################
+        # k1
+        ku1 = self.rhs_u(self.v_on_u(v1),h1)*self.dt
+        kv1 = self.rhs_v(self.u_on_v(u1),h1)*self.dt
+        kh1 = self.rhs_h(u1,v1,He)*self.dt
+        # k2
+        ku2 = self.rhs_u(self.v_on_u(v1+0.5*kv1),h1+0.5*kh1)*self.dt
+        kv2 = self.rhs_v(self.u_on_v(u1+0.5*ku1),h1+0.5*kh1)*self.dt
+        kh2 = self.rhs_h(u1+0.5*ku1,v1+0.5*kv1,He)*self.dt
+        # k3
+        ku3 = self.rhs_u(self.v_on_u(v1+0.5*kv2),h1+0.5*kh2)*self.dt
+        kv3 = self.rhs_v(self.u_on_v(u1+0.5*ku2),h1+0.5*kh2)*self.dt
+        
+        #######################
+        #   Time propagation  #
+        #######################
+        # Update
+        kh1_ad = 1/6 * adh0
+        kh2_ad = 1/3 * adh0
+        kh3_ad = 1/3 * adh0
+        kh4_ad = 1/6 * adh0
+        #adh0 = 0
+        kv1_ad = 1/6 * adv0
+        kv2_ad = 1/3 * adv0
+        kv3_ad = 1/3 * adv0
+        kv4_ad = 1/6 * adv0
+        #adv0 = 0
+        ku1_ad = 1/6 * adu0
+        ku2_ad = 1/3 * adu0
+        ku3_ad = 1/3 * adu0
+        ku4_ad = 1/6 * adu0
+        #adu0 = 0
+        
+        #######################
+        #  Right hand sides   #
+        #######################
+        # kh4_ad
+        kh4_ad,adu_incr,adv_incr,adHe,ku3_ad,kv3_ad = self.kh_adj(
+            t,kh4_ad,adu,adv,adHe,u1+ku3,v1+kv3,He,ku3_ad,kv3_ad)
+        
+        # kv4_ad
+        kv4_ad,adu,adh,ku3_ad,kh3_ad = self.kv_adj(
+            kv4_ad,adu,adh,ku3_ad,kh3_ad)
+        
+        # ku4_ad
+        ku4_ad,adv,adh,kv3_ad,kh3_ad = self.ku_adj(
+            ku4_ad,adv,adh,kv3_ad,kh3_ad)
+        
+        # kh3_ad
+        kh3_ad,adu,adv,adHe,ku2_ad,kv2_ad = self.kh_adj(
+            t,kh3_ad,adu,adv,adHe,u1+0.5*ku2,v1+0.5*kv2,He,ku2_ad,kv2_ad,1/2)
+        
+        # kv3_ad
+        kv3_ad,adu,adh,ku2_ad,kh2_ad = self.kv_adj(
+            kv3_ad,adu,adh,ku2_ad,kh2_ad,1/2)
+        
+        # ku3_ad
+        ku3_ad,adv,adh,kv2_ad,kh2_ad = self.ku_adj(
+            ku3_ad,adv,adh,kv2_ad,kh2_ad,1/2)
+        
+        # kh2_ad
+        kh2_ad,adu,adv,adHe,ku1_ad,kv1_ad = self.kh_adj(
+            t,kh2_ad,adu,adv,adHe,u1+0.5*ku1,v1+0.5*kv1,He,ku1_ad,kv1_ad,1/2)
+        
+        # kv2_ad
+        kv2_ad,adu,adh,ku1_ad,kh1_ad = self.kv_adj(
+            kv2_ad,adu,adh,ku1_ad,kh1_ad,1/2)
+        
+        # ku2_ad
+        ku2_ad,adv,adh,kv1_ad,kh1_ad = self.ku_adj(
+            ku2_ad,adv,adh,kv1_ad,kh1_ad,1/2)
+        
+        # kh1_ad
+        kh1_ad,adu,adv,adHe = self.kh_adj(
+            t,kh1_ad,adu,adv,adHe,u1,v1,He)
+        
+        # kv1_ad
+        kv1_ad,adu,adh = self.kv_adj(
+            kv1_ad,adu,adh,None,None)
+        
+        # ku1_ad
+        ku1_ad,adv,adh = self.ku_adj(
+            ku1_ad,adv,adh,None,None)
     
+        #######################
+        #       Update        #
+        #######################
+        adu += adu0 
+        adv += adv0 
+        adh += adh0 
+        
+        #######################
+        #       Init bc       #
+        #######################
+        if first:
+            adHe_tmp,adhbcx_tmp,adhbcy_tmp = init_bc_adj(
+                self,adu,adv,adh,He,hbcx,hbcy,t0=t)
+            adHe += adHe_tmp
+            adhbcx += adhbcx_tmp
+            adhbcy += adhbcy_tmp
+            
+        return adu,adv,adh,adHe,adhbcx,adhbcy

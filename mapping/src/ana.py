@@ -400,13 +400,13 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     
 def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     
-    from .tools_4Dvar import Obsopt, Cov, Variational, grad_test
+    from .tools_4Dvar import Obsopt, Cov, Variational
 
     #################
     # 1. Obs op     #
     #################
     print('\n*** Obs op ***\n')
-    H = Obsopt(State.lon.size,dict_obs,Model.dt)
+    H = Obsopt(State.lon.size,dict_obs,Model.timestamps,Model.dt)
     
     ###################
     # 2. Variationnal #
@@ -429,7 +429,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # Cost and Grad functions
     var = Variational(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path)
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint)
     # Initial State
     if config.path_init_4Dvar is None:
         Xopt = np.zeros_like(var.Xb)
@@ -439,13 +439,6 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
             print('Read previous minimum:',config.path_init_4Dvar)
             Xopt = pickle.load(f)
 
-    Jini = var.cost(Xopt)
-    
-    print('* Initial cost function:',Jini)
-    
-    print('* grad test:')
-    Xtest = np.random.random(Xopt.shape)
-    grad_test(var.cost,var.grad,Xtest)
     
     ###################
     # 3. Minimization #
@@ -464,7 +457,6 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
                     callback=callback)
 
     print ('\nIs the minimization successful? {}'.format(res.success))
-    print ('\nInitial cost function value: {}'.format(Jini))
     print ('\nFinal cost function value: {}'.format(res.fun))
     print ('\nNumber of iterations: {}'.format(res.nit))
 
@@ -482,11 +474,11 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # Steady initial state
     State0 = State.free()
     State0.save(date=config.init_date)
-    for step in range(Model.nt-1):
-        t = Model.T[step] # seconds
-        date = Model.timestamps[step+1] # date
+    for i in range(Model.nt-1):
+        t = Model.T[i] # seconds
+        date = Model.timestamps[i+1] # date
         
-        Model.step(t,State0,Xini,step=step)
+        Model.step(t,State0,Xini)
         
         if (((date - config.init_date).total_seconds()
              /config.saveoutput_time_step.total_seconds())%1 == 0)\
@@ -494,6 +486,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
             print(date, end=' / ')    
             # Save State
             State0.save(date=date)
+    print()
         
 
     

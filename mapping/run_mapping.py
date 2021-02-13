@@ -6,13 +6,16 @@ Created on Mon Jan 18 18:41:43 2021
 @author: leguillou
 """
 
-import sys,os
+import sys,os,time
 
 def run_bfn(config):
     
     return
 
 if __name__ == "__main__":
+    
+    start = time.time()
+    
     # check number of arguments
     if  len(sys.argv)!=2:
         sys.exit('Wrong number of argument')
@@ -48,4 +51,7 @@ if __name__ == "__main__":
     print('* Analysis')
     from src import ana as ana
     ana.ana(config,State,Model,dict_obs=dict_obs)
+    
+    end = time.time()
+    print('computation time:',end-start,'seconds')
     

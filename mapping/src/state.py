@@ -35,6 +35,7 @@ class State:
         self.path_save = config.path_save
         if not os.path.exists(self.path_save):
             os.makedirs(self.path_save)
+        self.g = config.g
         # Initialize grid
         if config.name_init == 'geo_grid':
              self.ini_geo_grid(config)
@@ -43,6 +44,7 @@ class State:
         else:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
         self.ny,self.nx = self.lon.shape
+        self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
         if config.name_model=='QG1L':
