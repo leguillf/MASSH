@@ -36,5 +36,8 @@ def exp(path_config):
         os.system(cmd)
     else:
         os.makedirs(config.tmp_DA_path)
+    cmd = 'cp ' + path_config + '.py ' + config.tmp_DA_path + '/config.py'
+    print(cmd)
+    os.system(cmd)
     
     return config

@@ -8,7 +8,6 @@ Created on Tue Jul 28 14:49:01 2020
 
 import xarray as xr 
 import numpy as np 
-import time
 
 class Obsopt:
 
@@ -122,7 +121,7 @@ class Variational:
         if self.B is not None:
             X *= self.B.sigma 
         print('gradient test:')
-        grad_test(self.cost, self.grad, X)
+        #grad_test(self.cost, self.grad, X)
         
         
     def cost(self,X0):
@@ -141,7 +140,7 @@ class Variational:
         # Observational cost function evaluation
         Jo = 0.
         State.save(self.tmp_DA_path + \
-                   '/model_state_' + str(self.checkpoint[0]) + '.nc')
+                    '/model_state_' + str(self.checkpoint[0]) + '.nc',grd=False)
         
         for i in range(len(self.checkpoint)-1):
             
@@ -159,7 +158,7 @@ class Variational:
             
             # Save state for adj computation 
             State.save(self.tmp_DA_path + \
-                       '/model_state_' + str(self.checkpoint[i+1]) + '.nc')
+                        '/model_state_' + str(self.checkpoint[i+1]) + '.nc',grd=False)
             
 
         if self.isobs[-1]:
@@ -168,14 +167,12 @@ class Variational:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-    
+        
         return J
     
         
     def grad(self,X0): 
-        
-        start = time.time()
-        
+                
         X = +X0 
         
         # Background cost function grandient
@@ -194,7 +191,7 @@ class Variational:
         # Last timestamp
         if self.isobs[-1]:
             State.load(self.tmp_DA_path + \
-                       '/model_state_' + str(self.checkpoint[-1]) + '.nc')
+                        '/model_state_' + str(self.checkpoint[-1]) + '.nc')
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-yobs
             self.H.adj(adState,self.R.inv(misfit))
             
@@ -207,7 +204,7 @@ class Variational:
             
             # Read model state
             State.load(self.tmp_DA_path + \
-                       '/model_state_' + str(self.checkpoint[i]) + '.nc')
+                        '/model_state_' + str(self.checkpoint[i]) + '.nc')
             
             # Run adjoint model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
@@ -219,9 +216,6 @@ class Variational:
                 self.H.adj(adState,self.R.inv(misfit))
         
         g = adX + gb
-        
-        end = time.time()
-        #print('grad:',end-start)
         
         return g 
             

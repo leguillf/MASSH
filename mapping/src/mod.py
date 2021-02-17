@@ -157,6 +157,10 @@ class Model_sw1l:
         dx = np.mean(DX)
         dy = np.mean(DY)
         X,Y = grid.dxdy2xy(DX,DY)
+        self.X = X
+        self.Y = Y
+        self.dx = dx
+        self.dy = dy
         
         # State variable dimensions
         self.shapeu = State.var[0].shape
@@ -314,9 +318,9 @@ class Model_sw1l:
                 
         # Tests
         print('tangent test:')
-        self.tangent_test(State,self.T[-1],nstep=config.checkpoint)
+       # self.tangent_test(State,self.T[-2],nstep=config.checkpoint)
         print('adjoint test:')
-        self.adjoint_test(State,self.T[-1],nstep=config.checkpoint)
+       # self.adjoint_test(State,self.T[-2],nstep=config.checkpoint)
         
     def restart(self):
         

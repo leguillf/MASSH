@@ -22,14 +22,16 @@ if __name__ == "__main__":
     # Experiment config file
     print("* Experimental configuration file")
     exp_config_file = sys.argv[1]
-    _dir,_config = os.path.split(os.path.abspath(sys.argv[1]))
-    sys.path.append(_dir)
-    if _config[-3:]=='.py':
-        _config = _config[:-3]
-    config_exp = __import__(_config)
-    # Merge with default config file
-    from src import config_default as config
-    config.__dict__.update(config_exp.__dict__)
+    from src import exp as exp
+    config = exp.exp(exp_config_file)
+    # _dir,_config = os.path.split(os.path.abspath(sys.argv[1]))
+    # sys.path.append(_dir)
+    # if _config[-3:]=='.py':
+    #     _config = _config[:-3]
+    # config_exp = __import__(_config)
+    # # Merge with default config file
+    # from src import config_default as config
+    # config.__dict__.update(config_exp.__dict__)
     # Temporary directory
     print("* Temporary directory")
     if not os.path.exists(config.tmp_DA_path):

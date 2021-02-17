@@ -11,6 +11,7 @@ import xarray as xr
 import sys,os
 import pandas as pd 
 from copy import deepcopy
+import gc
 
 class State:
     """
@@ -131,7 +132,7 @@ class State:
                 self.var[var] = np.zeros((self.ny,self.nx))
 
 
-    def save(self,filename=None,date=None):
+    def save(self,filename=None,date=None,grd=True):
         """
         NAME
             save
@@ -150,25 +151,30 @@ class State:
                 + 'd' + str(date.day).zfill(2)\
                 + 'h' + str(date.hour).zfill(2)\
                 + str(date.minute).zfill(2) + '.nc'
-                
-        dictout = {self.name_lon: (('y','x',), self.lon),
-                   self.name_lat: (('y','x',), self.lat),
-               }
-    
-        if date is not None:
-            dictout['time'] = (('t'), [pd.to_datetime(date)])
+        
+        dictout = {}
+        
+        if grd:
+            dictout = {self.name_lon: (('y','x',), self.lon),
+                        self.name_lat: (('y','x',), self.lat),
+                    }
+        
+            if date is not None:
+                dictout['time'] = (('t'), [pd.to_datetime(date)])
             
         for i, name in enumerate(self.name_var):
             dictout[name] = (('y'+str(i), 'x'+str(i),), self.var.values[i])
             
         ds = xr.Dataset(dictout)
-        ds.to_netcdf(filename)
+        ds.to_netcdf(filename,engine='h5netcdf')
         ds.close()
+
+        
     
     def load(self,filename):
-        ds = xr.open_dataset(filename)
-        for i, name in enumerate(self.name_var):
-            self.var.values[i] = ds[name].values
+        with xr.open_dataset(filename,engine='h5netcdf') as ds:
+            for i, name in enumerate(self.name_var):
+                self.var.values[i] = ds[name].values
     
     def random(self,ampl=1):
         other = self.free()
