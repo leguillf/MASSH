@@ -429,7 +429,8 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # Cost and Grad functions
     var = Variational(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint)
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
+        prec=config.prec)
     # Initial State
     if config.path_init_4Dvar is None:
         Xopt = np.zeros_like(var.Xb)
@@ -444,6 +445,14 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 3. Minimization #
     ###################
     print('\n*** Minimization ***\n')
+    
+    J0 = var.cost(Xopt)
+    g0 = var.grad(Xopt)
+    projg0 = np.max(np.abs(g0))
+    print('J0=',"{:e}".format(J0))
+    print('projg0',"{:e}".format(projg0))
+    
+    
     def callback(XX):
         now = datetime.now()
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
@@ -453,7 +462,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     res = opt.minimize(var.cost,Xopt,
                     method='L-BFGS-B',
                     jac=var.grad,
-                    options={'disp': True, 'gtol': config.gtol, 'maxiter': config.maxiter},
+                    options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},
                     callback=callback)
 
     print ('\nIs the minimization successful? {}'.format(res.success))
@@ -464,12 +473,15 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 4. Saving trajectory #
     ########################
     print('\n*** Saving trajectory ***\n')
-        
-    Xini = res.x
     
+    if config.prec:
+        Xa = var.Xb + B.sqr.dot(res.x)
+    else:
+        Xa = var.Xb + res.x
+        
     # Save minimum for next experiments
     with open(config.tmp_DA_path + '/Xini.pic', 'wb') as f:
-        pickle.dump(Xini,f)
+        pickle.dump(Xa,f)
     
     # Steady initial state
     State0 = State.free()
@@ -478,7 +490,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         t = Model.T[i] # seconds
         date = Model.timestamps[i+1] # date
         
-        Model.step(t,State0,Xini)
+        Model.step(t,State0,Xa)
         
         if (((date - config.init_date).total_seconds()
              /config.saveoutput_time_step.total_seconds())%1 == 0)\

@@ -63,13 +63,16 @@ class Cov:
         
     def inv(self,X):
         return 1/self.sigma**2 * X    
+    
+    def sqr(self,X):
+        return self.sigma**0.5 * X   
         
 
 class Variational:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, Xb=None, 
-                 tmp_DA_path=None, checkpoint=1):
+                 tmp_DA_path=None, checkpoint=1, prec=False):
         
         # Objects
         self.M = M # model
@@ -116,6 +119,9 @@ class Variational:
                 print(': obs',end='')
             print()
         
+        # preconditioning
+        self.prec = prec
+        
         # Grad test
         X = np.random.random()
         if self.B is not None:
@@ -125,22 +131,33 @@ class Variational:
         
         
     def cost(self,X0):
-                
-        X = +X0
         
         # initial state
         State = self.State.free()
         
         # Background cost function evaluation 
+        # if self.B is not None:
+        #     Jb = (X-self.Xb).dot(self.B.inv(X-self.Xb))
+        # else:
+        #     Jb = 0
         if self.B is not None:
-            Jb = (X-self.Xb).dot(self.B.inv(X-self.Xb))
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                #gb = v        # gradient of background term
+                Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                #gb = np.dot(self.B.inv,v) # gradient of background term
+                Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
         else:
+            X  = X0 + self.Xb
             Jb = 0
         
         # Observational cost function evaluation
         Jo = 0.
         State.save(self.tmp_DA_path + \
-                    '/model_state_' + str(self.checkpoint[0]) + '.nc',grd=False)
+                    '/model_state_' + str(self.checkpoint[0]) + '.nc',
+                    grd=False)
         
         for i in range(len(self.checkpoint)-1):
             
@@ -158,7 +175,8 @@ class Variational:
             
             # Save state for adj computation 
             State.save(self.tmp_DA_path + \
-                        '/model_state_' + str(self.checkpoint[i+1]) + '.nc',grd=False)
+                        '/model_state_' + str(self.checkpoint[i+1]) + '.nc',
+                        grd=False)
             
 
         if self.isobs[-1]:
@@ -176,9 +194,21 @@ class Variational:
         X = +X0 
         
         # Background cost function grandient
+        # if self.B is not None:
+        #     gb = self.B.inv(X-self.Xb)
+        # else:
+        #     gb = 0
         if self.B is not None:
-            gb = self.B.inv(X-self.Xb)
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                gb = X0      # gradient of background term
+                #Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                gb = self.B.inv(X0) # gradient of background term
+                #Jb = np.dot(X0,np.dot(self.B.inv,X0))         # cost of background term
         else:
+            X  = X0 + self.Xb
             gb = 0
         
         # Ajoint initialization   
@@ -214,8 +244,11 @@ class Variational:
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State) # d=Hx-yobs     
                 self.H.adj(adState,self.R.inv(misfit))
+                
+        if self.prec :
+            adX = np.transpose(self.B.sqr(adX)) 
         
-        g = adX + gb
+        g = adX + gb  # total gradient
         
         return g 
             

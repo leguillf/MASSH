@@ -238,6 +238,8 @@ sigma_B_He = 0.2 # Background variance for He
 
 sigma_B_bc = 1e-2 # Background variance for bc
 
+prec = False # preconditoning
+
 gtol = 1e-5 # Gradient norm must be less than gtol before successful termination.
 
 maxiter = 20 # Maximal number of iterations for the minimization process
