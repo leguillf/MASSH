@@ -475,7 +475,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     print('\n*** Saving trajectory ***\n')
     
     if config.prec:
-        Xa = var.Xb + B.sqr.dot(res.x)
+        Xa = var.Xb + B.sqr(res.x)
     else:
         Xa = var.Xb + res.x
         
