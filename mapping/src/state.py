@@ -11,7 +11,6 @@ import xarray as xr
 import sys,os
 import pandas as pd 
 from copy import deepcopy
-import gc
 
 class State:
     """
@@ -54,6 +53,9 @@ class State:
             self.ini_var_sw1l()
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
+            
+        if not os.path.exists(config.tmp_DA_path):
+            os.makedirs(config.tmp_DA_path)
         
     def __str__(self):
         message = ''

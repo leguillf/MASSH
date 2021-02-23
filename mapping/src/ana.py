@@ -453,7 +453,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     print('projg0',"{:e}".format(projg0))
     
     
-    def callback(XX):
+    def callback(XX,projg0=projg0):
         now = datetime.now()
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
         with open(config.tmp_DA_path + '/X_it-'+current_time+'.pic','wb') as f:
@@ -502,7 +502,3 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         
 
     
-   
-    
-
-

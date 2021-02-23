@@ -8,6 +8,12 @@ Created on Thu Feb  4 17:26:07 2021
 
 import os, sys
 
+class dotdict(dict):
+    """dot.notation access to dictionary attributes"""
+    __getattr__ = dict.get
+    __setattr__ = dict.__setitem__
+    __delattr__ = dict.__delitem__
+
 def exp(path_config):
     
     """
@@ -27,17 +33,23 @@ def exp(path_config):
     if _config[-3:]=='.py':
         _config = _config[:-3]
     config_exp = __import__(_config)
-    # Merge with default config file
-    from . import config_default as config
-    config.__dict__.update(config_exp.__dict__)
-    # Clean temporary direcectory
-    if os.path.exists(config.tmp_DA_path):
-        cmd = 'rm ' + config.tmp_DA_path + '*'
-        os.system(cmd)
-    else:
-        os.makedirs(config.tmp_DA_path)
-    cmd = 'cp ' + path_config + '.py ' + config.tmp_DA_path + '/config.py'
-    print(cmd)
-    os.system(cmd)
     
+    # Merge with default config file
+    from . import config_default as config_def
+    config = {}
+    
+    for p in dir(config_exp):
+        config[p] = getattr(config_exp, p)
+        
+    for p in dir(config_def):
+        # you can write your filter here
+        if p not in dir(config_exp):
+            config[p] = getattr(config_def, p)
+    
+    config = dotdict(config)
+    
+    # temp directory
+    if not os.path.exists(config.tmp_DA_path):
+        os.makedirs(config.tmp_DA_path)
+
     return config

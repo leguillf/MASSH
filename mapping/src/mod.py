@@ -25,6 +25,7 @@ def Model(config,State):
     DESCRIPTION
         Main function calling subclass for specific models
     """
+    print('Model:',config.name_model)
     if config.name_model=='QG1L':
         return Model_qg1l(config,State)
     elif config.name_model=='SW1L':

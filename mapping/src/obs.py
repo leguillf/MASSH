@@ -75,7 +75,7 @@ def obs(config, State, *args, **kwargs):
     return dict_obs
 
 
-def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox):
+def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox=None):
     """
     NAME
         _obs_swot_simulator
