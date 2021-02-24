@@ -280,19 +280,7 @@ class bfn_qg1l(object):
                 err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
             dsf.close()
             dsb.close()
-        # #with xr.open_mfdataset(path_forth + '*', concat_dim='member') as ds:
-        # with xr.open_mfdataset(path_forth + '*', combine='nested', concat_dim='t',engine='h5netcdf') as ds:
-        #     pv_forth = ds[self.name_mod_var[1]][:-1].values.ravel()
-        #     if self.n_mod_var==3:
-        #         K = ds[self.name_mod_var[2]].mean(axis=0)
-        #         print('c_mean =', np.mean(self.f/np.sqrt(K)).values)
-        # #with xr.open_mfdataset(path_back + '*', concat_dim='member') as ds:
-        # with xr.open_mfdataset(path_back + '*', combine='nested', concat_dim='t',engine='h5netcdf') as ds:
-        #     pv_back = ds[self.name_mod_var[1]][1:].values.ravel()
-
-        # err = np.mean(np.abs(pv_forth - pv_back))
-        print('error on this loop:', err)
-
+        
         return err
 
 

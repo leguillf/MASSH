@@ -14,8 +14,9 @@ import matplotlib.pylab as plt
 import pickle
 from datetime import datetime
 import scipy.optimize as opt
+import gc
 
-from . import mod,tools,grid
+from . import grid
 
 
 
@@ -61,8 +62,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     middle_bfn_date = config.init_date
     # In the case of Nudging (i.e. bfn_max_iteration=1), set the bfn window length as the entire period of the experience
     if config.bfn_max_iteration==1:
-        print('bfn_max_iteration has been set to 1 --> '
-              + 'Only one forth loop will be done on the entiere period of the experience')
         new_bfn_window_size = config.final_date - config.init_date
     else:
         new_bfn_window_size = config.bfn_window_size
@@ -70,7 +69,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     
     # Main time loop
     while (middle_bfn_date <= config.final_date) and not bfn_last_window :
-        print('\n*** BFN window ***')
         #############
         # 1. SET-UP #
         #############
@@ -84,7 +82,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             final_bfn_date = config.final_date
         else:
             final_bfn_date = init_bfn_date + new_bfn_window_size
-        print('\nfrom ', init_bfn_date, ' to ', final_bfn_date)
         # propagation timestep
         one_time_step = config.bfn_propation_timestep
         if bfn_first_window:
@@ -93,14 +90,12 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         ########################
         # 2. Create BFN object #
         ########################
-        print('\n* Initialize BFN *')
         bfn_obj = bfn.bfn(
             config,init_bfn_date,final_bfn_date,one_time_step,State.lon,State.lat)
         
         ######################################
         # 3. BOUNDARY AND INITIAL CONDITIONS #
         ######################################
-        print("\n* Boundary and initial conditions *")
         # Boundary condition
         if config.flag_use_boundary_conditions:
             timestamps = np.arange(calendar.timegm(init_bfn_date.timetuple()),
@@ -131,7 +126,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 restart = False
             else:
                 restart = True
-                print(init_file, " is used as initialization")
                 State.load(init_file)
                 
         elif config.bfn_window_overlap:
@@ -141,11 +135,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         ###################
         # 4. Observations #
         ###################
-        # Selection
-        print('\n* Select observations *')
-        
+        # Selection        
         if call_obs_func:
-            print('Calling obs_all_observationcheck function...')
             dict_obs_it = obs.obs(config)
             bfn_obj.select_obs(dict_obs_it)
             dict_obs_it.clear()
@@ -154,7 +145,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             bfn_obj.select_obs(dict_obs)
 
         # Projection
-        print('\n* Project observations *')
         bfn_obj.do_projections()
 
         ###############
@@ -174,15 +164,10 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
             err_bfn0 = err_bfn1
             bfn_iter += 1
-            if bfn_iter == config.bfn_max_iteration:
-                print('\nMaximum number of iterations achieved ('
-                      + str(config.bfn_max_iteration)
-                      + ') --> last Forth loop !!')
-
+            
             ###################
             # 5.1. FORTH LOOP #
             ###################
-            print("\n* Forward loop " + str(bfn_iter) + " *")
             while present_date_forward0 < final_bfn_date :
                 
                 # Retrieve corresponding time index for the forward loop
@@ -241,13 +226,13 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 plt.colorbar(p2, ax=ax2)
                 ax1.set_title('Potential vorticity')
                 ax2.set_title('SSH')
+                plt.suptitle(middle_bfn_date,': End of forward loop n°',bfn_iter)
                 plt.show()
 
             ##################
             # 5.2. BACK LOOP #
             ##################
             if  bfn_iter < config.bfn_max_iteration:
-                print("\n* Backward loop " + str(bfn_iter) + " *")
                 present_date_backward0 = final_bfn_date
     
                 while present_date_backward0 > init_bfn_date :
@@ -304,25 +289,21 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     plt.colorbar(p2, ax=ax2)
                     ax1.set_title('Potential vorticity')
                     ax2.set_title('SSH')
+                    plt.suptitle(middle_bfn_date,': End of backward loop n°',bfn_iter)
                     plt.show()
 
             #########################
             # 5.3. CONVERGENCE TEST #
             #########################
             if bfn_iter < config.bfn_max_iteration:
-                print('\n* Convergence test *')
                 err_bfn1 = bfn_obj.convergence(
                                         path_forth=config.tmp_DA_path + '/BFN_forth_*.nc',
                                         path_back=config.tmp_DA_path + '/BFN_back_*.nc'
                                         )
-                
-
-        print("\n* End of the BFN loop after " + str(bfn_iter) + " iterations *")
 
         #####################
         # 6. SAVING OUTPUTS #
         #####################
-        print('\n* Saving last forth loop as outputs for the following dates : *')
         # Set the saving temporal window
         if config.bfn_max_iteration==1:
             write_date_min = init_bfn_date
@@ -381,7 +362,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     # Save output
                     if config.saveoutputs:
                         State_current.save(date=present_date)
-        print()
+        
         ########################
         # 8. PARAMETERS UPDATE #
         ########################
@@ -395,7 +376,9 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             bfn_first_window = False
         else:
             middle_bfn_date += window_lag
-
+    print()
+    del State_current,State_previous,State,dict_obs
+    return
     
     
 def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
@@ -498,6 +481,9 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
             print(date, end=' / ')    
             # Save State
             State0.save(date=date)
+    
+    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
+    gc.collect()
     print()
         
 

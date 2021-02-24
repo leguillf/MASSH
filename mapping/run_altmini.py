@@ -16,11 +16,14 @@ from src import mod as mod
 from src import obs as obs
 from src import ana as ana
 
-def update_config(config,i):
-    if i==0:
+from pympler import muppy, summary
+import gc
+
+def update_config(config,i,i0=0):
+    if i==i0:
         # Init paths
-        config.tmp_DA_path +=  'iteration_0/' 
-        config.path_save +=  'iteration_0/' 
+        config.tmp_DA_path +=  'iteration_' + str(i) +'/' 
+        config.path_save +=  'iteration_' + str(i) +'/' 
     else:
         if config2.name_model=='SW1L' and config2.name_analysis=='4Dvar':
             config.path_init_4Dvar = config.tmp_DA_path + 'Xini.pic'
@@ -35,14 +38,15 @@ def compute_new_obs(dict_obs,config):
         name_var = config.name_mod_var[0]
     elif config.name_model=='SW1L':
         name_var = config.name_mod_var[2]
-    times = [(dt64 - np.datetime64(config.init_date)) / np.timedelta64(1, 's') 
+    times = [(dt64 - np.datetime64(config.init_date)) / np.timedelta64(1, 's')
             for dt64 in ds['time'].values]
     maps = ds[name_var]
     ds.close()
+    del ds
     maps = maps.assign_coords({"t": ('t',times)})
     maps = maps.chunk(chunks=(len(times),1,1))
     # Get observed date and interpolate maps
-    times_obs = [(np.datetime64(dt) - np.datetime64(config.init_date))/ np.timedelta64(1, 's') 
+    times_obs = [(np.datetime64(dt) - np.datetime64(config.init_date))/ np.timedelta64(1, 's')
                  for dt in dict_obs]
     maps = maps.interp(t=times_obs)
     # For each observation, remove the corresponding estimated map
@@ -55,24 +59,37 @@ def compute_new_obs(dict_obs,config):
             if _sat.kind=='fullSSH':
                 # No grid interpolation
                 dsout = ds.copy()
+                ds.close()
+                del ds
                 dsout[_sat.name_obs_var[0]] -= maps[i,:,:].values
                 dsout.to_netcdf(_path_obs,engine='scipy')
-                
+                dsout.close()
+                del dsout
+            
 def compute_convergence_criteria(config,i):
     path_save_i = config.path_save
     path_save_i1 = config.path_save[:-2] + str(i-1) + '/'
     maps_i = xr.open_mfdataset(path_save_i+config.name_exp_save+'*.nc',
-                               combine='nested',concat_dim='t')
+                               combine='nested',concat_dim='t', engine='h5netcdf')
     maps_i1 = xr.open_mfdataset(path_save_i1+config.name_exp_save+'*.nc',
-                               combine='nested',concat_dim='t')
+                               combine='nested',concat_dim='t', engine='h5netcdf')
     K = 0
+    nc = 0
     for name in config.name_mod_var:
-        var_i = maps_i[name].values
-        var_i1 = maps_i1[name].values
-        K += np.linalg.norm(var_i-var_i1)/np.std(var_i1)
+        for t in range(maps_i.t.size):
+            var_i = maps_i[name][t,:,:].values
+            var_i1 = maps_i1[name][t,:,:].values
+            if ( np.max(np.max(var_i1))-np.min(np.min(var_i1)) )!=0:
+                K += np.sqrt(np.sum(np.sum(np.square(var_i-var_i1)))/var_i1.size) /\
+                    ( np.max(np.max(var_i1))-np.min(np.min(var_i1)) )
+                nc += 1
         
-    K /= len(config.name_mod_var)
-        
+    K /= nc
+    
+    maps_i.close()
+    maps_i1.close()
+    del maps_i,maps_i1
+
     return K
 
 if __name__ == "__main__":
@@ -92,8 +109,9 @@ if __name__ == "__main__":
     
 
     K = np.inf
-    i = 0
-    while K>1e-3:
+    i0 = 0
+    i = i0
+    while i<6:#K>1e-3:
         print('\n\n\
         *****************************************************************\n\
         *****************************************************************\n\
@@ -101,7 +119,7 @@ if __name__ == "__main__":
         *****************************************************************\n\
         *****************************************************************\n')
         # Updtade configuration file
-        update_config(config1,i)
+        update_config(config1,i,i0)
         # State
         State1 = state.State(config1)
         # Model
@@ -117,6 +135,9 @@ if __name__ == "__main__":
         # Analysis
         print('* Analysis')
         ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
+        # Clean-up
+        del State1,Model1,dict_obs1
+        gc.collect()
         
         print('\n\n\
         *****************************************************************\n\
@@ -125,7 +146,7 @@ if __name__ == "__main__":
         *****************************************************************\n\
         *****************************************************************\n')
         # Updtade configuration file
-        update_config(config2,i)
+        update_config(config2,i,i0)
         # State
         State2 = state.State(config2)
         # Model
@@ -140,7 +161,9 @@ if __name__ == "__main__":
         # Analysis
         print('* Analysis')
         ana.ana(config2,State2,Model2,dict_obs=dict_obs2)
-        
+        # Clean-up
+        del State2,Model2,dict_obs2
+        gc.collect()
         
         print('\n\n\
         *****************************************************************\n\

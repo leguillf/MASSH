@@ -211,7 +211,6 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         # Extract relevant pixels
         dlon =  np.max(bc_lon[:,1:] - bc_lon[:,:-1])
         dlat =  np.max(bc_lat[1:,:] - bc_lat[:-1,:])
-        print('BC resolutions:', round(dlon,2), round(dlat,2))
         ind_lonlat = (lon2d.min()-dlon<=bc_lon) & (bc_lon<=lon2d.max()+dlon) & (lat2d.min()-dlat<=bc_lat) & (bc_lat<=lat2d.max()+dlat)
 
         bc_lon = bc_lon[ind_lonlat]
@@ -229,9 +228,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         #####################
         # Grid processing
         #####################
-        print('Grid processing')
         if np.all(bc_lon==lon2d.ravel()) and np.all(bc_lat==lat2d.ravel()):
-            print('Grid are identical, no need to interpolate')
             bc_field_interp2d = bc_field.reshape((bc_field.shape[0],ny,nx))
         elif flag == '2D':
             bc_field_interp2d = interpolate.griddata((bc_lon,bc_lat), bc_field, (lon2d.ravel(),lat2d.ravel()))
@@ -243,7 +240,6 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         #####################
         # Time processing
         #####################
-        print('Time processing')
         if flag == '2D':
             # Only one field, use it at every timestamps
             for t in range(NT):
@@ -254,12 +250,6 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
             for i,t in enumerate(timestamps):
                 if bc_times.min() < t < bc_times.max():
                     bc_field_interpTime[i] = f_interpTime(t)
-
-        if np.all(bc_field_interpTime == 0):
-            print('Warning: All BC values have been set to 0')
-    else:
-        print('Boundary conditions file : [', file_bc,
-              '] does not exists. --> We set the boundary conditions to 0')
 
     if NT == 1:
         bc_field_interpTime = bc_field_interpTime[0]
@@ -292,9 +282,8 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         bc_weight = 1- bc_weight
 
     else:
-        print('Error: No ' + sponge + ' sponge implemented'
+        sys.exit('Error: No ' + sponge + ' sponge implemented'
               + 'for boundary conditions')
-        sys.exit()
 
     if flag_plot > 1:
         fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(15, 7))
