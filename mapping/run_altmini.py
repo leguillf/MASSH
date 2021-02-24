@@ -16,7 +16,6 @@ from src import mod as mod
 from src import obs as obs
 from src import ana as ana
 
-from pympler import muppy, summary
 import gc
 
 def update_config(config,i,i0=0):
@@ -111,7 +110,7 @@ if __name__ == "__main__":
     K = np.inf
     i0 = 0
     i = i0
-    while i<6:#K>1e-3:
+    while K>1e-3:
         print('\n\n\
         *****************************************************************\n\
         *****************************************************************\n\
