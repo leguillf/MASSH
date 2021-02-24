@@ -136,7 +136,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 
         elif config.bfn_window_overlap:
             # Use last state from the last forward loop as initialization
-            print(name_init)
             State.load(name_init)
         
         ###################
@@ -167,8 +166,9 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         Nold_t = None
 
         while bfn_iter==0 or\
-             (bfn_iter < config.bfn_max_iteration
+              (bfn_iter < config.bfn_max_iteration
               and abs(err_bfn0-err_bfn1)/err_bfn1 > config.bfn_criterion):
+        #while bfn_iter < config.bfn_max_iteration:
             if bfn_iter>0:
                 present_date_forward0 = init_bfn_date
 
@@ -279,7 +279,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=-1)
                     
                     # Save current state            
-                    name_save = config.name_exp_save + '_' + str(ibackward).zfill(5) + '.nc'
+                    name_save = config.name_exp_save + '_' + str(ibackward-1).zfill(5) + '.nc'
                     filename_backward = config.tmp_DA_path + '/BFN_back_' + name_save
                     State.save(filename_backward,present_date_backward)
                     if config.save_bfn_trajectory:
@@ -312,10 +312,10 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             if bfn_iter < config.bfn_max_iteration:
                 print('\n* Convergence test *')
                 err_bfn1 = bfn_obj.convergence(
-                                        path_forth=config.tmp_DA_path + '/BFN_forth_',
-                                        path_back=config.tmp_DA_path + '/BFN_back_'
+                                        path_forth=config.tmp_DA_path + '/BFN_forth_*.nc',
+                                        path_back=config.tmp_DA_path + '/BFN_back_*.nc'
                                         )
-
+                
 
         print("\n* End of the BFN loop after " + str(bfn_iter) + " iterations *")
 

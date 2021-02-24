@@ -144,11 +144,11 @@ bfn_window_size = timedelta(days=15)
 
 bfn_window_output = timedelta(days=7)
 
-bfn_propation_timestep = timedelta(hours=1)
+bfn_propation_timestep = timedelta(hours=3)
 
 bfn_criterion = 0.01
 
-bfn_max_iteration = 1
+bfn_max_iteration = 10
 
 save_bfn_trajectory = False
 
