@@ -51,7 +51,7 @@ from math import pi
 
 name_init = 'from_file'
 
-name_init_grid = '../../data_Example2/data_BM-IT_idealized/ref.nc'
+name_init_grid = '../data_Example2/data_BM-IT_idealized/ref.nc'
 
 name_init_lon = 'lon'
 
@@ -71,7 +71,7 @@ name_init_file = 'init_state.nc'
    
 init_date = datetime(2010,5,1,0)
 
-final_date = datetime(2010,7,1,0)
+final_date = datetime(2010,5,15,0)
 
 assimilation_time_step = timedelta(hours=1)  
 
@@ -91,7 +91,7 @@ saveoutput_time_step = timedelta(hours=3)
        
 name_model = 'SW1L'
 
-dir_model =  '../models/model_sw1l/'
+dir_model =  'models/model_sw1l/'
     
 name_mod_var = ["u","v","ssh"]
 
@@ -118,7 +118,7 @@ He_init = 0.9 # Mean height (in m)
 
 Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
 
-D_He = 150e3 # Space scale of gaussian decomposition for He (in m)
+D_He = None#150e3 # Space scale of gaussian decomposition for He (in m)
 
 T_He = timedelta(days=20).total_seconds() # Time scale of gaussian decomposition for He (in m)
 
@@ -171,7 +171,7 @@ prec = False # preconditoning
 
 gtol = 1e-1 # Gradient norm must be less than gtol before successful termination.
 
-maxiter = 50 # Maximal number of iterations for the minimization process
+maxiter = 1 # Maximal number of iterations for the minimization process
 
 #################################################################################################################################
 # Observation parameters
@@ -192,7 +192,7 @@ write_obs = False
 #    * name_obs_xac_sat: name of the observation across track distance (only for swathSSH satellites)
 #################################################################################################################################
 kind_nr = "fullSSH"
-obs_path_nr = '../../data_Example2/data_BM-IT_idealized/'
+obs_path_nr = '../data_Example2/data_BM-IT_idealized/'
 obs_name_nr = "obs"
 name_obs_var_nr = ["ssh_obs"]
 name_obs_lon_nr = "lon"
@@ -214,7 +214,7 @@ saveoutputs = True
 
 name_exp_save = name_experiment 
 
-path_save = '../outputs/' + name_exp_save + '/'
+path_save = 'outputs/' + name_exp_save + '/'
     
 #################################################################################################################################
 # Temporary DA parameters
@@ -223,7 +223,7 @@ path_save = '../outputs/' + name_exp_save + '/'
 # - name_grd: name used for saving the QG grid to avoid calculating it every time.
 #################################################################################################################################
         
-tmp_DA_path = "../scratch/" +  name_exp_save + '/'
+tmp_DA_path = "scratch/" +  name_exp_save + '/'
 
 
 

@@ -37,7 +37,6 @@ name_experiment = 'Example2_BM'
 # - timedelta
 #################################################################################################################################
 from datetime import datetime,timedelta
-from math import pi
 
 #################################################################################################################################
 # Initialization parameters
@@ -51,7 +50,7 @@ from math import pi
 
 name_init = 'from_file'
 
-name_init_grid = '../../data_Example2/data_BM-IT_idealized/ref.nc'
+name_init_grid = '../data_Example2/data_BM-IT_idealized/ref.nc'
 
 name_init_lon = 'lon'
 
@@ -71,7 +70,7 @@ name_init_file = 'init_state.nc'
    
 init_date = datetime(2010,5,1,0)
 
-final_date = datetime(2010,7,1,0)
+final_date = datetime(2010,5,15,0)
 
 assimilation_time_step = timedelta(hours=1)  
 
@@ -91,7 +90,7 @@ saveoutput_time_step = timedelta(hours=3)
        
 name_model = 'QG1L'   
 
-dir_qgmodel =  '../models/model_qg1l/'        
+dir_model =  'models/model_qg1l/'        
     
 name_mod_var = ["ssh","pv"]  
 
@@ -148,13 +147,13 @@ bfn_propation_timestep = timedelta(hours=3)
 
 bfn_criterion = 0.01
 
-bfn_max_iteration = 10
+bfn_max_iteration = 1
 
 save_bfn_trajectory = False
 
 flag_use_boundary_conditions = True
 
-file_boundary_conditions = '../../data_Example2/data_BM-IT_idealized/bc.nc'
+file_boundary_conditions = '../data_Example2/data_BM-IT_idealized/bc.nc'
 
 name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'ssh_bc'}
 
@@ -179,7 +178,7 @@ write_obs = False
 #    * name_obs_xac_sat: name of the observation across track distance (only for swathSSH satellites)
 #################################################################################################################################
 kind_nr = "fullSSH"
-obs_path_nr = '../../data_Example2/data_BM-IT_idealized/'
+obs_path_nr = '../data_Example2/data_BM-IT_idealized/'
 obs_name_nr = "obs"
 name_obs_var_nr = ["ssh_obs"]
 name_obs_lon_nr = "lon"
@@ -201,7 +200,7 @@ saveoutputs = True
 
 name_exp_save = name_experiment 
 
-path_save = '../outputs/' + name_exp_save + '/'
+path_save = 'outputs/' + name_exp_save + '/'
     
 #################################################################################################################################
 # Temporary DA parameters
@@ -210,9 +209,9 @@ path_save = '../outputs/' + name_exp_save + '/'
 # - name_grd: name used for saving the QG grid to avoid calculating it every time.
 #################################################################################################################################
         
-tmp_DA_path = "../scratch/" +  name_exp_save + '/'
+tmp_DA_path = "scratch/" +  name_exp_save + '/'
 
-
+name_grd = tmp_DA_path + 'QGgrid'
 
 
 
