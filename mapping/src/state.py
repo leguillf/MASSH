@@ -76,7 +76,7 @@ class State:
         lon = np.arange(config.lon_min, config.lon_max + config.dx, config.dx) % 360
         lat = np.arange(config.lat_min, config.lat_max + config.dy, config.dy) 
         lon,lat = np.meshgrid(lon,lat)
-        self.lon = lon
+        self.lon = lon % 360
         self.lat = lat
     
     def ini_from_file(self,config):
@@ -94,7 +94,7 @@ class State:
         lat = dsin[config.name_init_lat].values
         if len(lon.shape)==1:
             lon,lat = np.meshgrid(lon,lat)
-        self.lon = lon
+        self.lon = lon % 360
         self.lat = lat
             
     def ini_var_qg1l(self):
