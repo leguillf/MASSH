@@ -147,12 +147,12 @@ class State:
                 """
         
         if filename is None:
-            filename = self.path_save + '/' + self.name_exp_save\
+            filename = os.path.join(self.path_save,self.name_exp_save\
                 + '_y' + str(date.year)\
                 + 'm' + str(date.month).zfill(2)\
                 + 'd' + str(date.day).zfill(2)\
                 + 'h' + str(date.hour).zfill(2)\
-                + str(date.minute).zfill(2) + '.nc'
+                + str(date.minute).zfill(2) + '.nc')
         
         dictout = {}
         

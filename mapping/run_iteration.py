@@ -5,7 +5,7 @@ Created on Mon Mar  1 18:44:46 2021
 
 @author: leguillou
 """
-import sys
+import sys, os 
 import xarray as xr
 import numpy as np
 import time 
@@ -17,18 +17,21 @@ from src import obs as obs
 from src import ana as ana
 
 def update_config(config,i):
-    if i>0:
-        config.tmp_DA_path = config.tmp_DA_path[:-2] + str(i) + '/'
-        config.path_save = config.path_save[:-2] + str(i) + '/'
-        if config.name_model=='SW1L' and config.name_analysis=='4Dvar':
-            config.path_init_4Dvar = config.tmp_DA_path[:-2] + str(i-1) + '/'\
-                + 'Xini.pic'
-        
+    name_it = 'iteration_' + str(i) 
+    config.tmp_DA_path = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_it])
+    config.path_save = '/'.join(config.path_save.split('/')[:-1]+[name_it])
+    if i>0 and config.name_model=='SW1L' and config.name_analysis=='4Dvar':
+        name_prev = 'iteration_' + str(i-1) 
+        path_tmp_prev = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_prev])
+        config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
     
+
 def compute_new_obs(dict_obs,config):
     # Load maps
-    ds = xr.open_mfdataset(config.path_save+config.name_exp_save+'*.nc',
-                           combine='nested',concat_dim='t')
+    print(os.path.join(config.path_save,config.name_exp_save+'*.nc'))
+    ds = xr.open_mfdataset(
+        os.path.join(config.path_save,config.name_exp_save+'*.nc'),
+        combine='nested',concat_dim='t')
     if config.name_model=='QG1L':
         name_var = config.name_mod_var[0]
     elif config.name_model=='SW1L':
@@ -63,11 +66,14 @@ def compute_new_obs(dict_obs,config):
             
 def compute_convergence_criteria(config,i):
     path_save_i = config.path_save
-    path_save_i1 = config.path_save[:-2] + str(i-1) + '/'
-    maps_i = xr.open_mfdataset(path_save_i+config.name_exp_save+'*.nc',
-                               combine='nested',concat_dim='t', engine='h5netcdf')
-    maps_i1 = xr.open_mfdataset(path_save_i1+config.name_exp_save+'*.nc',
-                               combine='nested',concat_dim='t', engine='h5netcdf')
+    name_it1 = 'iteration_' + str(i-1)
+    path_save_i1 = '/'.join(config.path_save.split('/')[:-1]+[name_it1])
+    maps_i = xr.open_mfdataset(
+        os.path.join(path_save_i,config.name_exp_save+'*.nc'),
+        combine='nested',concat_dim='t', engine='h5netcdf')
+    maps_i1 = xr.open_mfdataset(
+        os.path.join(path_save_i1,config.name_exp_save+'*.nc'),
+        combine='nested',concat_dim='t', engine='h5netcdf')
     K = 0
     nc = 0
     for name in config.name_mod_var:

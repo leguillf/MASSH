@@ -197,11 +197,11 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
                 # Save current state                 
                 name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
-                filename_forward = config.tmp_DA_path + '/BFN_forth_' + name_save
+                filename_forward = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
                 State.save(filename_forward,present_date_forward)
                 if config.save_bfn_trajectory:
-                    filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
-                               + '_forth_' + str(bfn_iter) + '/' + name_save
+                    filename_traj = os.path.join(config.path_save,'BFN_' + str(middle_bfn_date)[:10]\
+                               + '_forth_' + str(bfn_iter),name_save)
 
                     if not os.path.exists(os.path.dirname(filename_traj)):
                         os.makedirs(os.path.dirname(filename_traj))
@@ -265,11 +265,11 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     
                     # Save current state            
                     name_save = config.name_exp_save + '_' + str(ibackward-1).zfill(5) + '.nc'
-                    filename_backward = config.tmp_DA_path + '/BFN_back_' + name_save
+                    filename_backward = os.path.join(config.tmp_DA_path,'BFN_back_' + name_save)
                     State.save(filename_backward,present_date_backward)
                     if config.save_bfn_trajectory:
-                        filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
-                                   + '_back_' + str(bfn_iter) + '/' + name_save
+                        filename_traj = os.path.join(config.path_save,'BFN_' + str(middle_bfn_date)[:10]\
+                                   + '_back_' + str(bfn_iter),name_save)
 
                         if not os.path.exists(os.path.dirname(filename_traj)):
                             os.makedirs(os.path.dirname(filename_traj))
@@ -297,8 +297,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             #########################
             if bfn_iter < config.bfn_max_iteration:
                 err_bfn1 = bfn_obj.convergence(
-                                        path_forth=config.tmp_DA_path + '/BFN_forth_*.nc',
-                                        path_back=config.tmp_DA_path + '/BFN_back_*.nc'
+                                        path_forth=os.path.join(config.tmp_DA_path,'BFN_forth_*.nc'),
+                                        path_back=os.path.join(config.tmp_DA_path,'BFN_back_*.nc')
                                         )
 
         #####################
@@ -334,19 +334,19 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     # Read current converged state
                     iforward = int((present_date - init_bfn_date)/one_time_step) - 1
                     name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
-                    current_file = config.tmp_DA_path + '/BFN_forth_' + name_save
+                    current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
                     State_current.load(current_file)
                     
                     # Smooth with previous BFN window
                     if config.bfn_window_overlap and (not bfn_first_window or restart):
                         # Read previous output at this timestamp
-                        previous_file = config.path_save + config.name_exp_save\
+                        previous_file = os.path.join(config.path_save,config.name_exp_save\
                                         + '_y'+str(present_date.year)\
                                         + 'm'+str(present_date.month).zfill(2)\
                                         + 'd'+str(present_date.day).zfill(2)\
                                         + 'h'+str(present_date.hour).zfill(2)\
                                         + str(present_date.minute).zfill(2) + \
-                                            '.nc'
+                                            '.nc')
                         if os.path.isfile(previous_file):
                             State_previous.load(previous_file)
                             
@@ -439,7 +439,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     def callback(XX,projg0=projg0):
         now = datetime.now()
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
-        with open(config.tmp_DA_path + '/X_it-'+current_time+'.pic','wb') as f:
+        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
             pickle.dump(XX,f)
 
     res = opt.minimize(var.cost,Xopt,
@@ -463,7 +463,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         Xa = var.Xb + res.x
         
     # Save minimum for next experiments
-    with open(config.tmp_DA_path + '/Xini.pic', 'wb') as f:
+    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
         pickle.dump(Xa,f)
     
     # Steady initial state
