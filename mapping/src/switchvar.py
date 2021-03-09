@@ -80,11 +80,11 @@ def ssh2rv(ssh, lon, lat, name_grd=None, xac=None):
         dy = grd.dy[1:-1,1:-1,np.newaxis]
 
     # Initialization
-    rv = np.zeros_like(ssh)
+    rv = np.zeros_like(ssh)*np.nan
     # Compute relative vorticity
-    #rv = laplacian(factor*ssh,dx,dy) #- ((g/f0**2))*beta*gradj(ssh)/dy
-    rv[1:-1,1:-1] = g/f0[1:-1,1:-1] * ((ssh[2:,1:-1]+ssh[:-2,1:-1]-2*ssh[1:-1,1:-1])/dy**2 \
-                                      +(ssh[1:-1,2:]+ssh[1:-1,:-2]-2*ssh[1:-1,1:-1])/dx**2)
+    rv[1:-1,1:-1] = g/f0[1:-1,1:-1] *\
+        ((ssh[2:,1:-1]+ssh[:-2,1:-1]-2*ssh[1:-1,1:-1])/dy**2 \
+        +(ssh[1:-1,2:]+ssh[1:-1,:-2]-2*ssh[1:-1,1:-1])/dx**2)
     if xac is not None:
         rv = _masked_edge(rv, xac)
 

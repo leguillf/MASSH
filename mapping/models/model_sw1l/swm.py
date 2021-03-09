@@ -100,7 +100,7 @@ class Swm:
     #                            One time step                                #
     ###########################################################################
             
-    def step_euler(self,t,u0,v0,h0,He=None,hbcx=None,hbcy=None,step=None):
+    def step_euler(self,t,u0,v0,h0,He=None,hbcx=None,hbcy=None,first=False):
         
         #######################
         #   Init local state  #
@@ -112,7 +112,7 @@ class Swm:
         #######################
         #       Init bc       #
         #######################
-        if step==0:
+        if first:
             init_bc(self,u1,v1,h1,He,hbcx,hbcy,t0=t)
             
         #######################
@@ -137,7 +137,7 @@ class Swm:
         
         return u,v,h
     
-    def step_lf(self,t,u0,v0,h0,He=None,hbcx=None,hbcy=None,step=0):
+    def step_lf(self,t,u0,v0,h0,He=None,hbcx=None,hbcy=None,first=False):
         
         #######################
         #   Init local state  #
@@ -149,7 +149,7 @@ class Swm:
         #######################
         #       Init bc       #
         #######################
-        if step==0:
+        if first:
             init_bc(self,u1,v1,h1,He,hbcx,hbcy,t0=t)
             
         #######################
@@ -162,7 +162,7 @@ class Swm:
         #######################
         #   Time propagation  #
         #######################
-        if step==0:
+        if first:
             # forward euler
             u = u1 + self.dt*ku 
             v = v1 + self.dt*kv
@@ -185,5 +185,57 @@ class Swm:
             
         return u,v,h
 
+
+    def step_rk4(self,t,u0,v0,h0,He=None,hbcx=None,hbcy=None,first=False):
+        
+        
+        #######################
+        #   Init local state  #
+        #######################
+        u1 = deepcopy(u0)
+        v1 = deepcopy(v0)
+        h1 = deepcopy(h0)
+        
+        #######################
+        #       Init bc       #
+        #######################
+        if first:
+            init_bc(self,u1,v1,h1,He,hbcx,hbcy,t0=t)
+            
+        #######################
+        #  Right hand sides   #
+        #######################
+        # k1
+        ku1 = self.rhs_u(self.v_on_u(v1),h1)*self.dt
+        kv1 = self.rhs_v(self.u_on_v(u1),h1)*self.dt
+        kh1 = self.rhs_h(u1,v1,He)*self.dt
+        # k2
+        ku2 = self.rhs_u(self.v_on_u(v1+0.5*kv1),h1+0.5*kh1)*self.dt
+        kv2 = self.rhs_v(self.u_on_v(u1+0.5*ku1),h1+0.5*kh1)*self.dt
+        kh2 = self.rhs_h(u1+0.5*ku1,v1+0.5*kv1,He)*self.dt
+        # k3
+        ku3 = self.rhs_u(self.v_on_u(v1+0.5*kv2),h1+0.5*kh2)*self.dt
+        kv3 = self.rhs_v(self.u_on_v(u1+0.5*ku2),h1+0.5*kh2)*self.dt
+        kh3 = self.rhs_h(u1+0.5*ku2,v1+0.5*kv2,He)*self.dt
+        # k4
+        ku4 = self.rhs_u(self.v_on_u(v1+kv3),h1+kh3)*self.dt
+        kv4 = self.rhs_v(self.u_on_v(u1+ku3),h1+kh3)*self.dt
+        kh4 = self.rhs_h(u1+ku3,v1+kv3,He)*self.dt
+        
+        
+        #######################
+        #   Time propagation  #
+        #######################
+        u = u1 + 1/6*(ku1+2*ku2+2*ku3+ku4)
+        v = v1 + 1/6*(kv1+2*kv2+2*kv3+kv4)
+        h = h1 + 1/6*(kh1+2*kh2+2*kh3+kh4)
+        
+        #######################
+        # Boundary conditions #
+        #######################
+        if hbcx is not None and hbcy is not None:
+            obcs(self,t,u,v,h,u1,v1,h1,He,hbcx,hbcy)
+        
+        return u,v,h
     
             

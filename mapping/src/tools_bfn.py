@@ -16,6 +16,7 @@ import matplotlib.pylab as plt
 import pickle
 import os.path
 from scipy.ndimage.filters import gaussian_filter
+import glob
 
 from . import switchvar 
 from .tools import gaspari_cohn, hat_function, L2_scalar_prod
@@ -264,20 +265,22 @@ class bfn_qg1l(object):
 
 
     def convergence(self, path_forth, path_back):
-
-        #with xr.open_mfdataset(path_forth + '*', concat_dim='member') as ds:
-        with xr.open_mfdataset(path_forth + '*', combine='nested', concat_dim='member') as ds:
-            pv_forth = ds[self.name_mod_var[1]][:-1].values.ravel()
-            if self.n_mod_var==3:
-                K = ds[self.name_mod_var[2]].mean(axis=0)
-                print('c_mean =', np.mean(self.f/np.sqrt(K)).values)
-        #with xr.open_mfdataset(path_back + '*', concat_dim='member') as ds:
-        with xr.open_mfdataset(path_back + '*', combine='nested', concat_dim='member') as ds:
-            pv_back = ds[self.name_mod_var[1]][1:].values.ravel()
-
-        err = np.mean(np.abs(pv_forth - pv_back))
-        print('error on this loop:', err)
-
+        
+        err = 0
+        
+        files_forth = sorted(glob.glob(path_forth))
+        files_back = sorted(glob.glob(path_back))
+        
+        for (ff,fb) in zip(files_forth,files_back):
+            dsf = xr.open_dataset(ff,engine='h5netcdf')
+            dsb = xr.open_dataset(fb,engine='h5netcdf')
+            for name_var in self.name_mod_var:
+                varf = dsf[name_var].values
+                varb = dsb[name_var].values
+                err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
+            dsf.close()
+            dsb.close()
+        
         return err
 
 

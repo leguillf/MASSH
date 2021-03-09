@@ -33,9 +33,9 @@ def obs(config, State, *args, **kwargs):
     """
     
     # Check if previous *dict_obs* has been computed
-    if config.write_obs and os.path.exists(config.tmp_DA_path + 'dict_obs.pic'):
+    if config.write_obs and os.path.exists(os.path.join(config.tmp_DA_path,'dict_obs.pic')):
         print('Reading *dict_obs* from previous run')
-        with open(config.tmp_DA_path + 'dict_obs.pic', 'rb') as f:
+        with open(os.path.join(config.tmp_DA_path,'dict_obs.pic'), 'rb') as f:
             dict_obs = pickle.load(f)
             return dict_obs
         
@@ -69,13 +69,13 @@ def obs(config, State, *args, **kwargs):
     
     # Write *dict_obs* for next experiment
     if config.write_obs:
-        with open(config.tmp_DA_path + 'dict_obs.pic', 'wb') as f:
+        with open(os.path.join(config.tmp_DA_path,'dict_obs.pic'), 'wb') as f:
             pickle.dump(dict_obs,f)
         
     return dict_obs
 
 
-def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox):
+def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox=None):
     """
     NAME
         _obs_swot_simulator
@@ -85,7 +85,8 @@ def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox)
         
     """
     # Read obs
-    ds = xr.open_mfdataset(sat_info.path + sat_info.name,combine='by_coords')
+    ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
+                           combine='by_coords')
     time_obs = ds[sat_info.name_obs_time]
     ds = ds[sat_info.name_obs_grd + sat_info.name_obs_var]
     
@@ -106,8 +107,8 @@ def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox)
         if _ds[sat_info.name_obs_time].size>0:
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
-            path = out_path + 'obs_' + sat_info.satellite + '_' +\
-                '_'.join(sat_info.name_obs_var) + '_' + date + '.nc'
+            path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
+                '_'.join(sat_info.name_obs_var) + '_' + date + '.nc')
             print(dt_curr,': '+path)
             _ds[sat_info.name_obs_time].encoding.pop("_FillValue", None)
             _ds.to_netcdf(path,engine='scipy')
@@ -125,7 +126,7 @@ def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox)
 def _obs_fullSSH(dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None):
     
     # read file(s)
-    ds = xr.open_mfdataset(sat_info.path + '/' + sat_info.name+ '*.nc',
+    ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
                            combine='by_coords')
     name_dim_time_obs = ds[sat_info.name_obs_time].dims[0]
     # read time variable
@@ -146,7 +147,7 @@ def _obs_fullSSH(dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None):
         if len(ds1[sat_info.name_obs_time])>0:
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
-            path = out_path + 'obs_' + date + '.nc'
+            path = os.path.join(out_path,'obs_' + date + '.nc')
             print(dt_curr,': '+path)
             ds1[sat_info.name_obs_time].encoding.pop("_FillValue", None)
             ds1.to_netcdf(path,engine='scipy')

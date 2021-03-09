@@ -40,8 +40,8 @@ Created on Wed Jan  6 19:20:42 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = 'my_exp' 
-name_domain = 'my_domain'
+name_experiment = 'Example1' 
+name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
 # Global libraries     
@@ -49,24 +49,22 @@ name_domain = 'my_domain'
 # - datetime
 # - timedelta
 #################################################################################################################################
+import os
 from datetime import datetime,timedelta
-from math import pi
+    
 #################################################################################################################################
 # Initialization parameters
 #################################################################################################################################
-name_init = 'geo_grid' # Either 'geo_grid' or 'from_file'
+# - name_init: 'geo_grid' computes a spherical regular grid. You can also set 'from_file'
+# - file_name_init_SSH_field: name of the file used for initialization
+# - path_init_SSH_field: path (directory+file) used for initialization
+# - name_init_lon: name of longitude field stored in *file_name_init_SSH_field*
+# - name_init_lat: name of latitude field stored in *file_name_init_SSH_field*   
+#################################################################################################################################    
 
-name_init_file = 'init_state.nc' # Name of init file, which will be used by other functions
+name_init = 'geo_grid'                                # either 'geo_grid' or 'from_file'
 
-# For name_init=='from_file'
-
-name_init_grid = '' 
-
-name_init_lon = ''
-
-name_init_lat = ''
-
-# For name_init=='geo_grid'
+# - parameters specific to 'geo_grid'  
 
 lon_min = 294.                                        # domain min longitude
 
@@ -80,8 +78,6 @@ dx = 1/10.                                            # zonal grid spatial step 
 
 dy = 1/10.                                            # meridional grid spatial step (in degree)
 
-g = 9.81
-
 #################################################################################################################################
 # Time parameters
 #################################################################################################################################
@@ -94,11 +90,11 @@ g = 9.81
    
 init_date = datetime(2012,10,1,0)     
 
-final_date = datetime(2012,12,2,0)  
+final_date = datetime(2012,10,15,0)
 
-assimilation_time_step = timedelta(hours=1)  
+assimilation_time_step = timedelta(hours=3)  
 
-saveoutput_time_step = timedelta(hours=1) 
+saveoutput_time_step = timedelta(days=1) 
 
 plot_time_step = timedelta(days=1)  
 
@@ -124,46 +120,20 @@ name_mod_lon = "nav_lon"
 
 name_mod_lat = "nav_lat"
 
-
+####################################
+### Function-specific parameters ### 
+#################################### 
 # - parameters specific to QG model
 #    * qgiter: number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
 #    * c: first baroclinic gravity-wave phase speed (in m/s) related to Rossby Radius of deformation
 #    * dtmodel: timestep of the model (in seconds). Typical values: between 200s and 1000s. If the model crashes, reduce its value.
-
-dir_model =  '../models/model_qg1l/'
-
-dtmodel = 300   
+#################################################################################################################################
 
 qgiter = 20
 
 c = 2.7
 
-cdiffus = 0. 
-
-only_diffusion = False
-
-
-# - parameters specific to SW model
-
-sw_time_scheme = 'lf' # Time scheme of the model (e.g. Euler,rk4,lf)
-
-bc_kind = '1d'
-
-w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
-
-He_init = 0.9 # Mean height (in m)
-
-Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
-
-D_He = 200e3 # Space scale of gaussian decomposition for He (in m)
-
-T_He = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for He (in m)
-
-D_bc = 200e3 # Space scale of gaussian decomposition for boundary conditions (in m)
-
-T_bc = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for boundary conditions (in m)
-
-He_data = None # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+dtmodel = 300   
 
 #################################################################################################################################
 # Analysis parameters
@@ -184,14 +154,13 @@ He_data = None # He external data that will be used as apriori for the inversion
 #      The boundary conditions have to be prescribed on the same grid as *file_name_init_SSH_field*
 #      If no file is specified, or the file does not exist, the boundary conditions are set to 0. 
 #    * lenght_bc: lenght of the peripherical band for which the boundary conditions are applied
-#    * name_time_bc: name of the boundary conditions time
 #    * name_var_bc: name of the boundary conditions variable
 #################################################################################################################################
 
 name_analysis = 'BFN'
 
 ####################################
-### BFN-specific parameters ### 
+### Function-specific parameters ### 
 #################################### 
 
 bfn_window_size = timedelta(days=7)
@@ -200,49 +169,21 @@ bfn_window_output = timedelta(days=3)
 
 bfn_propation_timestep = timedelta(hours=1)
 
-bfn_window_overlap = True
-
 bfn_criterion = 0.01
 
 bfn_max_iteration = 5
 
-save_bfn_trajectory = False
-
 dist_scale = 10 # in km
 
-save_obs_proj = False
-
-path_save_proj = None
+save_obs_proj = True
 
 flag_use_boundary_conditions = True
 
-file_boundary_conditions = None
+file_boundary_conditions = '../../data_Example1/2020a_SSH_mapping_NATL60_DUACS_swot_en_j1_tpn_g2.nc'
 
 lenght_bc = 20
 
-name_var_bc = None
-
-scalenudg = None
-
-####################################
-### 4Dvar-specific parameters ### 
-#################################### 
-
-path_init_4Dvar = None 
-
-checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
-
-sigma_R = 1e-2 # Observational standard deviation
-
-sigma_B_He = 0.2 # Background variance for He
-
-sigma_B_bc = 1e-2 # Background variance for bc
-
-prec = False # preconditoning
-
-gtol = 1e-5 # Gradient norm must be less than gtol before successful termination.
-
-maxiter = 20 # Maximal number of iterations for the minimization process
+name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'gssh'}
 
 #################################################################################################################################
 # Observation parameters
@@ -272,7 +213,7 @@ write_obs = True
 #################################################################################################################################
 
 kind_swot = "swot_simulator"
-obs_path_swot = 'dc_obs/'
+obs_path_swot = '../../data_Example1/dc_obs/'
 obs_name_swot = "2020a_SSH_mapping_NATL60_karin_swot.nc" 
 name_obs_var_swot = ["ssh_model"]     
 name_obs_lon_swot = "lon"
@@ -283,7 +224,7 @@ nudging_params_stretching_swot = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
 nudging_params_relvort_swot = {'sigma':0,'K':0.05,'Tau':timedelta(hours=12)}
 
 kind_nadir_swot = "swot_simulator"
-obs_path_nadir_swot = 'dc_obs/'
+obs_path_nadir_swot = '../../data_Example1/dc_obs/'
 obs_name_nadir_swot = "2020a_SSH_mapping_NATL60_nadir_swot.nc" 
 name_obs_var_nadir_swot = ["ssh_model"]     
 name_obs_lon_nadir_swot = "lon"
@@ -294,7 +235,7 @@ nudging_params_stretching_nadir_swot = {'sigma':0,'K':0.7,'Tau':timedelta(days=1
 nudging_params_relvort_nadir_swot = None
 
 kind_jason1 = "swot_simulator"
-obs_path_jason1 = 'dc_obs/'
+obs_path_jason1 = '../../data_Example1/dc_obs/'
 obs_name_jason1 = "2020a_SSH_mapping_NATL60_jason1.nc" 
 name_obs_var_jason1 = ["ssh_model"]     
 name_obs_lon_jason1 = "lon"
@@ -305,7 +246,7 @@ nudging_params_stretching_jason1 = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
 nudging_params_relvort_jason1 = None
 
 kind_geosat2 = "swot_simulator"
-obs_path_geosat2 = 'dc_obs/'
+obs_path_geosat2 = '../../data_Example1/dc_obs/'
 obs_name_geosat2 = "2020a_SSH_mapping_NATL60_geosat2.nc" 
 name_obs_var_geosat2 = ["ssh_model"]     
 name_obs_lon_geosat2 = "lon"
@@ -316,7 +257,7 @@ nudging_params_stretching_geosat2 = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
 nudging_params_relvort_geosat2 = None
 
 kind_envisat = "swot_simulator"
-obs_path_envisat = 'dc_obs/'
+obs_path_envisat = '../../data_Example1/dc_obs/'
 obs_name_envisat = "2020a_SSH_mapping_NATL60_envisat.nc" 
 name_obs_var_envisat = ["ssh_model"]     
 name_obs_lon_envisat = "lon"
@@ -327,7 +268,7 @@ nudging_params_stretching_envisat = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
 nudging_params_relvort_envisat = None
 
 kind_topex = "swot_simulator"
-obs_path_topex = 'dc_obs/'
+obs_path_topex = '../../data_Example1/dc_obs/'
 obs_name_topex = "2020a_SSH_mapping_NATL60_topex-poseidon_interleaved.nc" 
 name_obs_var_topex = ["ssh_model"]     
 name_obs_lon_topex = "lon"
@@ -348,11 +289,11 @@ nudging_params_relvort_topex = None
 
 saveoutputs = True         
 
-name_exp_save = name_experiment + '_' + name_domain
+name_exp_save = name_experiment 
 
-path_save = 'outputs/' + name_exp_save + '/'
+path_save = '../outputs/' + name_exp_save + '/'
 
-flag_plot = 0
+flag_plot = 1
     
 #################################################################################################################################
 # Temporary DA parameters
@@ -361,7 +302,7 @@ flag_plot = 0
 # - name_grd: name used for saving the QG grid to avoid calculating it every time.
 #################################################################################################################################
         
-tmp_DA_path = "scratch/" +  name_exp_save + '/'
+tmp_DA_path = "../scratch/" +  name_exp_save + '/'
  
 name_grd = tmp_DA_path + 'QGgrid'
 

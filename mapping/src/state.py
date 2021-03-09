@@ -35,6 +35,7 @@ class State:
         self.path_save = config.path_save
         if not os.path.exists(self.path_save):
             os.makedirs(self.path_save)
+        self.g = config.g
         # Initialize grid
         if config.name_init == 'geo_grid':
              self.ini_geo_grid(config)
@@ -43,6 +44,7 @@ class State:
         else:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
         self.ny,self.nx = self.lon.shape
+        self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
         if config.name_model=='QG1L':
@@ -51,6 +53,9 @@ class State:
             self.ini_var_sw1l()
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
+            
+        if not os.path.exists(config.tmp_DA_path):
+            os.makedirs(config.tmp_DA_path)
         
     def __str__(self):
         message = ''
@@ -71,7 +76,7 @@ class State:
         lon = np.arange(config.lon_min, config.lon_max + config.dx, config.dx) % 360
         lat = np.arange(config.lat_min, config.lat_max + config.dy, config.dy) 
         lon,lat = np.meshgrid(lon,lat)
-        self.lon = lon
+        self.lon = lon % 360
         self.lat = lat
     
     def ini_from_file(self,config):
@@ -89,7 +94,7 @@ class State:
         lat = dsin[config.name_init_lat].values
         if len(lon.shape)==1:
             lon,lat = np.meshgrid(lon,lat)
-        self.lon = lon
+        self.lon = lon % 360
         self.lat = lat
             
     def ini_var_qg1l(self):
@@ -129,7 +134,7 @@ class State:
                 self.var[var] = np.zeros((self.ny,self.nx))
 
 
-    def save(self,filename=None,date=None):
+    def save(self,filename=None,date=None,grd=True):
         """
         NAME
             save
@@ -142,31 +147,36 @@ class State:
                 """
         
         if filename is None:
-            filename = self.path_save + '/' + self.name_exp_save\
+            filename = os.path.join(self.path_save,self.name_exp_save\
                 + '_y' + str(date.year)\
                 + 'm' + str(date.month).zfill(2)\
                 + 'd' + str(date.day).zfill(2)\
                 + 'h' + str(date.hour).zfill(2)\
-                + str(date.minute).zfill(2) + '.nc'
-                
-        dictout = {self.name_lon: (('y','x',), self.lon),
-                   self.name_lat: (('y','x',), self.lat),
-               }
-    
-        if date is not None:
-            dictout['time'] = (('t'), [pd.to_datetime(date)])
+                + str(date.minute).zfill(2) + '.nc')
+        
+        dictout = {}
+        
+        if grd:
+            dictout = {self.name_lon: (('y','x',), self.lon),
+                        self.name_lat: (('y','x',), self.lat),
+                    }
+        
+            if date is not None:
+                dictout['time'] = (('t'), [pd.to_datetime(date)])
             
         for i, name in enumerate(self.name_var):
             dictout[name] = (('y'+str(i), 'x'+str(i),), self.var.values[i])
             
         ds = xr.Dataset(dictout)
-        ds.to_netcdf(filename)
+        ds.to_netcdf(filename,engine='h5netcdf')
         ds.close()
+
+        
     
     def load(self,filename):
-        ds = xr.open_dataset(filename)
-        for i, name in enumerate(self.name_var):
-            self.var.values[i] = ds[name].values
+        with xr.open_dataset(filename,engine='h5netcdf') as ds:
+            for i, name in enumerate(self.name_var):
+                self.var.values[i] = ds[name].values
     
     def random(self,ampl=1):
         other = self.free()

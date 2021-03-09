@@ -14,8 +14,9 @@ import matplotlib.pylab as plt
 import pickle
 from datetime import datetime
 import scipy.optimize as opt
+import gc
 
-from . import mod,tools,grid
+from . import grid
 
 
 
@@ -61,16 +62,13 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     middle_bfn_date = config.init_date
     # In the case of Nudging (i.e. bfn_max_iteration=1), set the bfn window length as the entire period of the experience
     if config.bfn_max_iteration==1:
-        print('bfn_max_iteration has been set to 1 --> '
-              + 'Only one forth loop will be done on the entiere period of the experience')
         new_bfn_window_size = config.final_date - config.init_date
     else:
         new_bfn_window_size = config.bfn_window_size
+    name_init = ""
     
-        
     # Main time loop
     while (middle_bfn_date <= config.final_date) and not bfn_last_window :
-        print('\n*** BFN window ***')
         #############
         # 1. SET-UP #
         #############
@@ -84,23 +82,20 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             final_bfn_date = config.final_date
         else:
             final_bfn_date = init_bfn_date + new_bfn_window_size
-        print('\nfrom ', init_bfn_date, ' to ', final_bfn_date)
         # propagation timestep
         one_time_step = config.bfn_propation_timestep
         if bfn_first_window:
             present_date_forward0 = init_bfn_date
-
+        
         ########################
         # 2. Create BFN object #
         ########################
-        print('\n* Initialize BFN *')
         bfn_obj = bfn.bfn(
             config,init_bfn_date,final_bfn_date,one_time_step,State.lon,State.lat)
         
         ######################################
         # 3. BOUNDARY AND INITIAL CONDITIONS #
         ######################################
-        print("\n* Boundary and initial conditions *")
         # Boundary condition
         if config.flag_use_boundary_conditions:
             timestamps = np.arange(calendar.timegm(init_bfn_date.timetuple()),
@@ -129,31 +124,19 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                         + str(init_bfn_date.minute).zfill(2) + '.nc'
             if not os.path.isfile(init_file) :
                 restart = False
-                print(init_file, " : Init file is not present for nudging."
-                      + "We will use the current state")
             else:
                 restart = True
-                print(init_file, " is used as initialization")
                 State.load(init_file)
                 
         elif config.bfn_window_overlap:
             # Use last state from the last forward loop as initialization
-            name_previous = config.path_save + '/' + config.name_exp_save\
-                            + '_y' + str(init_bfn_date.year)\
-                            + 'm' + str(init_bfn_date.month).zfill(2)\
-                            + 'd' + str(init_bfn_date.day).zfill(2)\
-                            + 'h' + str(init_bfn_date.hour).zfill(2)\
-                            + str(init_bfn_date.minute).zfill(2) + '.nc'
-            State.load(name_previous)
+            State.load(name_init)
         
         ###################
         # 4. Observations #
         ###################
-        # Selection
-        print('\n* Select observations *')
-        
+        # Selection        
         if call_obs_func:
-            print('Calling obs_all_observationcheck function...')
             dict_obs_it = obs.obs(config)
             bfn_obj.select_obs(dict_obs_it)
             dict_obs_it.clear()
@@ -162,7 +145,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             bfn_obj.select_obs(dict_obs)
 
         # Projection
-        print('\n* Project observations *')
         bfn_obj.do_projections()
 
         ###############
@@ -174,22 +156,18 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         Nold_t = None
 
         while bfn_iter==0 or\
-             (bfn_iter < config.bfn_max_iteration
+              (bfn_iter < config.bfn_max_iteration
               and abs(err_bfn0-err_bfn1)/err_bfn1 > config.bfn_criterion):
+        #while bfn_iter < config.bfn_max_iteration:
             if bfn_iter>0:
                 present_date_forward0 = init_bfn_date
 
             err_bfn0 = err_bfn1
             bfn_iter += 1
-            if bfn_iter == config.bfn_max_iteration:
-                print('\nMaximum number of iterations achieved ('
-                      + str(config.bfn_max_iteration)
-                      + ') --> last Forth loop !!')
-
+            
             ###################
             # 5.1. FORTH LOOP #
             ###################
-            print("\n* Forward loop " + str(bfn_iter) + " *")
             while present_date_forward0 < final_bfn_date :
                 
                 # Retrieve corresponding time index for the forward loop
@@ -217,42 +195,44 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 # Update model parameter
                 bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=1)
 
-                # Save output every *saveoutput_time_step*
-                if (((present_date_forward - config.init_date)/config.saveoutput_time_step)%1 == 0)\
-                   & (present_date_forward>config.init_date) :
-                        name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
-                        filename_forward = config.tmp_DA_path + '/BFN_forth_' + name_save
-                        State.save(filename_forward,present_date_forward)
-                        if config.save_bfn_trajectory:
-                            filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
-                                       + '_forth_' + str(bfn_iter) + '/' + name_save
+                # Save current state                 
+                name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
+                filename_forward = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
+                State.save(filename_forward,present_date_forward)
+                if config.save_bfn_trajectory:
+                    filename_traj = os.path.join(config.path_save,'BFN_' + str(middle_bfn_date)[:10]\
+                               + '_forth_' + str(bfn_iter),name_save)
 
-                            if not os.path.exists(os.path.dirname(filename_traj)):
-                                os.makedirs(os.path.dirname(filename_traj))
-                            State.save(filename_traj,present_date_forward)
+                    if not os.path.exists(os.path.dirname(filename_traj)):
+                        os.makedirs(os.path.dirname(filename_traj))
+                    State.save(filename_traj,present_date_forward)
+                            
                             
                 # Time update
                 present_date_forward0 = present_date_forward
                 Nold_t = N_t
-
+            
+            # Init file for next loop
+            name_init = filename_forward
+            
             # Plot for debugging
             if config.flag_plot > 0:
                 ssh = State.getvar(0)
                 pv = State.getvar(1)
                 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=((10, 5)))
-                p1 = ax1.pcolormesh(State.lon, State.lat, ssh, shading='auto')
-                p2 = ax2.pcolormesh(State.lon, State.lat, pv, shading='auto')
+                p1 = ax1.pcolormesh(State.lon, State.lat, pv, shading='auto')
+                p2 = ax2.pcolormesh(State.lon, State.lat, ssh, shading='auto')
                 plt.colorbar(p1, ax=ax1)
                 plt.colorbar(p2, ax=ax2)
                 ax1.set_title('Potential vorticity')
                 ax2.set_title('SSH')
+                plt.suptitle(middle_bfn_date,': End of forward loop n°',bfn_iter)
                 plt.show()
 
             ##################
             # 5.2. BACK LOOP #
             ##################
             if  bfn_iter < config.bfn_max_iteration:
-                print("\n* Backward loop " + str(bfn_iter) + " *")
                 present_date_backward0 = final_bfn_date
     
                 while present_date_backward0 > init_bfn_date :
@@ -282,20 +262,18 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
                     # Update model parameter
                     bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=-1)
+                    
+                    # Save current state            
+                    name_save = config.name_exp_save + '_' + str(ibackward-1).zfill(5) + '.nc'
+                    filename_backward = os.path.join(config.tmp_DA_path,'BFN_back_' + name_save)
+                    State.save(filename_backward,present_date_backward)
+                    if config.save_bfn_trajectory:
+                        filename_traj = os.path.join(config.path_save,'BFN_' + str(middle_bfn_date)[:10]\
+                                   + '_back_' + str(bfn_iter),name_save)
 
-                    # Save output every *saveoutput_time_step*
-                    if (((present_date_backward - config.init_date)/config.saveoutput_time_step)%1 == 0)\
-                       & (present_date_backward>=config.init_date) :
-                            name_save = config.name_exp_save + '_' + str(ibackward).zfill(5) + '.nc'
-                            filename_backward = config.tmp_DA_path + '/BFN_back_' + name_save
-                            State.save(filename_backward,present_date_backward)
-                            if config.save_bfn_trajectory:
-                                filename_traj = config.path_save + 'BFN_' + str(middle_bfn_date)[:10]\
-                                           + '_back_' + str(bfn_iter) + '/' + name_save
-
-                                if not os.path.exists(os.path.dirname(filename_traj)):
-                                    os.makedirs(os.path.dirname(filename_traj))
-                                State.save(filename_traj,present_date_backward)
+                        if not os.path.exists(os.path.dirname(filename_traj)):
+                            os.makedirs(os.path.dirname(filename_traj))
+                        State.save(filename_traj,present_date_backward)
 
                     # Time update
                     present_date_backward0 = present_date_backward
@@ -311,25 +289,21 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     plt.colorbar(p2, ax=ax2)
                     ax1.set_title('Potential vorticity')
                     ax2.set_title('SSH')
+                    plt.suptitle(middle_bfn_date,': End of backward loop n°',bfn_iter)
                     plt.show()
 
             #########################
             # 5.3. CONVERGENCE TEST #
             #########################
             if bfn_iter < config.bfn_max_iteration:
-                print('\n* Convergence test *')
                 err_bfn1 = bfn_obj.convergence(
-                                        path_forth=config.tmp_DA_path + '/BFN_forth_',
-                                        path_back=config.tmp_DA_path + '/BFN_back_'
+                                        path_forth=os.path.join(config.tmp_DA_path,'BFN_forth_*.nc'),
+                                        path_back=os.path.join(config.tmp_DA_path,'BFN_back_*.nc')
                                         )
-
-
-        print("\n* End of the BFN loop after " + str(bfn_iter) + " iterations *")
 
         #####################
         # 6. SAVING OUTPUTS #
         #####################
-        print('\n* Saving last forth loop as outputs for the following dates : *')
         # Set the saving temporal window
         if config.bfn_max_iteration==1:
             write_date_min = init_bfn_date
@@ -360,19 +334,19 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     # Read current converged state
                     iforward = int((present_date - init_bfn_date)/one_time_step) - 1
                     name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
-                    current_file = config.tmp_DA_path + '/BFN_forth_' + name_save
+                    current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
                     State_current.load(current_file)
                     
                     # Smooth with previous BFN window
                     if config.bfn_window_overlap and (not bfn_first_window or restart):
                         # Read previous output at this timestamp
-                        previous_file = config.path_save + config.name_exp_save\
+                        previous_file = os.path.join(config.path_save,config.name_exp_save\
                                         + '_y'+str(present_date.year)\
                                         + 'm'+str(present_date.month).zfill(2)\
                                         + 'd'+str(present_date.day).zfill(2)\
                                         + 'h'+str(present_date.hour).zfill(2)\
                                         + str(present_date.minute).zfill(2) + \
-                                            '.nc'
+                                            '.nc')
                         if os.path.isfile(previous_file):
                             State_previous.load(previous_file)
                             
@@ -388,7 +362,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     # Save output
                     if config.saveoutputs:
                         State_current.save(date=present_date)
-        print()
+        
         ########################
         # 8. PARAMETERS UPDATE #
         ########################
@@ -402,18 +376,20 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             bfn_first_window = False
         else:
             middle_bfn_date += window_lag
-
+    print()
+    del State_current,State_previous,State,dict_obs
+    return
     
     
 def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     
-    from .tools_4Dvar import Obsopt, Cov, Variational, grad_test
+    from .tools_4Dvar import Obsopt, Cov, Variational
 
     #################
     # 1. Obs op     #
     #################
     print('\n*** Obs op ***\n')
-    H = Obsopt(State.lon.size,dict_obs,Model.dt)
+    H = Obsopt(State.lon.size,dict_obs,Model.timestamps,Model.dt)
     
     ###################
     # 2. Variationnal #
@@ -436,7 +412,8 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # Cost and Grad functions
     var = Variational(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path)
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
+        prec=config.prec)
     # Initial State
     if config.path_init_4Dvar is None:
         Xopt = np.zeros_like(var.Xb)
@@ -446,32 +423,32 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
             print('Read previous minimum:',config.path_init_4Dvar)
             Xopt = pickle.load(f)
 
-    Jini = var.cost(Xopt)
-    
-    print('* Initial cost function:',Jini)
-    
-    print('* grad test:')
-    Xtest = np.random.random(Xopt.shape)
-    grad_test(var.cost,var.grad,Xtest)
     
     ###################
     # 3. Minimization #
     ###################
     print('\n*** Minimization ***\n')
-    def callback(XX):
+    
+    J0 = var.cost(Xopt)
+    g0 = var.grad(Xopt)
+    projg0 = np.max(np.abs(g0))
+    print('J0=',"{:e}".format(J0))
+    print('projg0',"{:e}".format(projg0))
+    
+    
+    def callback(XX,projg0=projg0):
         now = datetime.now()
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
-        with open(config.tmp_DA_path + '/X_it-'+current_time+'.pic','wb') as f:
+        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
             pickle.dump(XX,f)
 
     res = opt.minimize(var.cost,Xopt,
                     method='L-BFGS-B',
                     jac=var.grad,
-                    options={'disp': True, 'gtol': config.gtol, 'maxiter': config.maxiter},
+                    options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},
                     callback=callback)
 
     print ('\nIs the minimization successful? {}'.format(res.success))
-    print ('\nInitial cost function value: {}'.format(Jini))
     print ('\nFinal cost function value: {}'.format(res.fun))
     print ('\nNumber of iterations: {}'.format(res.nit))
 
@@ -479,21 +456,24 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 4. Saving trajectory #
     ########################
     print('\n*** Saving trajectory ***\n')
-        
-    Xini = res.x
     
+    if config.prec:
+        Xa = var.Xb + B.sqr(res.x)
+    else:
+        Xa = var.Xb + res.x
+        
     # Save minimum for next experiments
-    with open(config.tmp_DA_path + '/Xini.pic', 'wb') as f:
-        pickle.dump(Xini,f)
+    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
+        pickle.dump(Xa,f)
     
     # Steady initial state
     State0 = State.free()
     State0.save(date=config.init_date)
-    for step in range(Model.nt-1):
-        t = Model.T[step] # seconds
-        date = Model.timestamps[step+1] # date
+    for i in range(Model.nt-1):
+        t = Model.T[i] # seconds
+        date = Model.timestamps[i+1] # date
         
-        Model.step(t,State0,Xini,step=step)
+        Model.step(t,State0,Xa)
         
         if (((date - config.init_date).total_seconds()
              /config.saveoutput_time_step.total_seconds())%1 == 0)\
@@ -501,10 +481,10 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
             print(date, end=' / ')    
             # Save State
             State0.save(date=date)
+    
+    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
+    gc.collect()
+    print()
         
 
     
-   
-    
-
-

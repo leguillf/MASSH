@@ -15,6 +15,7 @@ from math import sqrt,pi
 from datetime import timedelta
 from . import switchvar, tools, grid
 
+import time
 
 def Model(config,State):
     """
@@ -24,6 +25,7 @@ def Model(config,State):
     DESCRIPTION
         Main function calling subclass for specific models
     """
+    print('Model:',config.name_model)
     if config.name_model=='QG1L':
         return Model_qg1l(config,State)
     elif config.name_model=='SW1L':
@@ -37,25 +39,26 @@ class Model_qg1l:
     def __init__(self,config,State):
         # Model specific libraries
         SourceFileLoader("modgrid", 
-                         "../models/model_qg1l/modgrid.py").load_module() 
+                         config.dir_model + "/modgrid.py").load_module() 
         SourceFileLoader("moddyn", 
-                         "../models/model_qg1l/moddyn.py").load_module()     
+                        config.dir_model + "/moddyn.py").load_module()     
         SourceFileLoader("modelliptic", 
-                         "../models/model_qg1l/modelliptic.py").load_module()     
+                        config.dir_model + "/modelliptic.py").load_module()     
         self.qgsw = SourceFileLoader("qgsw", 
-                                 "../models/model_qg1l/qgsw.py").load_module() 
+                                 config.dir_model + "/qgsw.py").load_module() 
 
         # Model parameters
         self.name_grd = config.name_grd
         self.dt = config.dtmodel
-        self.g = 9.81
         self.c = config.c
-        self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
         self.only_diffusion = config.only_diffusion
         self.cdiffus = config.cdiffus
         self.qgiter = config.qgiter
         
         State.ini_var_qg1l()
+        
+        self.State = State
+        
             
         
         
@@ -76,7 +79,7 @@ class Model_qg1l:
             c = np.mean(State.f/np.sqrt(K))
         else:
             c = self.c
-            K = (self.f/c)**2
+            K = (self.State.f/c)**2
         # Boundary condition
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
@@ -107,7 +110,7 @@ class Model_qg1l:
             # Nudging towards ssh
             if np.any(np.isfinite(Nudging_term['ssh'])):
                 indNoNan = ~np.isnan(Nudging_term['ssh'])
-                pv_1[-1][indNoNan] -= (1-Wbc[indNoNan]) * (self.g/self.f[indNoNan]) *\
+                pv_1[-1][indNoNan] -= (1-Wbc[indNoNan]) * (self.State.g/self.State.f[indNoNan]) *\
                     K[indNoNan] * Nudging_term['ssh'][indNoNan]
     
     
@@ -137,24 +140,28 @@ class Model_sw1l:
         self.config = config
         # Model specific libraries
         SourceFileLoader("obcs", 
-                                 "../models/model_sw1l/obcs.py").load_module() 
+                                 config.dir_model+"/obcs.py").load_module() 
         SourceFileLoader("obcs_tgl", 
-                                 "../models/model_sw1l/obcs_tgl.py").load_module() 
+                                 config.dir_model + "/obcs_tgl.py").load_module() 
         SourceFileLoader("obcs_adj", 
-                                 "../models/model_sw1l/obcs_adj.py").load_module() 
+                                 config.dir_model + "/obcs_adj.py").load_module() 
         SourceFileLoader("swm", 
-                                 "../models/model_sw1l/swm.py").load_module() 
+                                 config.dir_model + "/swm.py").load_module() 
         SourceFileLoader("swm_tgl", 
-                                 "../models/model_sw1l/swm_tgl.py").load_module() 
+                                 config.dir_model + "/swm_tgl.py").load_module() 
         
         swm_adj = SourceFileLoader("swm_adj", 
-                                 "../models/model_sw1l/swm_adj.py").load_module() 
+                                 config.dir_model + "/swm_adj.py").load_module() 
                 
         # Compute cartesian grid 
         DX,DY = grid.lonlat2dxdy(State.lon,State.lat)
         dx = np.mean(DX)
         dy = np.mean(DY)
         X,Y = grid.dxdy2xy(DX,DY)
+        self.X = X
+        self.Y = Y
+        self.dx = dx
+        self.dy = dy
         
         # State variable dimensions
         self.shapeu = State.var[0].shape
@@ -175,10 +182,12 @@ class Model_sw1l:
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
         cfl = min(dx, dy) / np.max(np.sqrt(State.g * self.Heb))
+        print('CFL:',cfl)
         if self.dt>=cfl:
             print('WARNING: timestep>=CFL')
         self.T = np.arange(self.nt) * self.dt
         self.time_scheme = config.sw_time_scheme
+        print('time scheme:',self.time_scheme)
         
         # Construct timestamps
         self.timestamps = [] 
@@ -246,10 +255,10 @@ class Model_sw1l:
             isub_bc = int(config.D_bc//dy)  
             jsub_bc = int(config.D_bc//dx)  
             self.bcy = np.arange(-2*isub_bc*dy,(State.ny+3*isub_bc)*dy,isub_bc*dy)
-            self.bcx = np.arange(-2*jsub_bc*dx,(State.nx+3*isub_bc)*dx,jsub_bc*dx)
+            self.bcx = np.arange(-2*jsub_bc*dx,(State.nx+3*jsub_bc)*dx,jsub_bc*dx)
             
             for xj in self.bcx:
-                bc_x_gauss.append(tools.gaspari_cohn(X[State.ny//2,:],7*config.D_bc/2))
+                bc_x_gauss.append(tools.gaspari_cohn(X[State.ny//2,:]-xj,7*config.D_bc/2))
             for yi in self.bcy:
                 bc_y_gauss.append(tools.gaspari_cohn(Y[:,State.nx//2]-yi,7*config.D_bc/2))   
             self.bc_x_gauss = np.asarray(bc_x_gauss)
@@ -293,12 +302,26 @@ class Model_sw1l:
                                    f=State.f)
         
         
+        if self.time_scheme=='Euler':
+            self.swm_step = self.swm.step_euler
+            self.swm_step_tgl = self.swm.step_euler_tgl
+            self.swm_step_adj = self.swm.step_euler_adj
+        elif self.time_scheme=='lf':
+            self.swm_step = self.swm.step_lf
+            self.swm_step_tgl = self.swm.step_lf_tgl
+            self.swm_step_adj = self.swm.step_lf_adj
+        elif self.time_scheme=='rk4':
+            self.swm_step = self.swm.step_rk4
+            self.swm_step_tgl = self.swm.step_rk4_tgl
+            self.swm_step_adj = self.swm.step_rk4_adj
+            
         
+                
         # Tests
         print('tangent test:')
-        self.tangent_test(State,10*self.dt)
+       # self.tangent_test(State,self.T[-2],nstep=config.checkpoint)
         print('adjoint test:')
-        self.adjoint_test(State,10*self.dt)
+       # self.adjoint_test(State,self.T[-2],nstep=config.checkpoint)
         
     def restart(self):
         
@@ -367,7 +390,7 @@ class Model_sw1l:
             else:
                 hbcx_1d = hbcx
         else:
-            hbcx_1d = np.zeros([self.omegas.size,2,2,self.bc_theta.size,self.nx])
+            hbcx_1d = np.zeros([self.omegas.size,2,2,self.bc_theta.size,self.shapeh[1]])
         
         # West/East
         if hbcy is not None:
@@ -384,8 +407,8 @@ class Model_sw1l:
             else:
                 hbcy_1d = hbcy
         else:
-            hbcy_1d = np.zeros([self.omegas.size,2,2,self.bc_theta.size,self.ny])
-        
+            hbcy_1d = np.zeros([self.omegas.size,2,2,self.bc_theta.size,self.shapeh[0]])
+    
         return hbcx_1d,hbcy_1d
     
     def reduced_shape_He(self,t,adHe2d_incr):
@@ -437,11 +460,9 @@ class Model_sw1l:
         return adhbcx_incr,adhbcy_incr
     
         
-    def step(self,t,State,params,step=0):
-        
+    def step(self,t,State,params,nstep=1,t0=0):
         # Get state variables and model parameters
         u0,v0,h0 = State.getvar()
-        
         He,hbcx,hbcy = self.reshapeParams(params)
 
         # Model parameters: switch to physical space
@@ -451,22 +472,28 @@ class Model_sw1l:
             tbc += self.dt       
         hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
         
+        # init
+        u = +u0
+        v = +v0
+        h = +h0
+        
         # Time propagation
-        if self.time_scheme=='Euler':
-            u,v,h = self.swm.step_euler(t,u0,v0,h0,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,step=step)
-        
-        if self.time_scheme=='lf':
-            u,v,h = self.swm.step_lf(t,u0,v0,h0,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,step=step)
-        
+        for i in range(nstep):
+            
+            if t+i*self.dt==t0:
+                    first = True
+            else: first = False
+            #first = False
+            
+            u,v,h = self.swm_step(
+                t+i*self.dt,
+                u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+            
         # Update state
         State.setvar([u,v,h])
         
-        
-
-        
     
-    def step_tgl(self,t,dState,State,dparams,params,step=0):
-        
+    def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0):
         # Get state variables and model parameters
         du0,dv0,dh0 = dState.getvar()
         u0,v0,h0 = State.getvar()
@@ -483,29 +510,50 @@ class Model_sw1l:
         hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
         dhbcx1d,dhbcy1d = self.get_hbc1d(tbc,dhbcx,dhbcy)
         
-        # Time propagation
-        if self.time_scheme=='Euler':
-            du,dv,dh = self.swm.step_euler_tgl(
-                t,du0,dv0,dh0,u0,v0,h0,
-                dHe=dHe2d,He=He2d,
-                dhbcx=dhbcx1d,dhbcy=dhbcy1d,hbcx=hbcx1d,hbcy=hbcy1d,step=step)
-    
-        if self.time_scheme=='lf':
-            du,dv,dh = self.swm.step_lf_tgl(
-                t,du0,dv0,dh0,u0,v0,h0,
-                dHe=dHe2d,He=He2d,
-                dhbcx=dhbcx1d,dhbcy=dhbcy1d,hbcx=hbcx1d,hbcy=hbcy1d,step=step)
+        # init
+        du = +du0
+        dv = +dv0
+        dh = +dh0
+        u = +u0
+        v = +v0
+        h = +h0
         
+        # Time propagation
+        # Current trajectory
+        traj = [(u,v,h)]
+        if nstep>1:
+            for i in range(nstep):
+                if t+i*self.dt==t0:
+                        first = True
+                else: first = False
+                #first = False
+                u,v,h = self.swm_step(
+                        t+i*self.dt,
+                        u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                traj.append((u,v,h))
+            
+        for i in range(nstep):
+            if t+i*self.dt==t0:
+                    first = True
+            else: first = False
+            #first = False
+            u,v,h = traj[i]
+            
+            du,dv,dh = self.swm_step_tgl(
+                t+i*self.dt,du,dv,dh,u,v,h,
+                dHe=dHe2d,He=He2d,
+                dhbcx=dhbcx1d,dhbcy=dhbcy1d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+      
         # Update state 
         dState.setvar([du,dv,dh])
         
     
     
-    def step_adj(self,t,adState, State, adparams0, params, step=0):
+    def step_adj(self,t,adState, State, adparams0, params, nstep=1, t0=0):
         
-        # Get state variables
-        u0,v0,h0 = State.getvar()
+        # Get variables
         adu0,adv0,adh0 = adState.getvar()
+        u0,v0,h0 = State.getvar()
         He,hbcx,hbcy = self.reshapeParams(params)
         adHe0,adhbcx0,adhbcy0 = self.reshapeParams(adparams0)
         
@@ -516,17 +564,45 @@ class Model_sw1l:
             tbc += self.dt
         hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
         
+        # Init
+        adu = +adu0
+        adv = +adv0
+        adh = +adh0
+        adHe2d = 0
+        adhbcx1d = 0
+        adhbcy1d = 0
+        u = +u0
+        v = +v0
+        h = +h0
+        
         # Time propagation
-        if self.time_scheme=='Euler':
-            adu,adv,adh,adHe2d,adhbcx1d,adhbcy1d =\
-                self.swm.step_adj_euler(t,adu0,adv0,adh0,u0,v0,h0,
-                                      He2d,hbcx1d,hbcy1d,step)
-                
-        if self.time_scheme=='lf':
-            adu,adv,adh,adHe2d,adhbcx1d,adhbcy1d =\
-                self.swm.step_adj_lf(t,adu0,adv0,adh0,u0,v0,h0,
-                                      He2d,hbcx1d,hbcy1d,step)
-                
+        # Current trajectory
+        traj = [(u,v,h)]
+        if nstep>1:
+            for i in range(nstep):
+                if t+i*self.dt==t0:
+                        first = True
+                else: first = False
+                #first = False
+                u,v,h = self.swm_step(
+                        t+i*self.dt,
+                        u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                traj.append((u,v,h))
+            
+        for i in reversed(range(nstep)):
+            if t+i*self.dt==t0:
+                    first = True
+            else: first = False
+            #first = False
+            u,v,h = traj[i]
+        
+            adu,adv,adh,adHe2d_tmp,adhbcx1d_tmp,adhbcy1d_tmp =\
+                self.swm_step_adj(t+i*self.dt,adu,adv,adh,u,v,h,
+                                      He2d,hbcx1d,hbcy1d,first=first)
+            adHe2d += adHe2d_tmp
+            adhbcx1d += adhbcx1d_tmp
+            adhbcy1d += adhbcy1d_tmp
+            
         # Back to reduced form
         adHe = self.reduced_shape_He(t,adHe2d)
         adHe += adHe0 
@@ -540,177 +616,43 @@ class Model_sw1l:
         
         return adparams
         
-        
-    def run(self,t0,tint,State,params,return_traj=False):
+    def run(self,t0,tint,State,params,return_traj=False,nstep=1):
         if return_traj:
+            tt = [t0]
             traj = [State.getvar()]
-        t,step = t0,0
+        t = t0
         while t <= t0+tint: 
-            self.step(t,State,params,step=step)
+            _nstep = nstep
+            self.step(t,State,params,nstep=_nstep,t0=t0)
+            t += nstep*self.dt
             if return_traj:
                 traj.append(State.getvar())
-            step +=1
-            t += self.dt
+                tt.append(t)
         if return_traj:
-            return traj
+            return tt,traj
 
-    def run_tgl(self,t0,tint,dState,State,dparams,params):
-        
+    def run_tgl(self,t0,tint,dState,State,dparams,params,nstep=1):
         State_tmp = State.copy()
-        traj = self.run(t0,tint,State_tmp,params,return_traj=True)
-        t,step = t0,0
-        while t <= t0+tint: 
-            State_tmp.setvar(traj[step])
-            self.step_tgl(t,dState,State_tmp,dparams,params,step)
-            step +=1
-            t += self.dt
+        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
+        for i,t in enumerate(tt[:-1]): 
+            State_tmp.setvar(traj[i])
+            _nstep = nstep
+            self.step_tgl(t,dState,State_tmp,dparams,params,nstep=_nstep,t0=t0)
+
 
     
-    def run_adj(self,t0,tint,adState,State,adparams,params):
-
+    def run_adj(self,t0,tint,adState,State,adparams,params,nstep=1):
         State_tmp = State.copy()
-        traj = self.run(t0,tint,State_tmp,params,return_traj=True)
-        t,step = t0+tint, len(traj)-2
-        while t >= t0: 
-            State_tmp.setvar(traj[step])
+        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
+        for i in reversed(range(len(tt[:-1]))):
+            t = tt[i]
+            State_tmp.setvar(traj[i])
+            _nstep = nstep
             adparams = self.step_adj(
-                t,adState,State_tmp,adparams,params,step=step)
-            step -=1
-            t -= self.dt
-            
+                t,adState,State_tmp,adparams,params,nstep=_nstep,t0=t0)
         return adparams
     
-    # def tangent_test(self,State):
-    
-    #     t0 = 0
-    #     tint = 12*3600
-    #     State0 = State.random()
-    #     dState = State.random()
-    
-    #     params = np.random.random(self.nParams)
-    #     dparams = np.random.random(self.nParams)
-        
-    #     State0_tmp = State0.copy()
-    #     self.run(t0,tint,State0_tmp,params)
-    #     X2 = State0_tmp.getvar(vect=True)
-        
-    #     for p in range(10):
-            
-    #         lambd = 10**(-p)
-            
-    #         State1 = State0.free()
-    #         State1.setvar(lambd*dState.var.values+State0.var.values)
-    #         self.run(t0,tint,State1,params+lambd*dparams)
-    #         X1 = State1.getvar(vect=True)
-            
-    #         dState1 = State0.free()
-    #         dState1.setvar(lambd*dState.var.values)
-    #         self.run_tgl(t0,tint,dState1,State0,lambd*dparams,params)
-    #         dX = dState1.getvar(vect=True)
-            
-    #         ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
-            
-    #         print('%.E' % lambd,'%.E' % ps)
-    
-    # def tangent_test(self,State):
-    #     t0 = 0
-        
-    #     State0 = State.random()
-    #     u,v,h = State0.getvar()
-    #     _u0 = deepcopy(u)
-        
-    #     params = np.random.random(self.nParams)
-        
-    #     dState = State.random()
-    #     du,dv,dh = dState.getvar()
-    #     dparams = np.random.random(self.nParams)
-        
-    #     He,hbcx,hbcy = self.reshapeParams(params)
-    #     dHe,dhbcx,dhbcy = self.reshapeParams(dparams)
-        
-    #     # Model parameters: switch to physical space
-    #     He2d = self.get_He2d(t0,He,He_mean=self.Heb)
-    #     dHe2d = self.get_He2d(t0,He,He_mean=0)
-    #     tbc = t0
-    #     if self.bc_kind=='1d':
-    #         tbc += self.dt       
-    #     hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
-    #     dhbcx1d,dhbcy1d = self.get_hbc1d(tbc,dhbcx,dhbcy)
-            
-        
-    #     #u2,v2,h2 = self.swm.step_lf(t0,u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,step=0)
-    #     State0_tmp = self.step(t0,State0,params)
-    #     u2,v2,h2 = State0_tmp.getvar()
-    #     print(np.array_equal(u,_u0))
-    #     #u0,v0,h0 = State0.getvar()
-        
-    #     #u2,v2,h2 = self.swm.step_lf(t0,deepcopy(u),deepcopy(v),deepcopy(h),He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,step=0)
-    #     _u2,_v2,_h2 = self.swm.step_lf(t0,u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,step=0)
-    #     print(np.array_equal(u,_u0))
-
-        
-    #     for p in range(10):
-    #         lambd = 10**(-p)
-        
-    #         u1,v1,h1 = self.swm.step_lf(t0,u+lambd*du,v+lambd*dv,h+lambd*dh,
-    #                               He=He2d+lambd*dHe2d,
-    #                               hbcx=hbcx1d+lambd*dhbcx1d,hbcy=hbcy1d+lambd*dhbcy1d,step=0)
-            
-            
- 
-            
-    #         du1,dv1,dh1 = self.swm.step_lf_tgl(t0,lambd*du,lambd*dv,lambd*dh,u,v,h,
-    #                                     dHe=lambd*dHe2d,He=He2d,
-    #                                     dhbcx=lambd*dhbcx1d,hbcx=hbcx1d,dhbcy=lambd*dhbcy1d,hbcy=hbcy1d,step=0)
-
-            
-            
-    #         psu = np.linalg.norm((u1-u2)-du1)/np.linalg.norm(du1)
-    #         psv = np.linalg.norm((v1-v2)-dv1)/np.linalg.norm(dv1)
-    #         psh = np.linalg.norm((h1-h2)-dh1)/np.linalg.norm(dh1)
-            
-    #         print('%.E' % lambd,'%.E' % psu,'%.E' % psv,'%.E' % psh)
-        
-    # def tangent_test(self,State):
-    
-    #     t0 = 0
-    #     tint = 12*3600
-    #     State0 = State.random()
-    #     dState = State.random()
-        
-    #     params = np.random.random(self.nParams)
-    #     dparams = np.random.random(self.nParams)
-        
-    #     State0_tmp = self.step(t0,State0,params)
-    #     u2,v2,h2 = State0_tmp.getvar()
-
-    #     for p in [5,6]:#range(10):
-            
-    #         lambd = 10**(-p)
-            
-    #         State1 = dState.copy()
-    #         #State1.setvar(lambd*dState.var.values+State0.var.values)
-    #         State1.scalar(lambd)
-    #         State1.Sum(State0)
-    #         State1_tmp = self.step(t0,State1,params+lambd*dparams)
-            
-    #         u1,v1,h1 = State1_tmp.getvar()
-            
-    #         dState1 = dState.copy()
-    #         dState1.scalar(lambd)
-    #         dState1_tmp = self.step_tgl(t0,dState1,State0,lambd*dparams,params)
-    #         du1,dv1,dh1 = dState1_tmp.getvar()
-            
-            
-            
-            
-    #         psu = np.linalg.norm((u1-u2)-du1)/np.linalg.norm(du1)
-    #         psv = np.linalg.norm((v1-v2)-dv1)/np.linalg.norm(dv1)
-    #         psh = np.linalg.norm((h1-h2)-dh1)/np.linalg.norm(dh1)
-            
-    #         print('%.E' % lambd,'%.E' % psu,'%.E' % psv,'%.E' % psh)
-
-    def tangent_test(self,State,tint,t0=0):
+    def tangent_test(self,State,tint,t0=0,nstep=1):
     
         State0 = State.random()
         dState = State.random()
@@ -719,7 +661,8 @@ class Model_sw1l:
         dparams = np.random.random(self.nParams)
         
         State0_tmp = State0.copy()
-        self.run(t0,tint,State0_tmp,params)
+        self.run(t0,tint,State0_tmp,params,nstep=nstep)
+        #self.step(t0,State0_tmp,params,nstep=nstep)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -729,12 +672,14 @@ class Model_sw1l:
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.run(t0,tint,State1,params+lambd*dparams)
+            self.run(t0,tint,State1,params+lambd*dparams,nstep=nstep)
+            #self.step(t0,State1,params+lambd*dparams,nstep=nstep)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.run_tgl(t0,tint,dState1,State0,lambd*dparams,params)
+            self.run_tgl(t0,tint,dState1,State0,lambd*dparams,params,nstep=nstep)
+            #self.step_tgl(t0,dState1,State0,lambd*dparams,params,nstep=nstep)
             dX = dState1.getvar(vect=True)
             
             ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
@@ -742,7 +687,7 @@ class Model_sw1l:
             print('%.E' % lambd,'%.E' % ps)
             
         
-    def adjoint_test(self,State,tint,t0=0):
+    def adjoint_test(self,State,tint,t0=0,nstep=1):
         
         # Current trajectory
         State0 = State.random()
@@ -751,27 +696,27 @@ class Model_sw1l:
         # Perturbation
         dState = State.random()
         dX = dState.getvar(vect=True)
-        
         dparams = np.random.random(self.nParams)
         dX = np.concatenate((dX,dparams))
-        
         
         # Adjoint
         adState = State.random()
         adX = adState.getvar(vect=True)
         adparams = np.random.random(self.nParams)
-        
         adX = np.concatenate((adX,adparams))
         
         # Run TLM
-        self.run_tgl(t0,tint,dState,State0,dparams,params)
+        self.run_tgl(t0,tint,dState,State0,dparams,params,nstep=nstep)
+        #self.step_tgl(t0,dState,State0,dparams,params,nstep=nstep)
         TLM = dState.getvar(vect=True)
         
         TLM = np.concatenate((TLM,dparams))
         
         # Run ADJ
         adparams = self.run_adj(
-            t0,tint,adState,State0,adparams,params)
+            t0,tint,adState,State0,adparams,params,nstep=nstep)
+        #adparams = self.step_adj(
+        #    t0,adState,State0,adparams,params,nstep=nstep)
         ADM = adState.getvar(vect=True)
         ADM = np.concatenate((ADM,adparams))
         
