@@ -5,22 +5,76 @@ Created on Tue Jul 28 14:49:01 2020
 
 @author: leguillou
 """
-import os
+import os,sys
 import xarray as xr 
 import numpy as np 
+from scipy.spatial.distance import cdist
+
+
+from . import grid
 
 class Obsopt:
 
-    def __init__(self,npix,dict_obs,timestamps,dt):
+    def __init__(self,State,dict_obs,Model):
         
-        self.npix = npix
+        self.npix = State.lon.size
         self.dict_obs = dict_obs        # observation dictionnary
-        self.dt = dt
-        self.ind_obs = []
-        for i,t in enumerate(timestamps):
+        self.dt = Model.dt
+        self.date_obs = {}
+        for t in Model.timestamps:
             if self.isobserved(t):
-                self.ind_obs.append(i)
-        self.ind_obs = np.asarray(self.ind_obs)
+                delta_t = [(t - tobs).total_seconds() 
+                           for tobs in self.dict_obs.keys()]
+                t_obs = [tobs for tobs in self.dict_obs.keys()] 
+                
+                ind_obs = np.argmin(np.abs(delta_t))
+                self.date_obs[t] = t_obs[ind_obs]
+                
+        self.obs_sparse = {}
+        # For grid interpolation:
+        coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
+        self.coords_car = grid.geo2cart(coords_geo)
+        self.indexes = {}
+        self.weights = {}
+        self.maskobs = {}
+        
+        for t in self.date_obs:
+            # Read obs
+            sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
+            obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
+            
+            obs_sparse = False   
+            lon_obs = np.array([])
+            lat_obs = np.array([])
+            for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+                if sat_info.kind=='fullSSH':
+                    if obs_sparse:
+                        sys.exit("Error: in Obsopt: \
+                                 can't handle 'fullSSH' and 'swot_simulator'\
+                                 observations at the same time, sorry")
+                    elif len(sat_info_list)>1:
+                        sys.exit("Error: in Obsopt: \
+                                 can't handle several 'fullSSH'\
+                                 observations at the same time, sorry")
+            
+                elif sat_info.kind=='swot_simulator':
+                    obs_sparse = True
+                    with xr.open_dataset(obs_file) as ncin:
+                        lon = ncin[sat_info.name_obs_lon].values.ravel()
+                        lat = ncin[sat_info.name_obs_lat].values.ravel()
+                    lon_obs = np.concatenate((lon_obs,lon))
+                    lat_obs = np.concatenate((lat_obs,lat))
+                                    
+            self.obs_sparse[t] = obs_sparse
+            
+            if obs_sparse :
+                # Compute indexes and weights of neighbour grid pixels
+                print(t,'Compute obs interpolator')
+                indexes,weights = self.interpolator(lon_obs,lat_obs)
+                self.indexes[t] = indexes
+                self.weights[t] = weights
+                self.maskobs[t] = np.isnan(lon_obs)*np.isnan(lat_obs)
+                    
         
     def isobserved(self,t):
         
@@ -30,32 +84,74 @@ class Obsopt:
         else: is_obs = False
         
         return is_obs
+    
+    def interpolator(self,lon_obs,lat_obs):
+        
+        coords_geo_obs = np.column_stack((lon_obs, lat_obs))
+        coords_car_obs = grid.geo2cart(coords_geo_obs)
+        dist = cdist(coords_car_obs,self.coords_car, metric="euclidean") 
+        
+        indexes = []
+        weights = []
+        for i in range(lon_obs.size):
+            _dist = dist[i,:]
+            # 4 closest
+            ind4 = np.argsort(_dist)[:4]
+            indexes.append(ind4)
+            weights.append(1/_dist[ind4])   
+            
+        return indexes,weights
 
     def misfit(self,t,State):
         
-        if self.isobserved(t): 
-             
-            Hx = State.getvar(2).ravel()
-            
-            delta_t = [(t - tobs).total_seconds() 
-                       for tobs in self.dict_obs.keys()]
-            t_obs = [tobs for tobs in self.dict_obs.keys()] 
-            
-            ind_obs = np.argmin(np.abs(delta_t))
-            tobs = t_obs[ind_obs]
-            
-            sat_info_list = self.dict_obs[tobs]['satellite']
-            obs_file_list = self.dict_obs[tobs]['obs_name']
-            # For now we consider only one complete SSH obs
-            with xr.open_dataset(obs_file_list[0]) as ncin:
-                yobs = ncin[sat_info_list[0].name_obs_var[0]].values.ravel()
-            
-            return Hx - yobs
+        # Read obs
+        sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
+        obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
         
-    def adj(self,adState,misfit):
-        adState.var[2] += misfit.reshape(adState.var[2].shape)
+        Yobs = np.array([])        
+        for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+            with xr.open_dataset(obs_file) as ncin:
+                yobs = ncin[sat_info.name_obs_var[0]].values.ravel() # SSH_obs
+            Yobs = np.concatenate((Yobs,yobs))
         
+        X = State.getvar(2).ravel() # SSH from state
+        if self.obs_sparse[t] :
+            # Get indexes and weights of neighbour grid pixels
+            indexes = self.indexes[t]
+            weights = self.weights[t]
+            
+            # Compute inerpolation of state to obs space
+            HX = np.zeros_like(Yobs)
+            
+            for i,(ind,w) in enumerate(zip(indexes,weights)):
+                if not self.maskobs[t][i]:
+                    # Average
+                    HX[i] = np.average(X[ind],weights=w)
+        else:
+            HX = X # H==Id
+            
+        res = HX - Yobs
+        res[np.isnan(res)] = 0
         
+        return res
+    
+    
+    def adj(self,t,adState,misfit):
+        
+        if self.obs_sparse[t]:
+            adHssh = np.zeros(self.npix)
+            for i,(ind,w) in enumerate(zip(self.indexes[t],self.weights[t])):
+                if not self.maskobs[t][i]:
+                    # Average
+                    for _ind,_w in zip(ind,w):
+                        if w.sum()!=0:
+                            adHssh[_ind] += _w*misfit[i]/(w.sum())
+            
+            adState.var[2] += adHssh.reshape(adState.var[2].shape)
+        else:
+            adState.var[2] += misfit.reshape(adState.var[2].shape)
+                
+            
 class Cov:
     
     def __init__(self,sigma):
@@ -127,7 +223,7 @@ class Variational:
         if self.B is not None:
             X *= self.B.sigma 
         print('gradient test:')
-        #grad_test(self.cost, self.grad, X)
+        grad_test(self.cost, self.grad, X)
         
         
     def cost(self,X0):
@@ -136,18 +232,12 @@ class Variational:
         State = self.State.free()
         
         # Background cost function evaluation 
-        # if self.B is not None:
-        #     Jb = (X-self.Xb).dot(self.B.inv(X-self.Xb))
-        # else:
-        #     Jb = 0
         if self.B is not None:
             if self.prec :
                 X  = self.B.sqr(X0) + self.Xb
-                #gb = v        # gradient of background term
                 Jb = X0.dot(X0) # cost of background term
             else:
                 X  = X0 + self.Xb
-                #gb = np.dot(self.B.inv,v) # gradient of background term
                 Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
         else:
             X  = X0 + self.Xb
@@ -193,20 +283,13 @@ class Variational:
                 
         X = +X0 
         
-        # Background cost function grandient
-        # if self.B is not None:
-        #     gb = self.B.inv(X-self.Xb)
-        # else:
-        #     gb = 0
         if self.B is not None:
             if self.prec :
                 X  = self.B.sqr(X0) + self.Xb
                 gb = X0      # gradient of background term
-                #Jb = X0.dot(X0) # cost of background term
             else:
                 X  = X0 + self.Xb
                 gb = self.B.inv(X0) # gradient of background term
-                #Jb = np.dot(X0,np.dot(self.B.inv,X0))         # cost of background term
         else:
             X  = X0 + self.Xb
             gb = 0
@@ -223,7 +306,7 @@ class Variational:
             State.load(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[-1]) + '.nc'))
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-yobs
-            self.H.adj(adState,self.R.inv(misfit))
+            self.H.adj(self.M.timestamps[self.checkpoint[-1]],adState,self.R.inv(misfit))
             
         # Time loop
         self.M.restart()  
@@ -243,7 +326,7 @@ class Variational:
             # Misfit 
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State) # d=Hx-yobs     
-                self.H.adj(adState,self.R.inv(misfit))
+                self.H.adj(timestamp,adState,self.R.inv(misfit))
                 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -257,7 +340,8 @@ def grad_test(J, G, X):
         h = np.random.random(X.size)
         h /= np.linalg.norm(h)
         JX = J(X)
-        Gh = np.inner(h,G(X))
+        GX = G(X)
+        Gh = h.dot(np.where(np.isnan(GX),0,GX))
         for p in range(10):
             lambd = 10**(-p)
             test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))

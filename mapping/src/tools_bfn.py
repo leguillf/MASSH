@@ -18,8 +18,9 @@ import os.path
 from scipy.ndimage.filters import gaussian_filter
 import glob
 
-from . import switchvar 
+from . import switchvar, grid
 from .tools import gaspari_cohn, hat_function, L2_scalar_prod
+
 
 
 def bfn(config,dt_start,dt_end,one_time_step,lon,lat):
@@ -277,7 +278,8 @@ class bfn_qg1l(object):
             for name_var in self.name_mod_var:
                 varf = dsf[name_var].values
                 varb = dsb[name_var].values
-                err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
+                if varf.size != 0 and np.std(varf)>0:
+                    err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
             dsf.close()
             dsb.close()
         
@@ -877,7 +879,7 @@ def bfn_project_obsvar_to_state_grid(var, nudging_coeff, lon, lat,
         # Clean memory
         del lon, lat
 
-        obs_tree = spatial.cKDTree(bfn_geo2cart(coords_obs_geo))
+        obs_tree = spatial.cKDTree(grid.geo2cart(coords_obs_geo))
 
         # Compute distances
         dist_mx = ground_pixel_tree.sparse_distance_matrix(obs_tree,
@@ -959,51 +961,11 @@ def bfn_project_obsvar_to_state_grid(var, nudging_coeff, lon, lat,
     return obs_projected, nudging_coeff_projected
 
 
-def bfn_geo2cart(coords):
-    """
-    NAME
-        bfn_geo2cart
-
-    DESCRIPTION
-        Transform coordinates from geodetic to cartesian
-
-        Args:
-            coords : a set of lan/lon coordinates (e.g. a tuple or
-             an array of tuples)
-
-
-        Returns: a set of cartesian coordinates (x,y,z)
-
-    """
-
-    # WGS 84 reference coordinate system parameters
-    A = 6378.137  # major axis [km]
-    E2 = 6.69437999014e-3  # eccentricity squared
-
-    coords = np.asarray(coords).astype(np.float)
-
-    # is coords a tuple? Convert it to an one-element array of tuples
-    if coords.ndim == 1:
-        coords = np.array([coords])
-
-    # convert to radiants
-    lat_rad = np.radians(coords[:, 1])
-    lon_rad = np.radians(coords[:, 0])
-
-    # convert to cartesian coordinates
-    r_n = A / (np.sqrt(1 - E2 * (np.sin(lat_rad) ** 2)))
-    x = r_n * np.cos(lat_rad) * np.cos(lon_rad)
-    y = r_n * np.cos(lat_rad) * np.sin(lon_rad)
-    z = r_n * (1 - E2) * np.sin(lat_rad)
-
-    return np.column_stack((x, y, z))
-
-
 def bfn_construct_ground_pixel_tree(lon, lat):
     coords = np.column_stack((lon.ravel(), lat.ravel()))
     # construct KD-tree
-    ground_pixel_tree = spatial.cKDTree(bfn_geo2cart(coords))
-    subdomain = bfn_geo2cart(coords)[0:100]
+    ground_pixel_tree = spatial.cKDTree(grid.geo2cart(coords))
+    subdomain = grid.geo2cart(coords)[0:100]
     eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
     dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
 

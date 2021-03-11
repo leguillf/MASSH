@@ -130,7 +130,7 @@ name_mod_lat = "nav_lat"
 #    * c: first baroclinic gravity-wave phase speed (in m/s) related to Rossby Radius of deformation
 #    * dtmodel: timestep of the model (in seconds). Typical values: between 200s and 1000s. If the model crashes, reduce its value.
 
-dir_model =  '../models/model_qg1l/'
+dir_model =  None
 
 dtmodel = 300   
 

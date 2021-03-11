@@ -15,8 +15,6 @@ from math import sqrt,pi
 from datetime import timedelta
 from . import switchvar, tools, grid
 
-import time
-
 def Model(config,State):
     """
     NAME
@@ -38,14 +36,20 @@ class Model_qg1l:
     
     def __init__(self,config,State):
         # Model specific libraries
+        if config.dir_model is None:
+            dir_model = os.path.realpath(
+                os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             '..','models','model_qg1l'))
+        else:
+            dir_model = dir_model
         SourceFileLoader("modgrid", 
-                         config.dir_model + "/modgrid.py").load_module() 
+                         dir_model + "/modgrid.py").load_module() 
         SourceFileLoader("moddyn", 
-                        config.dir_model + "/moddyn.py").load_module()     
+                        dir_model + "/moddyn.py").load_module()     
         SourceFileLoader("modelliptic", 
-                        config.dir_model + "/modelliptic.py").load_module()     
+                        dir_model + "/modelliptic.py").load_module()     
         self.qgsw = SourceFileLoader("qgsw", 
-                                 config.dir_model + "/qgsw.py").load_module() 
+                                 dir_model + "/qgsw.py").load_module() 
 
         # Model parameters
         self.name_grd = config.name_grd
@@ -139,19 +143,26 @@ class Model_sw1l:
     def __init__(self,config,State):
         self.config = config
         # Model specific libraries
+        if config.dir_model is None:
+            dir_model = os.path.realpath(
+                os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             '..','models','model_sw1l'))
+        else:
+            dir_model = config.dir_model
+            
         SourceFileLoader("obcs", 
-                                 config.dir_model+"/obcs.py").load_module() 
+                                 dir_model+"/obcs.py").load_module() 
         SourceFileLoader("obcs_tgl", 
-                                 config.dir_model + "/obcs_tgl.py").load_module() 
+                                 dir_model + "/obcs_tgl.py").load_module() 
         SourceFileLoader("obcs_adj", 
-                                 config.dir_model + "/obcs_adj.py").load_module() 
+                                 dir_model + "/obcs_adj.py").load_module() 
         SourceFileLoader("swm", 
-                                 config.dir_model + "/swm.py").load_module() 
+                                 dir_model + "/swm.py").load_module() 
         SourceFileLoader("swm_tgl", 
-                                 config.dir_model + "/swm_tgl.py").load_module() 
+                                 dir_model + "/swm_tgl.py").load_module() 
         
         swm_adj = SourceFileLoader("swm_adj", 
-                                 config.dir_model + "/swm_adj.py").load_module() 
+                                 dir_model + "/swm_adj.py").load_module() 
                 
         # Compute cartesian grid 
         DX,DY = grid.lonlat2dxdy(State.lon,State.lat)

@@ -226,7 +226,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 plt.colorbar(p2, ax=ax2)
                 ax1.set_title('Potential vorticity')
                 ax2.set_title('SSH')
-                plt.suptitle(middle_bfn_date,': End of forward loop n°',bfn_iter)
+                plt.suptitle(str(present_date_forward) + ': End of forward loop n°' + str(bfn_iter))
                 plt.show()
 
             ##################
@@ -289,7 +289,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     plt.colorbar(p2, ax=ax2)
                     ax1.set_title('Potential vorticity')
                     ax2.set_title('SSH')
-                    plt.suptitle(middle_bfn_date,': End of backward loop n°',bfn_iter)
+                    plt.suptitle(str(present_date_backward) + ': End of backward loop n°' + str(bfn_iter))
                     plt.show()
 
             #########################
@@ -300,7 +300,9 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                         path_forth=os.path.join(config.tmp_DA_path,'BFN_forth_*.nc'),
                                         path_back=os.path.join(config.tmp_DA_path,'BFN_back_*.nc')
                                         )
-
+                
+        print('Loop from',init_bfn_date.strftime("%Y-%m-%d"),'to',final_bfn_date.strftime("%Y-%m-%d :"),bfn_iter,'iterations')
+        
         #####################
         # 6. SAVING OUTPUTS #
         #####################
@@ -330,7 +332,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                    /config.saveoutput_time_step.total_seconds())%1 == 0)\
                    & (present_date>config.init_date)\
                    & (present_date<=config.final_date) :
-                    print(present_date, end=' / ')                
                     # Read current converged state
                     iforward = int((present_date - init_bfn_date)/one_time_step) - 1
                     name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
@@ -389,7 +390,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 1. Obs op     #
     #################
     print('\n*** Obs op ***\n')
-    H = Obsopt(State.lon.size,dict_obs,Model.timestamps,Model.dt)
+    H = Obsopt(State,dict_obs,Model)
     
     ###################
     # 2. Variationnal #
@@ -478,7 +479,6 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         if (((date - config.init_date).total_seconds()
              /config.saveoutput_time_step.total_seconds())%1 == 0)\
             & (date>config.init_date) & (date<=config.final_date) :
-            print(date, end=' / ')    
             # Save State
             State0.save(date=date)
     

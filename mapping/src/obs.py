@@ -54,16 +54,28 @@ def obs(config, State, *args, **kwargs):
         date += config.assimilation_time_step
         
     for sat in config.satellite:
+        
         print('* for sat',sat,':')
+        
         # Read satellite info
         sat_info = read_satellite_info(config,sat)
         print(sat_info)
+        
+        # Read observation
+        path_obs = os.path.join(sat_info.path,sat_info.name)
+        if '.nc' in path_obs:
+            ds = xr.open_dataset(path_obs)
+        else:
+            ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
+                                   combine='by_coords')
+            
+        # Run subfunction specific to the kind of satellite
         if sat_info.kind=='swot_simulator':
-            _obs_swot_simulator(assim_dates, dict_obs, sat_info, 
+            _obs_swot_simulator(ds, assim_dates, dict_obs, sat_info, 
                                 config.assimilation_time_step, 
                                 config.tmp_DA_path,bbox)
         elif sat_info.kind=='fullSSH':
-            _obs_fullSSH(assim_dates,dict_obs, sat_info,
+            _obs_fullSSH(ds, assim_dates,dict_obs, sat_info,
                          config.assimilation_time_step,
                          config.tmp_DA_path,bbox)
     
@@ -75,7 +87,7 @@ def obs(config, State, *args, **kwargs):
     return dict_obs
 
 
-def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox=None):
+def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox=None):
     """
     NAME
         _obs_swot_simulator
@@ -84,9 +96,6 @@ def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox=
         Subfunction handling observations generated from swotsimulator module
         
     """
-    # Read obs
-    ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
-                           combine='by_coords')
     time_obs = ds[sat_info.name_obs_time]
     ds = ds[sat_info.name_obs_grd + sat_info.name_obs_var]
     
@@ -123,11 +132,8 @@ def _obs_swot_simulator(dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox=
                 dict_obs[dt_curr]['obs_name'] = [path]
     
     
-def _obs_fullSSH(dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None):
+def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None):
     
-    # read file(s)
-    ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
-                           combine='by_coords')
     name_dim_time_obs = ds[sat_info.name_obs_time].dims[0]
     # read time variable
     times_obs = pd.to_datetime(ds[sat_info.name_obs_time].values)
