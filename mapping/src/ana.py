@@ -390,7 +390,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 1. Obs op     #
     #################
     print('\n*** Obs op ***\n')
-    H = Obsopt(State,dict_obs,Model)
+    H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
     
     ###################
     # 2. Variationnal #

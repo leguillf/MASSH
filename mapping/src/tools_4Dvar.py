@@ -8,14 +8,12 @@ Created on Tue Jul 28 14:49:01 2020
 import os,sys
 import xarray as xr 
 import numpy as np 
-from scipy.spatial.distance import cdist
-
 
 from . import grid
 
 class Obsopt:
 
-    def __init__(self,State,dict_obs,Model):
+    def __init__(self,State,dict_obs,Model,tmp_DA_path=None,):
         
         self.npix = State.lon.size
         self.dict_obs = dict_obs        # observation dictionnary
@@ -29,14 +27,15 @@ class Obsopt:
                 
                 ind_obs = np.argmin(np.abs(delta_t))
                 self.date_obs[t] = t_obs[ind_obs]
-                
+        
+        # Temporary path where to save model trajectories
+        self.tmp_DA_path = tmp_DA_path
+        
         self.obs_sparse = {}
+        
         # For grid interpolation:
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
-        self.indexes = {}
-        self.weights = {}
-        self.maskobs = {}
         
         for t in self.date_obs:
             # Read obs
@@ -71,9 +70,18 @@ class Obsopt:
                 # Compute indexes and weights of neighbour grid pixels
                 print(t,'Compute obs interpolator')
                 indexes,weights = self.interpolator(lon_obs,lat_obs)
-                self.indexes[t] = indexes
-                self.weights[t] = weights
-                self.maskobs[t] = np.isnan(lon_obs)*np.isnan(lat_obs)
+                maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
+                # save in netcdf
+                dsout = xr.Dataset({"indexes": (("Nobs","Npix"), indexes),
+                                    "weights": (("Nobs","Npix"), weights),
+                                    "maskobs": (("Nobs"), maskobs)},                
+                                   )
+                dsout.to_netcdf(os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')),
+                    encoding={'indexes': {'dtype': 'int16'}})
+                #self.indexes[t] = indexes
+                #self.weights[t] = weights
+                #self.maskobs[t] = np.isnan(lon_obs)*np.isnan(lat_obs)
                     
         
     def isobserved(self,t):
@@ -89,18 +97,18 @@ class Obsopt:
         
         coords_geo_obs = np.column_stack((lon_obs, lat_obs))
         coords_car_obs = grid.geo2cart(coords_geo_obs)
-        dist = cdist(coords_car_obs,self.coords_car, metric="euclidean") 
-        
+
         indexes = []
         weights = []
         for i in range(lon_obs.size):
-            _dist = dist[i,:]
+            diff = np.square(coords_car_obs[i])-np.square(self.coords_car)
+            _dist = np.sqrt(np.sum(np.square(diff),axis=1))
             # 4 closest
             ind4 = np.argsort(_dist)[:4]
             indexes.append(ind4)
             weights.append(1/_dist[ind4])   
             
-        return indexes,weights
+        return np.asarray(indexes),np.asarray(weights)
 
     def misfit(self,t,State):
         
@@ -117,16 +125,19 @@ class Obsopt:
         X = State.getvar(2).ravel() # SSH from state
         if self.obs_sparse[t] :
             # Get indexes and weights of neighbour grid pixels
-            indexes = self.indexes[t]
-            weights = self.weights[t]
+            ds = xr.open_dataset(os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+            indexes = ds['indexes'].values
+            weights = ds['weights'].values
+            maskobs = ds['maskobs'].values
             
             # Compute inerpolation of state to obs space
             HX = np.zeros_like(Yobs)
             
-            for i,(ind,w) in enumerate(zip(indexes,weights)):
-                if not self.maskobs[t][i]:
+            for i in range(Yobs.size):
+                if not maskobs[i]:
                     # Average
-                    HX[i] = np.average(X[ind],weights=w)
+                    HX[i] = np.average(X[indexes[i]],weights=weights[i])
         else:
             HX = X # H==Id
             
@@ -140,12 +151,20 @@ class Obsopt:
         
         if self.obs_sparse[t]:
             adHssh = np.zeros(self.npix)
-            for i,(ind,w) in enumerate(zip(self.indexes[t],self.weights[t])):
-                if not self.maskobs[t][i]:
+            ds = xr.open_dataset(os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+            indexes = ds['indexes'].values
+            weights = ds['weights'].values
+            maskobs = ds['maskobs'].values
+            Nobs,Npix = indexes.shape
+            
+            for i in range(Nobs):
+                if not maskobs[i]:
                     # Average
-                    for _ind,_w in zip(ind,w):
-                        if w.sum()!=0:
-                            adHssh[_ind] += _w*misfit[i]/(w.sum())
+                    for j in range(Npix):
+                        if weights[i].sum()!=0:
+                            adHssh[indexes[i,j]] +=\
+                                weights[i,j]*misfit[i]/(weights[i].sum())
             
             adState.var[2] += adHssh.reshape(adState.var[2].shape)
         else:
