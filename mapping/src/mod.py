@@ -41,7 +41,7 @@ class Model_qg1l:
                 os.path.join(os.path.dirname(os.path.realpath(__file__)),
                              '..','models','model_qg1l'))
         else:
-            dir_model = dir_model
+            dir_model = config.dir_model
         SourceFileLoader("modgrid", 
                          dir_model + "/modgrid.py").load_module() 
         SourceFileLoader("moddyn", 
