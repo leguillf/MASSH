@@ -113,7 +113,11 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,b
         
         _ds = ds.where((dt1<=time_obs) & (time_obs<=dt2), drop=True)
         
-        if _ds[sat_info.name_obs_time].size>0:
+        lon = _ds[sat_info.name_obs_lon].values.ravel()
+        lat = _ds[sat_info.name_obs_lat].values.ravel()
+        is_obs = np.any(~np.isnan(lon*lat)) * (lon.size>0)
+                    
+        if is_obs:
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
