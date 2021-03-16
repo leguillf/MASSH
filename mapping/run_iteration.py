@@ -9,6 +9,7 @@ import sys, os
 import xarray as xr
 import numpy as np
 import time 
+from  scipy import interpolate 
 
 from src import state as state
 from src import exp as exp
@@ -28,7 +29,6 @@ def update_config(config,i):
 
 def compute_new_obs(dict_obs,config):
     # Load maps
-    print(os.path.join(config.path_save,config.name_exp_save+'*.nc'))
     ds = xr.open_mfdataset(
         os.path.join(config.path_save,config.name_exp_save+'*.nc'),
         combine='nested',concat_dim='t')
@@ -36,17 +36,29 @@ def compute_new_obs(dict_obs,config):
         name_var = config.name_mod_var[0]
     elif config.name_model=='SW1L':
         name_var = config.name_mod_var[2]
+    maps = ds[name_var]
+    # Convert map times
     times = [(dt64 - np.datetime64(config.init_date)) / np.timedelta64(1, 's')
             for dt64 in ds['time'].values]
-    maps = ds[name_var]
+    # Read map  grid
+    lon = ds[config.name_mod_lon]
+    lat = ds[config.name_mod_lat]
+    if len(lon.shape)==3:
+        lon = lon[0,:,:].values
+        lat = lat[0,:,:].values
+    else:
+        lon = lon.values
+        lat = lat.values
     ds.close()
     del ds
     maps = maps.assign_coords({"t": ('t',times)})
     maps = maps.chunk(chunks=(len(times),1,1))
+    
     # Get observed date and interpolate maps
     times_obs = [(np.datetime64(dt) - np.datetime64(config.init_date))/ np.timedelta64(1, 's')
                  for dt in dict_obs]
     maps = maps.interp(t=times_obs)
+    
     # For each observation, remove the corresponding estimated map
     for i,date in enumerate(dict_obs):
         # Open obs
@@ -54,15 +66,24 @@ def compute_new_obs(dict_obs,config):
         sat =  dict_obs[date]['satellite']
         for _sat,_path_obs in zip(sat,path_obs):
             ds = xr.open_dataset(_path_obs)
+            dsout = ds.copy()
+            ds.close()
+            del ds
+            map_grd = maps[i,:,:].values
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout = ds.copy()
-                ds.close()
-                del ds
-                dsout[_sat.name_obs_var[0]] -= maps[i,:,:].values
-                dsout.to_netcdf(_path_obs,engine='scipy')
-                dsout.close()
-                del dsout
+                dsout[_sat.name_obs_var[0]] -= map_grd
+            elif _sat.kind=='swot_simulator':
+                # grid interpolation 
+                lon_obs = dsout[_sat.name_obs_lon].values
+                lat_obs = dsout[_sat.name_obs_lat].values
+                map_obs = interpolate.griddata((lon.ravel(),lat.ravel()),
+                                               map_grd.ravel(),
+                                               (lon_obs.ravel(),lat_obs.ravel()))
+                dsout[_sat.name_obs_var[0]] -= map_obs.reshape(lon_obs.shape)
+            dsout.to_netcdf(_path_obs,engine='scipy')
+            dsout.close()
+            del dsout
             
 def compute_convergence_criteria(config,i):
     path_save_i = config.path_save

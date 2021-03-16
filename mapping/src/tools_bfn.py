@@ -545,8 +545,7 @@ def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
     dict_obs_relvort = {}
 
     present_date0 = dt_start
-
-    print('\nObservations in the temporal window:')
+    
     while present_date0 < dt_end:
         if pd.to_datetime(present_date0) in dict_obs:
             sat_info_list = dict_obs[present_date0]['satellite']
@@ -555,7 +554,6 @@ def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
             for sat_info, obs_file in zip(sat_info_list,obs_file_list):
                 if sat_info.nudging_params_stretching is not None and\
                 sat_info.nudging_params_stretching['K']>0:
-                    print(obs_file)
                     # Get nudging parameters relative to stretching
                     K = sat_info.nudging_params_stretching['K']
                     Tau = sat_info.nudging_params_stretching['Tau']
@@ -572,7 +570,6 @@ def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
                         dict_obs_ssh[present_date0][(sigma,Tau)] = {'sat_info':[sat_info],'obs_name':[obs_file],'K':[K]}
                 if sat_info.nudging_params_relvort is not None and\
                 sat_info.nudging_params_relvort['K']>0:
-                    print(obs_file)
                     # Get nudging parameters relative to relative vorticity
                     K = sat_info.nudging_params_relvort['K']
                     Tau = sat_info.nudging_params_relvort['Tau']
@@ -640,18 +637,16 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
                 continue
             # Check if the projections have been saved in a previous run
             if path_save is not None and name_save is not None:
-                file_obs_save = path_save + name_save + '_' + varname + '_sigma' +\
+                file_obs_save = os.path.join(path_save,name_save + '_' + varname + '_sigma' +\
                                 str(key[0]) + '_K' +\
                                 '-'.join(map(str,nudging_coeff_list)) +\
                                 '_window' + str(key[1]).replace(" ", "") +\
                                 '_d' + str(dist_scale) + '_y' + str(date.year)\
                                 + 'm' + str(date.month).zfill(2) + 'd' +\
                                 str(date.day).zfill(2) + 'h' + str(date.hour).zfill(2) +\
-                                str(date.minute).zfill(2) + '.pic'
+                                str(date.minute).zfill(2) + '.pic')
 
                 if os.path.isfile(file_obs_save):
-                    print('projections have been saved in a previous run : ',
-                          file_obs_save)
                     # If yes, read the file
                     with open(file_obs_save, 'rb') as f:
                         obs_projected, nudging_coeff_projected = pickle.load(f)
@@ -684,8 +679,6 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
                         pickle.dump((obs_projected, nudging_coeff_projected),
                                     f)
                         f.close()
-
-                    print('Projection saved: ', file_obs_save)
 
             else:
                 obs_projected, nudging_coeff_projected =\

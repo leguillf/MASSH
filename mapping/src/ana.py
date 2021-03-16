@@ -99,7 +99,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         # Boundary condition
         if config.flag_use_boundary_conditions:
             timestamps = np.arange(calendar.timegm(init_bfn_date.timetuple()),
-                                   calendar.timegm(final_bfn_date.timetuple()),
+                                   calendar.timegm(final_bfn_date.timetuple())+\
+                                       one_time_step.total_seconds(),
                                    one_time_step.total_seconds())
 
             bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
@@ -168,14 +169,19 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             ###################
             # 5.1. FORTH LOOP #
             ###################
+            # Save state at first timestep              
+            name_save = config.name_exp_save + '_' + str(0).zfill(5) + '.nc'
+            filename_forward = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
+            State.save(filename_forward,present_date_forward0)
+            
             while present_date_forward0 < final_bfn_date :
                 
                 # Retrieve corresponding time index for the forward loop
-                iforward = int((present_date_forward0 - init_bfn_date)/one_time_step)
-
+                iforward0 = int((present_date_forward0 - init_bfn_date)/one_time_step)
+                
                 # Get BC field
                 if bc_field is not None:
-                    bc_field_t = bc_field[iforward]
+                    bc_field_t = bc_field[iforward0]
 
                 # Model propagation and apply Nudging
                 Model.step(State,
@@ -186,6 +192,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 
                 # Time increment 
                 present_date_forward = present_date_forward0 + one_time_step
+                iforward = iforward0 + 1
                 
                 # Compute Nudging term (for next time step)
                 N_t = bfn_obj.compute_nudging_term(
@@ -234,7 +241,12 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             ##################
             if  bfn_iter < config.bfn_max_iteration:
                 present_date_backward0 = final_bfn_date
-    
+                # Save state at first timestep          
+                ibackward = int((present_date_backward0 - init_bfn_date)/one_time_step)
+                name_save = config.name_exp_save + '_' + str(ibackward).zfill(5) + '.nc'
+                filename_backward = os.path.join(config.tmp_DA_path,'BFN_back_' + name_save)
+                State.save(filename_backward,present_date_backward0)
+                
                 while present_date_backward0 > init_bfn_date :
                     
                     # Retrieve corresponding time index for the backward loop
@@ -242,7 +254,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
                     # Get BC field
                     if bc_field is not None:
-                        bc_field_t = bc_field[ibackward-1]
+                        bc_field_t = bc_field[ibackward]
 
                     # Propagate the state by nudging the model vorticity towards the 2D observations
                     Model.step(State,
@@ -324,6 +336,14 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         present_date = init_bfn_date
         State_current = State.free()
         State_previous = State.free()
+        # Save first timestep
+        if present_date==config.init_date:
+            iforward = 0
+            name_save = config.name_exp_save + '_' + str(0).zfill(5) + '.nc'
+            current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
+            State_current.load(current_file)
+            if config.saveoutputs:
+                State_current.save(date=present_date)
         while present_date < final_bfn_date :
             present_date += one_time_step
             if (present_date > write_date_min) & (present_date <= write_date_max) :
@@ -333,7 +353,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                    & (present_date>config.init_date)\
                    & (present_date<=config.final_date) :
                     # Read current converged state
-                    iforward = int((present_date - init_bfn_date)/one_time_step) - 1
+                    iforward = int((present_date - init_bfn_date)/one_time_step) 
                     name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
                     current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
                     State_current.load(current_file)
