@@ -6,14 +6,12 @@ Created on Tue Feb 23 10:02:31 2021
 @author: leguillou
 """
 
-import sys,os
+import os
 import argparse
 import numpy as np
 import subprocess
 from datetime import datetime
 import re
-
-K_MIN = 1e-3
 
 def create_new_config_file(src_file,out_file,list_pattern,list_subst):
     with open(out_file, 'w') as out:
@@ -44,17 +42,21 @@ if __name__ == "__main__":
     parser.add_argument('--c2', 
                         default=os.path.join(pwd,'examples','config_Example2_IT.py'),
                         type=str)   
-    parser.add_argument('--i', default=0, type=int)           
+    parser.add_argument('--i0', default=0, type=int)           
+    parser.add_argument('--Kmin', default=1e-3, type=float)           
     opts = parser.parse_args()
     print("* Parsing:")
     path_exp = opts.p
     exp_config_file_1 = opts.c1
     exp_config_file_2 = opts.c2
-    i0 = opts.i
+    i0 = opts.i0
+    Kmin = opts.Kmin
     print('path_exp:',path_exp)
     print('config1:',exp_config_file_1)
     print('config2:',exp_config_file_2)
     print('Startint at iteration n°',i0)
+    print('Stopping algorithm when K <',Kmin)
+    
     
     # Convergence file
     path_K = os.path.join(path_exp,'K.txt')
@@ -84,7 +86,7 @@ if __name__ == "__main__":
     
     K = np.inf
     i = i0
-    while K>K_MIN:
+    while K>Kmin:
         
         time0 = datetime.now()
         print('\n*** Iteration n°'+str(i) + ' ***')
