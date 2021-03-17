@@ -48,22 +48,21 @@ def compute_new_obs(dict_obs,config,State):
     for i,date in enumerate(dict_obs):
         # Load corresponding map(s)
         if date in maps_date:
-            # Cool: the observation date match exactly an estimated map
+            # Cool: the observation date matches exactly an estimated map
             State_current.load(date=date)
         else:
-            # We have to perform a time interpolation
+            # Don't panic: we just have to perform a time interpolation
             date_prev = min(maps_date, key=lambda x: (x<date, abs(x-date)) )
             date_next = min(maps_date, key=lambda x: (x>date, abs(x-date)) )
             State_prev.load(date=date_prev)
             State_next.load(date=date_next)
             # Time interpolation
-            Wprev = abs(date_prev - date).total_seconds()
-            Wnext = abs(date_next - date).total_seconds()
-            State_prev.scalar(Wprev)
-            State_next.scalar(Wnext)
+            Wprev = 1/abs(date_prev - date).total_seconds()
+            Wnext = 1/abs(date_next - date).total_seconds()
+            State_prev.scalar(Wprev/(Wprev+Wnext))
+            State_next.scalar(Wnext/(Wprev+Wnext))
             State_current = State_prev.copy()
             State_current.Sum(State_next)
-            State_current.scalar(1/(Wprev+Wnext))
 
         # Open obs
         path_obs = dict_obs[date]['obs_name']
@@ -98,6 +97,7 @@ def compute_new_obs(dict_obs,config,State):
                                                map_grd.ravel(),
                                                (lon_obs.ravel(),lat_obs.ravel()))
                 dsout[_sat.name_obs_var[0]] -=  map_obs.reshape(lon_obs.shape)
+            # Writing new obs file
             dsout.to_netcdf(_path_obs,engine='scipy')
             dsout.close()
             del dsout
@@ -153,6 +153,7 @@ if __name__ == "__main__":
                   1st Experiment (iteration ' + str(iteration) +')\n\
     *****************************************************************\n\
     *****************************************************************\n')
+    time0 = datetime.now()
     # Updtade configuration file
     update_config(config1,iteration)
     # State
@@ -172,7 +173,10 @@ if __name__ == "__main__":
     # Analysis
     print('* Analysis')
     ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
-    
+    # Computational time
+    time1 = datetime.now()
+    print('1st Experiment (iteration ' + str(iteration) + ' took',
+          time1-time0)
     
     print('\n\n\
     *****************************************************************\n\
@@ -180,6 +184,7 @@ if __name__ == "__main__":
                   2nd Experiment (iteration ' + str(iteration) +')\n\
     *****************************************************************\n\
     *****************************************************************\n')
+    time0 = datetime.now()
     # Updtade configuration file
     update_config(config2,iteration)
     # State
@@ -196,6 +201,10 @@ if __name__ == "__main__":
     # Analysis
     print('* Analysis')
     ana.ana(config2,State2,Model2,dict_obs=dict_obs2)
+    # Computational time
+    time1 = datetime.now()
+    print('2nd Experiment (iteration ' + str(iteration) + ' took',
+          time1-time0)
     
     if iteration>0:
         print('\n\n\
