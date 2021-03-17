@@ -10,6 +10,7 @@ import xarray as xr
 import numpy as np
 import time 
 from  scipy import interpolate 
+from datetime import datetime
 
 from src import state as state
 from src import exp as exp
@@ -27,41 +28,43 @@ def update_config(config,i):
         config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
     
 
-def compute_new_obs(dict_obs,config):
-    # Load maps
-    ds = xr.open_mfdataset(
-        os.path.join(config.path_save,config.name_exp_save+'*.nc'),
-        combine='nested',concat_dim='t')
-    if config.name_model=='QG1L':
-        name_var = config.name_mod_var[0]
-    elif config.name_model=='SW1L':
-        name_var = config.name_mod_var[2]
-    maps = ds[name_var]
-    # Convert map times
-    times = [(dt64 - np.datetime64(config.init_date)) / np.timedelta64(1, 's')
-            for dt64 in ds['time'].values]
-    # Read map  grid
-    lon = ds[config.name_mod_lon]
-    lat = ds[config.name_mod_lat]
-    if len(lon.shape)==3:
-        lon = lon[0,:,:].values
-        lat = lat[0,:,:].values
-    else:
-        lon = lon.values
-        lat = lat.values
-    ds.close()
-    del ds
-    maps = maps.assign_coords({"t": ('t',times)})
-    maps = maps.chunk(chunks=(len(times),1,1))
+def compute_new_obs(dict_obs,config,State):
     
-    # Get observed date and interpolate maps
-    times_obs = [(np.datetime64(dt) - np.datetime64(config.init_date))/ np.timedelta64(1, 's')
-                 for dt in dict_obs]
-    maps = maps.interp(t=times_obs)
+    # Read grid
+    lon = State.lon 
+    lat = State.lat
     
+    # Maps timestamps
+    maps_date = []
+    date = config.init_date
+    while date<=config.final_date:
+        maps_date.append(date)
+        date += config.saveoutput_time_step
+        
     # For each observation, remove the corresponding estimated map
+    State_current = State.free()
+    State_prev = State.free()
+    State_next = State.free()
     for i,date in enumerate(dict_obs):
-        map_grd = maps[i].values
+        # Load corresponding map(s)
+        if date in maps_date:
+            # Cool: the observation date match exactly an estimated map
+            State_current.load(date=date)
+        else:
+            # We have to perform a time interpolation
+            date_prev = min(maps_date, key=lambda x: (x<date, abs(x-date)) )
+            date_next = min(maps_date, key=lambda x: (x>date, abs(x-date)) )
+            State_prev.load(date=date_prev)
+            State_next.load(date=date_next)
+            # Time interpolation
+            Wprev = abs(date_prev - date).total_seconds()
+            Wnext = abs(date_next - date).total_seconds()
+            State_prev.scalar(Wprev)
+            State_next.scalar(Wnext)
+            State_current = State_prev.copy()
+            State_current.Sum(State_next)
+            State_current.scalar(1/(Wprev+Wnext))
+
         # Open obs
         path_obs = dict_obs[date]['obs_name']
         sat =  dict_obs[date]['satellite']
@@ -71,9 +74,23 @@ def compute_new_obs(dict_obs,config):
             ds.close()
             del ds
             if _sat.kind=='fullSSH':
+                # index of observed state variable
+                if config.name_model=='QG1L':
+                    ind = 0
+                elif config.name_model=='SW1L':
+                    ind = 2
+                # Load current state
+                map_grd = State_current.getvar(ind)
                 # No grid interpolation
                 dsout[_sat.name_obs_var[0]] -= map_grd 
             elif _sat.kind=='swot_simulator':
+                # index of observed state variable
+                if config.name_model=='QG1L':
+                    ind = 0
+                elif config.name_model=='SW1L':
+                    ind = 2
+                # Load current state
+                map_grd = State_current.getvar(ind)
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
                 lat_obs = dsout[_sat.name_obs_lat].values
@@ -150,12 +167,12 @@ if __name__ == "__main__":
     print('* Compute new observations')
     if iteration>0:
         update_config(config2,iteration-1)
-        compute_new_obs(dict_obs1,config2)
+        State2 = state.State(config2)
+        compute_new_obs(dict_obs1,config2,State2)
     # Analysis
     print('* Analysis')
     ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
-    # Clean-up
-    del State1,Model1,dict_obs1
+    
     
     print('\n\n\
     *****************************************************************\n\
@@ -175,12 +192,10 @@ if __name__ == "__main__":
     dict_obs2 = obs.obs(config2,State2)
     # Compute new observations taking into account previous estimation
     print('* Compute new observations')
-    compute_new_obs(dict_obs2,config1)
+    compute_new_obs(dict_obs2,config1,State1)
     # Analysis
     print('* Analysis')
     ana.ana(config2,State2,Model2,dict_obs=dict_obs2)
-    # Clean-up
-    del State2,Model2,dict_obs2
     
     if iteration>0:
         print('\n\n\
@@ -197,3 +212,8 @@ if __name__ == "__main__":
         print('K=',K)
         with open(path_K,'a') as f:
             f.write(str(K1) + " " + str(K2) + " " + str(K) + '\n') 
+    
+    # Clean-up
+    del State1,Model1,dict_obs1
+    del State2,Model2,dict_obs2
+    

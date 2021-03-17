@@ -173,7 +173,16 @@ class State:
 
         
     
-    def load(self,filename):
+    def load(self,filename=None,date=None):
+        
+        if filename is None:
+            filename = os.path.join(self.path_save,self.name_exp_save\
+                + '_y' + str(date.year)\
+                + 'm' + str(date.month).zfill(2)\
+                + 'd' + str(date.day).zfill(2)\
+                + 'h' + str(date.hour).zfill(2)\
+                + str(date.minute).zfill(2) + '.nc')
+                
         with xr.open_dataset(filename,engine='h5netcdf') as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values

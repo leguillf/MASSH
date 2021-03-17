@@ -393,6 +393,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                             State_current.scalar(W1)
                             State_previous.scalar(W2)
                             State_current.Sum(State_previous)
+                            State_current.scalar(1/(W1+W2))
             
                     # Save output
                     if config.saveoutputs:
