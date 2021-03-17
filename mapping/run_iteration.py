@@ -61,6 +61,7 @@ def compute_new_obs(dict_obs,config):
     
     # For each observation, remove the corresponding estimated map
     for i,date in enumerate(dict_obs):
+        map_grd = maps[i].values
         # Open obs
         path_obs = dict_obs[date]['obs_name']
         sat =  dict_obs[date]['satellite']
@@ -69,10 +70,9 @@ def compute_new_obs(dict_obs,config):
             dsout = ds.copy()
             ds.close()
             del ds
-            map_grd = maps[i,:,:].values
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout[_sat.name_obs_var[0]] -= map_grd
+                dsout[_sat.name_obs_var[0]] -= map_grd 
             elif _sat.kind=='swot_simulator':
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
@@ -80,7 +80,7 @@ def compute_new_obs(dict_obs,config):
                 map_obs = interpolate.griddata((lon.ravel(),lat.ravel()),
                                                map_grd.ravel(),
                                                (lon_obs.ravel(),lat_obs.ravel()))
-                dsout[_sat.name_obs_var[0]] -= map_obs.reshape(lon_obs.shape)
+                dsout[_sat.name_obs_var[0]] -=  map_obs.reshape(lon_obs.shape)
             dsout.to_netcdf(_path_obs,engine='scipy')
             dsout.close()
             del dsout

@@ -155,6 +155,9 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         err_bfn1 = 0
         bfn_iter = 0
         Nold_t = None
+        
+        from datetime import datetime
+        
 
         while bfn_iter==0 or\
               (bfn_iter < config.bfn_max_iteration
@@ -169,6 +172,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             ###################
             # 5.1. FORTH LOOP #
             ###################
+            time0 = datetime.now()
+            time00 = time0
             # Save state at first timestep              
             name_save = config.name_exp_save + '_' + str(0).zfill(5) + '.nc'
             filename_forward = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
@@ -235,10 +240,12 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 ax2.set_title('SSH')
                 plt.suptitle(str(present_date_forward) + ': End of forward loop n°' + str(bfn_iter))
                 plt.show()
-
+            time1 = datetime.now()
+            print('F',bfn_iter,time1-time0)
             ##################
             # 5.2. BACK LOOP #
             ##################
+            time0 = datetime.now()
             if  bfn_iter < config.bfn_max_iteration:
                 present_date_backward0 = final_bfn_date
                 # Save state at first timestep          
@@ -303,15 +310,22 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     ax2.set_title('SSH')
                     plt.suptitle(str(present_date_backward) + ': End of backward loop n°' + str(bfn_iter))
                     plt.show()
-
+            time1 = datetime.now()
+            print('B',bfn_iter,time1-time0)
             #########################
             # 5.3. CONVERGENCE TEST #
             #########################
+            time0 = datetime.now()
             if bfn_iter < config.bfn_max_iteration:
                 err_bfn1 = bfn_obj.convergence(
                                         path_forth=os.path.join(config.tmp_DA_path,'BFN_forth_*.nc'),
                                         path_back=os.path.join(config.tmp_DA_path,'BFN_back_*.nc')
                                         )
+            time1 = datetime.now()
+            print('C',bfn_iter,time1-time0)
+            
+            time11 = datetime.now()
+            print('T',bfn_iter,time11-time00)
                 
         print('Loop from',init_bfn_date.strftime("%Y-%m-%d"),'to',final_bfn_date.strftime("%Y-%m-%d :"),bfn_iter,'iterations')
         

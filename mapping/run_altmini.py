@@ -20,7 +20,8 @@ def create_new_config_file(src_file,out_file,list_pattern,list_subst):
             for line in lines:
                 found = False
                 for pattern,subst in zip(list_pattern,list_subst):
-                    if re.search(pattern, line) and line[:len(pattern)]==pattern:
+                    if re.search(pattern, line) and line[:len(pattern)]==pattern\
+                        and line[len(pattern)] in [' ','=']:
                         new_line = subst + '\n'
                         out.write(new_line)
                         found = True
@@ -79,7 +80,7 @@ if __name__ == "__main__":
                 )
     create_new_config_file(exp_config_file_2,
                 path_exp_config_file_2,
-                ['tmp_DA_path','path_save'],
+                ['tmp_DA_path','path_save '],
                 ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp2/iteration_0"'),
                  'path_save = "' + os.path.join(path_exp,'outputs/Exp2/iteration_0"')]
                 )
