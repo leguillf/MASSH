@@ -753,7 +753,14 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
             if varname == 'relvort' and sat_info.name_obs_xac is not None:
                 # Only for 2D data (need 'xac' variable)
                 xac = ncin[sat_info.name_obs_xac].values
-                rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
+                #rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
+                try:
+                    rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
+                except: 
+                    print('Warning: for ' + obs_file +\
+                          ' impossible to convert ssh to relatve vorticity,\
+                          we skip this date')
+                    continue
                 varobs = np.append(varobs, rv.ravel())
             elif varname == 'ssh':
                 if sat_info.kind == 'CMEMS':
