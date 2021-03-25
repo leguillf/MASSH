@@ -66,6 +66,8 @@ name_init_lon = ''
 
 name_init_lat = ''
 
+name_init_var = None
+
 # For name_init=='geo_grid'
 
 lon_min = 294.                                        # domain min longitude

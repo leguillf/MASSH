@@ -58,9 +58,7 @@ class Model_qg1l:
         self.only_diffusion = config.only_diffusion
         self.cdiffus = config.cdiffus
         self.qgiter = config.qgiter
-        
-        State.ini_var_qg1l()
-        
+                
         self.State = State
         
             

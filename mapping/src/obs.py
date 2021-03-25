@@ -47,6 +47,10 @@ def obs(config, State, *args, **kwargs):
     # Compute output observation dictionnary
     dict_obs = {}
     
+    if config.satellite is None:
+        print('None observation has been provided')
+        return dict_obs
+    
     assim_dates = []
     date = config.init_date
     while date<=config.final_date:

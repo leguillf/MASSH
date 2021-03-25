@@ -11,6 +11,7 @@ import numpy as np
 import time 
 from  scipy import interpolate 
 from datetime import datetime
+from glob import glob
 
 from src import state as state
 from src import exp as exp
@@ -22,10 +23,27 @@ def update_config(config,i):
     name_it = 'iteration_' + str(i) 
     config.tmp_DA_path = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_it])
     config.path_save = '/'.join(config.path_save.split('/')[:-1]+[name_it])
-    if i>0 and config.name_model=='SW1L' and config.name_analysis=='4Dvar':
-        name_prev = 'iteration_' + str(i-1) 
-        path_tmp_prev = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_prev])
-        config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
+    if i>0:
+        if config.name_model=='QG1L' and config.name_analysis=='BFN':
+            # Use first output of previous iteration as initialization 
+            name_prev = 'iteration_' + str(i-1) 
+            path_output_prev = '/'.join(config.path_save.split('/')[:-1]+[name_prev])
+            # First file
+            file_init = sorted(glob(os.path.join(path_output_prev,'*.nc')))[0]
+            print(file_init)
+            # Update config
+            config.name_init = 'from_file'
+            config.name_init_grid = file_init
+            config.name_init_lon = config.name_mod_lon
+            config.name_init_lat = config.name_mod_lat
+            config.name_init_var = config.name_mod_var[0]
+            
+        if config.name_model=='SW1L' and config.name_analysis=='4Dvar':
+            # Use converged state from previous iteration as initialization 
+            name_prev = 'iteration_' + str(i-1) 
+            path_tmp_prev = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_prev])
+            config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
+        
     
 
 def compute_new_obs(dict_obs,config,State):
@@ -157,6 +175,7 @@ if __name__ == "__main__":
     # Updtade configuration file
     update_config(config1,iteration)
     # State
+    print('* State Initialization')
     State1 = state.State(config1)
     # Model
     print('* Model Initialization')
@@ -186,6 +205,7 @@ if __name__ == "__main__":
     *****************************************************************\n')
     time0 = datetime.now()
     # Updtade configuration file
+    print('* State Initialization')
     update_config(config2,iteration)
     # State
     State2 = state.State(config2)

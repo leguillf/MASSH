@@ -29,6 +29,8 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
         Main function calling subfunctions for specific Data Assimilation algorithms
     """
     
+    if config.name_analysis is None: 
+        return ana_forward(config,State,Model)
     if config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
     elif config.name_analysis=='4Dvar':
@@ -36,7 +38,23 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
+
+def ana_forward(config,State,Model):
+    present_date = config.init_date
+    State.save(date=present_date)
+    
+    while present_date < config.final_date :
+        print(present_date)
+        # Propagation
+        Model.step(State,config.saveoutput_time_step.total_seconds())
+        # Time increment
+        present_date += config.saveoutput_time_step
+        # Save
+        State.save(date=present_date)
         
+        
+    return
+    
     
 def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     """

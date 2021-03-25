@@ -48,9 +48,9 @@ class State:
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
         if config.name_model=='QG1L':
-            self.ini_var_qg1l()
+            self.ini_var_qg1l(config)
         elif config.name_model=='SW1L':
-            self.ini_var_sw1l()
+            self.ini_var_sw1l(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
             
@@ -96,8 +96,10 @@ class State:
             lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
-            
-    def ini_var_qg1l(self):
+        dsin.close()
+        del dsin
+        
+    def ini_var_qg1l(self,config):
         """
         NAME
             ini_var_qg1l
@@ -111,9 +113,20 @@ class State:
         if len(self.name_var) not in [1,2,3]:
             sys.exit('For QG1L: wrong number variable names')
         for i, var in enumerate(self.name_var):
-            self.var[var] = np.zeros((self.ny,self.nx))
+            if (config.name_init == 'from_file') and (config.name_init_var is not None) and (i==0):
+                print('Read var *'+config.name_init_var+' from file')
+                dsin = xr.open_dataset(config.name_init_grid)
+                var_init = dsin[config.name_init_var]
+                if len(var_init.shape)==3:
+                    var_init = var_init[0,:,:]
+                self.var[var] = var_init.values
+                dsin.close()
+                del dsin
+            else:
+                self.var[var] = np.zeros((self.ny,self.nx))
+            
 
-    def ini_var_sw1l(self):
+    def ini_var_sw1l(self,config):
         """
         NAME
             ini_var_qg1l
