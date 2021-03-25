@@ -114,7 +114,6 @@ class State:
             sys.exit('For QG1L: wrong number variable names')
         for i, var in enumerate(self.name_var):
             if (config.name_init == 'from_file') and (config.name_init_var is not None) and (i==0):
-                print('Read var *'+config.name_init_var+' from file')
                 dsin = xr.open_dataset(config.name_init_grid)
                 var_init = dsin[config.name_init_var]
                 if len(var_init.shape)==3:
