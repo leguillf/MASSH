@@ -30,7 +30,6 @@ def update_config(config,i):
             path_output_prev = '/'.join(config.path_save.split('/')[:-1]+[name_prev])
             # First file
             file_init = sorted(glob(os.path.join(path_output_prev,'*.nc')))[0]
-            print(file_init)
             # Update config
             config.name_init = 'from_file'
             config.name_init_grid = file_init
@@ -116,7 +115,7 @@ def compute_new_obs(dict_obs,config,State):
                                                (lon_obs.ravel(),lat_obs.ravel()))
                 dsout[_sat.name_obs_var[0]] -=  map_obs.reshape(lon_obs.shape)
             # Writing new obs file
-            dsout.to_netcdf(_path_obs,engine='scipy')
+            dsout.to_netcdf(_path_obs,engine='h5netcdf')
             dsout.close()
             del dsout
             
@@ -182,7 +181,7 @@ if __name__ == "__main__":
     Model1 = mod.Model(config1,State1)
     # Observations
     print('* Observations')
-    dict_obs1 = obs.obs(config1,State1)
+    #dict_obs1 = obs.obs(config1,State1)
     # Compute new observations taking into account previous estimation
     print('* Compute new observations')
     if iteration>0:
@@ -191,7 +190,7 @@ if __name__ == "__main__":
         compute_new_obs(dict_obs1,config2,State2)
     # Analysis
     print('* Analysis')
-    ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
+    #ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
     # Computational time
     time1 = datetime.now()
     print('1st Experiment (iteration ' + str(iteration) + ' took',

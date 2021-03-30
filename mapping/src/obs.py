@@ -128,7 +128,7 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,b
                 '_'.join(sat_info.name_obs_var) + '_' + date + '.nc')
             print(dt_curr,': '+path)
             _ds[sat_info.name_obs_time].encoding.pop("_FillValue", None)
-            _ds.to_netcdf(path,engine='scipy')
+            _ds.to_netcdf(path)#,engine='scipy')
             _ds.close()
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:

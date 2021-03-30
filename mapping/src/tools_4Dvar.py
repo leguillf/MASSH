@@ -238,11 +238,12 @@ class Variational:
         self.prec = prec
         
         # Grad test
-        X = np.random.random()
-        if self.B is not None:
-            X *= self.B.sigma 
-        print('gradient test:')
-        grad_test(self.cost, self.grad, X)
+        if False:
+            X = np.random.random()
+            if self.B is not None:
+                X *= self.B.sigma 
+            print('gradient test:')
+            grad_test(self.cost, self.grad, X)
         
         
     def cost(self,X0):
