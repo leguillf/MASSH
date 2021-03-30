@@ -181,7 +181,7 @@ if __name__ == "__main__":
     Model1 = mod.Model(config1,State1)
     # Observations
     print('* Observations')
-    #dict_obs1 = obs.obs(config1,State1)
+    dict_obs1 = obs.obs(config1,State1)
     # Compute new observations taking into account previous estimation
     print('* Compute new observations')
     if iteration>0:
@@ -190,7 +190,7 @@ if __name__ == "__main__":
         compute_new_obs(dict_obs1,config2,State2)
     # Analysis
     print('* Analysis')
-    #ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
+    ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
     # Computational time
     time1 = datetime.now()
     print('1st Experiment (iteration ' + str(iteration) + ' took',
