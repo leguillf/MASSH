@@ -86,36 +86,29 @@ def compute_new_obs(dict_obs,config,State):
         sat =  dict_obs[date]['satellite']
         for _sat,_path_obs in zip(sat,path_obs):
             ds = xr.open_dataset(_path_obs)
-            dsout = ds.copy()
+            dsout = ds.copy().load()
             ds.close()
             del ds
+            # index of observed state variable
+            if config.name_model=='QG1L':
+                ind = 0
+            elif config.name_model=='SW1L':
+                ind = 2
+            # Load current state
+            map_grd = State_current.getvar(ind)
             if _sat.kind=='fullSSH':
-                # index of observed state variable
-                if config.name_model=='QG1L':
-                    ind = 0
-                elif config.name_model=='SW1L':
-                    ind = 2
-                # Load current state
-                map_grd = State_current.getvar(ind)
                 # No grid interpolation
                 dsout[_sat.name_obs_var[0]] -= map_grd 
             elif _sat.kind=='swot_simulator':
-                # index of observed state variable
-                if config.name_model=='QG1L':
-                    ind = 0
-                elif config.name_model=='SW1L':
-                    ind = 2
-                # Load current state
-                map_grd = State_current.getvar(ind)
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
                 lat_obs = dsout[_sat.name_obs_lat].values
                 map_obs = interpolate.griddata((lon.ravel(),lat.ravel()),
-                                               map_grd.ravel(),
-                                               (lon_obs.ravel(),lat_obs.ravel()))
+                                                map_grd.ravel(),
+                                                (lon_obs.ravel(),lat_obs.ravel()))
                 dsout[_sat.name_obs_var[0]] -=  map_obs.reshape(lon_obs.shape)
             # Writing new obs file
-            dsout.to_netcdf(_path_obs,engine='h5netcdf')
+            dsout.to_netcdf(_path_obs)
             dsout.close()
             del dsout
             

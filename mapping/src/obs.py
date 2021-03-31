@@ -33,9 +33,9 @@ def obs(config, State, *args, **kwargs):
     """
     
     # Check if previous *dict_obs* has been computed
-    if config.write_obs and os.path.exists(os.path.join(config.tmp_DA_path,'dict_obs.pic')):
+    if config.write_obs and os.path.exists(os.path.join(config.path_obs,'dict_obs.pic')):
         print('Reading *dict_obs* from previous run')
-        with open(os.path.join(config.tmp_DA_path,'dict_obs.pic'), 'rb') as f:
+        with open(os.path.join(config.path_obs,'dict_obs.pic'), 'rb') as f:
             dict_obs = pickle.load(f)
             return dict_obs
         
@@ -71,7 +71,7 @@ def obs(config, State, *args, **kwargs):
             ds = xr.open_dataset(path_obs)
         else:
             ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
-                                   combine='by_coords')
+                                   combine='by_coords',lock=False)
             
         # Run subfunction specific to the kind of satellite
         if sat_info.kind=='swot_simulator':
@@ -85,7 +85,9 @@ def obs(config, State, *args, **kwargs):
     
     # Write *dict_obs* for next experiment
     if config.write_obs:
-        with open(os.path.join(config.tmp_DA_path,'dict_obs.pic'), 'wb') as f:
+        if not os.path.exists(config.path_obs):
+            os.makedirs(config.path_obs)
+        with open(os.path.join(config.path_obs,'dict_obs.pic'), 'wb') as f:
             pickle.dump(dict_obs,f)
         
     return dict_obs
@@ -115,7 +117,7 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,b
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
         
-        _ds = ds.where((dt1<=time_obs) & (time_obs<=dt2), drop=True)
+        _ds = ds.where((dt1<=time_obs) & (time_obs<=dt2), drop=True).load()
         
         lon = _ds[sat_info.name_obs_lon].values.ravel()
         lat = _ds[sat_info.name_obs_lat].values.ravel()
@@ -128,8 +130,9 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,b
                 '_'.join(sat_info.name_obs_var) + '_' + date + '.nc')
             print(dt_curr,': '+path)
             _ds[sat_info.name_obs_time].encoding.pop("_FillValue", None)
-            _ds.to_netcdf(path)#,engine='scipy')
+            _ds.to_netcdf(path)
             _ds.close()
+            del _ds
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
                     dict_obs[dt_curr]['satellite'].append(sat_info)
@@ -157,15 +160,16 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
         # Get indexes of observation times that fall into this time interval
         idx_obs = np.where((dt_obs>=dt_min) & (dt_obs<dt_max))[0]
         # Select the data for theses indexes
-        ds1 = ds.isel(**{name_dim_time_obs: idx_obs})
+        ds1 = ds.isel(**{name_dim_time_obs: idx_obs},drop=True).load()
         if len(ds1[sat_info.name_obs_time])>0:
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path,'obs_' + date + '.nc')
             print(dt_curr,': '+path)
             ds1[sat_info.name_obs_time].encoding.pop("_FillValue", None)
-            ds1.to_netcdf(path,engine='scipy')
+            ds1.to_netcdf(path)
             ds1.close()
+            del ds1
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
                     dict_obs[dt_curr]['satellite'].append(sat_info)
@@ -175,6 +179,7 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
                 dict_obs[dt_curr]['satellite'] = [sat_info]
                 dict_obs[dt_curr]['obs_name'] = [path]
     ds.close()
+    del ds
     
     return    
 

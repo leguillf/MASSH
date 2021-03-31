@@ -14,6 +14,7 @@ from datetime import datetime
 import re
 
 def create_new_config_file(src_file,out_file,list_pattern,list_subst):
+    line_added = []
     with open(out_file, 'w') as out:
         with open(src_file, 'r') as src:
             lines = src.readlines()
@@ -22,11 +23,16 @@ def create_new_config_file(src_file,out_file,list_pattern,list_subst):
                 for pattern,subst in zip(list_pattern,list_subst):
                     if re.search(pattern, line) and line[:len(pattern)]==pattern\
                         and line[len(pattern)] in [' ','=']:
+                        line_added.append(pattern)
                         new_line = subst + '\n'
                         out.write(new_line)
                         found = True
                 if not found:
                     out.write(line)
+        for pattern,subst in zip(list_pattern,list_subst):
+            if pattern not in line_added:
+                new_line = subst + '\n'
+                out.write(new_line)
 
 if __name__ == "__main__":
     
@@ -74,15 +80,18 @@ if __name__ == "__main__":
     
     create_new_config_file(exp_config_file_1,
                 path_exp_config_file_1,
-                ['tmp_DA_path','path_save'],
+                ['tmp_DA_path ','path_save ','path_obs '],
                 ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp1/iteration_0"'),
-                 'path_save = "' + os.path.join(path_exp,'outputs/Exp1/iteration_0"')]
+                 'path_save = "' + os.path.join(path_exp,'outputs/Exp1/iteration_0"'),
+                 'path_obs = "' + os.path.join(path_exp,'obs/Exp1"')]
                 )
+    
     create_new_config_file(exp_config_file_2,
                 path_exp_config_file_2,
-                ['tmp_DA_path','path_save '],
+                ['tmp_DA_path ','path_save ','path_obs '],
                 ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp2/iteration_0"'),
-                 'path_save = "' + os.path.join(path_exp,'outputs/Exp2/iteration_0"')]
+                 'path_save = "' + os.path.join(path_exp,'outputs/Exp2/iteration_0"'),
+                 'path_obs = "' + os.path.join(path_exp,'obs/Exp2"')]
                 )
     
     K = np.inf
@@ -96,6 +105,7 @@ if __name__ == "__main__":
         run_iteration = os.path.join(pwd,'run_iteration.py')
         cmd = ['python3', run_iteration, 
                path_exp_config_file_1,path_exp_config_file_2,str(i),path_K]
+        print(' '.join(cmd))
         out = open(os.path.join(path_exp,'logout_' + str(i) + '.txt'), "w")
         err = open(os.path.join(path_exp,'logerr_' + str(i) + '.txt'), "w")
         subprocess.call(cmd,stdout=out,stderr=err)

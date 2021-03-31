@@ -166,20 +166,35 @@ class State:
                 + 'h' + str(date.hour).zfill(2)\
                 + str(date.minute).zfill(2) + '.nc')
         
-        dictout = {}
+        outvars = {}
+        coords = {}
         
+        if date is not None:
+            coords['time'] = (('t'), [pd.to_datetime(date)])
+            
         if grd:
-            dictout = {self.name_lon: (('y','x',), self.lon),
-                        self.name_lat: (('y','x',), self.lat),
-                    }
+            _namey = {self.ny:'y'}
+            _namex = {self.nx:'x'}
+            coords[self.name_lon] = (('y','x',), self.lon)
+            coords[self.name_lat] = (('y','x',), self.lat)
+        else:
+            _namey = {}
+            _namex = {}
         
-            if date is not None:
-                dictout['time'] = (('t'), [pd.to_datetime(date)])
-            
+        cy,cx = 1,1
         for i, name in enumerate(self.name_var):
-            dictout[name] = (('y'+str(i), 'x'+str(i),), self.var.values[i])
+            outvar = self.var.values[i]
+            y1,x1 = outvar.shape
+            if y1 not in _namey:
+                _namey[y1] = 'y'+str(cy)
+                cy += 1
+            if x1 not in _namex:
+                _namex[x1] = 'x'+str(cx)
+                cx += 1
+                    
+            outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
             
-        ds = xr.Dataset(dictout)
+        ds = xr.Dataset(outvars,coords=coords)
         ds.to_netcdf(filename,engine='h5netcdf')
         ds.close()
 

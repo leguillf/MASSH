@@ -44,6 +44,32 @@ name_experiment = 'my_exp'
 name_domain = 'my_domain'
 
 #################################################################################################################################
+# Outputs parameters
+#################################################################################################################################
+# - saveoutputs: save outputs flag (True or False)
+# - name_exp_save: name of output files
+# - path_save: path of output files
+# - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
+#################################################################################################################################
+
+saveoutputs = True         
+
+name_exp_save = name_experiment + '_' + name_domain
+
+path_save = 'outputs/' + name_exp_save + '/'
+
+flag_plot = 0
+    
+#################################################################################################################################
+# Temporary DA parameters
+#################################################################################################################################
+# - tmp_DA_path: temporary data assimilation directory path
+#################################################################################################################################
+        
+tmp_DA_path = "scratch/" +  name_exp_save + '/'
+ 
+
+#################################################################################################################################
 # Global libraries     
 #################################################################################################################################
 # - datetime
@@ -144,6 +170,7 @@ cdiffus = 0.
 
 only_diffusion = False
 
+name_grd = tmp_DA_path + 'QGgrid'
 
 # - parameters specific to SW model
 
@@ -253,6 +280,7 @@ maxiter = 20 # Maximal number of iterations for the minimization process
 
 satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
 write_obs = True
+path_obs = tmp_DA_path
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
@@ -339,33 +367,6 @@ name_obs_xac_topex = None
 nudging_params_stretching_topex = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
 nudging_params_relvort_topex = None
 
-#################################################################################################################################
-# Outputs parameters
-#################################################################################################################################
-# - saveoutputs: save outputs flag (True or False)
-# - name_exp_save: name of output files
-# - path_save: path of output files
-# - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
-#################################################################################################################################
-
-saveoutputs = True         
-
-name_exp_save = name_experiment + '_' + name_domain
-
-path_save = 'outputs/' + name_exp_save + '/'
-
-flag_plot = 0
-    
-#################################################################################################################################
-# Temporary DA parameters
-#################################################################################################################################
-# - tmp_DA_path: temporary data assimilation directory path
-# - name_grd: name used for saving the QG grid to avoid calculating it every time.
-#################################################################################################################################
-        
-tmp_DA_path = "scratch/" +  name_exp_save + '/'
- 
-name_grd = tmp_DA_path + 'QGgrid'
 
 
 
