@@ -160,7 +160,7 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
         # Get indexes of observation times that fall into this time interval
         idx_obs = np.where((dt_obs>=dt_min) & (dt_obs<dt_max))[0]
         # Select the data for theses indexes
-        ds1 = ds.isel(**{name_dim_time_obs: idx_obs},drop=True).load()
+        ds1 = ds.isel(**{name_dim_time_obs: idx_obs},drop=True)
         if len(ds1[sat_info.name_obs_time])>0:
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
