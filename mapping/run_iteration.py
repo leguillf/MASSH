@@ -112,34 +112,42 @@ def compute_new_obs(dict_obs,config,State):
             dsout.close()
             del dsout
             
-def compute_convergence_criteria(config,i):
-    path_save_i = config.path_save
-    name_it1 = 'iteration_' + str(i-1)
-    path_save_i1 = '/'.join(config.path_save.split('/')[:-1]+[name_it1])
-    maps_i = xr.open_mfdataset(
-        os.path.join(path_save_i,config.name_exp_save+'*.nc'),
-        combine='nested',concat_dim='t', engine='h5netcdf')
-    maps_i1 = xr.open_mfdataset(
-        os.path.join(path_save_i1,config.name_exp_save+'*.nc'),
-        combine='nested',concat_dim='t', engine='h5netcdf')
-    K = 0
-    nc = 0
-    for name in config.name_mod_var:
-        for t in range(maps_i.t.size):
-            var_i = maps_i[name][t,:,:].values
-            var_i1 = maps_i1[name][t,:,:].values
-            if ( np.max(np.max(var_i1))-np.min(np.min(var_i1)) )!=0:
-                K += np.sqrt(np.sum(np.sum(np.square(var_i-var_i1)))/var_i1.size) /\
-                    ( np.max(np.max(var_i1))-np.min(np.min(var_i1)) )
+            
+def compute_convergence_criteria(config,State,i):
+    
+    # Maps timestamps
+    maps_date = []
+    date = config.init_date
+    while date<=config.final_date:
+        maps_date.append(date)
+        date += config.saveoutput_time_step
+    
+    # Find State from previous iteration
+    name_it_prev = 'iteration_' + str(i-1) 
+    path_save_prev = '/'.join(config.path_save.split('/')[:-1]+[name_it_prev])
+    State_prev = State.copy()
+    State_prev.path_save = path_save_prev
+    
+    K,nc = 0,0
+    for i,date in enumerate(maps_date):
+        # Load corresponding maps
+        State.load(date=date)
+        State_prev.load(date=date)
+        # Get state variables
+        statevars = State.getvar()
+        statevars_prev = State_prev.getvar()
+        # Compare variables
+        for var,var_prev in zip(statevars,statevars_prev):
+            if ( np.max(np.max(var_prev))-np.min(np.min(var_prev)) )!=0:
+                size = var.size
+                K += np.sqrt(np.sum(np.sum(np.square(var-var_prev)))/size) /\
+                    ( np.max(np.max(var_prev))-np.min(np.min(var_prev)) )
                 nc += 1
         
     K /= nc
-    
-    maps_i.close()
-    maps_i1.close()
-    del maps_i,maps_i1
 
     return K
+
 
 if __name__ == "__main__":
     
@@ -225,8 +233,8 @@ if __name__ == "__main__":
                       Convergence test (iteration ' + str(iteration) +')\n\
         *****************************************************************\n\
         *****************************************************************\n')
-        K1 = compute_convergence_criteria(config1,iteration)
-        K2 = compute_convergence_criteria(config2,iteration)
+        K1 = compute_convergence_criteria(config1,State1,iteration)
+        K2 = compute_convergence_criteria(config2,State2,iteration)
         K = (K1+K2)/2
         print('K1=',K1)
         print('K2=',K2)
