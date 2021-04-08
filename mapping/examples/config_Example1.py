@@ -49,7 +49,6 @@ name_domain = 'GULFSTREAM'
 # - datetime
 # - timedelta
 #################################################################################################################################
-import os
 from datetime import datetime,timedelta
     
 #################################################################################################################################
@@ -191,7 +190,7 @@ name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'gssh'}
 # - satellite: list of satellite names 
 
 satellite = ["swot"]
-write_obs = False
+write_obs = True
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
@@ -293,7 +292,7 @@ name_exp_save = name_experiment
 
 path_save = '../outputs/' + name_exp_save + '/'
 
-flag_plot = 0
+flag_plot = 1
     
 #################################################################################################################################
 # Temporary DA parameters

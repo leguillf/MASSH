@@ -13,7 +13,7 @@ import numpy as np
 import os
 from math import sqrt,pi
 from datetime import timedelta
-from . import switchvar, tools, grid
+from . import tools, grid
 
 def Model(config,State):
     """
@@ -41,98 +41,83 @@ class Model_qg1l:
                 os.path.join(os.path.dirname(os.path.realpath(__file__)),
                              '..','models','model_qg1l'))
         else:
-            dir_model = config.dir_model
-        SourceFileLoader("modgrid", 
-                         dir_model + "/modgrid.py").load_module() 
-        SourceFileLoader("moddyn", 
-                        dir_model + "/moddyn.py").load_module()     
-        SourceFileLoader("modelliptic", 
-                        dir_model + "/modelliptic.py").load_module()     
-        self.qgsw = SourceFileLoader("qgsw", 
-                                 dir_model + "/qgsw.py").load_module() 
-
+            dir_model = config.dir_model  
+        qgm = SourceFileLoader("qgm", 
+                                 dir_model + "/qgm.py").load_module() 
+        
+        
         # Model parameters
-        self.name_grd = config.name_grd
         self.dt = config.dtmodel
         self.c = config.c
-        self.only_diffusion = config.only_diffusion
-        self.cdiffus = config.cdiffus
-        self.qgiter = config.qgiter
-                
+        
+        # Model initialization
+        self.qgm = qgm.Qgm(dx=State.DX,
+                           dy=State.DY,
+                           dt=self.dt,
+                           SSH=State.getvar(ind=0),
+                           c=self.c,
+                           g=State.g,
+                           f=State.f,
+                           qgiter=config.qgiter,
+                           diff=config.only_diffusion,
+                           snu=config.cdiffus)
         self.State = State
         
             
-        
-        
     def step(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
+        
         # Read state variable
         ssh_0 = State.getvar(0)
         if len(State.name_var)>1 and State.name_var[1] in State.var:
             flag_pv = True
             pv_0 = State.getvar(1)
         else:
-            pv_0 = switchvar.ssh2pv(ssh_0,State.lon,State.lat,self.c,
-                                    name_grd=self.name_grd)
-        # Get model parameter from model state or use default one
-        flag_K = False
-        if len(State.name_var)>2 and State.name_var[2] in State.var:
-            flag_K = True
-            K = State.getvar(2)
-            c = np.mean(State.f/np.sqrt(K))
-        else:
-            c = self.c
-            K = (self.State.f/c)**2
+            flag_pv = False
+            pv_0 = self.qgm.h2pv(ssh_0)
         # Boundary condition
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
         if Hbc is not None:
-            Qbc = switchvar.ssh2pv(Hbc, State.lon, State.lat, self.c, 
-                                   name_grd=self.name_grd)
+            Qbc = self.qgm.h2pv(Hbc)
             ssh_0 = Wbc*Hbc + (1-Wbc)*ssh_0
             pv_0 = Wbc*Qbc + (1-Wbc)*pv_0
             
         # Model propagation
         deltat = np.abs(tint)
-        ssh_1, pv_1, trash = self.qgsw.qgsw(Hi=ssh_0, PVi=pv_0, c=c,
-                                            lon=State.lon, lat=State.lat,
-                                            tint=tint,
-                                            dtout=deltat,
-                                            dt=self.dt,
-                                            name_grd=self.name_grd,
-                                            diff=self.only_diffusion,
-                                            snu=self.cdiffus)
+        way = np.sign(tint)
+        t = 0
+        ssh_1 = +ssh_0
+        pv_1 = +pv_0
+        while t<deltat:
+            ssh_1, pv_1 = self.qgm.step(Hi=ssh_1, PVi=pv_1,way=way)
+            t += self.dt
         
         # Nudging
         if Nudging_term is not None:
             # Nudging towards relative vorticity
             if np.any(np.isfinite(Nudging_term['rv'])):
                 indNoNan = ~np.isnan(Nudging_term['rv'])
-                pv_1[-1][indNoNan] += (1-Wbc[indNoNan]) *\
+                pv_1[indNoNan] += (1-Wbc[indNoNan]) *\
                     Nudging_term['rv'][indNoNan]
             # Nudging towards ssh
             if np.any(np.isfinite(Nudging_term['ssh'])):
                 indNoNan = ~np.isnan(Nudging_term['ssh'])
-                pv_1[-1][indNoNan] -= (1-Wbc[indNoNan]) * (self.State.g/self.State.f[indNoNan]) *\
-                    K[indNoNan] * Nudging_term['ssh'][indNoNan]
-    
-    
+                pv_1[indNoNan] -= (1-Wbc[indNoNan]) *\
+                    (self.State.g*self.State.f[indNoNan])/self.c**2 * \
+                        Nudging_term['ssh'][indNoNan]
                 # Inversion pv -> ssh
-                ssh_b = ssh_1[-1].copy()
-                ssh_1[-1] = switchvar.pv2ssh(
-                    State.lon,State.lat,pv_1[-1],ssh_b,c,nitr=self.qgiter,
-                    name_grd=self.name_grd)
-        
+                ssh_b = +ssh_1
+                ssh_1 = self.qgm.pv2h(pv_1,ssh_b)
+                    
         if np.any(np.isnan(ssh_1)):
             sys.exit('Invalid value encountered in mod_qg1l')
         
         # Update state 
-        State.setvar(ssh_1[-1],0)
+        State.setvar(ssh_1,0)
         if flag_pv:
-            State.setvar(pv_1[-1],1)
-        if flag_K:
-            State.setvar(K,2)
+            State.setvar(pv_1,1)
+
             
-        
     def step_adj():
         return
     

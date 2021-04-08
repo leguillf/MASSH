@@ -12,6 +12,8 @@ import sys,os
 import pandas as pd 
 from copy import deepcopy
 
+from . import grid
+
 class State:
     """
     NAME
@@ -26,7 +28,9 @@ class State:
    # __slots__ = ('config','lon','lat','var','name_lon','name_lat','name_var','name_exp_save','path_save','ny','nx','f','g')
     
     def __init__(self,config):
+        
         self.config = config
+        
         # Parameters
         self.name_lon = config.name_mod_lon
         self.name_lat = config.name_mod_lat
@@ -36,6 +40,7 @@ class State:
         if not os.path.exists(self.path_save):
             os.makedirs(self.path_save)
         self.g = config.g
+        
         # Initialize grid
         if config.name_init == 'geo_grid':
              self.ini_geo_grid(config)
@@ -45,6 +50,19 @@ class State:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
         self.ny,self.nx = self.lon.shape
         self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
+        
+        # Compute cartesian grid 
+        DX,DY = grid.lonlat2dxdy(self.lon,self.lat)
+        dx = np.mean(DX)
+        dy = np.mean(DY)
+        X,Y = grid.dxdy2xy(DX,DY)
+        self.DX = DX
+        self.DY = DY
+        self.X = X
+        self.Y = Y
+        self.dx = dx
+        self.dy = dy
+        
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
         if config.name_model=='QG1L':
