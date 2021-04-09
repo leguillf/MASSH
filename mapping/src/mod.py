@@ -51,16 +51,18 @@ class Model_qg1l:
         self.c = config.c
         
         # Model initialization
-        self.qgm = qgm.Qgm_tgl(dx=State.DX,
-                           dy=State.DY,
-                           dt=self.dt,
-                           SSH=State.getvar(ind=0),
-                           c=self.c,
-                           g=State.g,
-                           f=State.f,
-                           qgiter=config.qgiter,
-                           diff=config.only_diffusion,
-                           snu=config.cdiffus)
+        if config.name_analys is None or config.name_analys == 'BFN':
+            model = qgm.Qgm
+        self.qgm = model(dx=State.DX,
+                         dy=State.DY,
+                         dt=self.dt,
+                         SSH=State.getvar(ind=0),
+                         c=self.c,
+                         g=State.g,
+                         f=State.f,
+                         qgiter=config.qgiter,
+                         diff=config.only_diffusion,
+                         snu=config.cdiffus)
         self.State = State
         
         #self.tangent_test(State,self.dt)
