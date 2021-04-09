@@ -695,7 +695,7 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                           timestep, we take the first one')
                 varobs = varobs[0]
             if varname == 'relvort' and sat_info_list[0].kind=='fullSSH':
-                proj_var = switchvar.ssh2rv(varobs, lon=lonobs, lat=latobs)
+                proj_var = switchvar.ssh2rv(varobs, State)
             else:
                 proj_var = varobs
 
