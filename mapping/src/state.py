@@ -12,6 +12,8 @@ import sys,os
 import pandas as pd 
 from copy import deepcopy
 
+from . import grid
+
 class State:
     """
     NAME
@@ -26,7 +28,9 @@ class State:
    # __slots__ = ('config','lon','lat','var','name_lon','name_lat','name_var','name_exp_save','path_save','ny','nx','f','g')
     
     def __init__(self,config):
+        
         self.config = config
+        
         # Parameters
         self.name_lon = config.name_mod_lon
         self.name_lat = config.name_mod_lat
@@ -36,6 +40,7 @@ class State:
         if not os.path.exists(self.path_save):
             os.makedirs(self.path_save)
         self.g = config.g
+        
         # Initialize grid
         if config.name_init == 'geo_grid':
              self.ini_geo_grid(config)
@@ -45,12 +50,25 @@ class State:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
         self.ny,self.nx = self.lon.shape
         self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
+        
+        # Compute cartesian grid 
+        DX,DY = grid.lonlat2dxdy(self.lon,self.lat)
+        dx = np.mean(DX)
+        dy = np.mean(DY)
+        X,Y = grid.dxdy2xy(DX,DY)
+        self.DX = DX
+        self.DY = DY
+        self.X = X
+        self.Y = Y
+        self.dx = dx
+        self.dy = dy
+        
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
         if config.name_model=='QG1L':
-            self.ini_var_qg1l()
+            self.ini_var_qg1l(config)
         elif config.name_model=='SW1L':
-            self.ini_var_sw1l()
+            self.ini_var_sw1l(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
             
@@ -96,8 +114,10 @@ class State:
             lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
-            
-    def ini_var_qg1l(self):
+        dsin.close()
+        del dsin
+        
+    def ini_var_qg1l(self,config):
         """
         NAME
             ini_var_qg1l
@@ -111,9 +131,19 @@ class State:
         if len(self.name_var) not in [1,2,3]:
             sys.exit('For QG1L: wrong number variable names')
         for i, var in enumerate(self.name_var):
-            self.var[var] = np.zeros((self.ny,self.nx))
+            if (config.name_init == 'from_file') and (config.name_init_var is not None) and (i==0):
+                dsin = xr.open_dataset(config.name_init_grid)
+                var_init = dsin[config.name_init_var]
+                if len(var_init.shape)==3:
+                    var_init = var_init[0,:,:]
+                self.var[var] = var_init.values
+                dsin.close()
+                del dsin
+            else:
+                self.var[var] = np.zeros((self.ny,self.nx))
+            
 
-    def ini_var_sw1l(self):
+    def ini_var_sw1l(self,config):
         """
         NAME
             ini_var_qg1l
@@ -154,26 +184,50 @@ class State:
                 + 'h' + str(date.hour).zfill(2)\
                 + str(date.minute).zfill(2) + '.nc')
         
-        dictout = {}
+        outvars = {}
+        coords = {}
         
+        if date is not None:
+            coords['time'] = (('t'), [pd.to_datetime(date)])
+            
         if grd:
-            dictout = {self.name_lon: (('y','x',), self.lon),
-                        self.name_lat: (('y','x',), self.lat),
-                    }
+            _namey = {self.ny:'y'}
+            _namex = {self.nx:'x'}
+            coords[self.name_lon] = (('y','x',), self.lon)
+            coords[self.name_lat] = (('y','x',), self.lat)
+        else:
+            _namey = {}
+            _namex = {}
         
-            if date is not None:
-                dictout['time'] = (('t'), [pd.to_datetime(date)])
-            
+        cy,cx = 1,1
         for i, name in enumerate(self.name_var):
-            dictout[name] = (('y'+str(i), 'x'+str(i),), self.var.values[i])
+            outvar = self.var.values[i]
+            y1,x1 = outvar.shape
+            if y1 not in _namey:
+                _namey[y1] = 'y'+str(cy)
+                cy += 1
+            if x1 not in _namex:
+                _namex[x1] = 'x'+str(cx)
+                cx += 1
+                    
+            outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
             
-        ds = xr.Dataset(dictout)
+        ds = xr.Dataset(outvars,coords=coords)
         ds.to_netcdf(filename,engine='h5netcdf')
         ds.close()
 
         
     
-    def load(self,filename):
+    def load(self,filename=None,date=None):
+        
+        if filename is None:
+            filename = os.path.join(self.path_save,self.name_exp_save\
+                + '_y' + str(date.year)\
+                + 'm' + str(date.month).zfill(2)\
+                + 'd' + str(date.day).zfill(2)\
+                + 'h' + str(date.hour).zfill(2)\
+                + str(date.minute).zfill(2) + '.nc')
+                
         with xr.open_dataset(filename,engine='h5netcdf') as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values

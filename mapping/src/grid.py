@@ -46,78 +46,9 @@ class Grid():
                      + (dY[0]*111000)**2)
         f0 = 2*2*np.pi/86164*np.sin(np.deg2rad(Y))
 
-    np0 = np.shape(np.where(mask >= 1))[1]
-    np2 = np.shape(np.where(mask == 2))[1]
-    np1 = np.shape(np.where(mask == 1))[1]
-    self.mask1d = np.zeros((np0))
-    self.H = np.zeros((np0))
-    self.c1d = np.zeros((np0))
-    self.f01d = np.zeros((np0))
-    self.dx1d = np.zeros((np0))
-    self.dy1d = np.zeros((np0))
-    self.indi = np.zeros((np0), dtype=np.int)
-    self.indj = np.zeros((np0), dtype=np.int)
-    self.vp1 = np.zeros((np1), dtype=np.int)
-    self.vp2 = np.zeros((np2), dtype=np.int)
-    self.vp2n = np.zeros((np2), dtype=np.int)
-    self.vp2nn = np.zeros((np2), dtype=np.int)
-    self.vp2s = np.zeros((np2), dtype=np.int)
-    self.vp2ss = np.zeros((np2), dtype=np.int)
-    self.vp2e = np.zeros((np2), dtype=np.int)
-    self.vp2ee = np.zeros((np2), dtype=np.int)
-    self.vp2w = np.zeros((np2), dtype=np.int)
-    self.vp2ww = np.zeros((np2), dtype=np.int)
-    self.vp2nw = np.zeros((np2), dtype=np.int)
-    self.vp2ne = np.zeros((np2), dtype=np.int)
-    self.vp2se = np.zeros((np2), dtype=np.int)
-    self.vp2sw = np.zeros((np2), dtype=np.int)
-    self.indp = np.zeros((ny,nx), dtype=np.int)
-
-    p = -1
-    for i in range(ny):
-      for j in range(nx):
-        if (mask[i,j] >= 1):
-          p += 1
-          self.mask1d[p] = mask[i,j]
-          self.dx1d[p] = dx[i,j]
-          self.dy1d[p] = dy[i,j]
-          self.f01d[p] = f0[i,j]
-          self.indi[p] = i
-          self.indj[p] = j
-          self.indp[i,j] = p
-
-
-    p2 = -1
-    p1 = -1
-    for p in range(np0):
-      if (self.mask1d[p] == 2):
-        p2 += 1
-        i = self.indi[p]
-        j = self.indj[p]
-        self.vp2[p2] = p
-        self.vp2n[p2] = self.indp[i+1,j]
-        self.vp2nn[p2] = self.indp[i+2,j]
-        self.vp2s[p2] = self.indp[i-1,j]
-        self.vp2ss[p2] = self.indp[i-2,j]
-        self.vp2e[p2] = self.indp[i,j+1]
-        self.vp2ee[p2] = self.indp[i,j+2]
-        self.vp2w[p2] = self.indp[i,j-1]
-        self.vp2ww[p2] = self.indp[i,j-2]
-        self.vp2nw[p2] = self.indp[i+1,j-1]
-        self.vp2ne[p2] = self.indp[i+1,j+1]
-        self.vp2se[p2] = self.indp[i-1,j+1]
-        self.vp2sw[p2] = self.indp[i-1,j-1]
-      if (self.mask1d[p] == 1):
-        p1 += 1
-        i = self.indi[p]
-        j = self.indj[p]
-        self.vp1[p1] = p
-    self.mask = mask
     self.f0 = f0
     self.dx = dx
     self.dy = dy
-    self.np0 = np0
-    self.np2 = np2
     self.nx = nx
     self.ny = ny
     self.X = X
@@ -161,6 +92,46 @@ def ds(lon, lat):
         ds[i] = np.sqrt((dlon*111000*np.cos(np.deg2rad(lat[i])))**2
                         + (dlat*111000)**2)
     return ds
+
+
+def geo2cart(coords):
+    """
+    NAME
+        geo2cart
+
+    DESCRIPTION
+        Transform coordinates from geodetic to cartesian
+
+        Args:
+            coords : a set of lan/lon coordinates (e.g. a tuple or
+             an array of tuples)
+
+
+        Returns: a set of cartesian coordinates (x,y,z)
+
+    """
+
+    # WGS 84 reference coordinate system parameters
+    A = 6378.137  # major axis [km]
+    E2 = 6.69437999014e-3  # eccentricity squared
+
+    coords = np.asarray(coords).astype(np.float)
+
+    # is coords a tuple? Convert it to an one-element array of tuples
+    if coords.ndim == 1:
+        coords = np.array([coords])
+
+    # convert to radiants
+    lat_rad = np.radians(coords[:, 1])
+    lon_rad = np.radians(coords[:, 0])
+
+    # convert to cartesian coordinates
+    r_n = A / (np.sqrt(1 - E2 * (np.sin(lat_rad) ** 2)))
+    x = r_n * np.cos(lat_rad) * np.cos(lon_rad)
+    y = r_n * np.cos(lat_rad) * np.sin(lon_rad)
+    z = r_n * (1 - E2) * np.sin(lat_rad)
+
+    return np.column_stack((x, y, z))
 
 
 def laplacian(u, dx, dy):

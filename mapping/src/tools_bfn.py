@@ -18,8 +18,9 @@ import os.path
 from scipy.ndimage.filters import gaussian_filter
 import glob
 
-from . import switchvar 
+from . import switchvar, grid
 from .tools import gaspari_cohn, hat_function, L2_scalar_prod
+
 
 
 def bfn(config,dt_start,dt_end,one_time_step,lon,lat):
@@ -277,7 +278,8 @@ class bfn_qg1l(object):
             for name_var in self.name_mod_var:
                 varf = dsf[name_var].values
                 varb = dsb[name_var].values
-                err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
+                if varf.size != 0 and np.std(varf)>0:
+                    err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
             dsf.close()
             dsb.close()
         
@@ -543,8 +545,7 @@ def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
     dict_obs_relvort = {}
 
     present_date0 = dt_start
-
-    print('\nObservations in the temporal window:')
+    
     while present_date0 < dt_end:
         if pd.to_datetime(present_date0) in dict_obs:
             sat_info_list = dict_obs[present_date0]['satellite']
@@ -553,7 +554,6 @@ def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
             for sat_info, obs_file in zip(sat_info_list,obs_file_list):
                 if sat_info.nudging_params_stretching is not None and\
                 sat_info.nudging_params_stretching['K']>0:
-                    print(obs_file)
                     # Get nudging parameters relative to stretching
                     K = sat_info.nudging_params_stretching['K']
                     Tau = sat_info.nudging_params_stretching['Tau']
@@ -570,7 +570,6 @@ def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
                         dict_obs_ssh[present_date0][(sigma,Tau)] = {'sat_info':[sat_info],'obs_name':[obs_file],'K':[K]}
                 if sat_info.nudging_params_relvort is not None and\
                 sat_info.nudging_params_relvort['K']>0:
-                    print(obs_file)
                     # Get nudging parameters relative to relative vorticity
                     K = sat_info.nudging_params_relvort['K']
                     Tau = sat_info.nudging_params_relvort['Tau']
@@ -638,18 +637,16 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
                 continue
             # Check if the projections have been saved in a previous run
             if path_save is not None and name_save is not None:
-                file_obs_save = path_save + name_save + '_' + varname + '_sigma' +\
+                file_obs_save = os.path.join(path_save,name_save + '_' + varname + '_sigma' +\
                                 str(key[0]) + '_K' +\
                                 '-'.join(map(str,nudging_coeff_list)) +\
                                 '_window' + str(key[1]).replace(" ", "") +\
                                 '_d' + str(dist_scale) + '_y' + str(date.year)\
                                 + 'm' + str(date.month).zfill(2) + 'd' +\
                                 str(date.day).zfill(2) + 'h' + str(date.hour).zfill(2) +\
-                                str(date.minute).zfill(2) + '.pic'
+                                str(date.minute).zfill(2) + '.pic')
 
                 if os.path.isfile(file_obs_save):
-                    print('projections have been saved in a previous run : ',
-                          file_obs_save)
                     # If yes, read the file
                     with open(file_obs_save, 'rb') as f:
                         obs_projected, nudging_coeff_projected = pickle.load(f)
@@ -682,8 +679,6 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
                         pickle.dump((obs_projected, nudging_coeff_projected),
                                     f)
                         f.close()
-
-                    print('Projection saved: ', file_obs_save)
 
             else:
                 obs_projected, nudging_coeff_projected =\
@@ -758,7 +753,14 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
             if varname == 'relvort' and sat_info.name_obs_xac is not None:
                 # Only for 2D data (need 'xac' variable)
                 xac = ncin[sat_info.name_obs_xac].values
-                rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
+                #rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
+                try:
+                    rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
+                except: 
+                    print('Warning: for ' + obs_file +\
+                          ' impossible to convert ssh to relatve vorticity,\
+                          we skip this date')
+                    continue
                 varobs = np.append(varobs, rv.ravel())
             elif varname == 'ssh':
                 if sat_info.kind == 'CMEMS':
@@ -877,7 +879,7 @@ def bfn_project_obsvar_to_state_grid(var, nudging_coeff, lon, lat,
         # Clean memory
         del lon, lat
 
-        obs_tree = spatial.cKDTree(bfn_geo2cart(coords_obs_geo))
+        obs_tree = spatial.cKDTree(grid.geo2cart(coords_obs_geo))
 
         # Compute distances
         dist_mx = ground_pixel_tree.sparse_distance_matrix(obs_tree,
@@ -959,51 +961,11 @@ def bfn_project_obsvar_to_state_grid(var, nudging_coeff, lon, lat,
     return obs_projected, nudging_coeff_projected
 
 
-def bfn_geo2cart(coords):
-    """
-    NAME
-        bfn_geo2cart
-
-    DESCRIPTION
-        Transform coordinates from geodetic to cartesian
-
-        Args:
-            coords : a set of lan/lon coordinates (e.g. a tuple or
-             an array of tuples)
-
-
-        Returns: a set of cartesian coordinates (x,y,z)
-
-    """
-
-    # WGS 84 reference coordinate system parameters
-    A = 6378.137  # major axis [km]
-    E2 = 6.69437999014e-3  # eccentricity squared
-
-    coords = np.asarray(coords).astype(np.float)
-
-    # is coords a tuple? Convert it to an one-element array of tuples
-    if coords.ndim == 1:
-        coords = np.array([coords])
-
-    # convert to radiants
-    lat_rad = np.radians(coords[:, 1])
-    lon_rad = np.radians(coords[:, 0])
-
-    # convert to cartesian coordinates
-    r_n = A / (np.sqrt(1 - E2 * (np.sin(lat_rad) ** 2)))
-    x = r_n * np.cos(lat_rad) * np.cos(lon_rad)
-    y = r_n * np.cos(lat_rad) * np.sin(lon_rad)
-    z = r_n * (1 - E2) * np.sin(lat_rad)
-
-    return np.column_stack((x, y, z))
-
-
 def bfn_construct_ground_pixel_tree(lon, lat):
     coords = np.column_stack((lon.ravel(), lat.ravel()))
     # construct KD-tree
-    ground_pixel_tree = spatial.cKDTree(bfn_geo2cart(coords))
-    subdomain = bfn_geo2cart(coords)[0:100]
+    ground_pixel_tree = spatial.cKDTree(grid.geo2cart(coords))
+    subdomain = grid.geo2cart(coords)[0:100]
     eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
     dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
 

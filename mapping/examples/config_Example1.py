@@ -40,7 +40,7 @@ Created on Wed Jan  6 19:20:42 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = 'Example1' 
+name_experiment = 'Example1_test_2' 
 name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
@@ -49,7 +49,6 @@ name_domain = 'GULFSTREAM'
 # - datetime
 # - timedelta
 #################################################################################################################################
-import os
 from datetime import datetime,timedelta
     
 #################################################################################################################################
@@ -90,11 +89,11 @@ dy = 1/10.                                            # meridional grid spatial 
    
 init_date = datetime(2012,10,1,0)     
 
-final_date = datetime(2012,10,15,0)
+final_date = datetime(2012,12,1,0)
 
 assimilation_time_step = timedelta(hours=3)  
 
-saveoutput_time_step = timedelta(days=1) 
+saveoutput_time_step = timedelta(hours=3) 
 
 plot_time_step = timedelta(days=1)  
 
@@ -190,7 +189,7 @@ name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'gssh'}
 #################################################################################################################################
 # - satellite: list of satellite names 
 
-satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
+satellite = ["swot"]
 write_obs = True
 
 # - For each *satellite*:

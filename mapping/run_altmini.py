@@ -6,28 +6,33 @@ Created on Tue Feb 23 10:02:31 2021
 @author: leguillou
 """
 
-import sys,os
+import os
 import argparse
 import numpy as np
 import subprocess
 from datetime import datetime
 import re
 
-K_MIN = 1e-3
-
 def create_new_config_file(src_file,out_file,list_pattern,list_subst):
+    line_added = []
     with open(out_file, 'w') as out:
         with open(src_file, 'r') as src:
             lines = src.readlines()
             for line in lines:
                 found = False
                 for pattern,subst in zip(list_pattern,list_subst):
-                    if re.search(pattern, line) and line[:len(pattern)]==pattern:
+                    if re.search(pattern, line) and line[:len(pattern)]==pattern\
+                        and line[len(pattern)] in [' ','=']:
+                        line_added.append(pattern)
                         new_line = subst + '\n'
                         out.write(new_line)
                         found = True
                 if not found:
                     out.write(line)
+        for pattern,subst in zip(list_pattern,list_subst):
+            if pattern not in line_added:
+                new_line = subst + '\n'
+                out.write(new_line)
 
 if __name__ == "__main__":
     
@@ -44,17 +49,21 @@ if __name__ == "__main__":
     parser.add_argument('--c2', 
                         default=os.path.join(pwd,'examples','config_Example2_IT.py'),
                         type=str)   
-    parser.add_argument('--i', default=0, type=int)           
+    parser.add_argument('--i0', default=0, type=int)           
+    parser.add_argument('--Kmin', default=1e-3, type=float)           
     opts = parser.parse_args()
     print("* Parsing:")
     path_exp = opts.p
     exp_config_file_1 = opts.c1
     exp_config_file_2 = opts.c2
-    i0 = opts.i
+    i0 = opts.i0
+    Kmin = opts.Kmin
     print('path_exp:',path_exp)
     print('config1:',exp_config_file_1)
     print('config2:',exp_config_file_2)
     print('Startint at iteration n°',i0)
+    print('Stopping algorithm when K <',Kmin)
+    
     
     # Convergence file
     path_K = os.path.join(path_exp,'K.txt')
@@ -71,20 +80,23 @@ if __name__ == "__main__":
     
     create_new_config_file(exp_config_file_1,
                 path_exp_config_file_1,
-                ['tmp_DA_path','path_save'],
+                ['tmp_DA_path ','path_save ','path_obs '],
                 ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp1/iteration_0"'),
-                 'path_save = "' + os.path.join(path_exp,'outputs/Exp1/iteration_0"')]
+                 'path_save = "' + os.path.join(path_exp,'outputs/Exp1/iteration_0"'),
+                 'path_obs = "' + os.path.join(path_exp,'obs/Exp1"')]
                 )
+    
     create_new_config_file(exp_config_file_2,
                 path_exp_config_file_2,
-                ['tmp_DA_path','path_save'],
+                ['tmp_DA_path ','path_save ','path_obs '],
                 ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp2/iteration_0"'),
-                 'path_save = "' + os.path.join(path_exp,'outputs/Exp2/iteration_0"')]
+                 'path_save = "' + os.path.join(path_exp,'outputs/Exp2/iteration_0"'),
+                 'path_obs = "' + os.path.join(path_exp,'obs/Exp2"')]
                 )
     
     K = np.inf
     i = i0
-    while K>K_MIN:
+    while K>Kmin:
         
         time0 = datetime.now()
         print('\n*** Iteration n°'+str(i) + ' ***')
@@ -93,6 +105,7 @@ if __name__ == "__main__":
         run_iteration = os.path.join(pwd,'run_iteration.py')
         cmd = ['python3', run_iteration, 
                path_exp_config_file_1,path_exp_config_file_2,str(i),path_K]
+        print(' '.join(cmd))
         out = open(os.path.join(path_exp,'logout_' + str(i) + '.txt'), "w")
         err = open(os.path.join(path_exp,'logerr_' + str(i) + '.txt'), "w")
         subprocess.call(cmd,stdout=out,stderr=err)
