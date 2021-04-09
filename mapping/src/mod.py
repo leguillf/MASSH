@@ -43,16 +43,19 @@ class Model_qg1l:
         else:
             dir_model = config.dir_model  
         SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
-        qgm = SourceFileLoader("qgm_tgl",dir_model + "/qgm_tgl.py").load_module() 
-        
-        
+
         # Model parameters
         self.dt = config.dtmodel
         self.c = config.c
         
         # Model initialization
         if config.name_analys is None or config.name_analys == 'BFN':
-            model = qgm.Qgm
+            file = SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
+            model = file.Qgm
+        else:
+            file = SourceFileLoader("qgm_tgl",dir_model + "/qgm.py").load_module() 
+            model = file.Qgm_tgl
+            
         self.qgm = model(dx=State.DX,
                          dy=State.DY,
                          dt=self.dt,
