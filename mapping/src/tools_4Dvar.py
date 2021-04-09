@@ -79,10 +79,7 @@ class Obsopt:
                 dsout.to_netcdf(os.path.join(
                     self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')),
                     encoding={'indexes': {'dtype': 'int16'}})
-                #self.indexes[t] = indexes
-                #self.weights[t] = weights
-                #self.maskobs[t] = np.isnan(lon_obs)*np.isnan(lat_obs)
-                    
+                
         
     def isobserved(self,t):
         

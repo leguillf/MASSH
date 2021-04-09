@@ -42,8 +42,8 @@ class Model_qg1l:
                              '..','models','model_qg1l'))
         else:
             dir_model = config.dir_model  
-        qgm = SourceFileLoader("qgm", 
-                                 dir_model + "/qgm.py").load_module() 
+        SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
+        qgm = SourceFileLoader("qgm_tgl",dir_model + "/qgm_tgl.py").load_module() 
         
         
         # Model parameters
@@ -51,7 +51,7 @@ class Model_qg1l:
         self.c = config.c
         
         # Model initialization
-        self.qgm = qgm.Qgm(dx=State.DX,
+        self.qgm = qgm.Qgm_tgl(dx=State.DX,
                            dy=State.DY,
                            dt=self.dt,
                            SSH=State.getvar(ind=0),
@@ -63,6 +63,7 @@ class Model_qg1l:
                            snu=config.cdiffus)
         self.State = State
         
+        #self.tangent_test(State,self.dt)
             
     def step(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
         
@@ -89,7 +90,7 @@ class Model_qg1l:
         ssh_1 = +ssh_0
         pv_1 = +pv_0
         while t<deltat:
-            ssh_1, pv_1 = self.qgm.step(Hi=ssh_1, PVi=pv_1,way=way)
+            ssh_1, pv_1 = self.qgm.step(Hi=ssh_1, PVi=pv_1, way=way)
             t += self.dt
         
         # Nudging
@@ -117,10 +118,79 @@ class Model_qg1l:
         if flag_pv:
             State.setvar(pv_1,1)
 
+
+
+    def step_tgl(self,dState,State,tint):
+        # Read state variable
+        ssh_0 = State.getvar(0)
+        dssh_0 = dState.getvar(0)
+        if len(State.name_var)>1 and State.name_var[1] in State.var:
+            flag_pv = True
+            pv_0 = State.getvar(1)
+            dpv_0 = dState.getvar(1)
+        else:
+            flag_pv = False
+            pv_0 = self.qgm.h2pv(ssh_0)
+            dpv_0 = self.qgm.h2pv(dssh_0)
+        
+        # Model propagation
+        deltat = np.abs(tint)
+        way = np.sign(tint)
+        t = 0
+        dssh_1 = +dssh_0
+        dpv_1 = +dpv_0
+        ssh_1 = +ssh_0
+        pv_1 = +pv_0
+        
+        while t<deltat:
+            
+            dssh_1, dpv_1 = self.qgm.step_tgl(dHi=dssh_1, dPVi=dpv_1, 
+                                              Htraj=ssh_1, PVtraj=pv_1, 
+                                              way=way)
+            ssh_1, pv_1 = self.qgm.step(Hi=ssh_1, PVi=pv_1, way=way)
+            
+            t += self.dt
+        
+        # Update state 
+        dState.setvar(dssh_1,0)
+        if flag_pv:
+            dState.setvar(dpv_1,1)
             
     def step_adj():
         return
     
+    
+    def tangent_test(self,State,tint):
+    
+        State0 = State.random()
+        dState = State.random()
+        
+
+        State0_tmp = State0.copy()
+        self.step(State0_tmp,tint)
+        X2 = State0_tmp.getvar(vect=True)
+
+        for p in range(10):
+            
+            lambd = 10**(-p)
+            
+            State1 = dState.copy()
+            State1.scalar(lambd)
+            State1.Sum(State0)
+            self.step(State1,tint)
+            #self.step(t0,State1,params+lambd*dparams,nstep=nstep)
+            X1 = State1.getvar(vect=True)
+            
+            dState1 = dState.copy()
+            dState1.scalar(lambd)
+            self.step_tgl(dState1,State0,tint)
+            dX = dState1.getvar(vect=True)
+            
+            ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
+
+            print('%.E' % lambd,'%.E' % ps)
+            
+            
         
 class Model_sw1l:
     def __init__(self,config,State):
@@ -147,15 +217,6 @@ class Model_sw1l:
         swm_adj = SourceFileLoader("swm_adj", 
                                  dir_model + "/swm_adj.py").load_module() 
                 
-        # Compute cartesian grid 
-        DX,DY = grid.lonlat2dxdy(State.lon,State.lat)
-        dx = np.mean(DX)
-        dy = np.mean(DY)
-        X,Y = grid.dxdy2xy(DX,DY)
-        self.X = X
-        self.Y = Y
-        self.dx = dx
-        self.dy = dy
         
         # State variable dimensions
         self.shapeu = State.var[0].shape
@@ -175,7 +236,7 @@ class Model_sw1l:
         # Time parameters
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
-        cfl = min(dx, dy) / np.max(np.sqrt(State.g * self.Heb))
+        cfl = min(State.dx, State.dy) / np.max(np.sqrt(State.g * self.Heb))
         print('CFL:',cfl)
         if self.dt>=cfl:
             print('WARNING: timestep>=CFL')
@@ -198,16 +259,16 @@ class Model_sw1l:
         if config.D_He is not None:
             self.He_gauss = 1
             He_xy_gauss = []
-            isub_He = int(config.D_He/dy)  
-            jsub_He = int(config.D_He/dx)  
+            isub_He = int(config.D_He/State.dy)  
+            jsub_He = int(config.D_He/State.dx)  
             for i in range(-2*isub_He,State.ny+3*isub_He,isub_He):
-                y = i*dy
+                y = i*State.dy
                 for j in range(-2*jsub_He,State.nx+3*jsub_He,jsub_He):
-                    x = j*dx
+                    x = j*State.dx
                     mat = np.ones((self.shapeHe))
                     for ii in range(State.ny):
                         for jj in range(State.nx):
-                            dist = sqrt((Y[ii,jj]-y)**2+(X[ii,jj]-x)**2)
+                            dist = sqrt((State.Y[ii,jj]-y)**2+(State.X[ii,jj]-x)**2)
                             mat[ii,jj] = tools.gaspari_cohn(dist,7*config.D_He/2)
                     He_xy_gauss.append(mat)
             self.He_xy_gauss = np.asarray(He_xy_gauss)
@@ -246,15 +307,21 @@ class Model_sw1l:
             self.bc_gauss = 1
             bc_x_gauss = []
             bc_y_gauss = []
-            isub_bc = int(config.D_bc//dy)  
-            jsub_bc = int(config.D_bc//dx)  
-            self.bcy = np.arange(-2*isub_bc*dy,(State.ny+3*isub_bc)*dy,isub_bc*dy)
-            self.bcx = np.arange(-2*jsub_bc*dx,(State.nx+3*jsub_bc)*dx,jsub_bc*dx)
+            isub_bc = int(config.D_bc//State.dy)  
+            jsub_bc = int(config.D_bc//State.dx)  
+            self.bcy = np.arange(-2*isub_bc*State.dy,
+                                 (State.ny+3*isub_bc)*State.dy,
+                                 isub_bc*State.dy)
+            self.bcx = np.arange(-2*jsub_bc*State.dx,
+                                 (State.nx+3*jsub_bc)*State.dx,
+                                 jsub_bc*State.dx)
             
             for xj in self.bcx:
-                bc_x_gauss.append(tools.gaspari_cohn(X[State.ny//2,:]-xj,7*config.D_bc/2))
+                bc_x_gauss.append(tools.gaspari_cohn(State.X[State.ny//2,:]-xj,
+                                                     7*config.D_bc/2))
             for yi in self.bcy:
-                bc_y_gauss.append(tools.gaspari_cohn(Y[:,State.nx//2]-yi,7*config.D_bc/2))   
+                bc_y_gauss.append(tools.gaspari_cohn(State.Y[:,State.nx//2]-yi,
+                                                     7*config.D_bc/2))   
             self.bc_x_gauss = np.asarray(bc_x_gauss)
             self.bc_y_gauss = np.asarray(bc_y_gauss)
             self.shapehbcx[-1] = len(bc_x_gauss)
@@ -287,8 +354,8 @@ class Model_sw1l:
         self.slicehbcy = slice(self.nHe+self.nbcx,self.nParams)
         
         # Model initialization
-        self.swm = swm_adj.Swm_adj(X=X,
-                                   Y=Y,
+        self.swm = swm_adj.Swm_adj(X=State.X,
+                                   Y=State.Y,
                                    dt=self.dt,
                                    bc=self.bc_kind,
                                    omegas=self.omegas,

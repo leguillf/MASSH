@@ -16,46 +16,6 @@ from datetime import datetime
 import calendar
 import matplotlib.pylab as plt
 
-class Grid():
-
-
-  def __init__(self, X, Y, cartesian=False):
-
-    ny, nx, = np.shape(X)
-
-    mask = np.zeros((ny, nx)) + 2
-    mask[:2,:] = 1
-    mask[:,:2] = 1
-    mask[-3:,:] = 1
-    mask[:,-3:] = 1
-
-    if cartesian:
-        ##DEV## to generalize f0 computation
-        from swotda.swotda_params_specific import N, L0, Rom, L, U
-        dx = np.zeros((ny, nx)) + L0 * L / N
-        dy = np.zeros((ny, nx)) + L0 * L / N
-        #dx = np.gradient(X)[1]
-        #dy = np.gradient(Y)[0]
-        f0 = np.zeros((ny, nx)) - U/L/Rom
-    else:
-        dX = np.gradient(X)
-        dY = np.gradient(Y)
-        dx = np.sqrt((dX[1]*111000*np.cos(np.deg2rad(Y)))**2
-                     + (dY[1]*111000)**2)
-        dy = np.sqrt((dX[0]*111000*np.cos(np.deg2rad(Y)))**2
-                     + (dY[0]*111000)**2)
-        f0 = 2*2*np.pi/86164*np.sin(np.deg2rad(Y))
-
-    self.f0 = f0
-    self.dx = dx
-    self.dy = dy
-    self.nx = nx
-    self.ny = ny
-    self.X = X
-    self.Y = Y
-    self.g = 9.81
-
-
 def lonlat2dxdy(lon,lat):
     dlon = np.gradient(lon)
     dlat = np.gradient(lat)
@@ -188,7 +148,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         bc_lat = bc_lat[ind_lonlat]
         # Read BC fields
         if flag=='2D':
-            bc_field = ds[name_var_bc['var']][ind_lonlat].values
+            bc_field = ds[name_var_bc['var']].values[ind_lonlat]
         else:
             bc_field = []
             for i in np.where(ind_time)[0]:
@@ -200,7 +160,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         # Grid processing
         #####################
         if np.all(bc_lon==lon2d.ravel()) and np.all(bc_lat==lat2d.ravel()):
-            bc_field_interp2d = bc_field.reshape((bc_field.shape[0],ny,nx))
+            bc_field_interp2d = bc_field.reshape((bc_field.size//(ny*nx),ny,nx))
         elif flag == '2D':
             bc_field_interp2d = interpolate.griddata((bc_lon,bc_lat), bc_field, (lon2d.ravel(),lat2d.ravel()))
         elif flag == '3D':
@@ -214,7 +174,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         if flag == '2D':
             # Only one field, use it at every timestamps
             for t in range(NT):
-                bc_field_interpTime[t] = bc_field
+                bc_field_interpTime[t] = bc_field_interp2d.reshape((ny,nx))
         elif flag == '3D':
             # Time interpolations
             f_interpTime = interpolate.interp1d(bc_times, bc_field_interp2d, axis=0)
@@ -222,10 +182,15 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
                 if bc_times.min() < t < bc_times.max():
                     bc_field_interpTime[i] = f_interpTime(t)
 
+    else:
+        print('Warning: no boundary conditions provided')
+        
     if NT == 1:
         bc_field_interpTime = bc_field_interpTime[0]
 
     bc_field_interpTime[np.isnan(bc_field_interpTime)] = 0
+    
+    
     #####################
     # Compute weights map
     #####################

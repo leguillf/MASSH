@@ -405,7 +405,7 @@ class Qgm:
         if PVi is not None:
             q = PVi
         else:
-            q, = self.h2pv(h)
+            q = self.h2pv(h)
     
         qb = +q 
         hguess = +h
@@ -427,7 +427,7 @@ class Qgm:
         # 3/ Time integration 
         q = qb + self.dt*rq
         
-        # 4/
+        # 4/ 
         h = self.pv2h(q,hguess)
 
               
@@ -438,6 +438,9 @@ class Qgm:
             return h,q
         else:
             return h
+        
+    
+    
 
 
 

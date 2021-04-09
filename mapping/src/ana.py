@@ -109,7 +109,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         # 2. Create BFN object #
         ########################
         bfn_obj = bfn.bfn(
-            config,init_bfn_date,final_bfn_date,one_time_step,State.lon,State.lat)
+            config,init_bfn_date,final_bfn_date,one_time_step,State)
         
         ######################################
         # 3. BOUNDARY AND INITIAL CONDITIONS #
