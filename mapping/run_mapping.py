@@ -30,7 +30,7 @@ if __name__ == "__main__":
     # Experiment config file
     print("* Experimental configuration file")
     config = exp.exp(exp_config_file)
-    cmd = 'cp ' + exp_config_file + ' ' + config.tmp_DA_path
+    cmd = 'cp ' + exp_config_file + ' ' + config.tmp_DA_path + '/config.py'
     os.system(cmd)
     # Init
     print("* State initialization")
