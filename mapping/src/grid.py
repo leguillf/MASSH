@@ -190,7 +190,6 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
 
     bc_field_interpTime[np.isnan(bc_field_interpTime)] = 0
     
-    
     #####################
     # Compute weights map
     #####################
@@ -234,5 +233,5 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         plt.colorbar(im1, ax=ax1)
         plt.show()
         plt.close()
-
+        
     return bc_field_interpTime, bc_weight

@@ -49,18 +49,20 @@ class Model_qg1l:
         self.c = config.c
         
         # Model initialization
-        if config.name_analys is None or config.name_analys == 'BFN':
-            file = SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
-            model = file.Qgm
-        else:
-            file = SourceFileLoader("qgm_tgl",dir_model + "/qgm.py").load_module() 
-            model = file.Qgm_tgl
+        SourceFileLoader("qgm", 
+                                 dir_model + "/qgm.py").load_module() 
+        SourceFileLoader("qgm_tgl", 
+                                 dir_model + "/qgm_tgl.py").load_module() 
+        
+        qwm_adj = SourceFileLoader("qgm_adj", 
+                                 dir_model + "/qgm_adj.py").load_module() 
+        model = qwm_adj.Qgm_adj
             
         self.qgm = model(dx=State.DX,
                          dy=State.DY,
                          dt=self.dt,
                          SSH=State.getvar(ind=0),
-                         c=self.c,
+                         c=config.c,
                          g=State.g,
                          f=State.f,
                          qgiter=config.qgiter,
@@ -68,9 +70,28 @@ class Model_qg1l:
                          snu=config.cdiffus)
         self.State = State
         
-        #self.tangent_test(State,self.dt)
+        print('Tangent test:')
+        self.tangent_test(State,10)
+        
+        print('Adjoint test:')
+        self.adjoint_test(State,10)
+        
+    def step(self,State,nstep=1):
+        
+        # Get state variable
+        SSH0 = State.getvar(ind=0)
+        
+        # init
+        SSH1 = +SSH0
+        
+        # Time propagation
+        for i in range(nstep):
+            SSH1 = self.qgm.step(SSH1,way=1)
             
-    def step(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
+        # Update state
+        State.setvar(SSH1,ind=0)
+            
+    def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
         
         # Read state variable
         ssh_0 = State.getvar(0)
@@ -80,6 +101,7 @@ class Model_qg1l:
         else:
             flag_pv = False
             pv_0 = self.qgm.h2pv(ssh_0)
+            
         # Boundary condition
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
@@ -95,7 +117,7 @@ class Model_qg1l:
         ssh_1 = +ssh_0
         pv_1 = +pv_0
         while t<deltat:
-            ssh_1, pv_1 = self.qgm.step(Hi=ssh_1, PVi=pv_1, way=way)
+            ssh_1, pv_1 = self.qgm.step(h0=ssh_1, q0=pv_1, way=way)
             t += self.dt
         
         # Nudging
@@ -122,57 +144,62 @@ class Model_qg1l:
         State.setvar(ssh_1,0)
         if flag_pv:
             State.setvar(pv_1,1)
-
-
-
-    def step_tgl(self,dState,State,tint):
-        # Read state variable
-        ssh_0 = State.getvar(0)
-        dssh_0 = dState.getvar(0)
-        if len(State.name_var)>1 and State.name_var[1] in State.var:
-            flag_pv = True
-            pv_0 = State.getvar(1)
-            dpv_0 = dState.getvar(1)
-        else:
-            flag_pv = False
-            pv_0 = self.qgm.h2pv(ssh_0)
-            dpv_0 = self.qgm.h2pv(dssh_0)
-        
-        # Model propagation
-        deltat = np.abs(tint)
-        way = np.sign(tint)
-        t = 0
-        dssh_1 = +dssh_0
-        dpv_1 = +dpv_0
-        ssh_1 = +ssh_0
-        pv_1 = +pv_0
-        
-        while t<deltat:
             
-            dssh_1, dpv_1 = self.qgm.step_tgl(dHi=dssh_1, dPVi=dpv_1, 
-                                              Htraj=ssh_1, PVtraj=pv_1, 
-                                              way=way)
-            ssh_1, pv_1 = self.qgm.step(Hi=ssh_1, PVi=pv_1, way=way)
-            
-            t += self.dt
+    def step_tgl(self,dState,State,nstep=1):
         
-        # Update state 
-        dState.setvar(dssh_1,0)
-        if flag_pv:
-            dState.setvar(dpv_1,1)
+        # Get state variable
+        dSSH0 = dState.getvar(ind=0)
+        SSH0 = State.getvar(ind=0)
+        
+        # init
+        dSSH1 = +dSSH0
+        SSH1 = +SSH0
+        
+        # Time propagation
+        for i in range(nstep):
             
-    def step_adj():
+            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1)
+            SSH1 = self.qgm.step(h0=SSH1)
+        
+        # Update state
+        dState.setvar(dSSH1,ind=0)
+        
+    def step_adj(self,adState,State,nstep=1):
+        
+        # Get state variable
+        adSSH0 = adState.getvar(ind=0)
+        SSH0 = State.getvar(ind=0)
+        
+        # Init
+        adSSH1 = +adSSH0
+        SSH1 = +SSH0
+
+        # Current trajectory
+        traj = [SSH1]
+        if nstep>1:
+            for i in range(nstep):
+                SSH1 = self.qgm.step(SSH1)
+                traj.append(SSH1)
+        
+        # Time propagation
+        for i in reversed(range(nstep)):
+            SSH1 = traj[i]
+        
+            adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
+        
+        # Update state  and parameters
+        adState.setvar(adSSH1,ind=0)
+        
         return
     
     
-    def tangent_test(self,State,tint):
+    def tangent_test(self,State,nstep):
     
-        State0 = State.random()
-        dState = State.random()
+        State0 = State.random(1e-2)
+        dState = State.random(1e-2)
         
-
         State0_tmp = State0.copy()
-        self.step(State0_tmp,tint)
+        self.step(State0_tmp,nstep)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -182,20 +209,44 @@ class Model_qg1l:
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(State1,tint)
-            #self.step(t0,State1,params+lambd*dparams,nstep=nstep)
+            self.step(State1,nstep)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(dState1,State0,tint)
+            self.step_tgl(dState1,State0,nstep)
             dX = dState1.getvar(vect=True)
             
             ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
 
             print('%.E' % lambd,'%.E' % ps)
+         
             
-            
+    def adjoint_test(self,State,nstep):
+        
+        # Current trajectory
+        State0 = State.random(1e-2)
+        
+        # Perturbation
+        dState = State.random()
+        dX = dState.getvar(vect=True)
+
+        # Adjoint
+        adState = State.random()
+        adY = adState.getvar(vect=True)
+        
+        # Run TLM
+        self.step_tgl(dState,State0,nstep=nstep)
+        dY = dState.getvar(vect=True)
+        
+        # Run ADJ
+        self.step_adj(adState,State0,nstep=nstep)
+        adX = adState.getvar(vect=True)
+       
+        ps1 = np.inner(dX,adX)
+        ps2 = np.inner(dY,adY)
+        
+        print(ps1/ps2)
         
 class Model_sw1l:
     def __init__(self,config,State):
@@ -527,6 +578,7 @@ class Model_sw1l:
     
         
     def step(self,t,State,params,nstep=1,t0=0):
+        
         # Get state variables and model parameters
         u0,v0,h0 = State.getvar()
         He,hbcx,hbcy = self.reshapeParams(params)
@@ -560,6 +612,7 @@ class Model_sw1l:
         
     
     def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0):
+        
         # Get state variables and model parameters
         du0,dv0,dh0 = dState.getvar()
         u0,v0,h0 = State.getvar()
@@ -592,7 +645,6 @@ class Model_sw1l:
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                #first = False
                 u,v,h = self.swm_step(
                         t+i*self.dt,
                         u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
@@ -602,7 +654,6 @@ class Model_sw1l:
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            #first = False
             u,v,h = traj[i]
             
             du,dv,dh = self.swm_step_tgl(
@@ -649,7 +700,6 @@ class Model_sw1l:
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                #first = False
                 u,v,h = self.swm_step(
                         t+i*self.dt,
                         u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
@@ -659,7 +709,6 @@ class Model_sw1l:
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            #first = False
             u,v,h = traj[i]
         
             adu,adv,adh,adHe2d_tmp,adhbcx1d_tmp,adhbcy1d_tmp =\

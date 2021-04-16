@@ -11,6 +11,7 @@ import xarray as xr
 import sys,os
 import pandas as pd 
 from copy import deepcopy
+import matplotlib.pylab as plt
 
 from . import grid
 
@@ -276,6 +277,20 @@ class State:
     def Sum(self,State1):
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
+            
+    def plot(self,cmap='RdBu_r'):
+        
+        nvar = len(self.name_var)
+    
+        fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
+        
+        for i in range(nvar):
+            ax = axs[i]
+            ax.set_title(self.name_var[i])
+            im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],cmap=cmap, shading='auto')
+            plt.colorbar(im,ax=ax)
+        
+        plt.show()
 
 
     
