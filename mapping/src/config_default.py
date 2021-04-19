@@ -280,7 +280,7 @@ maxiter = 20 # Maximal number of iterations for the minimization process
 
 satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
 write_obs = True
-path_obs = tmp_DA_path
+path_obs = None
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  

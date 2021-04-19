@@ -45,7 +45,7 @@ def update_config(config,i):
         
     
 
-def compute_new_obs(dict_obs,config,State):
+def compute_new_obs(it,dict_obs,config,State):
     
     # Read grid
     lon = State.lon 
@@ -84,6 +84,7 @@ def compute_new_obs(dict_obs,config,State):
         # Open obs
         path_obs = dict_obs[date]['obs_name']
         sat =  dict_obs[date]['satellite']
+        new_path_obs = []
         for _sat,_path_obs in zip(sat,path_obs):
             ds = xr.open_dataset(_path_obs)
             dsout = ds.copy().load()
@@ -108,9 +109,17 @@ def compute_new_obs(dict_obs,config,State):
                                                 (lon_obs.ravel(),lat_obs.ravel()))
                 dsout[_sat.name_obs_var[0]] -=  map_obs.reshape(lon_obs.shape)
             # Writing new obs file
-            dsout.to_netcdf(_path_obs)
+            _dir,_name = os.path.split(_path_obs)
+            name_iteration = 'iteration_' + str(it) 
+            _new_dir = '/'.join(_dir.split('/')[:-1]+[name_iteration])
+            _new_path_obs = os.path.join(_new_dir,_name)
+            new_path_obs.append(_new_path_obs)
+            dsout.to_netcdf(_new_path_obs)
             dsout.close()
             del dsout
+        # Update dict_obs
+        dict_obs[date]['obs_name'] = new_path_obs
+        
             
             
 def compute_convergence_criteria(config,State,i):
@@ -188,7 +197,8 @@ if __name__ == "__main__":
     if iteration>0:
         update_config(config2,iteration-1)
         State2 = state.State(config2)
-        compute_new_obs(dict_obs1,config2,State2)
+        compute_new_obs(iteration,dict_obs1,config2,State2)
+    print(dict_obs1)
     # Analysis
     print('* Analysis')
     ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
@@ -217,7 +227,7 @@ if __name__ == "__main__":
     dict_obs2 = obs.obs(config2,State2)
     # Compute new observations taking into account previous estimation
     print('* Compute new observations')
-    compute_new_obs(dict_obs2,config1,State1)
+    compute_new_obs(iteration,dict_obs2,config1,State1)
     # Analysis
     print('* Analysis')
     ana.ana(config2,State2,Model2,dict_obs=dict_obs2)

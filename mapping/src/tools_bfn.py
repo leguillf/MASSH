@@ -23,7 +23,7 @@ from .tools import gaspari_cohn, hat_function, L2_scalar_prod
 
 
 
-def bfn(config,dt_start,dt_end,one_time_step,lon,lat):
+def bfn(config,dt_start,dt_end,one_time_step,State):
     
     # Use temp_DA_path to save the projections
     if config.save_obs_proj:
@@ -40,10 +40,8 @@ def bfn(config,dt_start,dt_end,one_time_step,lon,lat):
                         dt_end,
                         config.assimilation_time_step,
                         one_time_step,
-                        lon,
-                        lat,
+                        State,
                         config.name_mod_var,
-                        config.name_grd,
                         config.dist_scale,
                         pathsaveproj,
                         'projections_' + config.name_domain + '_' +\
@@ -58,10 +56,8 @@ def bfn(config,dt_start,dt_end,one_time_step,lon,lat):
                             dt_end,
                             config.assimilation_time_step,
                             one_time_step,
-                            lon,
-                            lat,
+                            State,
                             config.name_mod_var,
-                            config.name_grd,
                             config.dist_scale,
                             config.Rom,
                             config.Fr,
@@ -82,10 +78,8 @@ class bfn_qg1l(object):
                  dt_end,
                  assim_time_step,
                  model_time_step,
-                 lon,
-                 lat,
+                 State,
                  name_mod_var,
-                 name_grd,
                  dist_scale,
                  path_save=None,
                  name_save=None,
@@ -99,15 +93,7 @@ class bfn_qg1l(object):
         self.dt_end = dt_end
         self.assim_time_step = assim_time_step
         self.model_time_step = model_time_step
-        # Grid coordinates
-        if len(lon.shape)==1:
-            lon,lat = np.meshgrid(lon,lat)
-        self.lon2d = lon
-        self.lat2d = lat
-        self.ny, self.nx = self.lon2d.shape
-        self.f = 4*np.pi/86164*np.sin(self.lat2d*np.pi/180)
-        self.g = 9.81
-        self.name_grd = name_grd
+        self.State = State
         # Model variables
         self.name_mod_var = name_mod_var # Must be [SSH, PV, K] or [SSH, PV]
         self.n_mod_var = len(name_mod_var)
@@ -120,9 +106,6 @@ class bfn_qg1l(object):
         self.name_save = name_save
         self.dict_proj_ssh = {}
         self.dict_proj_rv = {}
-        # Model parameters
-        self.c = c
-        self.K = (self.f/self.c)**2
         # Plotting parameter
         self.flag_plot = flag_plot
         # Sponge
@@ -157,7 +140,7 @@ class bfn_qg1l(object):
         self.dict_proj_ssh = bfn_projections(
             'ssh',
             self.dict_obs_ssh,
-            self.lon2d, self.lat2d,
+            self.State,
             self.dist_scale,
             self.flag_plot,
             self.path_save,
@@ -166,7 +149,7 @@ class bfn_qg1l(object):
         self.dict_proj_rv = bfn_projections(
             'relvort',
             self.dict_obs_rv,
-            self.lon2d, self.lat2d,
+            self.State,
             self.dist_scale,
             self.flag_plot,
             self.path_save,
@@ -194,8 +177,7 @@ class bfn_qg1l(object):
 
         if obs_rv is not None and np.any(np.isfinite(obs_rv)):
             # Nudging towards relative vorticity
-            rv = switchvar.ssh2rv(
-                ssh, self.lon2d, self.lat2d, name_grd=self.name_grd)
+            rv = switchvar.ssh2rv(ssh, self.State)
             nobs = len(obs_rv)
             for iobs in range(nobs):
                 indNoNan = ~np.isnan(obs_rv[iobs])
@@ -229,7 +211,7 @@ class bfn_qg1l(object):
         if self.flag_plot>3:
             plt.figure()
             plt.suptitle('Nudging coefficient')
-            plt.pcolormesh(self.lon2d,self.lat2d,N['ssh'])
+            plt.pcolormesh(self.State.lon,self.State.lat,N['ssh'])
             plt.colorbar()
             plt.show()
 
@@ -367,7 +349,7 @@ class bfn_qgml(object):
         self.dict_proj_ssh = bfn_projections(
             'ssh',
             self.dict_obs_ssh,
-            self.lon2d, self.lat2d,
+            self.State.lon, self.State.lat,
             self.dist_scale,
             self.flag_plot,
             self.path_save,
@@ -376,7 +358,7 @@ class bfn_qgml(object):
         self.dict_proj_rv = bfn_projections(
             'relvort',
             self.dict_obs_rv,
-            self.lon2d, self.lat2d,
+            self.State.lon, self.State.lon,
             self.dist_scale,
             self.flag_plot,
             self.path_save,
@@ -404,8 +386,7 @@ class bfn_qgml(object):
 
         if obs_rv is not None and np.any(np.isfinite(obs_rv)):
             # Nudging towards relative vorticity
-            rv = switchvar.ssh2rv(
-                ssh, self.lon2d, self.lat2d, name_grd=self.name_grd)
+            rv = switchvar.ssh2rv(ssh, self.State)
 
             nobs = len(obs_rv)
             for iobs in range(nobs):
@@ -595,7 +576,7 @@ def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
 # Funcs related to the projection of observations on state grid
 #########################################################################
 
-def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
+def bfn_projections(varname, dict_obs_var, State, dist_scale,
                     flag_plot, path_save=None, name_save=None):
 
     """
@@ -658,10 +639,10 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
                         plt.suptitle('Nudging on ' + varname + ' at ' +
                                      str(date) + ' (Tau = ' + str(key[1]) +
                                      ' & sigma = ' + str(key[0]) + ')')
-                        im1 = ax1.pcolormesh(lon2d, lat2d, obs_projected,shading='auto')
+                        im1 = ax1.pcolormesh(State.lon, State.lat, obs_projected,shading='auto')
                         plt.colorbar(im1, ax=ax1)
                         ax1.set_title('Projected observations')
-                        im2 = ax2.pcolormesh(lon2d, lat2d,
+                        im2 = ax2.pcolormesh(State.lon, State.lat,
                                              nudging_coeff_projected,shading='auto')
                         plt.colorbar(im2, ax=ax2)
                         ax2.set_title('Projected nudging coeff')
@@ -671,7 +652,7 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
                     obs_projected, nudging_coeff_projected =\
                           bfn_merge_projections(varname, sat_info_list,
                                                 obs_name_list,
-                                                lon2d, lat2d,
+                                                State,
                                                 flag_plot,
                                                 nudging_coeff_list,
                                                 dist_scale)
@@ -684,7 +665,7 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
                 obs_projected, nudging_coeff_projected =\
                        bfn_merge_projections(varname, sat_info_list,
                                              obs_name_list,
-                                             lon2d, lat2d,
+                                             State,
                                              flag_plot,
                                              nudging_coeff_list,
                                              dist_scale)
@@ -697,7 +678,7 @@ def bfn_projections(varname, dict_obs_var, lon2d, lat2d, dist_scale,
 
 
 def bfn_merge_projections(varname, sat_info_list, obs_file_list,
-                          lon2d, lat2d,
+                          State,
                           flag_plot=None,
                           nudging_coeff_list=None, dist_scale=None):
 
@@ -714,11 +695,11 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                           timestep, we take the first one')
                 varobs = varobs[0]
             if varname == 'relvort' and sat_info_list[0].kind=='fullSSH':
-                proj_var = switchvar.ssh2rv(varobs, lonobs, latobs)
+                proj_var = switchvar.ssh2rv(varobs, State)
             else:
                 proj_var = varobs
 
-        if np.any(lonobs!=lon2d) or np.any(latobs!=lat2d):
+        if np.any(lonobs!=State.lon) or np.any(latobs!=State.lat):
             print('ERROR: When providing ' + sat_info_list[0].kind +\
 ' observations, grid has to be the same as the model one')
             sys.exit()
@@ -728,7 +709,7 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
     else:
         # Construct KD tree for projection
         grnd_pix_tree, dist_threshold =\
-               bfn_construct_ground_pixel_tree(lon2d, lat2d)
+               bfn_construct_ground_pixel_tree(State.lon, State.lat)
         if nudging_coeff_list is None:
             nudging_coeff_list = [1 for _ in range(len(sat_info_list))]
             dist_scale = 2*dist_threshold
@@ -753,9 +734,8 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
             if varname == 'relvort' and sat_info.name_obs_xac is not None:
                 # Only for 2D data (need 'xac' variable)
                 xac = ncin[sat_info.name_obs_xac].values
-                #rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
                 try:
-                    rv = switchvar.ssh2rv(var[0], lon, lat, xac=xac)
+                    rv = switchvar.ssh2rv(var[0], State, lon=lon, lat=lat, xac=xac)
                 except: 
                     print('Warning: for ' + obs_file +\
                           ' impossible to convert ssh to relatve vorticity,\
@@ -785,8 +765,8 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                                                 lonobs, latobs,
                                                 grnd_pix_tree,
                                                 dist_threshold,
-                                                lon2d.shape[0],
-                                                lon2d.shape[1],
+                                                State.ny,
+                                                State.nx,
                                                 dist_scale)
 
     # Debug
@@ -810,16 +790,16 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
             im0 = ax0.pcolormesh(lonobs, latobs, varobs,shading='auto')
         else:
             im0 = ax0.scatter(lonobs, latobs, c=varobs)
-            ax0.set_xlim(lon2d.min(), lon2d.max())
-            ax0.set_ylim(lat2d.min(), lat2d.max())
+            ax0.set_xlim(State.lon.min(), State.lon.max())
+            ax0.set_ylim(State.lat.min(), State.lat.max())
         cbar = plt.colorbar(im0, ax=ax0)
         cbar.ax.set_title("m")
         ax0.set_title('Available observations')
-        im1 = ax1.pcolormesh(lon2d, lat2d, proj_var,shading='auto')
+        im1 = ax1.pcolormesh(State.lon, State.lat, proj_var,shading='auto')
         cbar = plt.colorbar(im1, ax=ax1)
         cbar.ax.set_title("m")
         ax1.set_title('Projected observations')
-        im2 = ax2.pcolormesh(lon2d, lat2d, proj_nudging_coeff,
+        im2 = ax2.pcolormesh(State.lon, State.lat, proj_nudging_coeff,
                              cmap='Spectral_r',shading='auto')
         cbar = plt.colorbar(im2, ax=ax2)
         ax2.set_title('Nudging term')

@@ -12,7 +12,7 @@ import calendar
 import os
 import matplotlib.pylab as plt
 import pickle
-from datetime import datetime
+from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
 
@@ -40,15 +40,16 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
         
 
 def ana_forward(config,State,Model):
+    
     present_date = config.init_date
     State.save(date=present_date)
-    
+    nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
     while present_date < config.final_date :
         print(present_date)
         # Propagation
-        Model.step(State,config.saveoutput_time_step.total_seconds())
+        Model.step(State,nstep)
         # Time increment
-        present_date += config.saveoutput_time_step
+        present_date += timedelta(seconds=nstep*Model.dt)
         # Save
         State.save(date=present_date)
         
@@ -109,7 +110,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         # 2. Create BFN object #
         ########################
         bfn_obj = bfn.bfn(
-            config,init_bfn_date,final_bfn_date,one_time_step,State.lon,State.lat)
+            config,init_bfn_date,final_bfn_date,one_time_step,State)
         
         ######################################
         # 3. BOUNDARY AND INITIAL CONDITIONS #
@@ -144,6 +145,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             if not os.path.isfile(init_file) :
                 restart = False
             else:
+                print('Restart BFN from:\n',init_file)
                 restart = True
                 State.load(init_file)
                 
@@ -204,7 +206,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     bc_field_t = bc_field[iforward0]
 
                 # Model propagation and apply Nudging
-                Model.step(State,
+                Model.step_nudging(State,
                        one_time_step.total_seconds(),
                        Hbc=bc_field_t,
                        Wbc=bc_weight,
@@ -277,7 +279,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                         bc_field_t = bc_field[ibackward]
 
                     # Propagate the state by nudging the model vorticity towards the 2D observations
-                    Model.step(State,
+                    Model.step_nudging(State,
                        -one_time_step.total_seconds(),
                        Hbc=bc_field_t,
                        Wbc=bc_weight,

@@ -23,13 +23,15 @@ if __name__ == "__main__":
         exp_config_file = sys.argv[1]
     elif len(sys.argv)==1:
         os.chdir('examples')
-        exp_config_file = 'config_Example1.py'
+        exp_config_file = 'config_Example0.py'
     elif len(sys.argv)>2:
         sys.exit('Wrong number of argument')
         
     # Experiment config file
     print("* Experimental configuration file")
     config = exp.exp(exp_config_file)
+    cmd = 'cp ' + exp_config_file + ' ' + config.tmp_DA_path + '/config.py'
+    os.system(cmd)
     # Init
     print("* State initialization")
     State = state.State(config)
