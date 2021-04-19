@@ -276,6 +276,17 @@ class State:
     def Sum(self,State1):
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
+    
+    def get_indobs(self) :
+        '''
+        Return the indice of the observed variable, SSH
+        '''
+        if self.config['name_model']=='QG1L' :
+            return 0
+        elif self.config['name_model']=='SW1L' :
+            return 2
+        else :
+            print('model not implemented')
 
 
     
