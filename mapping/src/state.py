@@ -291,6 +291,17 @@ class State:
             plt.colorbar(im,ax=ax)
         
         plt.show()
+    
+    def get_indobs(self) :
+        '''
+        Return the indice of the observed variable, SSH
+        '''
+        if self.config['name_model']=='QG1L' :
+            return 0
+        elif self.config['name_model']=='SW1L' :
+            return 2
+        else :
+            print('model not implemented')
 
 
     
