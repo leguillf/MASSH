@@ -32,15 +32,19 @@ if __name__ == "__main__":
     config = exp.exp(exp_config_file)
     cmd = 'cp ' + exp_config_file + ' ' + config.tmp_DA_path + '/config.py'
     os.system(cmd)
+    
     # Init
     print("* State initialization")
     State = state.State(config)
+    
     # Model
     print('* Model Initialization')
     Model = mod.Model(config,State)
+        
     # Observations
     print('* Observations')
     dict_obs = obs.obs(config,State)
+    
     # Analysis
     print('* Analysis')
     ana.ana(config,State,Model,dict_obs=dict_obs)

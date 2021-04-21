@@ -179,8 +179,7 @@ class State:
                 + str(date.minute).zfill(2) + '.nc')
         
         coords = {}
-        coords['time'] = (('time'), [pd.to_datetime(date)])
-        
+        coords['time'] = (('time'), [pd.to_datetime(date)],)
         
         if self.geo_grid:
             coords['lon'] = (('lon',), self.lon[0,:])
@@ -191,7 +190,8 @@ class State:
             coords['lat'] = (('y','x',), self.lat)
             var = {'ssh':(('y','x'),self.getvar(ind=self.get_indsave()))}
         ds = xr.Dataset(var,coords=coords)
-        ds.to_netcdf(filename,engine='h5netcdf')
+        ds.to_netcdf(filename,engine='h5netcdf',
+                     encoding={'time': {'units': 'days since 1900-01-01'}})
         
         ds.close()
         del ds
@@ -233,60 +233,6 @@ class State:
         del ds
         
         return
-
-
-    # def save(self,filename=None,date=None,grd=True):
-    #     """
-    #     NAME
-    #         save
-    
-    #     DESCRIPTION
-    #         Save State in a netcdf file
-    #         Args:
-    #             filename (str): path (dir+name) of the netcdf file.
-    #             date (datetime): present date
-    #             """
-        
-    #     if filename is None:
-    #         filename = os.path.join(self.path_save,self.name_exp_save\
-    #             + '_y' + str(date.year)\
-    #             + 'm' + str(date.month).zfill(2)\
-    #             + 'd' + str(date.day).zfill(2)\
-    #             + 'h' + str(date.hour).zfill(2)\
-    #             + str(date.minute).zfill(2) + '.nc')
-        
-    #     outvars = {}
-    #     coords = {}
-        
-    #     if date is not None:
-    #         coords['time'] = (('time'), [pd.to_datetime(date)])
-            
-    #     if grd:
-    #         _namey = {self.ny:'y'}
-    #         _namex = {self.nx:'x'}
-    #         coords[self.name_lon] = (('y','x',), self.lon)
-    #         coords[self.name_lat] = (('y','x',), self.lat)
-    #     else:
-    #         _namey = {}
-    #         _namex = {}
-        
-    #     cy,cx = 1,1
-    #     for i, name in enumerate(self.name_var):
-    #         outvar = self.var.values[i]
-    #         y1,x1 = outvar.shape
-    #         if y1 not in _namey:
-    #             _namey[y1] = 'y'+str(cy)
-    #             cy += 1
-    #         if x1 not in _namex:
-    #             _namex[x1] = 'x'+str(cx)
-    #             cx += 1
-                    
-    #         outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
-            
-    #     ds = xr.Dataset(outvars,coords=coords)
-    #     ds.to_netcdf(filename,engine='h5netcdf')
-    #     ds.close()
-
 
     def load_output(self,date):
         filename = os.path.join(self.path_save,self.name_exp_save\

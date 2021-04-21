@@ -13,6 +13,7 @@ import numpy as np
 import os
 from math import sqrt,pi
 from datetime import timedelta
+
 from . import tools, grid
 
 def Model(config,State):
@@ -419,7 +420,6 @@ class Model_sw1l:
                                    bc_theta=self.bc_theta,
                                    f=State.f)
         
-        
         if self.time_scheme=='Euler':
             self.swm_step = self.swm.step_euler
             self.swm_step_tgl = self.swm.step_euler_tgl
@@ -432,15 +432,15 @@ class Model_sw1l:
             self.swm_step = self.swm.step_rk4
             self.swm_step_tgl = self.swm.step_rk4_tgl
             self.swm_step_adj = self.swm.step_rk4_adj
-            
         
-                
         # Tests
         print('tangent test:')
        # self.tangent_test(State,self.T[-2],nstep=config.checkpoint)
         print('adjoint test:')
        # self.adjoint_test(State,self.T[-2],nstep=config.checkpoint)
-        
+       
+
+            
     def restart(self):
         
         self.swm.restart()

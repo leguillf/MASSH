@@ -405,17 +405,19 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     
     from .tools_4Dvar import Obsopt, Cov, Variational
-
+            
     #################
     # 1. Obs op     #
     #################
     print('\n*** Obs op ***\n')
+    
     H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
     
     ###################
     # 2. Variationnal #
     ###################
     print('\n*** Variational ***\n')
+    
     # Covariance matrixes
     if None in [config.sigma_R,config.sigma_B_He,config.sigma_B_bc]:          
             # Least squares
