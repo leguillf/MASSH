@@ -269,6 +269,12 @@ class Qgm:
     
     def step(self,h0,q0=None,way=1):
         
+        if np.all(h0==0):
+            if q0 is None:
+                return h0
+            else:
+                return h0,q0
+            
         # 1/ h-->q
         if q0 is None:
             qb0 = self.h2pv(h0)
