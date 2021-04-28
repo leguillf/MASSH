@@ -16,6 +16,7 @@ from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
 
+
 from . import grid
 
 
@@ -55,6 +56,107 @@ def ana_forward(config,State,Model):
         
         
     return
+
+
+def ana_4Dvar_id(config,State,Model,dict_obs=None) :
+    '''
+    Run a 4Dvar analysis using a identity model to propagate the state
+    '''
+    from .tools_4Dvar import Obsopt, Cov
+    from .tools_4Dvar import Variational_QG as Variational
+
+    #################
+    # 1. Obs op     #
+    #################
+    print('\n*** Obs op ***\n')
+    H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
+    
+    ###################
+    # 2. Variationnal #
+    ###################
+    print('\n*** Variational ***\n')
+    # Covariance matrixes
+    if None in [config.sigma_R,config.sigma_B]:          
+            # Least squares
+            B = None
+            R = Cov(1)
+    else:
+        sigma_B = config.sigma_B
+        sigma_R = config.sigma_R
+        B = Cov(sigma_B)
+        R = Cov(sigma_R)
+    # backgroud state 
+    n_vect = len(State.getvar(0).ravel()) # size of the control vector
+    Xb = np.zeros((n_vect))
+    # Cost and Grad functions
+    var = Variational(
+        M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
+        prec=config.prec)
+    
+    X = np.random.random(n_vect)
+    cst = var.cost(X)
+    print(cst)
+    
+    window_1D(config,State,Model,dict_obs=dict_obs,H=H,date_ini=date_ini)
+    
+    # # Initial State
+    # if config.path_init_4Dvar is None:
+    #     Xopt = np.zeros_like(var.Xb)
+    # else:
+    #     # Read previous minimum
+    #     with open(config.path_init_4Dvar, 'rb') as f:
+    #         print('Read previous minimum:',config.path_init_4Dvar)
+    #         Xopt = pickle.load(f)
+    
+
+def window_1D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None) :
+    '''
+    run one assimilation on the window considered which start at time date_ini
+    '''
+    from .tools_4Dvar import Obsopt, Cov
+    from .tools_4Dvar import Variational_QG as Variational
+    
+    if H==None :
+        H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
+    print(H.date_obs)
+    
+    print('\n*** Variational ***\n')
+    # Covariance matrixes
+    if None in [config.sigma_R,config.sigma_B]:          
+            # Least squares
+            B = None
+            R = Cov(1)
+    else:
+        sigma_B = config.sigma_B
+        sigma_R = config.sigma_R
+        B = Cov(sigma_B)
+        R = Cov(sigma_R)
+    # background state 
+    n_vect = len(State.getvar(0).ravel()) # size of the control vector
+    Xb = State.getvar(0).ravel()
+    # Cost and Grad functions
+    var = Variational(
+        M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
+        tmp_DA_path=config.tmp_DA_path, date_ini=date_ini, date_final=date_final,
+        prec=config.prec)
+    
+    # n = len(State.getvar(0).ravel())
+    # Xopt = np.random.random(n)
+    
+    # J0 = var.cost(Xopt)
+    # g0 = var.grad(Xopt)
+    # projg0 = np.max(np.abs(g0))
+    
+    # res = opt.minimize(var.cost,Xopt,
+    #                 method='L-BFGS-B',
+    #                 jac=var.grad,
+    #                 options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter})
+    return var
+    
+    
+    
+    
     
     
 def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
