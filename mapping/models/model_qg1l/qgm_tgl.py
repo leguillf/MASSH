@@ -142,6 +142,8 @@ class Qgm_tgl(Qgm):
     
     def step_tgl(self,dh0,h0,way=1):
         
+        if np.all(h0==0):
+            return dh0
         
         # Tangent trajectory
         qb0 = self.h2pv(h0)

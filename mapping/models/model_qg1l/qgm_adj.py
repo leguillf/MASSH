@@ -291,6 +291,9 @@ class Qgm_adj(Qgm_tgl):
         
         azeros = +adh1*0
         
+        if np.all(h0==0):
+            return adh1
+        
         # Tangent trajectory
         qb0 = self.h2pv(h0)
         u,v = self.h2uv(h0)
