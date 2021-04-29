@@ -141,18 +141,24 @@ def window_1D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
         tmp_DA_path=config.tmp_DA_path, date_ini=date_ini, date_final=date_final,
         prec=config.prec)
     
-    # n = len(State.getvar(0).ravel())
-    # Xopt = np.random.random(n)
+    n = len(State.getvar(0).ravel())
+    Xopt = np.zeros(n)
     
-    # J0 = var.cost(Xopt)
-    # g0 = var.grad(Xopt)
-    # projg0 = np.max(np.abs(g0))
+    J0 = var.cost(Xopt)
+    g0 = var.grad(Xopt)
+    projg0 = np.max(np.abs(g0))
     
-    # res = opt.minimize(var.cost,Xopt,
-    #                 method='L-BFGS-B',
-    #                 jac=var.grad,
-    #                 options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter})
-    return var
+    State_callback = State.free()
+    def callback(XX) :
+        var_ssh = XX.reshape(State_callback.var[0].shape)
+        State_callback.setvar(var_ssh,0)
+        State_callback.plot()
+    
+    res = opt.minimize(var.cost,Xopt,
+                    method='L-BFGS-B',
+                    jac=var.grad,
+                    options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},callback=callback)
+    return res
     
     
     
