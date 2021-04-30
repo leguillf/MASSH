@@ -142,6 +142,8 @@ class Qgm_tgl(Qgm):
     
     def step_tgl(self,dh0,h0,way=1):
         
+        if np.all(h0==0):
+            return dh0
         
         # Tangent trajectory
         qb0 = self.h2pv(h0)
@@ -183,7 +185,7 @@ if __name__ == "__main__":
     qgm = Qgm_tgl(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=10)
     
     # Tangent test    
-    SSH0 = np.random.random((ny,nx))
+    SSH0 = np.random.random((ny,nx))*0
     dSSH = np.random.random((ny,nx))
     
     SSH2 = qgm.step(SSH0)
