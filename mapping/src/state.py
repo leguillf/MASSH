@@ -43,12 +43,14 @@ class State:
         self.g = config.g
         
         # Initialize grid
+        self.geo_grid = False
         if config.name_init == 'geo_grid':
              self.ini_geo_grid(config)
         elif config.name_init == 'from_file':
              self.ini_from_file(config)
         else:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
+            
         self.ny,self.nx = self.lon.shape
         self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
         
@@ -92,6 +94,7 @@ class State:
             Args:
                 config (module): configuration module
         """
+        self.geo_grid = True
         lon = np.arange(config.lon_min, config.lon_max + config.dx, config.dx) % 360
         lat = np.arange(config.lat_min, config.lat_max + config.dy, config.dy) 
         lon,lat = np.meshgrid(lon,lat)
@@ -112,6 +115,7 @@ class State:
         lon = dsin[config.name_init_lon].values
         lat = dsin[config.name_init_lat].values
         if len(lon.shape)==1:
+            self.geo_grid = True
             lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
@@ -165,41 +169,51 @@ class State:
                 self.var[var] = np.zeros((self.ny,self.nx))
 
 
-    def save(self,filename=None,date=None,grd=True):
-        """
-        NAME
-            save
-    
-        DESCRIPTION
-            Save the grid and variables in a netcdf file
-            Args:
-                filename (str): path (dir+name) of the netcdf file.
-                date (datetime): present date
-                """
+    def save_output(self,date):
         
-        if filename is None:
-            filename = os.path.join(self.path_save,self.name_exp_save\
+        filename = os.path.join(self.path_save,self.name_exp_save\
                 + '_y' + str(date.year)\
                 + 'm' + str(date.month).zfill(2)\
                 + 'd' + str(date.day).zfill(2)\
                 + 'h' + str(date.hour).zfill(2)\
                 + str(date.minute).zfill(2) + '.nc')
         
-        outvars = {}
         coords = {}
+        coords['time'] = (('time'), [pd.to_datetime(date)],)
         
-        if date is not None:
-            coords['time'] = (('t'), [pd.to_datetime(date)])
-            
-        if grd:
-            _namey = {self.ny:'y'}
-            _namex = {self.nx:'x'}
-            coords[self.name_lon] = (('y','x',), self.lon)
-            coords[self.name_lat] = (('y','x',), self.lat)
+        if self.geo_grid:
+            coords['lon'] = (('lon',), self.lon[0,:])
+            coords['lat'] = (('lat',), self.lat[:,0])
+            var = {'ssh':(('lat','lon'),self.getvar(ind=self.get_indsave()))}
         else:
-            _namey = {}
-            _namex = {}
+            coords['lon'] = (('y','x',), self.lon)
+            coords['lat'] = (('y','x',), self.lat)
+            var = {'ssh':(('y','x'),self.getvar(ind=self.get_indsave()))}
+        ds = xr.Dataset(var,coords=coords)
+        ds.to_netcdf(filename,engine='h5netcdf',
+                     encoding={'time': {'units': 'days since 1900-01-01'}})
         
+        ds.close()
+        del ds
+        
+        return
+            
+
+    def save(self,filename=None):
+        """
+        NAME
+            save
+    
+        DESCRIPTION
+            Save State in a netcdf file
+            Args:
+                filename (str): path (dir+name) of the netcdf file.
+                date (datetime): present date
+                """
+        
+        _namey = {}
+        _namex = {}
+        outvars = {}
         cy,cx = 1,1
         for i, name in enumerate(self.name_var):
             outvar = self.var.values[i]
@@ -213,25 +227,37 @@ class State:
                     
             outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
             
-        ds = xr.Dataset(outvars,coords=coords)
+        ds = xr.Dataset(outvars)
         ds.to_netcdf(filename,engine='h5netcdf')
         ds.close()
+        del ds
+        
+        return
 
+    def load_output(self,date):
+        filename = os.path.join(self.path_save,self.name_exp_save\
+            + '_y' + str(date.year)\
+            + 'm' + str(date.month).zfill(2)\
+            + 'd' + str(date.day).zfill(2)\
+            + 'h' + str(date.hour).zfill(2)\
+            + str(date.minute).zfill(2) + '.nc')
+            
+        ds = xr.open_dataset(filename,engine='h5netcdf')
         
+        ds1 = ds.copy()
+        
+        ds.close()
+        del ds
+        
+        return ds1
     
-    def load(self,filename=None,date=None):
-        
-        if filename is None:
-            filename = os.path.join(self.path_save,self.name_exp_save\
-                + '_y' + str(date.year)\
-                + 'm' + str(date.month).zfill(2)\
-                + 'd' + str(date.day).zfill(2)\
-                + 'h' + str(date.hour).zfill(2)\
-                + str(date.minute).zfill(2) + '.nc')
-                
+    def load(self,filename):
+
         with xr.open_dataset(filename,engine='h5netcdf') as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values
+                
+                
     
     def random(self,ampl=1):
         other = self.free()
@@ -295,6 +321,17 @@ class State:
     def get_indobs(self) :
         '''
         Return the indice of the observed variable, SSH
+        '''
+        if self.config['name_model']=='QG1L' :
+            return 0
+        elif self.config['name_model']=='SW1L' :
+            return 2
+        else :
+            print('model not implemented')
+            
+    def get_indsave(self) :
+        '''
+        Return the indice of the variable to save, SSH
         '''
         if self.config['name_model']=='QG1L' :
             return 0

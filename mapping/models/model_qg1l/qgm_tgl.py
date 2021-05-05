@@ -185,7 +185,7 @@ if __name__ == "__main__":
     qgm = Qgm_tgl(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=10)
     
     # Tangent test    
-    SSH0 = np.random.random((ny,nx))
+    SSH0 = np.random.random((ny,nx))*0
     dSSH = np.random.random((ny,nx))
     
     SSH2 = qgm.step(SSH0)

@@ -461,8 +461,7 @@ class Variational:
         # Observational cost function evaluation
         Jo = 0.
         State.save(os.path.join(self.tmp_DA_path,
-                    'model_state_' + str(self.checkpoint[0]) + '.nc'),
-                    grd=False)
+                    'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
         for i in range(len(self.checkpoint)-1):
             
@@ -480,8 +479,7 @@ class Variational:
             
             # Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.checkpoint[i+1]) + '.nc'),
-                        grd=False)
+                        'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
             
 
         if self.isobs[-1]:

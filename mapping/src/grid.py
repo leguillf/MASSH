@@ -40,7 +40,7 @@ def dxdy2xy(dx,dy,x0=0,y0=0):
     for i in range(ny):
         for j in range(nx):
             X[i,j] = x0 + np.sum(dx[i,:j])
-            Y[i,j] = y0 + np.sum(dx[:i,j])   
+            Y[i,j] = y0 + np.sum(dy[:i,j])   
     return X,Y
 
 def ds(lon, lat):
