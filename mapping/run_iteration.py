@@ -198,7 +198,6 @@ if __name__ == "__main__":
         update_config(config2,iteration-1)
         State2 = state.State(config2)
         compute_new_obs(iteration,dict_obs1,config2,State2)
-    print(dict_obs1)
     # Analysis
     print('* Analysis')
     ana.ana(config1,State1,Model1,dict_obs=dict_obs1)
