@@ -274,7 +274,7 @@ class Qgm:
                 return h0
             else:
                 return h0,q0
-            
+   
         # 1/ h-->q
         if q0 is None:
             qb0 = self.h2pv(h0)

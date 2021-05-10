@@ -8,6 +8,7 @@ Created on Tue Jul 28 14:49:01 2020
 import os,sys
 import xarray as xr 
 import numpy as np 
+from datetime import datetime,timedelta
 
 from . import grid
 
@@ -19,14 +20,16 @@ class Obsopt:
         self.dict_obs = dict_obs        # observation dictionnary
         self.dt = Model.dt
         self.date_obs = {}
-        for t in Model.timestamps:
-            if self.isobserved(t):
-                delta_t = [(t - tobs).total_seconds() 
-                           for tobs in self.dict_obs.keys()]
-                t_obs = [tobs for tobs in self.dict_obs.keys()] 
-                
-                ind_obs = np.argmin(np.abs(delta_t))
-                self.date_obs[t] = t_obs[ind_obs]
+        
+        if State.config['name_model']=='SW1L' or State.config['name_model']=='QG1L' :
+            for t in Model.timestamps:
+                if self.isobserved(t):
+                    delta_t = [(t - tobs).total_seconds() 
+                               for tobs in self.dict_obs.keys()]
+                    t_obs = [tobs for tobs in self.dict_obs.keys()] 
+                    
+                    ind_obs = np.argmin(np.abs(delta_t))
+                    self.date_obs[t] = t_obs[ind_obs]
         
         # Temporary path where to save model trajectories
         self.tmp_DA_path = tmp_DA_path
@@ -120,7 +123,7 @@ class Obsopt:
                 yobs = ncin[sat_info.name_obs_var[0]].values.ravel() # SSH_obs
             Yobs = np.concatenate((Yobs,yobs))
         
-        X = State.getvar(2).ravel() # SSH from state
+        X = State.getvar(State.get_indobs()).ravel() # SSH from state
         if self.obs_sparse[t] :
             # Get indexes and weights of neighbour grid pixels
             ds = xr.open_dataset(os.path.join(
@@ -147,6 +150,8 @@ class Obsopt:
     
     def adj(self,t,adState,misfit):
         
+        ind = adState.get_indobs()
+        
         if self.obs_sparse[t]:
             adHssh = np.zeros(self.npix)
             ds = xr.open_dataset(os.path.join(
@@ -161,13 +166,12 @@ class Obsopt:
                     # Average
                     for j in range(Npix):
                         if weights[i].sum()!=0:
-                            adHssh[indexes[i,j]] +=\
-                                weights[i,j]*misfit[i]/(weights[i].sum())
+                            adHssh[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
             
-            adState.var[2] += adHssh.reshape(adState.var[2].shape)
+            adState.var[ind] += adHssh.reshape(adState.var[ind].shape)
         else:
-            adState.var[2] += misfit.reshape(adState.var[2].shape)
-                
+            adState.var[ind] += misfit.reshape(adState.var[ind].shape)
+        
             
 class Cov:
     
@@ -179,6 +183,200 @@ class Cov:
     
     def sqr(self,X):
         return self.sigma**0.5 * X   
+        
+class Variational_QG :
+    
+    def __init__(self,M=None, H=None, State=None, R=None,B=None, Xb=None, 
+                 tmp_DA_path=None, date_ini=None, date_final=None, prec=False) :
+        
+         # Objects
+        self.M = M # model
+        self.H = H # observational operator
+        self.State = State # state variables
+    
+        # Covariance matrixes
+        self.B = B
+        self.R = R
+        
+        # Background state
+        self.Xb = Xb
+        
+        # Temporary path where to save model trajectories
+        self.tmp_DA_path = tmp_DA_path
+        
+        # preconditioning
+        self.prec = prec
+        
+        # initial and final date of the assimilation window
+        self.date_ini = date_ini
+        self.date_final = date_final
+        
+        # model time step
+        self.dt = timedelta(seconds=State.config.dtmodel)
+        
+        # checkpoint indicate the iteration where the algorithm stop
+        self.checkpoint = [0]
+        # isobs has the same length as checkpoint and indicates when obs are available at a checkpoint
+        if self.H.isobserved(self.date_ini) :
+            self.isobs = [True]
+        else :
+            self.isobs = [False]
+        
+        compteur = 0
+        t,i = date_ini+self.dt, 1
+        while t < self.date_final :
+            
+            if self.H.isobserved(t) :
+                self.checkpoint.append(i)
+                self.isobs.append(True)
+            i += 1
+            t += self.dt
+        
+        if self.H.isobserved(self.date_final) :
+            self.isobs.append(True)
+        else :
+            self.isobs.append(False)
+            
+        self.n_iter = i
+        self.checkpoint.append(self.n_iter)
+        
+        # print("\n ** gradient test ** \n")
+        # X = np.random.random(State.lon.size)
+        # grad_test(self.cost,self.grad,X)
+        
+        
+        
+    
+    def cost(self,X0) :
+        '''
+        Compute the 4Dvar cost function for the SSH field var
+        '''
+        print('\n cost use \n')
+        # initial state
+        State = self.State.free() # create new state
+        X_var = X0.reshape(self.State.getvar(0).shape) 
+        State.setvar(X_var,0) # initiate the State with X0
+        
+        # Background cost function evaluation 
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
+        else:
+            X  = X0 + self.Xb
+            Jb = 0
+        
+        # Observational cost function evaluation
+        Jo = 0.
+        State.save(os.path.join(self.tmp_DA_path,
+                    'model_state_' + str(self.checkpoint[0]) + '.nc'),
+                    grd=False)
+        
+        for i in range(len(self.checkpoint)-1):
+            
+            # time corresponding to the checkpoint
+            timestamp = self.M.timestamps[self.checkpoint[i]]
+            
+            # Misfit
+            if self.isobs[i] :
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs                
+                Jo += misfit.dot(self.R.inv(misfit))
+            
+            # Run forward model
+            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            self.M.step(State,nstep=nstep)
+            
+            # Save state for adj computation 
+            State.save(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoint[i+1]) + '.nc'),
+                        grd=False)
+        
+        if self.isobs[-1]:
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
+            Jo = Jo + misfit.dot(self.R.inv(misfit))  
+        
+        # Cost function 
+        J = 1/2 * (Jo + Jb)
+        
+        print(f'\n cost eval : {J}')
+        
+        return J
+    
+    def grad(self,X0) :
+        
+        X = +X0 
+        
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                gb = X0      # gradient of background term
+            else:
+                X  = X0 + self.Xb
+                gb = self.B.inv(X0) # gradient of background term
+        else:
+            X  = X0 + self.Xb
+            gb = 0
+        
+        # Ajoint initialization   
+        adState = self.State.free()
+        
+        # Current trajectory
+        State = self.State.free()
+        
+        
+        # Last timestamp
+        if self.isobs[-1]:
+            State.load(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoint[-1]) + '.nc'))
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-yobs
+            self.H.adj(self.M.timestamps[self.checkpoint[-1]],adState,self.R.inv(misfit))
+            
+        # Time loop
+        for i in reversed(range(0,len(self.checkpoint)-1)):
+            
+            timestamp = self.M.timestamps[self.checkpoint[i]]
+            
+            # Read model state
+            State.load(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
+            
+            # Run adjoint model
+            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            self.M.step_adj(adState, State, nstep=nstep)
+            
+            # Misfit 
+            if self.isobs[i]:
+                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                self.H.adj(timestamp,adState,self.R.inv(misfit))
+        adX = adState.getvar(0).ravel()
+        if self.prec :
+            adX = np.transpose(self.B.sqr(adX)) 
+        
+        g = adX + gb  # total gradient
+        
+        return g
+    
+    def grad_test(self,deg=5) :
+        '''
+        performs a gradient test
+         - deg : degree of precision of the test
+        '''
+        n = len(self.State.getvar(0).ravel())
+        X = np.random.random(n)
+        dX = np.ones(n)
+        Jx = self.cost(X) # cost in X
+        g = self.grad(X) # grad of cost in X
+        for i in range(deg) :
+            Jxdx = self.cost(X+dX)
+            test = np.dot(g,dX)/(Jxdx-Jx)
+            print(f'{10**(-i):.1E} , {test:.1E}')
+            dX = 0.1*dX
+        
+        
+        
         
 
 class Variational:
@@ -362,7 +560,7 @@ def grad_test(J, G, X):
             lambd = 10**(-p)
             test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))
             
-            print('%.E' % lambd,'%.E' % test)
+            print(f'{lambd:.1E} , {test:.2E}')
 
 
 

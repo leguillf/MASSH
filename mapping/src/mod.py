@@ -71,13 +71,27 @@ class Model_qg1l:
                          snu=config.cdiffus)
         self.State = State
         
+
+        # Construct timestamps
+        self.timestamps = [] 
+        t = config.init_date
+        while t<=config.final_date:
+            self.timestamps.append(t)
+            t += timedelta(seconds=self.dt)
+        
+        # print('Tangent test:')
+        # self.tangent_test(State,10)
+        
+        # print('Adjoint test:')
+        # self.adjoint_test(State,10)
+
         if config.name_analysis=='4Dvar':
             print('Tangent test:')
             self.tangent_test(State,10)
             
             print('Adjoint test:')
             self.adjoint_test(State,10)
-        
+
     def step(self,State,nstep=1):
         
         # Get state variable
@@ -92,6 +106,31 @@ class Model_qg1l:
             
         # Update state
         State.setvar(SSH1,ind=0)
+    
+    def step_id(self,State,nstep=1) :
+        
+        # get the ssh
+        SSH0 = State.getvar(ind=0)
+        
+        # init
+        SSH1 = +SSH0
+        
+        # update state
+        State.setvar(SSH1,ind=0)
+        
+    def step_adj_id(self,adState,State,nstep=1):
+        
+        # Get state variable
+        adSSH0 = adState.getvar(ind=0)
+        SSH0 = State.getvar(ind=0)
+        
+        # Init
+        adSSH1 = +adSSH0
+
+        # Update state  and parameters
+        adState.setvar(adSSH1,ind=0)
+        
+        return
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
         

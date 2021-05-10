@@ -35,11 +35,12 @@ def obs(config, State, *args, **kwargs):
     """
     
     # Check if previous *dict_obs* has been computed
+    dir_obs = config.path_obs
     if config.path_obs is None:
-        path_obs = config.tmp_DA_path
-    if config.write_obs and os.path.exists(os.path.join(path_obs,'dict_obs.pic')):
+        dir_obs = config.tmp_DA_path
+    if config.write_obs and os.path.exists(os.path.join(dir_obs,'dict_obs.pic')):
         print('Reading *dict_obs* from previous run')
-        with open(os.path.join(config.path_obs,'dict_obs.pic'), 'rb') as f:
+        with open(os.path.join(dir_obs,'dict_obs.pic'), 'rb') as f:
             dict_obs = pickle.load(f)
             return dict_obs
         
@@ -89,9 +90,9 @@ def obs(config, State, *args, **kwargs):
     
     # Write *dict_obs* for next experiment
     if config.write_obs:
-        if not os.path.exists(config.path_obs):
-            os.makedirs(config.path_obs)
-        with open(os.path.join(path_obs,'dict_obs.pic'), 'wb') as f:
+        if not os.path.exists(dir_obs):
+            os.makedirs(dir_obs)
+        with open(os.path.join(dir_obs,'dict_obs.pic'), 'wb') as f:
             pickle.dump(dict_obs,f)
         
     return dict_obs
