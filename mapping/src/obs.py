@@ -11,8 +11,10 @@ import xarray as xr
 import numpy as np
 from datetime import datetime
 import pandas as pd
+import matplotlib.pylab as plt
 
 from .sat import read_satellite_info
+from .tools import detrendn
 
 def obs(config, State, *args, **kwargs):
     """
@@ -185,3 +187,31 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
     
     return    
 
+
+def detrend_obs(dict_obs):
+    
+    for t in dict_obs:
+        # Read obs
+        sat_info_list = dict_obs[t]['satellite']
+        obs_file_list = dict_obs[t]['obs_name']
+        for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+            # Read obs file
+            ncin = xr.open_dataset(obs_file)
+            ncout = ncin.copy().load()
+            ncin.close()
+            del ncin
+            # Load ssh
+            ssh = ncout[sat_info.name_obs_var[0]].squeeze().values
+            # Fill Masked pixels 
+            mask = np.isnan(ssh)
+            ssh[mask] = 0
+            # Detrend data in all directions
+            ssh_detrended = detrendn(ssh)
+            # Re-mask 
+            ssh_detrended[mask] = np.nan
+            # Write detrended observation
+            ncout[sat_info.name_obs_var[0]].data = ssh_detrended.reshape(ncout[sat_info.name_obs_var[0]].shape)
+            ncout.to_netcdf(obs_file)
+            ncout.close()
+            del ncout
+                

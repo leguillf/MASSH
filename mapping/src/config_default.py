@@ -279,8 +279,12 @@ maxiter = 20 # Maximal number of iterations for the minimization process
 # - satellite: list of satellite names 
 
 satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
+
 write_obs = True
+
 path_obs = None
+
+detrend = False
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  

@@ -54,7 +54,8 @@ class Obsopt:
                     elif len(sat_info_list)>1:
                         sys.exit("Error: in Obsopt: \
                                  can't handle several 'fullSSH'\
-                                 observations at the same time, sorry")
+                                 observations at the same time, sorry.\
+                                 Hint: reduce *assimiliation_time_step* parameter")
             
                 elif sat_info.kind=='swot_simulator':
                     obs_sparse = True
