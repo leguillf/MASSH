@@ -10,6 +10,7 @@ import sys
 import numpy as np
 from scipy import spatial
 from scipy.spatial.distance import cdist
+from scipy import interpolate
 import pandas as pd
 import xarray as xr
 import matplotlib.pylab as plt
@@ -688,6 +689,9 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
         with xr.open_dataset(obs_file_list[0]) as ncin:
             lonobs = ncin[sat_info_list[0].name_obs_lon].values % 360
             latobs = ncin[sat_info_list[0].name_obs_lat].values
+            # Compute 2D grid is needed
+            if len(lonobs.shape)==1:
+                lonobs,latobs = np.meshgrid(lonobs,latobs)
             varobs = ncin[sat_info_list[0].name_obs_var[0]].values
             if len(varobs.shape)==3:
                 if varobs.shape[0]>1:
@@ -700,9 +704,10 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                 proj_var = varobs
 
         if np.any(lonobs!=State.lon) or np.any(latobs!=State.lat):
-            print('ERROR: When providing ' + sat_info_list[0].kind +\
-' observations, grid has to be the same as the model one')
-            sys.exit()
+            print('Warning: grid interpolation of observation')
+            proj_var = interpolate.griddata((lonobs,latobs), 
+                                            proj_var, 
+                                            (State.lon.ravel(),State.lat.ravel())).reshape((State.ny,State.nx))
         proj_nudging_coeff = nudging_coeff_list[0] * np.ones_like(proj_var)
 
 

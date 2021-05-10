@@ -13,6 +13,7 @@ import numpy as np
 import os
 from math import sqrt,pi
 from datetime import timedelta
+import matplotlib.pylab as plt
 
 from . import tools, grid
 
@@ -133,6 +134,10 @@ class Model_qg1l:
         return
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
+        
+        plt.figure()
+        State.plot()
+        plt.show()
         
         # Read state variable
         ssh_0 = State.getvar(0)
