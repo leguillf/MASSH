@@ -242,7 +242,7 @@ class State:
             + 'h' + str(date.hour).zfill(2)\
             + str(date.minute).zfill(2) + '.nc')
             
-        ds = xr.open_dataset(filename,engine='h5netcdf')
+        ds = xr.open_dataset(filename)
         
         ds1 = ds.copy()
         
@@ -304,12 +304,18 @@ class State:
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
             
-    def plot(self,cmap='RdBu_r'):
+    def plot(self,title=None,cmap='RdBu_r'):
         
         nvar = len(self.name_var)
     
         fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
         
+        if title is not None:
+            fig.suptitle(title)
+            
+        if nvar==1:
+            axs = [axs]
+            
         for i in range(nvar):
             ax = axs[i]
             ax.set_title(self.name_var[i])

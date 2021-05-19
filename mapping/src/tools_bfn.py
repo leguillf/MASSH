@@ -51,7 +51,7 @@ def bfn(config,dt_start,dt_end,one_time_step,State):
                         config.flag_plot,
                         config.scalenudg)
                 
-    elif config.name_model == 'QGML':
+    elif config.name_model=='QGML':
             
             return bfn_qgml(dt_start,
                             dt_end,

@@ -59,27 +59,21 @@ def compute_new_obs(it,dict_obs,config,State):
         date += config.saveoutput_time_step
         
     # For each observation, remove the corresponding estimated map
-    State_current = State.free()
-    State_prev = State.free()
-    State_next = State.free()
     for i,date in enumerate(dict_obs):
         # Load corresponding map(s)
         if date in maps_date:
             # Cool: the observation date matches exactly an estimated map
-            State_current.load(date=date)
+            ssh_now = State.load_output(date=date).ssh
         else:
             # Don't panic: we just have to perform a time interpolation
             date_prev = min(maps_date, key=lambda x: (x<date, abs(x-date)) )
             date_next = min(maps_date, key=lambda x: (x>date, abs(x-date)) )
-            State_prev.load(date=date_prev)
-            State_next.load(date=date_next)
+            ssh_prev = State.load_output(date=date_prev).ssh
+            ssh_next = State.load_output(date=date_next).ssh
             # Time interpolation
             Wprev = 1/abs(date_prev - date).total_seconds()
             Wnext = 1/abs(date_next - date).total_seconds()
-            State_prev.scalar(Wprev/(Wprev+Wnext))
-            State_next.scalar(Wnext/(Wprev+Wnext))
-            State_current = State_prev.copy()
-            State_current.Sum(State_next)
+            ssh_now = (Wprev*ssh_prev + Wnext*ssh_next)/(Wprev+Wnext)
 
         # Open obs
         path_obs = dict_obs[date]['obs_name']
@@ -96,18 +90,17 @@ def compute_new_obs(it,dict_obs,config,State):
             elif config.name_model=='SW1L':
                 ind = 2
             # Load current state
-            map_grd = State_current.getvar(ind)
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout[_sat.name_obs_var[0]] -= map_grd 
+                dsout[_sat.name_obs_var[0]] -= ssh_now 
             elif _sat.kind=='swot_simulator':
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
                 lat_obs = dsout[_sat.name_obs_lat].values
-                map_obs = interpolate.griddata((lon.ravel(),lat.ravel()),
-                                                map_grd.ravel(),
+                ssh_on_obs = interpolate.griddata((lon.ravel(),lat.ravel()),
+                                                ssh_now.ravel(),
                                                 (lon_obs.ravel(),lat_obs.ravel()))
-                dsout[_sat.name_obs_var[0]] -=  map_obs.reshape(lon_obs.shape)
+                dsout[_sat.name_obs_var[0]] -=  ssh_on_obs.reshape(lon_obs.shape)
             # Writing new obs file
             _dir,_name = os.path.split(_path_obs)
             name_iteration = 'iteration_' + str(it) 
@@ -131,29 +124,26 @@ def compute_convergence_criteria(config,State,i):
         maps_date.append(date)
         date += config.saveoutput_time_step
     
-    # Find State from previous iteration
+    # Set State for previous iteration
     name_it_prev = 'iteration_' + str(i-1) 
     path_save_prev = '/'.join(config.path_save.split('/')[:-1]+[name_it_prev])
     State_prev = State.copy()
     State_prev.path_save = path_save_prev
     
-    K,nc = 0,0
+    # Compute convergence criteria
+    K,c = 0,0
     for i,date in enumerate(maps_date):
         # Load corresponding maps
-        State.load(date=date)
-        State_prev.load(date=date)
-        # Get state variables
-        statevars = State.getvar()
-        statevars_prev = State_prev.getvar()
-        # Compare variables
-        for var,var_prev in zip(statevars,statevars_prev):
-            if ( np.max(np.max(var_prev))-np.min(np.min(var_prev)) )!=0:
-                size = var.size
-                K += np.sqrt(np.sum(np.sum(np.square(var-var_prev)))/size) /\
-                    ( np.max(np.max(var_prev))-np.min(np.min(var_prev)) )
-                nc += 1
-        
-    K /= nc
+        ssh_curr = State.load_output(date=date).ssh.values
+        ssh_prev = State_prev.load_output(date=date).ssh.values
+        # Compare maps
+        #mask = np.isnan(ssh_curr) + np.isnan(ssh_prev)
+        K_t = np.sqrt(np.sum(np.sum(np.square(ssh_curr-ssh_prev)))/ssh_prev.size) /\
+            ( np.max(np.max(ssh_prev))-np.min(np.min(ssh_prev)) )    
+        if np.isfinite(K_t):
+            K += K_t
+            c += 1
+    K /= c
 
     return K
 

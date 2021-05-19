@@ -135,10 +135,6 @@ class Model_qg1l:
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
         
-        plt.figure()
-        State.plot()
-        plt.show()
-        
         # Read state variable
         ssh_0 = State.getvar(0)
         if len(State.name_var)>1 and State.name_var[1] in State.var:

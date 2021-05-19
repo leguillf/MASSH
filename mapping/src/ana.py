@@ -304,7 +304,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                        Hbc=bc_field_t,
                        Wbc=bc_weight,
                        Nudging_term=Nold_t)
-                
+
                 # Time increment 
                 present_date_forward = present_date_forward0 + one_time_step
                 iforward = iforward0 + 1
@@ -313,7 +313,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 N_t = bfn_obj.compute_nudging_term(
                         present_date_forward, State
                         )
-
+                
                 # Update model parameter
                 bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=1)
 
@@ -339,17 +339,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             
             # Plot for debugging
             if config.flag_plot > 0:
-                ssh = State.getvar(0)
-                pv = State.getvar(1)
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=((10, 5)))
-                p1 = ax1.pcolormesh(State.lon, State.lat, pv, shading='auto')
-                p2 = ax2.pcolormesh(State.lon, State.lat, ssh, shading='auto')
-                plt.colorbar(p1, ax=ax1)
-                plt.colorbar(p2, ax=ax2)
-                ax1.set_title('Potential vorticity')
-                ax2.set_title('SSH')
-                plt.suptitle(str(present_date_forward) + ': End of forward loop n°' + str(bfn_iter))
-                plt.show()
+                State.plot(title=str(present_date_forward) + ': End of forward loop n°' + str(bfn_iter))
 
             ##################
             # 5.2. BACK LOOP #
@@ -386,7 +376,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                             present_date_backward,
                             State
                             )
-
+                
                     # Update model parameter
                     bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=-1)
                     
@@ -407,17 +397,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     Nold_t = N_t
 
                 if config.flag_plot > 0:
-                    SSH = State.getvar(0)
-                    PV = State.getvar(1)
-                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=((10, 5)))
-                    p1 = ax1.pcolormesh(State.lon, State.lat, PV,shading='auto')
-                    p2 = ax2.pcolormesh(State.lon, State.lat, SSH,shading='auto')
-                    plt.colorbar(p1, ax=ax1)
-                    plt.colorbar(p2, ax=ax2)
-                    ax1.set_title('Potential vorticity')
-                    ax2.set_title('SSH')
-                    plt.suptitle(str(present_date_backward) + ': End of backward loop n°' + str(bfn_iter))
-                    plt.show()
+                    State.plot(title=str(present_date_backward) + ': End of backward loop n°' + str(bfn_iter))
             #########################
             # 5.3. CONVERGENCE TEST #
             #########################
