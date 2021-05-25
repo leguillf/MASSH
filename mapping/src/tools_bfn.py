@@ -261,6 +261,8 @@ class bfn_qg1l(object):
             for name_var in self.name_mod_var:
                 varf = dsf[name_var].values
                 varb = dsb[name_var].values
+                varf[np.isnan(varf)] = 0
+                varb[np.isnan(varb)] = 0
                 if varf.size != 0 and np.std(varf)>0:
                     err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
             dsf.close()

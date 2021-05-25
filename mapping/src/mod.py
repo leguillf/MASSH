@@ -134,7 +134,7 @@ class Model_qg1l:
         return
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
-        
+
         # Read state variable
         ssh_0 = State.getvar(0)
         if len(State.name_var)>1 and State.name_var[1] in State.var:
@@ -143,7 +143,7 @@ class Model_qg1l:
         else:
             flag_pv = False
             pv_0 = self.qgm.h2pv(ssh_0)
-            
+
         # Boundary condition
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
@@ -161,17 +161,17 @@ class Model_qg1l:
         while t<deltat:
             ssh_1, pv_1 = self.qgm.step(h0=ssh_1, q0=pv_1, way=way)
             t += self.dt
-        
+            
         # Nudging
         if Nudging_term is not None:
             # Nudging towards relative vorticity
             if np.any(np.isfinite(Nudging_term['rv'])):
-                indNoNan = ~np.isnan(Nudging_term['rv'])
+                indNoNan = ~np.isnan(Nudging_term['rv']) + (self.qgm.mask>=1)
                 pv_1[indNoNan] += (1-Wbc[indNoNan]) *\
                     Nudging_term['rv'][indNoNan]
             # Nudging towards ssh
             if np.any(np.isfinite(Nudging_term['ssh'])):
-                indNoNan = ~np.isnan(Nudging_term['ssh'])
+                indNoNan = ~np.isnan(Nudging_term['ssh']) + (self.qgm.mask>=1)
                 pv_1[indNoNan] -= (1-Wbc[indNoNan]) *\
                     (self.State.g*self.State.f[indNoNan])/self.c**2 * \
                         Nudging_term['ssh'][indNoNan]
@@ -179,7 +179,7 @@ class Model_qg1l:
                 ssh_b = +ssh_1
                 ssh_1 = self.qgm.pv2h(pv_1,ssh_b)
                     
-        if np.any(np.isnan(ssh_1)):
+        if np.any(np.isnan(ssh_1[self.qgm.mask>1])):
             sys.exit('Invalid value encountered in mod_qg1l')
         
         # Update state 

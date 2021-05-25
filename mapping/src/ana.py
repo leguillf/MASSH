@@ -52,7 +52,10 @@ def ana_forward(config,State,Model):
         # Time increment
         present_date += timedelta(seconds=nstep*Model.dt)
         # Save
-        State.save_output(present_date)
+        if config.saveoutputs:
+            State.save_output(present_date)
+        if config.flag_plot>0:
+            State.plot(present_date)
         
         
     return
