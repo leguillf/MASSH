@@ -10,8 +10,11 @@ import numpy as np
 
 from . import grid
 
-def ssh2rv(ssh, State, lon=None, lat=None, xac=None):
-    g = State.g
+def ssh2rv(ssh, State=None, lon=None, lat=None, xac=None):
+    if State is not None:
+        g = State.g
+    else:
+        g = 9.81
     # if lon and lat are provided, we compute grid spacing. 
     # Otherwise, state grid will be used
     if lon is not None and lat is not None:
@@ -47,7 +50,7 @@ def ssh2rv(ssh, State, lon=None, lat=None, xac=None):
     return rv
 
 
-def uv2rv(UV, State, lon=None, lat=None, xac=None):
+def uv2rv(UV, State=None, lon=None, lat=None, xac=None):
     # if lon and lat are provided, we compute grid spacing. 
     # Otherwise, state grid will be used
     if None not in [lon,lat]:
