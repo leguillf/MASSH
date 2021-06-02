@@ -132,7 +132,7 @@ qgiter = 100
 
 c = 2.7
 
-dtmodel = 300   
+dtmodel = 3600   
 
 #################################################################################################################################
 # Analysis parameters
@@ -172,7 +172,7 @@ bfn_criterion = 0.01
 
 bfn_max_iteration = 2
 
-dist_scale = 10 # in km
+dist_scale = 20 # in km
 
 save_obs_proj = False
 

@@ -209,13 +209,6 @@ class bfn_qg1l(object):
         N['ssh'][N['ssh']==0] = np.nan
         N['rv'][N['rv']==0] = np.nan
 
-        if self.flag_plot>3:
-            plt.figure()
-            plt.suptitle('Nudging coefficient')
-            plt.pcolormesh(self.State.lon,self.State.lat,N['ssh'])
-            plt.colorbar()
-            plt.show()
-
         return N
 
     def update_parameter(self, model_state, Nold, N, Wbc, way=1):
@@ -750,11 +743,7 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                     continue
                 varobs = np.append(varobs, rv.ravel())
             elif varname == 'ssh':
-                if sat_info.kind == 'CMEMS':
-                    var = var[0] + var[1]  # SLA + MDT
-                else:
-                    var = var[0]  # SSH
-                varobs = np.append(varobs, var.ravel())
+                varobs = np.append(varobs, var[0].ravel())
             else:
                 print('Warning: name of nudging variable not recongnized!!')
 
@@ -762,7 +751,7 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
         mask = varobs.copy()
         mask[np.isnan(mask)] = 1e19
         varobs = np.ma.masked_where(np.abs(mask) > 50, varobs)
-
+                    
         # Clean memory
         del var, mask, lon, lat
 

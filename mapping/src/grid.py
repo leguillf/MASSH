@@ -116,11 +116,11 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
     bc_field_interpTime = np.zeros((NT,ny,nx))
 
 
-    if file_bc is not None and os.path.exists(file_bc):
+    if file_bc is not None:
         #####################
         # Read file
         #####################
-        ds = xr.open_dataset(file_bc)
+        ds = xr.open_mfdataset(file_bc,combine='by_coords')
         if 'time' in name_var_bc:
             flag = '3D'
             bc_times = ds[name_var_bc['time']].values
@@ -189,6 +189,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         bc_field_interpTime = bc_field_interpTime[0]
 
     bc_field_interpTime[np.isnan(bc_field_interpTime)] = 0
+    bc_field_interpTime[np.abs(bc_field_interpTime)>1e10] = 0
     
     #####################
     # Compute weights map
@@ -207,7 +208,6 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
                 bc_weight[Y, nx-r-1] = gaspari_cohn(np.array([r]), lenght_bc)
             if len(X) == 0 or len(Y) == 0:
                 break
-
     elif sponge == 'linear':
         spn = np.linspace(0, 1, lenght_bc, endpoint=False)
         bc_weight[:lenght_bc, :] *= spn[:, None]
@@ -225,7 +225,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         if NT == 1:
             im0 = ax0.pcolormesh(lon2d, lat2d, bc_field_interpTime)
         else:
-            im0 = ax0.pcolormesh(lon2d, lat2d, bc_field_interpTime[0])
+            im0 = ax0.pcolormesh(lon2d, lat2d, bc_field_interpTime[NT//2])
         ax0.set_title('BC field')
         plt.colorbar(im0, ax=ax0)
         im1 = ax1.pcolormesh(lon2d, lat2d, bc_weight)

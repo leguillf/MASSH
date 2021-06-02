@@ -10,8 +10,10 @@ import pickle
 import xarray as xr
 import numpy as np
 from datetime import datetime
+from scipy import interpolate
 import pandas as pd
-import matplotlib.pylab as plt
+import glob 
+import matplotlib.pylab as plt 
 
 from .sat import read_satellite_info
 from .tools import detrendn
@@ -49,6 +51,19 @@ def obs(config, State, *args, **kwargs):
     lat = State.lat
     bbox = [lon.min(),lon.max(),lat.min(),lat.max()]
     
+    # Open MDT map if provided
+    if config.path_mdt is not None and os.path.exists(config.path_mdt):
+        ds = xr.open_dataset(config.path_mdt)
+        ds[config.name_var_mdt['lon']] = ds[config.name_var_mdt['lon']] % 360
+        ds = ds.sel({config.name_var_mdt['lon']:slice(lon.min(),lon.max()),
+                     config.name_var_mdt['lat']:slice(lat.min(),lat.max())})
+        lon_mdt,lat_mdt = np.meshgrid(ds[config.name_var_mdt['lon']].values,
+                                      ds[config.name_var_mdt['lat']].values)
+        mdt = ds[config.name_var_mdt['var']].values
+    else:
+        lon_mdt = lat_mdt = mdt = None
+                                      
+    
     # Compute output observation dictionnary
     dict_obs = {}
     
@@ -75,14 +90,19 @@ def obs(config, State, *args, **kwargs):
         if '.nc' in path_obs:
             ds = xr.open_dataset(path_obs)
         else:
+            files = glob.glob(os.path.join(sat_info.path,sat_info.name+'*.nc'))
+            # Get time dimension to concatenate
+            ds0 = xr.open_dataset(files[0])
+            name_time_dim = ds0[sat_info.name_obs_time].dims[0]
             ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
-                                   combine='by_coords',lock=False)
+                                   combine='nested',concat_dim=name_time_dim,lock=False)
             
         # Run subfunction specific to the kind of satellite
-        if sat_info.kind=='swot_simulator':
+        if sat_info.kind in ['swot_simulator','CMEMS']:
             _obs_swot_simulator(ds, assim_dates, dict_obs, sat_info, 
                                 config.assimilation_time_step, 
-                                config.tmp_DA_path,bbox)
+                                config.tmp_DA_path,bbox,
+                                lon_mdt,lat_mdt,mdt)
         elif sat_info.kind=='fullSSH':
             _obs_fullSSH(ds, assim_dates,dict_obs, sat_info,
                          config.assimilation_time_step,
@@ -98,7 +118,8 @@ def obs(config, State, *args, **kwargs):
     return dict_obs
 
 
-def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,bbox=None):
+def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
+                        bbox=None,lon_mdt=None,lat_mdt=None,mdt=None):
     """
     NAME
         _obs_swot_simulator
@@ -129,6 +150,12 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,b
         is_obs = np.any(~np.isnan(lon*lat)) * (lon.size>0)
                     
         if is_obs:
+            # Add MDT if provided
+            if mdt is not None:
+                mdt_on_track = interpolate.griddata(
+                    (lon_mdt.ravel(),lat_mdt.ravel()),mdt.ravel(),
+                    (lon.ravel(),lat.ravel())).reshape(lon.shape)
+                _ds[sat_info.name_obs_var[0]] += mdt_on_track
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
