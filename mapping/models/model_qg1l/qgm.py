@@ -1,5 +1,5 @@
 import numpy as np
-
+import matplotlib.pylab as plt 
 
 
 
@@ -149,8 +149,7 @@ class Qgm:
         q[ind]= -self.g*self.f0[ind]/(self.c[ind]**2) * h[ind]
     
         ind = np.where((np.isnan(q)))
-        qtemp =- self.g*self.f0/(self.c**2) * h
-        q[ind] = qtemp[ind]
+        q[ind] = 0
         
         ind = np.where((self.mask==0))
         q[ind] = 0
@@ -196,6 +195,15 @@ class Qgm:
         
         q_tmp[self.mask==0] = 0
         hg[self.mask==0] = 0
+        hg[np.isnan(hg)] = 0
+        q_tmp[np.isnan(q_tmp)] = 0
+        
+        # plt.figure()
+        # plt.pcolormesh(q_tmp)
+        # plt.show()
+        # plt.figure()
+        # plt.pcolormesh(hg)
+        # plt.show()
         
         r = +q_tmp - self.h2pv(hg)
         d = +r
@@ -270,7 +278,7 @@ class Qgm:
                 self.snu/(self.dy[2:-2,2:-2]**2)*\
                     (q[3:-1,2:-2]+q[1:-3,2:-2]-2*q[2:-2,2:-2])
             
-            rq[np.where((self.mask<=1))] = 0
+        rq[np.where((self.mask<=1))] = 0
     
         return rq
 

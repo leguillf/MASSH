@@ -55,11 +55,17 @@ def obs(config, State, *args, **kwargs):
     if config.path_mdt is not None and os.path.exists(config.path_mdt):
         ds = xr.open_dataset(config.path_mdt)
         ds[config.name_var_mdt['lon']] = ds[config.name_var_mdt['lon']] % 360
+        if ds[config.name_var_mdt['var']].shape[0]!=ds[config.name_var_mdt['lat']].shape[0]:
+            ds[config.name_var_mdt['var']] = ds[config.name_var_mdt['var']].transpose()
         ds = ds.sel({config.name_var_mdt['lon']:slice(lon.min(),lon.max()),
                      config.name_var_mdt['lat']:slice(lat.min(),lat.max())})
-        lon_mdt,lat_mdt = np.meshgrid(ds[config.name_var_mdt['lon']].values,
-                                      ds[config.name_var_mdt['lat']].values)
+        if len(ds[config.name_var_mdt['lon']].shape)==1:
+            
+            lon_mdt,lat_mdt = np.meshgrid(ds[config.name_var_mdt['lon']].values,
+                                          ds[config.name_var_mdt['lat']].values)
+            
         mdt = ds[config.name_var_mdt['var']].values
+        
     else:
         lon_mdt = lat_mdt = mdt = None
                                       
@@ -143,11 +149,13 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
         
-        _ds = ds.where((dt1<=time_obs) & (time_obs<=dt2), drop=True).load()
+        #_ds = ds.where((dt1<=time_obs) & (time_obs<=dt2), drop=True).load()
+        _ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
         
-        lon = _ds[sat_info.name_obs_lon].values.ravel()
-        lat = _ds[sat_info.name_obs_lat].values.ravel()
-        is_obs = np.any(~np.isnan(lon*lat)) * (lon.size>0)
+        lon = _ds[sat_info.name_obs_lon].values
+        lat = _ds[sat_info.name_obs_lat].values
+        
+        is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
                     
         if is_obs:
             # Add MDT if provided
@@ -157,14 +165,35 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
                     (lon.ravel(),lat.ravel())).reshape(lon.shape)
                 _ds[sat_info.name_obs_var[0]] += mdt_on_track
             # Save the selected dataset in a new nc file
+        
+            varobs = {}
+            for namevar in sat_info.name_obs_var:
+                varobs[namevar] = _ds[namevar]
+            coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
+            if len(lon.shape)==1:
+                coords[sat_info.name_obs_lon] = lon
+            else:
+                varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
+            if len(lat.shape)==1:
+                coords[sat_info.name_obs_lat] = lat
+            else:
+                varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
+            if sat_info.name_obs_xac is not None:
+                varobs[sat_info.name_obs_xac] = _ds[sat_info.name_obs_xac]
+                
+            dsout = xr.Dataset(varobs,
+                               coords=coords
+                               )
+            
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
                 '_'.join(sat_info.name_obs_var) + '_' + date + '.nc')
             print(dt_curr,': '+path)
-            _ds[sat_info.name_obs_time].encoding.pop("_FillValue", None)
-            _ds.to_netcdf(path)
+            dsout[sat_info.name_obs_time].encoding.pop("_FillValue", None)
+            dsout.to_netcdf(path)#, encoding={'my_variable': {'_FillValue': 1e35}})
+            dsout.close()
             _ds.close()
-            del _ds
+            del dsout,_ds
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
                     dict_obs[dt_curr]['satellite'].append(sat_info)

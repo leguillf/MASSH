@@ -14,6 +14,9 @@ from scipy import interpolate
 from .tools import gaspari_cohn
 from datetime import datetime
 import calendar
+from scipy import spatial
+from scipy.spatial.distance import cdist
+import pandas as pd
 import matplotlib.pylab as plt
 
 def lonlat2dxdy(lon,lat):
@@ -104,7 +107,7 @@ def laplacian(u, dx, dy):
     return Ml
 
 
-def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
+def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                         lon2d, lat2d, flag_plot=0, sponge='gaspari-cohn'):
 
     if type(timestamps) in [int,float]:
@@ -188,37 +191,58 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
     if NT == 1:
         bc_field_interpTime = bc_field_interpTime[0]
 
-    bc_field_interpTime[np.isnan(bc_field_interpTime)] = 0
-    bc_field_interpTime[np.abs(bc_field_interpTime)>1e10] = 0
+    bc_field_interpTime[np.abs(bc_field_interpTime)>1e10] = np.nan
     
     #####################
     # Compute weights map
     #####################
-    bc_weight = np.ones((ny, nx))
-
-    if sponge == 'gaspari-cohn':
-        for r in range(np.max((ny, nx))):
-            X = np.arange(r, nx-r)
-            Y = np.arange(r, ny-r)
-            if r < ny:
-                bc_weight[r, X] = gaspari_cohn(np.array([r]), lenght_bc)
-                bc_weight[ny-r-1, X] = gaspari_cohn(np.array([r]), lenght_bc)
-            if r < nx:
-                bc_weight[Y, r] = gaspari_cohn(np.array([r]), lenght_bc)
-                bc_weight[Y, nx-r-1] = gaspari_cohn(np.array([r]), lenght_bc)
-            if len(X) == 0 or len(Y) == 0:
-                break
-    elif sponge == 'linear':
-        spn = np.linspace(0, 1, lenght_bc, endpoint=False)
-        bc_weight[:lenght_bc, :] *= spn[:, None]
-        bc_weight[:, :lenght_bc] *= spn[None, :]
-        bc_weight[(-lenght_bc):, :] *= spn[::-1][:, None]
-        bc_weight[:, (-lenght_bc):] *= spn[::-1][None, :]
-        bc_weight = 1- bc_weight
-
-    else:
-        sys.exit('Error: No ' + sponge + ' sponge implemented'
-              + 'for boundary conditions')
+    coords = np.column_stack((lon2d.ravel(), lat2d.ravel()))
+    # construct KD-tree
+    ground_pixel_tree = spatial.cKDTree(geo2cart(coords))
+    subdomain = geo2cart(coords)[:100]
+    eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
+    dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
+    # Compute boundary pixels, including land pixels
+    mask = np.isnan(bc_field_interpTime[0])
+    mask[0,:] = True
+    mask[-1,:] = True
+    mask[:,0] = True
+    mask[:,-1] = True
+    # get boundary coordinates$
+    lon_bc = lon2d[mask]
+    lat_bc = lat2d[mask]
+    coords_bc = np.column_stack((lon_bc, lat_bc))
+    bc_tree = spatial.cKDTree(geo2cart(coords_bc))
+    # Compute distance between model pixels and boundary pixels
+    dist_mx = ground_pixel_tree.sparse_distance_matrix(bc_tree,2*dist_bc)
+    # Initialize weight map
+    bc_weight = np.zeros(lon2d.size)
+    #
+    keys = np.array(list(dist_mx.keys()))
+    ind_mod = keys[:, 0]
+    dist = np.array(list(dist_mx.values()))
+    dist = np.maximum(dist-0.5*dist_threshold, 0)
+    # Dataframe initialized without nan values in var
+    df = pd.DataFrame({'ind_mod': ind_mod,
+                       'dist': dist,
+                       'weight':np.ones_like(dist)})
+    # Remove external values in the boundary pixels
+    ind_dist = (df.dist == 0)
+    df = df[np.logical_or(ind_dist,
+                          np.isin(df.ind_mod,
+                                  df[ind_dist].ind_mod,
+                                  invert=True))]
+    # Compute tapering
+    df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*dist_bc)**2)))
+    # Nudge values out of pixels
+    df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
+    # Compute weight average and save it
+    df['tapering'] = df['tapering']**10
+    wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
+    dfg = df.groupby('ind_mod')
+    weights = dfg['weight'].apply(wa)
+    bc_weight[weights.index] = np.array(weights)
+    bc_weight = bc_weight.reshape(lon2d.shape)
 
     if flag_plot > 1:
         fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(15, 7))
@@ -233,5 +257,7 @@ def boundary_conditions(file_bc, lenght_bc, name_var_bc, timestamps,
         plt.colorbar(im1, ax=ax1)
         plt.show()
         plt.close()
+    
+    bc_field_interpTime[np.isnan(bc_field_interpTime)] = 0
         
     return bc_field_interpTime, bc_weight

@@ -137,6 +137,7 @@ class Model_qg1l:
     
         # Read state variable
         ssh_0 = State.getvar(0)
+        
         if len(State.name_var)>1 and State.name_var[1] in State.var:
             flag_pv = True
             pv_0 = State.getvar(1)
@@ -149,9 +150,10 @@ class Model_qg1l:
             Wbc = np.zeros((State.ny,State.nx))
         if Hbc is not None:
             Qbc = self.qgm.h2pv(Hbc)
+            #Qbc[np.isnan(Qbc)] = 0
             ssh_0 = Wbc*Hbc + (1-Wbc)*ssh_0
             pv_0 = Wbc*Qbc + (1-Wbc)*pv_0
-            
+        
         # Model propagation
         deltat = np.abs(tint)
         way = np.sign(tint)
@@ -166,7 +168,7 @@ class Model_qg1l:
         if Nudging_term is not None:
             # Nudging towards relative vorticity
             if np.any(np.isfinite(Nudging_term['rv'])):
-                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1)
+                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1) 
                 pv_1[indNoNan] += (1-Wbc[indNoNan]) *\
                     Nudging_term['rv'][indNoNan]
             # Nudging towards ssh
@@ -178,7 +180,7 @@ class Model_qg1l:
                 # Inversion pv -> ssh
                 ssh_b = +ssh_1
                 ssh_1 = self.qgm.pv2h(pv_1,ssh_b)
-
+        
         if np.any(np.isnan(ssh_1[self.qgm.mask>1])):
             sys.exit('Invalid value encountered in mod_qg1l')
         
@@ -186,7 +188,7 @@ class Model_qg1l:
         State.setvar(ssh_1,0)
         if flag_pv:
             State.setvar(pv_1,1)
-            
+        
     def step_tgl(self,dState,State,nstep=1):
         
         # Get state variable
