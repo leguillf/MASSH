@@ -184,14 +184,17 @@ class State:
         if self.geo_grid:
             coords['lon'] = (('lon',), self.lon[0,:])
             coords['lat'] = (('lat',), self.lat[:,0])
-            var = {'ssh':(('lat','lon'),self.getvar(ind=self.get_indsave()))}
+            var = {'ssh':(('time','lat','lon'),
+                          self.getvar(ind=self.get_indsave())[np.newaxis,:,:])}
         else:
             coords['lon'] = (('y','x',), self.lon)
             coords['lat'] = (('y','x',), self.lat)
-            var = {'ssh':(('y','x'),self.getvar(ind=self.get_indsave()))}
+            var = {'ssh':(('time','y','x'),
+                          self.getvar(ind=self.get_indsave())[np.newaxis,:,:])}
         ds = xr.Dataset(var,coords=coords)
-        ds.to_netcdf(filename,engine='h5netcdf',
-                     encoding={'time': {'units': 'days since 1900-01-01'}})
+        ds.to_netcdf(filename,
+                     encoding={'time': {'units': 'days since 1900-01-01'}},
+                     unlimited_dims={'time':True})
         
         ds.close()
         del ds
