@@ -197,8 +197,6 @@ class State:
         
         lon = lon % 360
         
-        if var.shape[0]!=lat.shape[0]:
-            var = var.transpose()
         if len(lon.shape)==2:
             dlon =  (lon[:,1:] - lon[:,:-1]).max().values
             dlat =  (lat[1:,:] - lat[:-1,:]).max().values
@@ -211,8 +209,10 @@ class State:
              config.name_var_mask['lat']:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
         
         if len(lon.shape)==1:
-            
             lon_mask,lat_mask = np.meshgrid(lon.values,lat.values)
+        else:
+            lon_mask = lon.values
+            lat_mask = lat.values
                 
         if len(var.shape)==2:
             mask = var.values
@@ -253,16 +253,19 @@ class State:
         coords = {}
         coords['time'] = (('time'), [pd.to_datetime(date)],)
         
+        var_to_save = self.getvar(ind=self.get_indsave())
+    
+        if len(var_to_save.shape)==2:
+            var_to_save = var_to_save[np.newaxis,:,:]
+            
         if self.geo_grid:
             coords['lon'] = (('lon',), self.lon[0,:])
             coords['lat'] = (('lat',), self.lat[:,0])
-            var = {'ssh':(('time','lat','lon'),
-                          self.getvar(ind=self.get_indsave())[np.newaxis,:,:])}
+            var = {'ssh':(('time','lat','lon'),var_to_save)}
         else:
             coords['lon'] = (('y','x',), self.lon)
             coords['lat'] = (('y','x',), self.lat)
-            var = {'ssh':(('time','y','x'),
-                          self.getvar(ind=self.get_indsave())[np.newaxis,:,:])}
+            var = {'ssh':(('time','y','x'),var_to_save)}
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
                      encoding={'time': {'units': 'days since 1900-01-01'}},
