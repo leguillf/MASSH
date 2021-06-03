@@ -108,6 +108,14 @@ dx = 1/10.                                            # zonal grid spatial step 
 
 dy = 1/10.                                            # meridional grid spatial step (in degree)
 
+# Mask 
+
+name_init_mask = None
+
+name_var_mask = {'lon':'','lat':'','var':''}
+
+# Gravity
+
 g = 9.81
 
 #################################################################################################################################
@@ -249,7 +257,7 @@ file_boundary_conditions = None
 
 lenght_bc = 20
 
-name_var_bc = None
+name_var_bc = {'time':'','lon':'','lat':'','var':''}
 
 scalenudg = None
 

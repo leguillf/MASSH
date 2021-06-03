@@ -150,7 +150,6 @@ class Model_qg1l:
             Wbc = np.zeros((State.ny,State.nx))
         if Hbc is not None:
             Qbc = self.qgm.h2pv(Hbc)
-            #Qbc[np.isnan(Qbc)] = 0
             ssh_0 = Wbc*Hbc + (1-Wbc)*ssh_0
             pv_0 = Wbc*Qbc + (1-Wbc)*pv_0
         

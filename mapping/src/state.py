@@ -12,6 +12,8 @@ import sys,os
 import pandas as pd 
 from copy import deepcopy
 import matplotlib.pylab as plt
+from scipy import interpolate
+
 
 from . import grid
 
@@ -47,7 +49,7 @@ class State:
         if config.name_init == 'geo_grid':
              self.ini_geo_grid(config)
         elif config.name_init == 'from_file':
-             self.ini_from_file(config)
+             self.ini_grid_from_file(config)
         else:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
             
@@ -74,6 +76,9 @@ class State:
             self.ini_var_sw1l(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
+        
+        # Add mask if provided
+        self.ini_mask(config)
             
         if not os.path.exists(config.tmp_DA_path):
             os.makedirs(config.tmp_DA_path)
@@ -101,7 +106,7 @@ class State:
         self.lon = lon % 360
         self.lat = lat
     
-    def ini_from_file(self,config):
+    def ini_grid_from_file(self,config):
         """
         NAME
             ini_from_file
@@ -111,6 +116,7 @@ class State:
             Args:
                 config (module): configuration module
         """
+        
         dsin = xr.open_dataset(config.name_init_grid)
         lon = dsin[config.name_init_lon].values
         lat = dsin[config.name_init_lat].values
@@ -119,6 +125,7 @@ class State:
             lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
+        
         dsin.close()
         del dsin
         
@@ -167,7 +174,72 @@ class State:
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
-
+    
+    def ini_mask(self,config):
+        
+        """
+        NAME
+            ini_mask
+    
+        DESCRIPTION
+            Read mask file, interpolate it to state grid, 
+            and apply to state variable
+        """
+        
+        # Read mask
+        if config.name_init_mask is None or not os.path.exists(config.name_init_mask):
+            return
+        
+        ds = xr.open_dataset(config.name_init_mask).squeeze()
+        lon = ds[config.name_var_mask['lon']]
+        lat = ds[config.name_var_mask['lat']]
+        var = ds[config.name_var_mask['var']]
+        
+        lon = lon % 360
+        
+        if var.shape[0]!=lat.shape[0]:
+            var = var.transpose()
+        if len(lon.shape)==2:
+            dlon =  (lon[:,1:] - lon[:,:-1]).max().values
+            dlat =  (lat[1:,:] - lat[:-1,:]).max().values
+        else:
+            dlon = (lon[1:] - lon[:-1]).max().values
+            dlat = (lat[1:] - lat[:-1]).max().values
+            
+        ds = ds.sel(
+            {config.name_var_mask['lon']:slice(self.lon.min()-dlon,self.lon.max()+dlon),
+             config.name_var_mask['lat']:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
+        
+        if len(lon.shape)==1:
+            
+            lon_mask,lat_mask = np.meshgrid(lon.values,lat.values)
+                
+        if len(var.shape)==2:
+            mask = var.values
+        elif len(mask.shape)==3:
+            mask = var[0,:,:].values
+        
+        # Interpolate to state grid
+        if np.any(lon_mask!=self.lon) or np.any(lat_mask!=self.lat):
+            mask_interp = interpolate.griddata(
+                (lon_mask.ravel(),lat_mask.ravel()), mask.ravel(),
+                (self.lon.ravel(),self.lat.ravel())).reshape((self.ny,self.nx))
+        
+        # Convert to bool if float type     
+        if mask_interp.dtype!=np.bool : 
+            self.mask = np.empty((self.ny,self.nx),dtype='bool')
+            ind_mask = (np.isnan(mask_interp)) | (np.abs(mask_interp)>10)
+            self.mask[ind_mask] = True
+            self.mask[~ind_mask] = False
+        else:
+            self.mask = mask_interp.copy()
+                
+        # Apply to state variable (SSH only)
+        if config.name_model=='QG1L':
+            self.var[0][self.mask] = np.nan
+        elif config.name_model=='SW1L':
+            self.var[-1][self.mask] = np.nan
+            
 
     def save_output(self,date):
         

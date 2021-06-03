@@ -165,11 +165,15 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
         if np.all(bc_lon==lon2d.ravel()) and np.all(bc_lat==lat2d.ravel()):
             bc_field_interp2d = bc_field.reshape((bc_field.size//(ny*nx),ny,nx))
         elif flag == '2D':
-            bc_field_interp2d = interpolate.griddata((bc_lon,bc_lat), bc_field, (lon2d.ravel(),lat2d.ravel()))
+            bc_field_interp2d = interpolate.griddata((bc_lon,bc_lat), 
+                                                     bc_field, 
+                                                     (lon2d.ravel(),lat2d.ravel()))
         elif flag == '3D':
             bc_field_interp2d = np.zeros((bc_field.shape[0], ny, nx))
             for t in range(bc_field.shape[0]):
-                bc_field_interp2d[t] = interpolate.griddata((bc_lon,bc_lat), bc_field[t], (lon2d.ravel(),lat2d.ravel())).reshape((ny,nx))
+                bc_field_interp2d[t] = interpolate.griddata((bc_lon,bc_lat), 
+                                                            bc_field[t], 
+                                                            (lon2d.ravel(),lat2d.ravel())).reshape((ny,nx))
 
         #####################
         # Time processing
@@ -182,7 +186,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
             # Time interpolations
             f_interpTime = interpolate.interp1d(bc_times, bc_field_interp2d, axis=0)
             for i,t in enumerate(timestamps):
-                if bc_times.min() < t < bc_times.max():
+                if bc_times.min() <= t <= bc_times.max():
                     bc_field_interpTime[i] = f_interpTime(t)
 
     else:
@@ -191,7 +195,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
     if NT == 1:
         bc_field_interpTime = bc_field_interpTime[0]
 
-    bc_field_interpTime[np.abs(bc_field_interpTime)>1e10] = np.nan
+    bc_field_interpTime[np.abs(bc_field_interpTime)>10] = np.nan
     
     #####################
     # Compute weights map
@@ -208,6 +212,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
     mask[-1,:] = True
     mask[:,0] = True
     mask[:,-1] = True
+    
     # get boundary coordinates$
     lon_bc = lon2d[mask]
     lat_bc = lat2d[mask]
@@ -249,7 +254,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
         if NT == 1:
             im0 = ax0.pcolormesh(lon2d, lat2d, bc_field_interpTime)
         else:
-            im0 = ax0.pcolormesh(lon2d, lat2d, bc_field_interpTime[NT//2])
+            im0 = ax0.pcolormesh(lon2d, lat2d, bc_field_interpTime[NT//2],cmap='RdBu_r')
         ax0.set_title('BC field')
         plt.colorbar(im0, ax=ax0)
         im1 = ax1.pcolormesh(lon2d, lat2d, bc_weight)
