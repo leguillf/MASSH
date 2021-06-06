@@ -243,6 +243,10 @@ class State:
 
     def save_output(self,date):
         
+        name_lon = self.name_lon 
+        name_lat = self.name_lat
+        name_var = self.name_var[self.get_indsave()]
+        
         filename = os.path.join(self.path_save,self.name_exp_save\
                 + '_y' + str(date.year)\
                 + 'm' + str(date.month).zfill(2)\
@@ -259,13 +263,13 @@ class State:
             var_to_save = var_to_save[np.newaxis,:,:]
             
         if self.geo_grid:
-            coords['lon'] = (('lon',), self.lon[0,:])
-            coords['lat'] = (('lat',), self.lat[:,0])
-            var = {'ssh':(('time','lat','lon'),var_to_save)}
+            coords[name_lon] = ((name_lon,), self.lon[0,:])
+            coords[name_lat] = ((name_lat,), self.lat[:,0])
+            var = {name_var:(('time','lat','lon'),var_to_save)}
         else:
-            coords['lon'] = (('y','x',), self.lon)
-            coords['lat'] = (('y','x',), self.lat)
-            var = {'ssh':(('time','y','x'),var_to_save)}
+            coords[name_lon] = (('y','x',), self.lon)
+            coords[name_lat] = (('y','x',), self.lat)
+            var = {name_var:(('time','y','x'),var_to_save)}
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
                      encoding={'time': {'units': 'days since 1900-01-01'}},

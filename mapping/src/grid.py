@@ -125,69 +125,83 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
         #####################
         
         ds = xr.open_mfdataset(file_bc,combine='by_coords')
+
         
         if 'time' in name_var_bc:
             flag = '3D'
             bc_times = ds[name_var_bc['time']].values
+            dtime = (ds[name_var_bc['time']][1:].values-ds[name_var_bc['time']][:-1].values).max()
             # Convert to timestamps
-            bc_times =  np.asarray([calendar.timegm(datetime.utcfromtimestamp(dt64.astype(int) * 1e-9).timetuple()) for dt64 in bc_times])
-            dtime = np.max(bc_times[1:]-bc_times[:-1])
-            # Extract relevant timestamps
-            ind_time = (timestamps.min()-dtime<=bc_times) & (bc_times<=timestamps.max()+dtime)
-            bc_times = bc_times[ind_time]
+            ds = ds.sel(
+                {name_var_bc['time']:slice(timestamps.min()-dtime,
+                                           timestamps.max()+dtime)
+                 }
+                )
+            bc_times = ds[name_var_bc['time']]
         else:
             flag = '2D'
         
         # Read and extract BC grid
-        lon = ds[name_var_bc['lon']].values
-        lat = ds[name_var_bc['lat']].values
+        ds = ds.assign_coords({name_var_bc['lon']:(ds[name_var_bc['lon']] % 360),
+                               name_var_bc['lat']:ds[name_var_bc['lat']]})
         
-        if len(lon.shape)==2:
-            dlon =  (lon[:,1:] - lon[:,:-1]).max()
-            dlat =  (lat[1:,:] - lat[:-1,:]).max()
-        else:
-            dlon = (lon[1:] - lon[:-1]).max()
-            dlat = (lat[1:] - lat[:-1]).max()
+        if len(ds[name_var_bc['lon']].shape)==2:
+            dlon = (ds[name_var_bc['lon']][:,1:].values - ds[name_var_bc['lon']][:,:-1].values).max()
+            dlat = (ds[name_var_bc['lat']][1:,:].values - ds[name_var_bc['lat']][:-1,:].values).max()
+
             
-        ds = ds.sel(
-            {name_var_bc['lon']:slice(lon2d.min()-dlon,lon2d.max()+dlon),
-             name_var_bc['lat']:slice(lat2d.min()-dlat,lat2d.max()+dlat)})
-   
-        if len(lon.shape)==1:
-            lon_bc,lat_bc = np.meshgrid(ds[name_var_bc['lon']].values,
-                                        ds[name_var_bc['lat']].values)
-        else:
+            ds = ds.where((ds[name_var_bc['lon']]<=lon2d.max()+dlon) &\
+                          (ds[name_var_bc['lon']]>=lon2d.min()-dlon) &\
+                          (ds[name_var_bc['lat']]<=lat2d.max()+dlat) &\
+                          (ds[name_var_bc['lat']]>=lat2d.min()-dlat),drop=True)
+                
             lon_bc = ds[name_var_bc['lon']].values
             lat_bc = ds[name_var_bc['lat']].values
+        
+        else:
+            dlon = (ds[name_var_bc['lon']][1:].values - ds[name_var_bc['lon']][:-1].values).max()
+            dlat = (ds[name_var_bc['lat']][1:].values - ds[name_var_bc['lat']][:-1].values).max()
+            
+            ds = ds.where((ds[name_var_bc['lon']]<=lon2d.max()+dlon) &\
+                          (ds[name_var_bc['lon']]>=lon2d.min()-dlon) &\
+                          (ds[name_var_bc['lat']]<=lat2d.max()+dlat) &\
+                          (ds[name_var_bc['lat']]>=lat2d.min()-dlat),drop=True)
+
+            lon_bc,lat_bc = np.meshgrid(ds[name_var_bc['lon']].values,
+                                        ds[name_var_bc['lat']].values)
         
         lon_bc = lon_bc % 360
         
         # Read BC fields
-        var = ds[name_var_bc['var']]
-        if flag=='2D':
-            var_bc = var.values
-        else:
-            var_bc = []
-            for i in np.where(ind_time)[0]:
-                var_bc.append(var[i].values)
-            var_bc = np.asarray(var_bc)
-        
+        var_bc = ds[name_var_bc['var']]
+       
         #####################
         # Grid processing
         #####################
+        
         if np.all(lon_bc==lon2d) and np.all(lat_bc==lat2d):
-            var_bc_interp2d = var_bc.reshape((var_bc.size//(ny*nx),ny,nx))
+            var_bc_interp2d = var_bc.copy()
             
         elif flag == '2D':
-            var_bc_interp2d = interpolate.griddata((lon_bc.ravel(),lat_bc.ravel()), 
-                                                     var_bc.ravel(), 
-                                                     (lon2d.ravel(),lat2d.ravel())).reshape((ny,nx))
+            var_bc_interp2d = interpolate.griddata(
+                (lon_bc.ravel(),lat_bc.ravel()),
+                var_bc.ravel(),
+                (lon2d.ravel(),lat2d.ravel())
+                ).reshape((ny,nx))
+            
         elif flag == '3D':
-            var_bc_interp2d = np.zeros((var_bc.shape[0], ny, nx))
+            
+            var_bc_interp2d = xr.DataArray(
+                np.empty((bc_times.size,ny,nx)),
+                dims=[name_var_bc['time'],'y','x'],
+                coords={name_var_bc['time']:bc_times.values})
+            
             for t in range(var_bc.shape[0]):
-                var_bc_interp2d[t] = interpolate.griddata((lon_bc.ravel(),lat_bc.ravel()),
-                                                          var_bc[t].ravel(), 
-                                                         (lon2d.ravel(),lat2d.ravel())).reshape((ny,nx))
+                var_bc_interp2d[t] = interpolate.griddata(
+                    (lon_bc.ravel(),lat_bc.ravel()),
+                    var_bc[t].values.ravel(),
+                    (lon2d.ravel(),lat2d.ravel())
+                    ).reshape((ny,nx))
         
         #####################
         # Time processing
@@ -198,10 +212,8 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                 var_bc_interpTime[t] = var_bc_interp2d.reshape((ny,nx))
         elif flag == '3D':
             # Time interpolations
-            f_interpTime = interpolate.interp1d(bc_times, var_bc_interp2d, axis=0)
-            for i,t in enumerate(timestamps):
-                if bc_times.min() <= t <= bc_times.max():
-                    var_bc_interpTime[i] = f_interpTime(t)
+            var_bc_interpTime = var_bc_interp2d.interp(
+                {name_var_bc['time']:timestamps}).values
 
     else:
         print('Warning: no boundary conditions provided')
@@ -271,7 +283,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
         if NT == 1:
             im0 = ax0.pcolormesh(lon2d, lat2d, var_bc_interpTime)
         else:
-            im0 = ax0.pcolormesh(lon2d, lat2d, var_bc_interpTime[NT//2],cmap='RdBu_r')
+            im0 = ax0.pcolormesh(lon2d, lat2d, var_bc_interpTime[0],cmap='RdBu_r')
         ax0.set_title('BC field')
         plt.colorbar(im0, ax=ax0)
         im1 = ax1.pcolormesh(lon2d, lat2d, bc_weight)

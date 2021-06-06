@@ -15,7 +15,7 @@ import pickle
 from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
-
+import pandas as pd
 
 from . import grid
 
@@ -228,10 +228,17 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         ######################################
         # Boundary condition
         if config.flag_use_boundary_conditions:
-            timestamps = np.arange(calendar.timegm(init_bfn_date.timetuple()),
-                                   calendar.timegm(final_bfn_date.timetuple())+\
-                                       one_time_step.total_seconds(),
-                                   one_time_step.total_seconds())
+            periods = (final_bfn_date-init_bfn_date).total_seconds()//\
+                one_time_step.total_seconds() + 1
+            timestamps = pd.date_range(init_bfn_date,
+                                       final_bfn_date,
+                                       periods=periods
+                                      )
+                                   #  np.arange(calendar.timegm(init_bfn_date.timetuple()),
+                                   # calendar.timegm(final_bfn_date.timetuple())+\
+                                   #     one_time_step.total_seconds(),
+                                   # one_time_step.total_seconds())
+                
 
             bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
                                                            config.lenght_bc,
@@ -467,6 +474,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                         # Read previous output at this timestamp
                         ds = State.load_output(present_date)
                         ssh1 = ds.ssh.data
+                        ds.close()
+                        del ds
                         # Update state
                         ssh2 = State_current.getvar(ind=State_current.get_indsave())
                         State_current.setvar(W1*ssh1+W2*ssh2,ind=0)

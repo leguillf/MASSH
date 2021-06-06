@@ -84,15 +84,10 @@ def compute_new_obs(it,dict_obs,config,State):
             dsout = ds.copy().load()
             ds.close()
             del ds
-            # index of observed state variable
-            if config.name_model=='QG1L':
-                ind = 0
-            elif config.name_model=='SW1L':
-                ind = 2
             # Load current state
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout[_sat.name_obs_var[0]] -= ssh_now 
+                dsout[_sat.name_obs_var[0]].data -= ssh_now.data
             elif _sat.kind=='swot_simulator':
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
@@ -100,7 +95,7 @@ def compute_new_obs(it,dict_obs,config,State):
                 ssh_on_obs = interpolate.griddata((lon.ravel(),lat.ravel()),
                                                 ssh_now.ravel(),
                                                 (lon_obs.ravel(),lat_obs.ravel()))
-                dsout[_sat.name_obs_var[0]] -=  ssh_on_obs.reshape(lon_obs.shape)
+                dsout[_sat.name_obs_var[0]].data -=  ssh_on_obs.reshape(lon_obs.shape).data
             # Writing new obs file
             _dir,_name = os.path.split(_path_obs)
             name_iteration = 'iteration_' + str(it) 
@@ -172,7 +167,9 @@ if __name__ == "__main__":
     *****************************************************************\n')
     time0 = datetime.now()
     # Updtade configuration file
+    print(config1.name_init_lon)
     update_config(config1,iteration)
+    print(config1.name_init_lon)
     # State
     print('* State Initialization')
     State1 = state.State(config1)

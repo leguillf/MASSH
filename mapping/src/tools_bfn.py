@@ -634,7 +634,7 @@ def bfn_projections(varname, dict_obs_var, State, dist_scale,
                         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
                         plt.suptitle('Nudging on ' + varname + ' at ' +
                                      str(date) + ' (Tau = ' + str(key[1]) +
-                                     ' & sigma = ' + str(key[0]) + ')')
+                                     ' & sigma = ' + str(key[0]) + ')') 
                         im1 = ax1.pcolormesh(State.lon, State.lat, obs_projected,shading='auto')
                         plt.colorbar(im1, ax=ax1)
                         ax1.set_title('Projected observations')
@@ -694,9 +694,9 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                           timestep, we take the first one')
                 varobs = varobs[0]
             if varname == 'relvort' and sat_info_list[0].kind=='fullSSH':
-                proj_var = switchvar.ssh2rv(varobs, State)
-            else:
-                proj_var = varobs
+                varobs = switchvar.ssh2rv(varobs, State)
+           
+            proj_var = +varobs
 
         if np.any(lonobs!=State.lon) or np.any(latobs!=State.lat):
             print('Warning: grid interpolation of observation')
