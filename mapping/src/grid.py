@@ -185,7 +185,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
         elif flag == '2D':
             var_bc_interp2d = interpolate.griddata(
                 (lon_bc.ravel(),lat_bc.ravel()),
-                var_bc.ravel(),
+                var_bc.values.ravel(),
                 (lon2d.ravel(),lat2d.ravel())
                 ).reshape((ny,nx))
             
