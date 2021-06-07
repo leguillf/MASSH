@@ -41,7 +41,7 @@ Created on Tue Apr 27 09:02:10 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = '4Dvar_identity' 
+name_experiment = '4Dvar_idealized' 
 name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
@@ -171,13 +171,13 @@ name_analysis = '4Dvar'
 
 path_init_4Dvar = None
 
-sigma_B = None
+sigma_B = 1.
 
-sigma_R = 0.5
+sigma_R = 0.1
 
-maxiter = 15
+maxiter = 50
 
-gtol = 1e-3
+gtol = 1e-5
 
 prec = False
 
@@ -221,7 +221,7 @@ name_obs_time_nr = "time_obs"
 # - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
 #################################################################################################################################
 
-saveoutputs = True
+saveoutputs = False
 
 name_exp_save = name_experiment 
 
