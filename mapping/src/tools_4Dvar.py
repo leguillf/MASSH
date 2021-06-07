@@ -8,7 +8,7 @@ Created on Tue Jul 28 14:49:01 2020
 import os,sys
 import xarray as xr 
 import numpy as np 
-from datetime import datetime,timedelta
+from datetime import timedelta
 
 from . import grid
 
@@ -181,7 +181,28 @@ class Cov:
         return 1/self.sigma**2 * X    
     
     def sqr(self,X):
-        return self.sigma**0.5 * X   
+        return self.sigma**0.5 * X
+    
+    def diff_filter(self,X,State,wgt_coef,number=1) :
+        # reshape X as the ssh field
+        var = X.reshape(State.var[0].shape)
+        for i in range(number) :
+            # apply a laplacian operator to var
+            var_e = np.roll(var,-1,axis=1)
+            var_w = np.roll(var,1,axis=1)
+            var_n = np.roll(var,-1,axis=0)
+            var_s = np.roll(var,1,axis=0)
+            wgt_out = (1.-wgt_coef)/4
+            var = wgt_coef*var + wgt_out*(var_e + var_w + var_n + var_s)
+            # boundary conditions
+            var[0,:] = var[1,:]
+            var[-1,:] = var[-2,:]
+            var[:,0] = var[:,1]
+            var[:,-1] = var[:,-2]
+        # reshape the output as a vector
+        Xout = var.ravel()
+        return Xout
+        
         
 class Variational_QG :
     
@@ -221,7 +242,6 @@ class Variational_QG :
         else :
             self.isobs = [False]
         
-        compteur = 0
         t,i = date_ini+self.dt, 1
         while t < self.date_final :
             
@@ -239,9 +259,11 @@ class Variational_QG :
         self.n_iter = i
         self.checkpoint.append(self.n_iter)
         
+        # indicates the corresponding iteration of the timestamps
+        self.start_iter = int((self.date_ini - State.config.init_date).total_seconds()/self.dt.total_seconds())
+        
         # print("\n ** gradient test ** \n")
-        # X = np.random.random(State.lon.size)
-        # grad_test(self.cost,self.grad,X)
+        # self.grad_test(deg=8)
         
         
         
@@ -251,22 +273,25 @@ class Variational_QG :
         Compute the 4Dvar cost function for the SSH field var
         '''
         print('\n cost use \n')
+        
         # initial state
         State = self.State.free() # create new state
-        X_var = X0.reshape(self.State.getvar(0).shape) 
+        if self.prec :
+            # X0 = self.B.diff_filter(X0,self.State,1.4,number=5)
+            X = self.B.sqr(X0) + self.Xb # value of the ssh field
+            X_var = X.reshape(self.State.getvar(0).shape)
+        else :
+            X_var = X0.reshape(self.State.getvar(0).shape) 
         State.setvar(X_var,0) # initiate the State with X0
         
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
-                X  = self.B.sqr(X0) + self.Xb
-                Jb = X0.dot(X0) # cost of background term
+                Jb = X0.dot(X0) # cost of background term with change of variable
             else:
-                X  = X0 + self.Xb
-                Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
+                Jb = np.dot(X0,self.B.inv(X0))  # cost of background term
         else:
-            X  = X0 + self.Xb
-            Jb = 0
+            Jb = 0.
         
         # Observational cost function evaluation
         Jo = 0.
@@ -277,7 +302,7 @@ class Variational_QG :
         for i in range(len(self.checkpoint)-1):
             
             # time corresponding to the checkpoint
-            timestamp = self.M.timestamps[self.checkpoint[i]]
+            timestamp = self.M.timestamps[self.checkpoint[i]+self.start_iter]
             
             # Misfit
             if self.isobs[i] :
@@ -306,17 +331,13 @@ class Variational_QG :
     
     def grad(self,X0) :
         
-        X = +X0 
-        
         if self.B is not None:
             if self.prec :
-                X  = self.B.sqr(X0) + self.Xb
-                gb = X0      # gradient of background term
+                # gb = self.B.diff_filter(X0,self.State,1.4,number=5) # gradient of background term
+                gb = X0
             else:
-                X  = X0 + self.Xb
                 gb = self.B.inv(X0) # gradient of background term
         else:
-            X  = X0 + self.Xb
             gb = 0
         
         # Ajoint initialization   
@@ -336,7 +357,7 @@ class Variational_QG :
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
             
-            timestamp = self.M.timestamps[self.checkpoint[i]]
+            timestamp = self.M.timestamps[self.checkpoint[i]+self.start_iter]
             
             # Read model state
             State.load(os.path.join(self.tmp_DA_path,
@@ -370,7 +391,7 @@ class Variational_QG :
         g = self.grad(X) # grad of cost in X
         for i in range(deg) :
             Jxdx = self.cost(X+dX)
-            test = np.dot(g,dX)/(Jxdx-Jx)
+            test = abs(1 - np.dot(g,dX)/(Jxdx-Jx))
             print(f'{10**(-i):.1E} , {test:.1E}')
             dX = 0.1*dX
         
