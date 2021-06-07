@@ -41,7 +41,7 @@ if __name__ == "__main__":
     # Parsing
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--p', 
-                        default='Exp_joint_'+datetime.now().strftime('%Y-%m-%d_%H%M'), 
+                        default='Exp_joint', 
                         type=str)     
     parser.add_argument('--c1', 
                         default=os.path.join(pwd,'examples','config_Example2_BM.py'),
@@ -49,14 +49,20 @@ if __name__ == "__main__":
     parser.add_argument('--c2', 
                         default=os.path.join(pwd,'examples','config_Example2_IT.py'),
                         type=str)   
-    parser.add_argument('--i0', default=0, type=int)           
+    parser.add_argument('--i0', default=0, type=int) 
+    parser.add_argument('--imax', default=None, type=int) 
     parser.add_argument('--Kmin', default=1e-3, type=float)           
     opts = parser.parse_args()
     print("* Parsing:")
-    path_exp = opts.p
+    i0 = opts.i0
+    imax = opts.imax
+    if imax is None:
+        imax = np.inf
+    path_exp = opts.p 
+    if i0==0:
+        path_exp += '_'+datetime.now().strftime('%Y-%m-%d_%H%M')
     exp_config_file_1 = opts.c1
     exp_config_file_2 = opts.c2
-    i0 = opts.i0
     Kmin = opts.Kmin
     print('path_exp:',path_exp)
     print('config1:',exp_config_file_1)
@@ -96,7 +102,7 @@ if __name__ == "__main__":
     
     K = np.inf
     i = i0
-    while K>Kmin:
+    while K>Kmin or i<=imax:
         
         time0 = datetime.now()
         print('\n*** Iteration n°'+str(i) + ' ***')

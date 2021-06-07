@@ -10,6 +10,7 @@ import sys
 import numpy as np
 from scipy import spatial
 from scipy.spatial.distance import cdist
+from scipy import interpolate
 import pandas as pd
 import xarray as xr
 import matplotlib.pylab as plt
@@ -50,7 +51,7 @@ def bfn(config,dt_start,dt_end,one_time_step,State):
                         config.flag_plot,
                         config.scalenudg)
                 
-    elif config.name_model == 'QGML':
+    elif config.name_model=='QGML':
             
             return bfn_qgml(dt_start,
                             dt_end,
@@ -208,13 +209,6 @@ class bfn_qg1l(object):
         N['ssh'][N['ssh']==0] = np.nan
         N['rv'][N['rv']==0] = np.nan
 
-        if self.flag_plot>3:
-            plt.figure()
-            plt.suptitle('Nudging coefficient')
-            plt.pcolormesh(self.State.lon,self.State.lat,N['ssh'])
-            plt.colorbar()
-            plt.show()
-
         return N
 
     def update_parameter(self, model_state, Nold, N, Wbc, way=1):
@@ -260,6 +254,8 @@ class bfn_qg1l(object):
             for name_var in self.name_mod_var:
                 varf = dsf[name_var].values
                 varb = dsb[name_var].values
+                varf[np.isnan(varf)] = 0
+                varb[np.isnan(varb)] = 0
                 if varf.size != 0 and np.std(varf)>0:
                     err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
             dsf.close()
@@ -638,7 +634,7 @@ def bfn_projections(varname, dict_obs_var, State, dist_scale,
                         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
                         plt.suptitle('Nudging on ' + varname + ' at ' +
                                      str(date) + ' (Tau = ' + str(key[1]) +
-                                     ' & sigma = ' + str(key[0]) + ')')
+                                     ' & sigma = ' + str(key[0]) + ')') 
                         im1 = ax1.pcolormesh(State.lon, State.lat, obs_projected,shading='auto')
                         plt.colorbar(im1, ax=ax1)
                         ax1.set_title('Projected observations')
@@ -688,6 +684,9 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
         with xr.open_dataset(obs_file_list[0]) as ncin:
             lonobs = ncin[sat_info_list[0].name_obs_lon].values % 360
             latobs = ncin[sat_info_list[0].name_obs_lat].values
+            # Compute 2D grid is needed
+            if len(lonobs.shape)==1:
+                lonobs,latobs = np.meshgrid(lonobs,latobs)
             varobs = ncin[sat_info_list[0].name_obs_var[0]].values
             if len(varobs.shape)==3:
                 if varobs.shape[0]>1:
@@ -695,14 +694,15 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                           timestep, we take the first one')
                 varobs = varobs[0]
             if varname == 'relvort' and sat_info_list[0].kind=='fullSSH':
-                proj_var = switchvar.ssh2rv(varobs, State)
-            else:
-                proj_var = varobs
+                varobs = switchvar.ssh2rv(varobs, State)
+           
+            proj_var = +varobs
 
         if np.any(lonobs!=State.lon) or np.any(latobs!=State.lat):
-            print('ERROR: When providing ' + sat_info_list[0].kind +\
-' observations, grid has to be the same as the model one')
-            sys.exit()
+            print('Warning: grid interpolation of observation')
+            proj_var = interpolate.griddata((lonobs,latobs), 
+                                            proj_var, 
+                                            (State.lon.ravel(),State.lat.ravel())).reshape((State.ny,State.nx))
         proj_nudging_coeff = nudging_coeff_list[0] * np.ones_like(proj_var)
 
 
@@ -743,11 +743,7 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                     continue
                 varobs = np.append(varobs, rv.ravel())
             elif varname == 'ssh':
-                if sat_info.kind == 'CMEMS':
-                    var = var[0] + var[1]  # SLA + MDT
-                else:
-                    var = var[0]  # SSH
-                varobs = np.append(varobs, var.ravel())
+                varobs = np.append(varobs, var[0].ravel())
             else:
                 print('Warning: name of nudging variable not recongnized!!')
 
@@ -755,7 +751,7 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
         mask = varobs.copy()
         mask[np.isnan(mask)] = 1e19
         varobs = np.ma.masked_where(np.abs(mask) > 50, varobs)
-
+                    
         # Clean memory
         del var, mask, lon, lat
 

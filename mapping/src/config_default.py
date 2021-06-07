@@ -108,6 +108,14 @@ dx = 1/10.                                            # zonal grid spatial step 
 
 dy = 1/10.                                            # meridional grid spatial step (in degree)
 
+# Mask 
+
+name_init_mask = None
+
+name_var_mask = {'lon':'','lat':'','var':''}
+
+# Gravity
+
 g = 9.81
 
 #################################################################################################################################
@@ -249,7 +257,7 @@ file_boundary_conditions = None
 
 lenght_bc = 20
 
-name_var_bc = None
+name_var_bc = {'time':'','lon':'','lat':'','var':''}
 
 scalenudg = None
 
@@ -277,10 +285,23 @@ maxiter = 20 # Maximal number of iterations for the minimization process
 # Observation parameters
 #################################################################################################################################
 # - satellite: list of satellite names 
+# - write_obs: (bool) save observation dictionary in *path_obs*
+# - path_obs: (string) if set to None, observations are saved in *tmp_DA_path*
+# - detrend: (bool) apply a 2D detrending on observations
+# - path_mdt: (string) full path of the netcdf file containing MDT data
+# - name_var_mdt: (dict) {'lon':name_lon_mdt,'lat':name_lon_mdt,'var':name_var_mdt}
 
 satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
+
 write_obs = True
+
 path_obs = None
+
+detrend = False
+
+path_mdt = None # For CMEMS data only ! 
+
+name_var_mdt = {'lon':'','lat':'','var':''}
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  

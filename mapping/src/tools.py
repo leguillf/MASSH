@@ -9,6 +9,8 @@ import numpy as np
 import os
 import xarray as xr
 import pandas as pd
+import xarray as xr
+import scipy.linalg as spl
 
 
 def gaspari_cohn(r,c):
@@ -84,3 +86,66 @@ def L2_scalar_prod(v1,v2,coeff=1):
     return res
 
 
+def detrendn(da, axes=None):
+    
+    """
+    Detrend by subtracting out the least-square plane or least-square cubic fit
+    depending on the number of axis.
+    Parameters
+    ----------
+    da : `dask.array`
+        The data to be detrended
+    Returns
+    -------
+    da : `numpy.array`
+        The detrended input data
+    """
+    
+    if axes is None:
+        axes = range(len(da.shape))
+        
+    N = [da.shape[n] for n in axes]
+    M = []
+    for n in range(da.ndim):
+        if n not in axes:
+            M.append(da.shape[n])
+
+    if len(N) == 2:
+        G = np.ones((N[0]*N[1],3))
+        for i in range(N[0]):
+            G[N[1]*i:N[1]*i+N[1], 1] = i+1
+            G[N[1]*i:N[1]*i+N[1], 2] = np.arange(1, N[1]+1)
+        if type(da) == xr.DataArray:
+            d_obs = np.reshape(da.copy().values, (N[0]*N[1],1))
+        else:
+            d_obs = np.reshape(da.copy(), (N[0]*N[1],1))
+    elif len(N) == 3:
+        if type(da) == xr.DataArray:
+            if da.ndim > 3:
+                raise NotImplementedError("Cubic detrend is not implemented "
+                                         "for 4-dimensional `xarray.DataArray`."
+                                         " We suggest converting it to "
+                                         "`dask.array`.")
+            else:
+                d_obs = np.reshape(da.copy().values, (N[0]*N[1]*N[2],1))
+        else:
+            d_obs = np.reshape(da.copy(), (N[0]*N[1]*N[2],1))
+
+        G = np.ones((N[0]*N[1]*N[2],4))
+        G[:,3] = np.tile(np.arange(1,N[2]+1), N[0]*N[1])
+        ys = np.zeros(N[1]*N[2])
+        for i in range(N[1]):
+            ys[N[2]*i:N[2]*i+N[2]] = i+1
+        G[:,2] = np.tile(ys, N[0])
+        for i in range(N[0]):
+            G[len(ys)*i:len(ys)*i+len(ys),1] = i+1
+    else:
+        raise NotImplementedError("Detrending over more than 4 axes is "
+                                 "not implemented.")
+
+    m_est = np.dot(np.dot(spl.inv(np.dot(G.T, G)), G.T), d_obs)
+    d_est = np.dot(G, m_est)
+
+    lin_trend = np.reshape(d_est, da.shape)
+
+    return da - lin_trend

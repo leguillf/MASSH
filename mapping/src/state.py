@@ -12,6 +12,8 @@ import sys,os
 import pandas as pd 
 from copy import deepcopy
 import matplotlib.pylab as plt
+from scipy import interpolate
+
 
 from . import grid
 
@@ -43,12 +45,14 @@ class State:
         self.g = config.g
         
         # Initialize grid
+        self.geo_grid = False
         if config.name_init == 'geo_grid':
              self.ini_geo_grid(config)
         elif config.name_init == 'from_file':
-             self.ini_from_file(config)
+             self.ini_grid_from_file(config)
         else:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
+            
         self.ny,self.nx = self.lon.shape
         self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
         
@@ -72,6 +76,9 @@ class State:
             self.ini_var_sw1l(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
+        
+        # Add mask if provided
+        self.ini_mask(config)
             
         if not os.path.exists(config.tmp_DA_path):
             os.makedirs(config.tmp_DA_path)
@@ -92,13 +99,14 @@ class State:
             Args:
                 config (module): configuration module
         """
+        self.geo_grid = True
         lon = np.arange(config.lon_min, config.lon_max + config.dx, config.dx) % 360
         lat = np.arange(config.lat_min, config.lat_max + config.dy, config.dy) 
         lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
     
-    def ini_from_file(self,config):
+    def ini_grid_from_file(self,config):
         """
         NAME
             ini_from_file
@@ -108,13 +116,16 @@ class State:
             Args:
                 config (module): configuration module
         """
+        
         dsin = xr.open_dataset(config.name_init_grid)
         lon = dsin[config.name_init_lon].values
         lat = dsin[config.name_init_lat].values
         if len(lon.shape)==1:
+            self.geo_grid = True
             lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
+        
         dsin.close()
         del dsin
         
@@ -163,43 +174,128 @@ class State:
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
-
-
-    def save(self,filename=None,date=None,grd=True):
+    
+    def ini_mask(self,config):
+        
         """
         NAME
-            save
+            ini_mask
     
         DESCRIPTION
-            Save the grid and variables in a netcdf file
-            Args:
-                filename (str): path (dir+name) of the netcdf file.
-                date (datetime): present date
-                """
+            Read mask file, interpolate it to state grid, 
+            and apply to state variable
+        """
         
-        if filename is None:
-            filename = os.path.join(self.path_save,self.name_exp_save\
+        # Read mask
+        if config.name_init_mask is None or not os.path.exists(config.name_init_mask):
+            return
+        
+        ds = xr.open_dataset(config.name_init_mask).squeeze()
+        lon = ds[config.name_var_mask['lon']]
+        lat = ds[config.name_var_mask['lat']]
+        var = ds[config.name_var_mask['var']]
+        
+        lon = lon % 360
+        
+        if len(lon.shape)==2:
+            dlon =  (lon[:,1:] - lon[:,:-1]).max().values
+            dlat =  (lat[1:,:] - lat[:-1,:]).max().values
+        else:
+            dlon = (lon[1:] - lon[:-1]).max().values
+            dlat = (lat[1:] - lat[:-1]).max().values
+            
+        ds = ds.sel(
+            {config.name_var_mask['lon']:slice(self.lon.min()-dlon,self.lon.max()+dlon),
+             config.name_var_mask['lat']:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
+        
+        if len(lon.shape)==1:
+            lon_mask,lat_mask = np.meshgrid(lon.values,lat.values)
+        else:
+            lon_mask = lon.values
+            lat_mask = lat.values
+                
+        if len(var.shape)==2:
+            mask = var.values
+        elif len(mask.shape)==3:
+            mask = var[0,:,:].values
+        
+        # Interpolate to state grid
+        if np.any(lon_mask!=self.lon) or np.any(lat_mask!=self.lat):
+            mask_interp = interpolate.griddata(
+                (lon_mask.ravel(),lat_mask.ravel()), mask.ravel(),
+                (self.lon.ravel(),self.lat.ravel())).reshape((self.ny,self.nx))
+        
+        # Convert to bool if float type     
+        if mask_interp.dtype!=np.bool : 
+            self.mask = np.empty((self.ny,self.nx),dtype='bool')
+            ind_mask = (np.isnan(mask_interp)) | (np.abs(mask_interp)>10)
+            self.mask[ind_mask] = True
+            self.mask[~ind_mask] = False
+        else:
+            self.mask = mask_interp.copy()
+                
+        # Apply to state variable (SSH only)
+        if config.name_model=='QG1L':
+            self.var[0][self.mask] = np.nan
+        elif config.name_model=='SW1L':
+            self.var[-1][self.mask] = np.nan
+            
+
+    def save_output(self,date):
+        
+        name_lon = self.name_lon 
+        name_lat = self.name_lat
+        name_var = self.name_var[self.get_indsave()]
+        
+        filename = os.path.join(self.path_save,self.name_exp_save\
                 + '_y' + str(date.year)\
                 + 'm' + str(date.month).zfill(2)\
                 + 'd' + str(date.day).zfill(2)\
                 + 'h' + str(date.hour).zfill(2)\
                 + str(date.minute).zfill(2) + '.nc')
         
-        outvars = {}
         coords = {}
+        coords['time'] = (('time'), [pd.to_datetime(date)],)
         
-        if date is not None:
-            coords['time'] = (('t'), [pd.to_datetime(date)])
+        var_to_save = self.getvar(ind=self.get_indsave())
+    
+        if len(var_to_save.shape)==2:
+            var_to_save = var_to_save[np.newaxis,:,:]
             
-        if grd:
-            _namey = {self.ny:'y'}
-            _namex = {self.nx:'x'}
-            coords[self.name_lon] = (('y','x',), self.lon)
-            coords[self.name_lat] = (('y','x',), self.lat)
+        if self.geo_grid:
+            coords[name_lon] = ((name_lon,), self.lon[0,:])
+            coords[name_lat] = ((name_lat,), self.lat[:,0])
+            var = {name_var:(('time','lat','lon'),var_to_save)}
         else:
-            _namey = {}
-            _namex = {}
+            coords[name_lon] = (('y','x',), self.lon)
+            coords[name_lat] = (('y','x',), self.lat)
+            var = {name_var:(('time','y','x'),var_to_save)}
+        ds = xr.Dataset(var,coords=coords)
+        ds.to_netcdf(filename,
+                     encoding={'time': {'units': 'days since 1900-01-01'}},
+                     unlimited_dims={'time':True})
         
+        ds.close()
+        del ds
+        
+        return
+            
+
+    def save(self,filename=None):
+        """
+        NAME
+            save
+    
+        DESCRIPTION
+            Save State in a netcdf file
+            Args:
+                filename (str): path (dir+name) of the netcdf file.
+                date (datetime): present date
+                """
+        
+        _namey = {}
+        _namex = {}
+        outvars = {}
         cy,cx = 1,1
         for i, name in enumerate(self.name_var):
             outvar = self.var.values[i]
@@ -213,25 +309,37 @@ class State:
                     
             outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
             
-        ds = xr.Dataset(outvars,coords=coords)
+        ds = xr.Dataset(outvars)
         ds.to_netcdf(filename,engine='h5netcdf')
         ds.close()
+        del ds
+        
+        return
 
+    def load_output(self,date):
+        filename = os.path.join(self.path_save,self.name_exp_save\
+            + '_y' + str(date.year)\
+            + 'm' + str(date.month).zfill(2)\
+            + 'd' + str(date.day).zfill(2)\
+            + 'h' + str(date.hour).zfill(2)\
+            + str(date.minute).zfill(2) + '.nc')
+            
+        ds = xr.open_dataset(filename)
         
+        ds1 = ds.copy()
+        
+        ds.close()
+        del ds
+        
+        return ds1
     
-    def load(self,filename=None,date=None):
-        
-        if filename is None:
-            filename = os.path.join(self.path_save,self.name_exp_save\
-                + '_y' + str(date.year)\
-                + 'm' + str(date.month).zfill(2)\
-                + 'd' + str(date.day).zfill(2)\
-                + 'h' + str(date.hour).zfill(2)\
-                + str(date.minute).zfill(2) + '.nc')
-                
+    def load(self,filename):
+
         with xr.open_dataset(filename,engine='h5netcdf') as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values
+                
+                
     
     def random(self,ampl=1):
         other = self.free()
@@ -278,13 +386,19 @@ class State:
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
             
-    def plot(self,cmap='RdBu_r',scale=0.7):
+    def plot(self,title=None,cmap='RdBu_r',scale=0.7):
         
         nvar = len(self.name_var)
         vmin ,vmax = -scale, scale
     
         fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
         
+        if title is not None:
+            fig.suptitle(title)
+            
+        if nvar==1:
+            axs = [axs]
+            
         for i in range(nvar):
             ax = axs[i]
             ax.set_title(self.name_var[i])
@@ -297,6 +411,17 @@ class State:
     def get_indobs(self) :
         '''
         Return the indice of the observed variable, SSH
+        '''
+        if self.config['name_model']=='QG1L' :
+            return 0
+        elif self.config['name_model']=='SW1L' :
+            return 2
+        else :
+            print('model not implemented')
+            
+    def get_indsave(self) :
+        '''
+        Return the indice of the variable to save, SSH
         '''
         if self.config['name_model']=='QG1L' :
             return 0

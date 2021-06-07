@@ -1,5 +1,5 @@
 import numpy as np
-
+import matplotlib.pylab as plt 
 
 
 
@@ -46,16 +46,17 @@ class Qgm:
         mask[:,-1:] = 1
         
         if SSH is not None:
-            mask[np.where((np.isnan(SSH)))]=0
+            mask[np.isnan(SSH)]=0
             
             indNan = np.argwhere(np.isnan(SSH))
             for i,j in indNan:
-                for p1 in range(-2,3):
-                    for p2 in range(-2,3):
+                for p1 in [-1,0,1]:
+                    for p2 in [-1,0,1]:
                       itest=i+p1
                       jtest=j+p2
                       if ((itest>=0) & (itest<=ny-1) & (jtest>=0) & (jtest<=nx-1)):
-                        mask[itest,jtest] = 1
+                          if mask[itest,jtest]==2:
+                              mask[itest,jtest] = 1
         self.mask = mask
         
         # Diffusion 
@@ -148,8 +149,7 @@ class Qgm:
         q[ind]= -self.g*self.f0[ind]/(self.c[ind]**2) * h[ind]
     
         ind = np.where((np.isnan(q)))
-        qtemp =- self.g*self.f0/(self.c**2) * h
-        q[ind] = qtemp[ind]
+        q[ind] = 0
         
         ind = np.where((self.mask==0))
         q[ind] = 0
@@ -191,7 +191,21 @@ class Qgm:
         return self.norm(rnew)**2 / self.norm(r)**2
     
     def pv2h(self,q,hg):
-        r = +q - self.h2pv(hg)
+        q_tmp = +q
+        
+        q_tmp[self.mask==0] = 0
+        hg[self.mask==0] = 0
+        hg[np.isnan(hg)] = 0
+        q_tmp[np.isnan(q_tmp)] = 0
+        
+        # plt.figure()
+        # plt.pcolormesh(q_tmp)
+        # plt.show()
+        # plt.figure()
+        # plt.pcolormesh(hg)
+        # plt.show()
+        
+        r = +q_tmp - self.h2pv(hg)
         d = +r
         alpha = self.alpha(r,d)
         h = hg + alpha*d
@@ -209,6 +223,9 @@ class Qgm:
                 d = +dnew
                 # Update SSH
                 h = hg + alpha*d 
+                
+        h[self.mask==0] = np.nan
+        
         return h
     
     
@@ -261,7 +278,7 @@ class Qgm:
                 self.snu/(self.dy[2:-2,2:-2]**2)*\
                     (q[3:-1,2:-2]+q[1:-3,2:-2]-2*q[2:-2,2:-2])
             
-            rq[np.where((self.mask<=1))] = 0
+        rq[np.where((self.mask<=1))] = 0
     
         return rq
 
@@ -269,22 +286,21 @@ class Qgm:
     
     def step(self,h0,q0=None,way=1):
         
-        
         if np.all(h0==0):
             if q0 is None:
                 return h0
-            else :
+            else:
                 return h0,q0
-
-
+   
         # 1/ h-->q
         if q0 is None:
             qb0 = self.h2pv(h0)
         else:
             qb0 = +q0
-        
+
         # 2/ h-->(u,v)
         u,v = self.h2uv(h0)
+        
         
         # 3/ (u,v,q)-->rq
         rq = self.qrhs(u,v,qb0,way)
@@ -313,26 +329,26 @@ if __name__ == "__main__":
     ds = xr.open_dataset('~/WORK/Developpement/Studies/MASSH/data_Example1/init.nc')
     print(ds)
     SSH_true = ds.sossheig.data
+    SSH_true[500:,500:] = np.nan
+    
+    plt.figure()
+    plt.pcolormesh(SSH_true)
+    plt.show()
     
     ny,nx = SSH_true.shape
-    dx = dy = 1 * np.ones((ny,nx))
-    dt = 1200
+    dx = dy = 1e3 * np.ones((ny,nx))
+    dt = 300
     SSH = np.zeros((ny,nx))
     c = 2.5
     
-    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=1000)
+    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH_true,qgiter=100)
     
-    PV_true = qgm.h2pv(SSH_true)
-    
-    SSHb = gaussian_filter(SSH_true, sigma=50)
-    
-    SSH_rec = qgm.pv2h(PV_true,SSHb)
-    
-    fig,(ax1,ax2,ax3) = plt.subplots(1,3,figsize=(15,5))
-    im1 = ax1.pcolormesh(SSH_true)
-    plt.colorbar(im1,ax=ax1)
-    im2 = ax2.pcolormesh(SSHb)
-    plt.colorbar(im2,ax=ax2)
-    im3 = ax3.pcolormesh(SSH_rec)
-    plt.colorbar(im3,ax=ax3)
-
+    ssh = +SSH_true
+    t = 0
+    for i in range(100000):
+        if i%10000==0:
+            ssh = qgm.step(ssh)
+            plt.figure()
+            plt.pcolormesh(ssh)
+            plt.show()
+        

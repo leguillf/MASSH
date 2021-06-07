@@ -132,7 +132,7 @@ qgiter = 100
 
 c = 2.7
 
-dtmodel = 300   
+dtmodel = 3600   
 
 #################################################################################################################################
 # Analysis parameters
@@ -172,7 +172,7 @@ bfn_criterion = 0.01
 
 bfn_max_iteration = 2
 
-dist_scale = 10 # in km
+dist_scale = 20 # in km
 
 save_obs_proj = False
 
@@ -180,7 +180,7 @@ flag_use_boundary_conditions = True
 
 file_boundary_conditions = '../../data_Example1/2020a_SSH_mapping_NATL60_DUACS_swot_en_j1_tpn_g2.nc'
 
-lenght_bc = 20
+lenght_bc = 50
 
 name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'gssh'}
 
@@ -286,7 +286,7 @@ nudging_params_relvort_topex = None
 # - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
 #################################################################################################################################
 
-saveoutputs = True         
+saveoutputs = True
 
 name_exp_save = name_experiment 
 

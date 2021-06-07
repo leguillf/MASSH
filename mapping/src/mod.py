@@ -13,6 +13,8 @@ import numpy as np
 import os
 from math import sqrt,pi
 from datetime import timedelta
+import matplotlib.pylab as plt
+
 from . import tools, grid
 
 def Model(config,State):
@@ -70,6 +72,7 @@ class Model_qg1l:
                          snu=config.cdiffus)
         self.State = State
         
+
         # Construct timestamps
         self.timestamps = [] 
         t = config.init_date
@@ -82,7 +85,14 @@ class Model_qg1l:
         
         # print('Adjoint test:')
         # self.adjoint_test(State,10)
-        
+
+        if config.name_analysis=='4Dvar':
+            print('Tangent test:')
+            self.tangent_test(State,10)
+            
+            print('Adjoint test:')
+            self.adjoint_test(State,10)
+
     def step(self,State,nstep=1):
         
         # Get state variable
@@ -124,16 +134,17 @@ class Model_qg1l:
         return
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
-        
+    
         # Read state variable
         ssh_0 = State.getvar(0)
+        
         if len(State.name_var)>1 and State.name_var[1] in State.var:
             flag_pv = True
             pv_0 = State.getvar(1)
         else:
             flag_pv = False
             pv_0 = self.qgm.h2pv(ssh_0)
-            
+
         # Boundary condition
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
@@ -141,7 +152,7 @@ class Model_qg1l:
             Qbc = self.qgm.h2pv(Hbc)
             ssh_0 = Wbc*Hbc + (1-Wbc)*ssh_0
             pv_0 = Wbc*Qbc + (1-Wbc)*pv_0
-            
+        
         # Model propagation
         deltat = np.abs(tint)
         way = np.sign(tint)
@@ -151,32 +162,32 @@ class Model_qg1l:
         while t<deltat:
             ssh_1, pv_1 = self.qgm.step(h0=ssh_1, q0=pv_1, way=way)
             t += self.dt
-        
+            
         # Nudging
         if Nudging_term is not None:
             # Nudging towards relative vorticity
             if np.any(np.isfinite(Nudging_term['rv'])):
-                indNoNan = ~np.isnan(Nudging_term['rv'])
+                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1) 
                 pv_1[indNoNan] += (1-Wbc[indNoNan]) *\
                     Nudging_term['rv'][indNoNan]
             # Nudging towards ssh
             if np.any(np.isfinite(Nudging_term['ssh'])):
-                indNoNan = ~np.isnan(Nudging_term['ssh'])
+                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1)
                 pv_1[indNoNan] -= (1-Wbc[indNoNan]) *\
                     (self.State.g*self.State.f[indNoNan])/self.c**2 * \
                         Nudging_term['ssh'][indNoNan]
                 # Inversion pv -> ssh
                 ssh_b = +ssh_1
                 ssh_1 = self.qgm.pv2h(pv_1,ssh_b)
-                    
-        if np.any(np.isnan(ssh_1)):
+        
+        if np.any(np.isnan(ssh_1[self.qgm.mask>1])):
             sys.exit('Invalid value encountered in mod_qg1l')
         
         # Update state 
         State.setvar(ssh_1,0)
         if flag_pv:
             State.setvar(pv_1,1)
-            
+        
     def step_tgl(self,dState,State,nstep=1):
         
         # Get state variable
@@ -450,7 +461,6 @@ class Model_sw1l:
                                    bc_theta=self.bc_theta,
                                    f=State.f)
         
-        
         if self.time_scheme=='Euler':
             self.swm_step = self.swm.step_euler
             self.swm_step_tgl = self.swm.step_euler_tgl
@@ -463,15 +473,15 @@ class Model_sw1l:
             self.swm_step = self.swm.step_rk4
             self.swm_step_tgl = self.swm.step_rk4_tgl
             self.swm_step_adj = self.swm.step_rk4_adj
-            
         
-                
         # Tests
         print('tangent test:')
        # self.tangent_test(State,self.T[-2],nstep=config.checkpoint)
         print('adjoint test:')
        # self.adjoint_test(State,self.T[-2],nstep=config.checkpoint)
-        
+       
+
+            
     def restart(self):
         
         self.swm.restart()

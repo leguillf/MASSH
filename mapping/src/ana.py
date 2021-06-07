@@ -15,7 +15,7 @@ import pickle
 from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
-
+import pandas as pd
 
 from . import grid
 
@@ -43,7 +43,7 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
 def ana_forward(config,State,Model):
     
     present_date = config.init_date
-    State.save(date=present_date)
+    State.save_output(present_date)
     nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
     while present_date < config.final_date :
         print(present_date)
@@ -52,7 +52,10 @@ def ana_forward(config,State,Model):
         # Time increment
         present_date += timedelta(seconds=nstep*Model.dt)
         # Save
-        State.save(date=present_date)
+        if config.saveoutputs:
+            State.save_output(present_date)
+        if config.flag_plot>0:
+            State.plot(present_date)
         
         
     return
@@ -260,10 +263,17 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         ######################################
         # Boundary condition
         if config.flag_use_boundary_conditions:
-            timestamps = np.arange(calendar.timegm(init_bfn_date.timetuple()),
-                                   calendar.timegm(final_bfn_date.timetuple())+\
-                                       one_time_step.total_seconds(),
-                                   one_time_step.total_seconds())
+            periods = (final_bfn_date-init_bfn_date).total_seconds()//\
+                one_time_step.total_seconds() + 1
+            timestamps = pd.date_range(init_bfn_date,
+                                       final_bfn_date,
+                                       periods=periods
+                                      )
+                                   #  np.arange(calendar.timegm(init_bfn_date.timetuple()),
+                                   # calendar.timegm(final_bfn_date.timetuple())+\
+                                   #     one_time_step.total_seconds(),
+                                   # one_time_step.total_seconds())
+                
 
             bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
                                                            config.lenght_bc,
@@ -276,24 +286,9 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
         else:
             bc_field = bc_weight = bc_field_t = None
-        # Initial condition
-        if bfn_first_window:
-            # Use previous state as initialization
-            init_file = config.path_save + config.name_exp_save\
-                        + '_y' + str(init_bfn_date.year)\
-                        + 'm' + str(init_bfn_date.month).zfill(2)\
-                        + 'd' + str(init_bfn_date.day).zfill(2)\
-                        + 'h' + str(init_bfn_date.hour).zfill(2)\
-                        + str(init_bfn_date.minute).zfill(2) + '.nc'
-            if not os.path.isfile(init_file) :
-                restart = False
-            else:
-                print('Restart BFN from:\n',init_file)
-                restart = True
-                State.load(init_file)
-                
-        elif config.bfn_window_overlap:
-            # Use last state from the last forward loop as initialization
+
+        # Use last state from the last forward loop as initialization
+        if not bfn_first_window and config.bfn_window_overlap:
             State.load(name_init)
         
         ###################
@@ -337,7 +332,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             # Save state at first timestep              
             name_save = config.name_exp_save + '_' + str(0).zfill(5) + '.nc'
             filename_forward = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
-            State.save(filename_forward,present_date_forward0)
+            State.save(filename_forward)
             
             while present_date_forward0 < final_bfn_date :
                 
@@ -354,7 +349,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                        Hbc=bc_field_t,
                        Wbc=bc_weight,
                        Nudging_term=Nold_t)
-                
+
                 # Time increment 
                 present_date_forward = present_date_forward0 + one_time_step
                 iforward = iforward0 + 1
@@ -363,21 +358,21 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 N_t = bfn_obj.compute_nudging_term(
                         present_date_forward, State
                         )
-
+                
                 # Update model parameter
                 bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=1)
 
                 # Save current state                 
                 name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
                 filename_forward = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
-                State.save(filename_forward,present_date_forward)
+                State.save(filename_forward)
                 if config.save_bfn_trajectory:
                     filename_traj = os.path.join(config.path_save,'BFN_' + str(middle_bfn_date)[:10]\
                                + '_forth_' + str(bfn_iter),name_save)
 
                     if not os.path.exists(os.path.dirname(filename_traj)):
                         os.makedirs(os.path.dirname(filename_traj))
-                    State.save(filename_traj,present_date_forward)
+                    State.save(filename_traj)
                             
                             
                 # Time update
@@ -389,17 +384,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             
             # Plot for debugging
             if config.flag_plot > 0:
-                ssh = State.getvar(0)
-                pv = State.getvar(1)
-                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=((10, 5)))
-                p1 = ax1.pcolormesh(State.lon, State.lat, pv, shading='auto')
-                p2 = ax2.pcolormesh(State.lon, State.lat, ssh, shading='auto')
-                plt.colorbar(p1, ax=ax1)
-                plt.colorbar(p2, ax=ax2)
-                ax1.set_title('Potential vorticity')
-                ax2.set_title('SSH')
-                plt.suptitle(str(present_date_forward) + ': End of forward loop n°' + str(bfn_iter))
-                plt.show()
+                State.plot(title=str(present_date_forward) + ': End of forward loop n°' + str(bfn_iter))
 
             ##################
             # 5.2. BACK LOOP #
@@ -410,7 +395,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                 ibackward = int((present_date_backward0 - init_bfn_date)/one_time_step)
                 name_save = config.name_exp_save + '_' + str(ibackward).zfill(5) + '.nc'
                 filename_backward = os.path.join(config.tmp_DA_path,'BFN_back_' + name_save)
-                State.save(filename_backward,present_date_backward0)
+                State.save(filename_backward)
                 
                 while present_date_backward0 > init_bfn_date :
                     
@@ -436,38 +421,28 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                             present_date_backward,
                             State
                             )
-
+                
                     # Update model parameter
                     bfn_obj.update_parameter(State, Nold_t, N_t, bc_weight, way=-1)
                     
                     # Save current state            
                     name_save = config.name_exp_save + '_' + str(ibackward-1).zfill(5) + '.nc'
                     filename_backward = os.path.join(config.tmp_DA_path,'BFN_back_' + name_save)
-                    State.save(filename_backward,present_date_backward)
+                    State.save(filename_backward)
                     if config.save_bfn_trajectory:
                         filename_traj = os.path.join(config.path_save,'BFN_' + str(middle_bfn_date)[:10]\
                                    + '_back_' + str(bfn_iter),name_save)
 
                         if not os.path.exists(os.path.dirname(filename_traj)):
                             os.makedirs(os.path.dirname(filename_traj))
-                        State.save(filename_traj,present_date_backward)
+                        State.save(filename_traj)
 
                     # Time update
                     present_date_backward0 = present_date_backward
                     Nold_t = N_t
 
                 if config.flag_plot > 0:
-                    SSH = State.getvar(0)
-                    PV = State.getvar(1)
-                    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=((10, 5)))
-                    p1 = ax1.pcolormesh(State.lon, State.lat, PV,shading='auto')
-                    p2 = ax2.pcolormesh(State.lon, State.lat, SSH,shading='auto')
-                    plt.colorbar(p1, ax=ax1)
-                    plt.colorbar(p2, ax=ax2)
-                    ax1.set_title('Potential vorticity')
-                    ax2.set_title('SSH')
-                    plt.suptitle(str(present_date_backward) + ': End of backward loop n°' + str(bfn_iter))
-                    plt.show()
+                    State.plot(title=str(present_date_backward) + ': End of backward loop n°' + str(bfn_iter))
             #########################
             # 5.3. CONVERGENCE TEST #
             #########################
@@ -501,7 +476,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
         present_date = init_bfn_date
         State_current = State.free()
-        State_previous = State.free()
         # Save first timestep
         if present_date==config.init_date:
             iforward = 0
@@ -509,7 +483,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
             State_current.load(current_file)
             if config.saveoutputs:
-                State_current.save(date=present_date)
+                State_current.save_output(present_date)
         while present_date < final_bfn_date :
             present_date += one_time_step
             if (present_date > write_date_min) & (present_date <= write_date_max) :
@@ -525,31 +499,25 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     State_current.load(current_file)
                     
                     # Smooth with previous BFN window
-                    if config.bfn_window_overlap and (not bfn_first_window or restart):
+                    if config.bfn_window_overlap and not bfn_first_window and\
+                        present_date<=middle_bfn_date:
+                        # weight coefficients
+                        W1 = max((middle_bfn_date - present_date)
+                                 / (config.bfn_window_output/2), 0)
+                        W2 = min((present_date - write_date_min)
+                                 / (config.bfn_window_output/2), 1)
                         # Read previous output at this timestamp
-                        previous_file = os.path.join(config.path_save,config.name_exp_save\
-                                        + '_y'+str(present_date.year)\
-                                        + 'm'+str(present_date.month).zfill(2)\
-                                        + 'd'+str(present_date.day).zfill(2)\
-                                        + 'h'+str(present_date.hour).zfill(2)\
-                                        + str(present_date.minute).zfill(2) + \
-                                            '.nc')
-                        if os.path.isfile(previous_file):
-                            State_previous.load(previous_file)
-                            
-                            # weight coefficients
-                            W1 = max((middle_bfn_date - present_date)
-                                     / (config.bfn_window_output/2), 0)
-                            W2 = min((present_date - write_date_min)
-                                     / (config.bfn_window_output/2), 1)
-                            State_current.scalar(W1)
-                            State_previous.scalar(W2)
-                            State_current.Sum(State_previous)
-                            State_current.scalar(1/(W1+W2))
-            
+                        ds = State.load_output(present_date)
+                        ssh1 = ds.ssh.data
+                        ds.close()
+                        del ds
+                        # Update state
+                        ssh2 = State_current.getvar(ind=State_current.get_indsave())
+                        State_current.setvar(W1*ssh1+W2*ssh2,ind=0)
+        
                     # Save output
                     if config.saveoutputs:
-                        State_current.save(date=present_date)
+                        State_current.save_output(present_date)
         
         ########################
         # 8. PARAMETERS UPDATE #
@@ -565,24 +533,30 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         else:
             middle_bfn_date += window_lag
     print()
-    del State_current,State_previous,State,dict_obs
+
     return
     
     
 def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     
     from .tools_4Dvar import Obsopt, Cov, Variational
-
+            
     #################
     # 1. Obs op     #
     #################
     print('\n*** Obs op ***\n')
     H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
     
+    if config.detrend:
+        print('\n*** Detrend obs ***\n')
+        from . import obs
+        obs.detrend_obs(dict_obs)
+    
     ###################
     # 2. Variationnal #
     ###################
     print('\n*** Variational ***\n')
+    
     # Covariance matrixes
     if None in [config.sigma_R,config.sigma_B_He,config.sigma_B_bc]:          
             # Least squares
@@ -656,7 +630,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     
     # Steady initial state
     State0 = State.free()
-    State0.save(date=config.init_date)
+    State0.save_output(config.init_date)
     for i in range(Model.nt-1):
         t = Model.T[i] # seconds
         date = Model.timestamps[i+1] # date
@@ -667,7 +641,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
              /config.saveoutput_time_step.total_seconds())%1 == 0)\
             & (date>config.init_date) & (date<=config.final_date) :
             # Save State
-            State0.save(date=date)
+            State0.save_output(date)
     
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
