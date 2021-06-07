@@ -33,11 +33,7 @@ print('\n ** create dict_obs **\n')
 # obs dictionnary
 dict_obs = obs.obs(config,State)
 
-print('\n ** window_1D **\n')
-var = ana.window_1D(config, State, Model,dict_obs=dict_obs,date_ini=config.init_date,date_final=config.final_date)
+ana.ana_4Dvar_QG(config, State, Model, dict_obs=dict_obs)
 
-# var_SSH = res.x.reshape(State.var[0].shape)
-
-# State.setvar(var_SSH,0)
-
-# State.plot()
+print('\n ** assimilation **\n')
+res = ana.window_4D(config, State, Model,dict_obs=dict_obs,date_ini=config.init_date,date_final=config.final_date)

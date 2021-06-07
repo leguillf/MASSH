@@ -41,7 +41,7 @@ Created on Tue Apr 27 09:02:10 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = 'test' 
+name_experiment = '4Dvar_idealized' 
 name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
@@ -81,17 +81,18 @@ name_init_file = 'init_state.nc'
 # - assimilation_time_step: assimilation time step (corresponding to observation update timestep)
 # - savepoutput_time_step: time step plot at which the states are saved 
 # - plot_time_step: time step plot at which the states are plotted (for debugging)
+# - window_time_step : time step corresponding to the size of an assimilation window
 #################################################################################################################################
    
-init_date = datetime(2010,5,1,0)     
+init_date = datetime(2010,1,2,0)     
 
-final_date = datetime(2010,5,5,0)
+final_date = datetime(2010,1,20,0)
 
 assimilation_time_step = timedelta(hours=3)  
 
 saveoutput_time_step = timedelta(hours=3) 
 
-plot_time_step = timedelta(days=1)  
+window_time_step = timedelta(days=6)
 
 #################################################################################################################################
 # Model parameters
@@ -128,7 +129,7 @@ qgiter = 20
 
 c = 2.7
 
-dtmodel = 1200
+dtmodel = 300
 
 #################################################################################################################################
 # Analysis parameters
@@ -163,18 +164,22 @@ name_analysis = '4Dvar'
 # - parameters specific to BFN:
 #    * sigma_B : standard deviation of the background error covariance matrix
 #    * sigma_R : standard deviation of the observation error covariance matrix 
-#    *
-#    *
+#    * maxiter : maximal number of iteration allowwed in the minimization process
+#    * background_state : path to ncdf file containing background ssh field
 #    *
 #################################################################################################################################
 
+path_init_4Dvar = None
+
 sigma_B = 1.
 
-sigma_R = 1.
+sigma_R = 0.1
 
-maxiter = 20
+maxiter = 50
 
+gtol = 1e-5
 
+prec = False
 
 #################################################################################################################################
 # Observation parameters
@@ -198,66 +203,11 @@ write_obs = False
 #    * gap_width_swot_sat: gap width in km (only for swathSSH satellites)
 #################################################################################################################################
 
-# kind_swot = "swot_simulator"
-# obs_path_swot = '../../data_Example1/dc_obs/'
-# obs_name_swot = "2020a_SSH_mapping_NATL60_karin_swot.nc" 
-# name_obs_var_swot = ["ssh_model"]     
-# name_obs_lon_swot = "lon"
-# name_obs_lat_swot = "lat"
-# name_obs_time_swot = "time"
-# name_obs_xac_swot = "x_ac"
-
-# kind_nadir_swot = "swot_simulator"
-# obs_path_nadir_swot = '../../data_Example1/dc_obs/'
-# obs_name_nadir_swot = "2020a_SSH_mapping_NATL60_nadir_swot.nc" 
-# name_obs_var_nadir_swot = ["ssh_model"]     
-# name_obs_lon_nadir_swot = "lon"
-# name_obs_lat_nadir_swot = "lat"
-# name_obs_time_nadir_swot = "time"
-# name_obs_xac_nadir_swot = None
-
-# kind_jason1 = "swot_simulator"
-# obs_path_jason1 = '../../data_Example1/dc_obs/'
-# obs_name_jason1 = "2020a_SSH_mapping_NATL60_jason1.nc" 
-# name_obs_var_jason1 = ["ssh_model"]     
-# name_obs_lon_jason1 = "lon"
-# name_obs_lat_jason1 = "lat"
-# name_obs_time_jason1 = "time"
-# name_obs_xac_jason1 = None
-
-# kind_geosat2 = "swot_simulator"
-# obs_path_geosat2 = '../../data_Example1/dc_obs/'
-# obs_name_geosat2 = "2020a_SSH_mapping_NATL60_geosat2.nc" 
-# name_obs_var_geosat2 = ["ssh_model"]     
-# name_obs_lon_geosat2 = "lon"
-# name_obs_lat_geosat2 = "lat"
-# name_obs_time_geosat2 = "time"
-# name_obs_xac_geosat2 = None
-
-# kind_envisat = "swot_simulator"
-# obs_path_envisat = '../../data_Example1/dc_obs/'
-# obs_name_envisat = "2020a_SSH_mapping_NATL60_envisat.nc" 
-# name_obs_var_envisat = ["ssh_model"]     
-# name_obs_lon_envisat = "lon"
-# name_obs_lat_envisat = "lat"
-# name_obs_time_envisat = "time"
-# name_obs_xac_envisat = None
-
-# kind_topex = "swot_simulator"
-# obs_path_topex = '../../data_Example1/dc_obs/'
-# obs_name_topex = "2020a_SSH_mapping_NATL60_topex-poseidon_interleaved.nc" 
-# name_obs_var_topex = ["ssh_model"]     
-# name_obs_lon_topex = "lon"
-# name_obs_lat_topex = "lat"
-# name_obs_time_topex = "time"
-# name_obs_xac_topex = None
-
-
 
 kind_nr = "fullSSH"
 obs_path_nr = '../../data_Example2/data_BM-IT_idealized/'
 obs_name_nr = "obs"
-name_obs_var_nr = ["ssh_obs"]
+name_obs_var_nr = ["ssh_meso"]
 name_obs_lon_nr = "lon"
 name_obs_lat_nr = "lat"
 name_obs_time_nr = "time_obs"
@@ -271,7 +221,7 @@ name_obs_time_nr = "time_obs"
 # - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
 #################################################################################################################################
 
-saveoutputs = True        
+saveoutputs = False
 
 name_exp_save = name_experiment 
 
