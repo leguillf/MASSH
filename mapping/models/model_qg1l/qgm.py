@@ -40,10 +40,10 @@ class Qgm:
         
         # Mask array
         mask = np.zeros((ny,nx))+2
-        mask[:2,:] = 1
-        mask[:,:2] = 1
-        mask[-3:,:] = 1
-        mask[:,-3:] = 1
+        mask[:1,:] = 1
+        mask[:,:1] = 1
+        mask[-1:,:] = 1
+        mask[:,-1:] = 1
         
         if SSH is not None:
             mask[np.where((np.isnan(SSH)))]=0
