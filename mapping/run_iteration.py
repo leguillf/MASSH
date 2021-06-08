@@ -131,8 +131,11 @@ def compute_convergence_criteria(config,State,i):
         # Load corresponding maps
         ssh_curr = State.load_output(date=date).ssh.values
         ssh_prev = State_prev.load_output(date=date).ssh.values
+        # Mask
+        mask = (np.isnan(ssh_curr)) | (np.isnan(ssh_prev))
+        ssh_curr[mask] = 0
+        ssh_prev[mask] = 0
         # Compare maps
-        #mask = np.isnan(ssh_curr) + np.isnan(ssh_prev)
         K_t = np.sqrt(np.sum(np.sum(np.square(ssh_curr-ssh_prev)))/ssh_prev.size) /\
             ( np.max(np.max(ssh_prev))-np.min(np.min(ssh_prev)) )    
         if np.isfinite(K_t):

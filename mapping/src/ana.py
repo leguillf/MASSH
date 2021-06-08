@@ -536,11 +536,19 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         R = Cov(config.sigma_R)
     # backgroud state 
     Xb = np.zeros((Model.nParams,))
+    # Tapering border pixel influence
+    if config.flag_use_boundary_conditions:
+        eps_bc = config.eps_bc
+        dist_scale = config.lenght_bc # tapering window length scale
+    else:
+        eps_bc = 0
+        dist_scale = None
+        
     # Cost and Grad functions
     var = Variational(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec)
+        prec=config.prec,eps_bc=eps_bc,dist_scale=dist_scale)
     # Initial State
     if config.path_init_4Dvar is None:
         Xopt = np.zeros_like(var.Xb)
@@ -555,7 +563,6 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 3. Minimization #
     ###################
     print('\n*** Minimization ***\n')
-    
     J0 = var.cost(Xopt)
     g0 = var.grad(Xopt)
     projg0 = np.max(np.abs(g0))

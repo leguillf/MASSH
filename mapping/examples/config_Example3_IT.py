@@ -28,7 +28,7 @@ Created on Wed Jan  6 19:20:42 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = 'Example2_BM'
+name_experiment = 'Example3_IT'
 
 #################################################################################################################################
 # Global libraries     
@@ -37,6 +37,7 @@ name_experiment = 'Example2_BM'
 # - timedelta
 #################################################################################################################################
 from datetime import datetime,timedelta
+from math import pi
 
 #################################################################################################################################
 # Initialization parameters
@@ -48,15 +49,19 @@ from datetime import datetime,timedelta
 # - name_init_lat: name of latitude field stored in *file_name_init_SSH_field*   
 #################################################################################################################################    
 
-name_init = 'from_file'
+name_init = 'from_file'                                # either 'geo_grid' or 'from_file'
 
-name_init_grid = '../data_Example2/data_BM-IT_idealized/ref.nc'
+# - parameters specific to 'geo_grid'  
+
+name_init_grid = '../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc'
 
 name_init_lon = 'lon'
 
 name_init_lat = 'lat'
 
-name_init_file = 'init_state.nc'
+name_init_mask = '../data_Example3/ssh_bc.nc'
+
+name_var_mask = {'lon':'lon','lat':'lat','var':'ssh_bc'}
 
 #################################################################################################################################
 # Time parameters
@@ -68,13 +73,12 @@ name_init_file = 'init_state.nc'
 # - plot_time_step: time step plot at which the states are plotted (for debugging)
 #################################################################################################################################
    
-init_date = datetime(2010,5,1,0)
+init_date = datetime(2012,7,1,0)     
 
-final_date = datetime(2010,5,15,0)
+final_date = datetime(2012,7,20,0)
 
-assimilation_time_step = timedelta(hours=3)  
+saveoutput_time_step = timedelta(hours=1) 
 
-saveoutput_time_step = timedelta(hours=3)
 
 #################################################################################################################################
 # Model parameters
@@ -88,11 +92,9 @@ saveoutput_time_step = timedelta(hours=3)
 # Both name_mod_lon and name_mod_lat are used in the output files.
 #################################################################################################################################
        
-name_model = 'QG1L'   
-
-dir_model =  'models/model_qg1l/'        
+name_model = 'SW1L'
     
-name_mod_var = ["ssh","pv"]  
+name_mod_var = ["u","v","ssh"]
 
 n_mod_var = len(name_mod_var)             
 
@@ -103,12 +105,27 @@ name_mod_lat = "nav_lat"
 ####################################
 ### Function-specific parameters ### 
 #################################### 
+# - parameters specific to SW model
 
-qgiter = 20
+dtmodel = 600
 
-c = 2.5
+sw_time_scheme = 'rk4' # Time scheme of the model (e.g. Euler,rk4,lf)
 
-dtmodel = 1800   
+bc_kind = '1d'
+
+w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
+
+He_init = 0.9 # Mean height (in m)
+
+Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
+
+D_He = 1000e3 # Space scale of gaussian decomposition for He (in m)
+
+T_He = timedelta(days=20).total_seconds() # Time scale of gaussian decomposition for He (in m)
+
+D_bc = 300e3 # Space scale of gaussian decomposition for boundary conditions (in m)
+
+T_bc = timedelta(days=15).total_seconds() # Time scale of gaussian decomposition for boundary conditions (in m)
 
 #################################################################################################################################
 # Analysis parameters
@@ -133,59 +150,56 @@ dtmodel = 1800
 #    * name_var_bc: name of the boundary conditions variable
 #################################################################################################################################
 
-name_analysis = 'BFN'     
+name_analysis = '4Dvar'
 
 ####################################
 ### Function-specific parameters ### 
 #################################### 
 
-bfn_window_size = timedelta(days=15)
+path_init_4Dvar = None 
 
-bfn_window_output = timedelta(days=7)
+checkpoint = 100 # Number of model timesteps separating two consecutive analysis 
 
-bfn_propation_timestep = timedelta(hours=3)
+sigma_R = 1e-2 # Observational standard deviation
 
-bfn_criterion = 0.01
+sigma_B_He = 1e-1 # Background variance for He
 
-bfn_max_iteration = 1
+sigma_B_bc = 1e-3 # Background variance for bc
 
-save_bfn_trajectory = False
+prec = False # preconditoning
+
+gtol = 1e-1 # Gradient norm must be less than gtol before successful termination.
+
+maxiter = 1 # Maximal number of iterations for the minimization process
 
 flag_use_boundary_conditions = True
 
-file_boundary_conditions = '../data_Example2/data_BM-IT_idealized/bc.nc'
-
-name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'ssh_bc'}
+eps_bc = 10
 
 lenght_bc = 50
+
+
 
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
 # - satellite: list of satellite names 
 
-satellite = ["nr"]
 write_obs = False
 
-# - For each *satellite*:
-#    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
-#    * obs_path_sat: directory where the observations are stored
-#    * obs_prefixe_sat: prefixe in observation files
-#    * name_obs_var_sat: name of the observed variables
-#    * name_obs_lon_sat: name of the observation longitude
-#    * name_obs_lat_sat: name of the observation latitude
-#    * name_obs_time_sat: name of the observation time
-#    * name_obs_xac_sat: name of the observation across track distance (only for swathSSH satellites)
-#################################################################################################################################
+detrend = True
+
+satellite = ['nr']
+
 kind_nr = "fullSSH"
-obs_path_nr = '../data_Example2/data_BM-IT_idealized/'
-obs_name_nr = "obs"
-name_obs_var_nr = ["ssh_obs"]
+obs_path_nr = '.'
+obs_name_nr = "../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc"
+name_obs_var_nr = ["ssh_corr"]
 name_obs_lon_nr = "lon"
 name_obs_lat_nr = "lat"
-name_obs_time_nr = "time_obs"
-nudging_params_stretching_nr = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)}
-nudging_params_relvort_nr = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)}
+name_obs_time_nr = "time"
+nudging_params_stretching_nr = None
+nudging_params_relvort_nr = None
 
 #################################################################################################################################
 # Outputs parameters
@@ -200,7 +214,7 @@ saveoutputs = True
 
 name_exp_save = name_experiment 
 
-path_save = 'outputs/' + name_exp_save + '/'
+path_save = 'outputs/' + name_exp_save 
     
 #################################################################################################################################
 # Temporary DA parameters
@@ -209,9 +223,9 @@ path_save = 'outputs/' + name_exp_save + '/'
 # - name_grd: name used for saving the QG grid to avoid calculating it every time.
 #################################################################################################################################
         
-tmp_DA_path = "scratch/" +  name_exp_save + '/'
+tmp_DA_path = "scratch/" +  name_exp_save 
 
-name_grd = tmp_DA_path + 'QGgrid'
+
 
 
 

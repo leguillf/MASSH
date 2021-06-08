@@ -188,6 +188,7 @@ class State:
         
         # Read mask
         if config.name_init_mask is None or not os.path.exists(config.name_init_mask):
+            self.mask = np.zeros((self.ny,self.nx),dtype='bool')
             return
         
         ds = xr.open_dataset(config.name_init_mask).squeeze()
@@ -237,8 +238,7 @@ class State:
         # Apply to state variable (SSH only)
         if config.name_model=='QG1L':
             self.var[0][self.mask] = np.nan
-        elif config.name_model=='SW1L':
-            self.var[-1][self.mask] = np.nan
+        
             
 
     def save_output(self,date):
@@ -257,8 +257,13 @@ class State:
         coords = {}
         coords['time'] = (('time'), [pd.to_datetime(date)],)
         
+        # Get variable to be saved
         var_to_save = self.getvar(ind=self.get_indsave())
-    
+        
+        # Apply Mask
+        if self.mask is not None:
+            var_to_save[self.mask] = np.nan
+            
         if len(var_to_save.shape)==2:
             var_to_save = var_to_save[np.newaxis,:,:]
             

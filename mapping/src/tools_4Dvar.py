@@ -8,7 +8,9 @@ Created on Tue Jul 28 14:49:01 2020
 import os,sys
 import xarray as xr 
 import numpy as np 
-from datetime import datetime,timedelta
+from datetime import timedelta
+
+import matplotlib.pylab as plt 
 
 from . import grid
 
@@ -110,6 +112,29 @@ class Obsopt:
             weights.append(1/_dist[ind4])   
             
         return np.asarray(indexes),np.asarray(weights)
+    
+    
+    def H(self,t,X):
+        
+        if self.obs_sparse[t] :
+            # Get indexes and weights of neighbour grid pixels
+            ds = xr.open_dataset(os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+            indexes = ds['indexes'].values
+            weights = ds['weights'].values
+            maskobs = ds['maskobs'].values
+            
+            # Compute inerpolation of X to obs space
+            HX = np.zeros_like(indexes.size)
+            
+            for i,(mask,ind,w) in enumerate(zip(maskobs,indexes,weights)):
+                if not mask:
+                    # Average
+                    HX[i] = np.average(X[ind],weights=w)
+        else:
+            HX = X # H==Id
+        
+        return HX
 
     def misfit(self,t,State):
         
@@ -124,24 +149,8 @@ class Obsopt:
             Yobs = np.concatenate((Yobs,yobs))
         
         X = State.getvar(State.get_indobs()).ravel() # SSH from state
-        if self.obs_sparse[t] :
-            # Get indexes and weights of neighbour grid pixels
-            ds = xr.open_dataset(os.path.join(
-                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
-            indexes = ds['indexes'].values
-            weights = ds['weights'].values
-            maskobs = ds['maskobs'].values
-            
-            # Compute inerpolation of state to obs space
-            HX = np.zeros_like(Yobs)
-            
-            for i in range(Yobs.size):
-                if not maskobs[i]:
-                    # Average
-                    HX[i] = np.average(X[indexes[i]],weights=weights[i])
-        else:
-            HX = X # H==Id
-            
+        
+        HX = self.H(t,X)
         res = HX - Yobs
         res[np.isnan(res)] = 0
         
@@ -383,7 +392,8 @@ class Variational:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, Xb=None, 
-                 tmp_DA_path=None, checkpoint=1, prec=False):
+                 tmp_DA_path=None, checkpoint=1, prec=False,eps_bc=10,
+                 dist_scale=None):
         
         # Objects
         self.M = M # model
@@ -433,6 +443,13 @@ class Variational:
         # preconditioning
         self.prec = prec
         
+        # Weight map to be apply on misfit, in order to reduce the influence of boundary pixels
+        if dist_scale is not None:
+            weight_map = grid.compute_weight_map(State.lon,State.lat,State.mask,dist_scale)
+            self.tapering = (1-weight_map + eps_bc*weight_map)**-1
+        else:
+            self.tapering = np.ones((self.State.ny,self.State.nx))
+        
         # Grad test
         if False:
             X = np.random.random()
@@ -471,8 +488,12 @@ class Variational:
             
             # Misfit
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs                
-                Jo += misfit.dot(self.R.inv(misfit))
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                
+                # Apply tapering
+                tapering = self.H.H(timestamp,self.tapering.ravel())
+                
+                Jo += misfit.dot(self.R.inv(misfit)*tapering)
                 
             # Run forward model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
@@ -485,7 +506,11 @@ class Variational:
 
         if self.isobs[-1]:
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
-            Jo = Jo + misfit.dot(self.R.inv(misfit))  
+            
+            # Apply tapering
+            tapering = self.H.H(timestamp,self.tapering.ravel())
+            
+            Jo = Jo + misfit.dot(self.R.inv(misfit)*tapering)  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
@@ -519,8 +544,13 @@ class Variational:
         if self.isobs[-1]:
             State.load(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[-1]) + '.nc'))
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-yobs
-            self.H.adj(self.M.timestamps[self.checkpoint[-1]],adState,self.R.inv(misfit))
+            timestamp = self.M.timestamps[self.checkpoint[-1]]
+            misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+            
+            # Apply tapering
+            tapering = self.H.H(timestamp,self.tapering.ravel())
+            
+            self.H.adj(timestamp,adState,self.R.inv(misfit)*tapering)
             
         # Time loop
         self.M.restart()  
@@ -539,8 +569,12 @@ class Variational:
             
             # Misfit 
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs     
-                self.H.adj(timestamp,adState,self.R.inv(misfit))
+                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                
+                # Apply tapering
+                tapering = self.H.H(timestamp,self.tapering.ravel())
+            
+                self.H.adj(timestamp,adState,self.R.inv(misfit)*tapering)
                 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 

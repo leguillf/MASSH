@@ -9,14 +9,26 @@ Created on Wed Jan  6 19:20:42 2021
 ##########################################
 ##########################################
 ##                                      ##
-##      Example 2 - Parameters          ##
+##      Example 4 - Parameters          ##
 ##                                      ##
-##               MASSH                  ##
+##              SWOT DA                 ##
 ##                                      ## 
-##            with model SW             ##
-##         and a 4D varuational         ##
-##       in a idealized region          ##
+##            with model QG             ## 
+##    and a Back and Forth Nudging      ## 
+##          in OSMOSIS region           ## 
+##     from 10/01/2012 to 10/10/2012    ## 
 ##                                      ## 
+##########################################
+# Settings:                              #
+# - experimental parameters              #
+# - global libraries                     #
+# - initialization parameters            #
+# - time parameters                      #
+# - model parameters                     #
+# - analysis parameters                  #
+# - observation parameters               #
+# - outputs parameters                   #
+# - temporary DA parameters              #
 ##########################################
 ##########################################
  
@@ -28,7 +40,7 @@ Created on Wed Jan  6 19:20:42 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = 'Example2_BM'
+name_experiment = 'Example3_BM' 
 
 #################################################################################################################################
 # Global libraries     
@@ -36,27 +48,30 @@ name_experiment = 'Example2_BM'
 # - datetime
 # - timedelta
 #################################################################################################################################
+import os
 from datetime import datetime,timedelta
-
+    
 #################################################################################################################################
 # Initialization parameters
 #################################################################################################################################
-# - name_assim_init: name of the initialization function. Here, we use a steady state, meaning that all pixel values are set to 0.
+# - name_init: 'geo_grid' computes a spherical regular grid. You can also set 'from_file'
 # - file_name_init_SSH_field: name of the file used for initialization
 # - path_init_SSH_field: path (directory+file) used for initialization
 # - name_init_lon: name of longitude field stored in *file_name_init_SSH_field*
 # - name_init_lat: name of latitude field stored in *file_name_init_SSH_field*   
 #################################################################################################################################    
 
-name_init = 'from_file'
+name_init = 'from_file'                                # either 'geo_grid' or 'from_file'
 
-name_init_grid = '../data_Example2/data_BM-IT_idealized/ref.nc'
+# - parameters specific to 'geo_grid'  
+
+name_init_grid = '../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc'
 
 name_init_lon = 'lon'
 
 name_init_lat = 'lat'
 
-name_init_file = 'init_state.nc'
+name_init_var = 'ssh_corr'
 
 #################################################################################################################################
 # Time parameters
@@ -68,13 +83,11 @@ name_init_file = 'init_state.nc'
 # - plot_time_step: time step plot at which the states are plotted (for debugging)
 #################################################################################################################################
    
-init_date = datetime(2010,5,1,0)
+init_date = datetime(2012,7,1,0)     
 
-final_date = datetime(2010,5,15,0)
+final_date = datetime(2012,7,20,0)
 
-assimilation_time_step = timedelta(hours=3)  
-
-saveoutput_time_step = timedelta(hours=3)
+saveoutput_time_step = timedelta(hours=1) 
 
 #################################################################################################################################
 # Model parameters
@@ -88,9 +101,7 @@ saveoutput_time_step = timedelta(hours=3)
 # Both name_mod_lon and name_mod_lat are used in the output files.
 #################################################################################################################################
        
-name_model = 'QG1L'   
-
-dir_model =  'models/model_qg1l/'        
+name_model = 'QG1L'           
     
 name_mod_var = ["ssh","pv"]  
 
@@ -103,12 +114,17 @@ name_mod_lat = "nav_lat"
 ####################################
 ### Function-specific parameters ### 
 #################################### 
+# - parameters specific to QG model
+#    * qgiter: number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
+#    * c: first baroclinic gravity-wave phase speed (in m/s) related to Rossby Radius of deformation
+#    * dtmodel: timestep of the model (in seconds). Typical values: between 200s and 1000s. If the model crashes, reduce its value.
+#################################################################################################################################
 
 qgiter = 20
 
-c = 2.5
+c = 2.7
 
-dtmodel = 1800   
+dtmodel = 300   
 
 #################################################################################################################################
 # Analysis parameters
@@ -129,11 +145,10 @@ dtmodel = 1800
 #      The boundary conditions have to be prescribed on the same grid as *file_name_init_SSH_field*
 #      If no file is specified, or the file does not exist, the boundary conditions are set to 0. 
 #    * lenght_bc: lenght of the peripherical band for which the boundary conditions are applied
-#    * name_time_bc: name of the boundary conditions time
 #    * name_var_bc: name of the boundary conditions variable
 #################################################################################################################################
 
-name_analysis = 'BFN'     
+name_analysis = 'BFN'
 
 ####################################
 ### Function-specific parameters ### 
@@ -143,49 +158,38 @@ bfn_window_size = timedelta(days=15)
 
 bfn_window_output = timedelta(days=7)
 
-bfn_propation_timestep = timedelta(hours=3)
+bfn_propation_timestep = timedelta(hours=1)
 
 bfn_criterion = 0.01
 
 bfn_max_iteration = 1
 
-save_bfn_trajectory = False
-
 flag_use_boundary_conditions = True
 
-file_boundary_conditions = '../data_Example2/data_BM-IT_idealized/bc.nc'
-
-name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'ssh_bc'}
+file_boundary_conditions = '../data_Example3/ssh_bc.nc'
 
 lenght_bc = 50
+
+name_var_bc = {'lon':'lon','lat':'lat','var':'ssh_bc'}
 
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
 # - satellite: list of satellite names 
 
-satellite = ["nr"]
 write_obs = False
 
-# - For each *satellite*:
-#    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
-#    * obs_path_sat: directory where the observations are stored
-#    * obs_prefixe_sat: prefixe in observation files
-#    * name_obs_var_sat: name of the observed variables
-#    * name_obs_lon_sat: name of the observation longitude
-#    * name_obs_lat_sat: name of the observation latitude
-#    * name_obs_time_sat: name of the observation time
-#    * name_obs_xac_sat: name of the observation across track distance (only for swathSSH satellites)
-#################################################################################################################################
+satellite = ['nr']
+
 kind_nr = "fullSSH"
-obs_path_nr = '../data_Example2/data_BM-IT_idealized/'
-obs_name_nr = "obs"
-name_obs_var_nr = ["ssh_obs"]
+obs_path_nr = '.'
+obs_name_nr = "../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc"
+name_obs_var_nr = ["ssh_corr"]
 name_obs_lon_nr = "lon"
 name_obs_lat_nr = "lat"
-name_obs_time_nr = "time_obs"
+name_obs_time_nr = "time"
 nudging_params_stretching_nr = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)}
-nudging_params_relvort_nr = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)}
+nudging_params_relvort_nr = None
 
 #################################################################################################################################
 # Outputs parameters
@@ -201,6 +205,8 @@ saveoutputs = True
 name_exp_save = name_experiment 
 
 path_save = 'outputs/' + name_exp_save + '/'
+
+flag_plot = 0
     
 #################################################################################################################################
 # Temporary DA parameters
@@ -210,8 +216,9 @@ path_save = 'outputs/' + name_exp_save + '/'
 #################################################################################################################################
         
 tmp_DA_path = "scratch/" +  name_exp_save + '/'
-
+ 
 name_grd = tmp_DA_path + 'QGgrid'
+
 
 
 
