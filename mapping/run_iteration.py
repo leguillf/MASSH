@@ -73,7 +73,7 @@ def compute_new_obs(it,dict_obs,config,State):
             # Time interpolation
             Wprev = 1/abs(date_prev - date).total_seconds()
             Wnext = 1/abs(date_next - date).total_seconds()
-            ssh_now = (Wprev*ssh_prev + Wnext*ssh_next)/(Wprev+Wnext)
+            ssh_now = (Wprev*ssh_prev.values + Wnext*ssh_next.values)/(Wprev+Wnext)
 
         # Open obs
         path_obs = dict_obs[date]['obs_name']
@@ -87,7 +87,7 @@ def compute_new_obs(it,dict_obs,config,State):
             # Load current state
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout[_sat.name_obs_var[0]].data -= ssh_now.data
+                dsout[_sat.name_obs_var[0]].data -= ssh_now
             elif _sat.kind=='swot_simulator':
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
@@ -167,9 +167,7 @@ if __name__ == "__main__":
     *****************************************************************\n')
     time0 = datetime.now()
     # Updtade configuration file
-    print(config1.name_init_lon)
     update_config(config1,iteration)
-    print(config1.name_init_lon)
     # State
     print('* State Initialization')
     State1 = state.State(config1)
