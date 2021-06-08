@@ -68,8 +68,8 @@ def compute_new_obs(it,dict_obs,config,State):
             # Don't panic: we just have to perform a time interpolation
             date_prev = min(maps_date, key=lambda x: (x<date, abs(x-date)) )
             date_next = min(maps_date, key=lambda x: (x>date, abs(x-date)) )
-            ssh_prev = State.load_output(date=date_prev).ssh
-            ssh_next = State.load_output(date=date_next).ssh
+            ssh_prev = State.load_output(date=date_prev).ssh.values
+            ssh_next = State.load_output(date=date_next).ssh.values
             # Time interpolation
             Wprev = 1/abs(date_prev - date).total_seconds()
             Wnext = 1/abs(date_next - date).total_seconds()
@@ -87,7 +87,7 @@ def compute_new_obs(it,dict_obs,config,State):
             # Load current state
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout[_sat.name_obs_var[0]].data -= ssh_now.data
+                dsout[_sat.name_obs_var[0]].data -= ssh_now
             elif _sat.kind=='swot_simulator':
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
