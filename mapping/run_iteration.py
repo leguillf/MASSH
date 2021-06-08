@@ -73,7 +73,7 @@ def compute_new_obs(it,dict_obs,config,State):
             # Time interpolation
             Wprev = 1/abs(date_prev - date).total_seconds()
             Wnext = 1/abs(date_next - date).total_seconds()
-            ssh_now = (Wprev*ssh_prev.values + Wnext*ssh_next.values)/(Wprev+Wnext)
+            ssh_now = (Wprev*ssh_prev + Wnext*ssh_next)/(Wprev+Wnext)
 
         # Open obs
         path_obs = dict_obs[date]['obs_name']
