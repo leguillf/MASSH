@@ -63,7 +63,7 @@ def compute_new_obs(it,dict_obs,config,State):
         # Load corresponding map(s)
         if date in maps_date:
             # Cool: the observation date matches exactly an estimated map
-            ssh_now = State.load_output(date=date).ssh
+            ssh_now = State.load_output(date=date).ssh.values
         else:
             # Don't panic: we just have to perform a time interpolation
             date_prev = min(maps_date, key=lambda x: (x<date, abs(x-date)) )
