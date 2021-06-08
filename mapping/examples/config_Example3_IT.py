@@ -1,35 +1,22 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Apr 27 09:02:10 2021
+Created on Wed Jan  6 19:20:42 2021
 
-@author: renamatt
+@author: leguillou
 """
 
-
 ##########################################
 ##########################################
 ##                                      ##
-##      Example 4 - Parameters          ##
+##      Example 2 - Parameters          ##
 ##                                      ##
-##              SWOT DA                 ##
+##               MASSH                  ##
 ##                                      ## 
-##            with model QG             ## 
-##    and a Back and Forth Nudging      ## 
-##          in OSMOSIS region           ## 
-##     from 10/01/2012 to 10/10/2012    ## 
+##            with model SW             ##
+##         and a 4D varuational         ##
+##       in a idealized region          ##
 ##                                      ## 
-##########################################
-# Settings:                              #
-# - experimental parameters              #
-# - global libraries                     #
-# - initialization parameters            #
-# - time parameters                      #
-# - model parameters                     #
-# - analysis parameters                  #
-# - observation parameters               #
-# - outputs parameters                   #
-# - temporary DA parameters              #
 ##########################################
 ##########################################
  
@@ -41,8 +28,7 @@ Created on Tue Apr 27 09:02:10 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = '4Dvar_idealized' 
-name_domain = 'GULFSTREAM'
+name_experiment = 'Example3_IT'
 
 #################################################################################################################################
 # Global libraries     
@@ -51,27 +37,31 @@ name_domain = 'GULFSTREAM'
 # - timedelta
 #################################################################################################################################
 from datetime import datetime,timedelta
-    
+from math import pi
+
 #################################################################################################################################
 # Initialization parameters
 #################################################################################################################################
-# - name_init: 'geo_grid' computes a spherical regular grid. You can also set 'from_file'
+# - name_assim_init: name of the initialization function. Here, we use a steady state, meaning that all pixel values are set to 0.
 # - file_name_init_SSH_field: name of the file used for initialization
 # - path_init_SSH_field: path (directory+file) used for initialization
 # - name_init_lon: name of longitude field stored in *file_name_init_SSH_field*
 # - name_init_lat: name of latitude field stored in *file_name_init_SSH_field*   
 #################################################################################################################################    
 
-name_init = 'from_file'
+name_init = 'from_file'                                # either 'geo_grid' or 'from_file'
 
-name_init_grid = '../../data_Example2/data_BM-IT_idealized/ref.nc'
+# - parameters specific to 'geo_grid'  
+
+name_init_grid = '../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc'
 
 name_init_lon = 'lon'
 
 name_init_lat = 'lat'
 
-name_init_file = 'init_state.nc'
+name_init_mask = '../data_Example3/ssh_bc.nc'
 
+name_var_mask = {'lon':'lon','lat':'lat','var':'ssh_bc'}
 
 #################################################################################################################################
 # Time parameters
@@ -81,18 +71,14 @@ name_init_file = 'init_state.nc'
 # - assimilation_time_step: assimilation time step (corresponding to observation update timestep)
 # - savepoutput_time_step: time step plot at which the states are saved 
 # - plot_time_step: time step plot at which the states are plotted (for debugging)
-# - window_time_step : time step corresponding to the size of an assimilation window
 #################################################################################################################################
    
-init_date = datetime(2010,1,2,0)     
+init_date = datetime(2012,7,1,0)     
 
-final_date = datetime(2010,1,20,0)
+final_date = datetime(2012,7,20,0)
 
-assimilation_time_step = timedelta(hours=3)  
+saveoutput_time_step = timedelta(hours=1) 
 
-saveoutput_time_step = timedelta(hours=3) 
-
-window_time_step = timedelta(days=6)
 
 #################################################################################################################################
 # Model parameters
@@ -106,9 +92,9 @@ window_time_step = timedelta(days=6)
 # Both name_mod_lon and name_mod_lat are used in the output files.
 #################################################################################################################################
        
-name_model = 'QG1L'           
+name_model = 'SW1L'
     
-name_mod_var = ["ssh","pv"]  
+name_mod_var = ["u","v","ssh"]
 
 n_mod_var = len(name_mod_var)             
 
@@ -119,17 +105,27 @@ name_mod_lat = "nav_lat"
 ####################################
 ### Function-specific parameters ### 
 #################################### 
-# - parameters specific to QG model
-#    * qgiter: number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
-#    * c: first baroclinic gravity-wave phase speed (in m/s) related to Rossby Radius of deformation
-#    * dtmodel: timestep of the model (in seconds). Typical values: between 200s and 1000s. If the model crashes, reduce its value.
-#################################################################################################################################
+# - parameters specific to SW model
 
-qgiter = 20
+dtmodel = 600
 
-c = 2.7
+sw_time_scheme = 'rk4' # Time scheme of the model (e.g. Euler,rk4,lf)
 
-dtmodel = 300
+bc_kind = '1d'
+
+w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
+
+He_init = 0.9 # Mean height (in m)
+
+Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
+
+D_He = 1000e3 # Space scale of gaussian decomposition for He (in m)
+
+T_He = timedelta(days=20).total_seconds() # Time scale of gaussian decomposition for He (in m)
+
+D_bc = 300e3 # Space scale of gaussian decomposition for boundary conditions (in m)
+
+T_bc = timedelta(days=15).total_seconds() # Time scale of gaussian decomposition for boundary conditions (in m)
 
 #################################################################################################################################
 # Analysis parameters
@@ -150,67 +146,60 @@ dtmodel = 300
 #      The boundary conditions have to be prescribed on the same grid as *file_name_init_SSH_field*
 #      If no file is specified, or the file does not exist, the boundary conditions are set to 0. 
 #    * lenght_bc: lenght of the peripherical band for which the boundary conditions are applied
+#    * name_time_bc: name of the boundary conditions time
 #    * name_var_bc: name of the boundary conditions variable
 #################################################################################################################################
 
 name_analysis = '4Dvar'
 
 ####################################
-### 4Dvar-specific parameters ### 
+### Function-specific parameters ### 
 #################################### 
 
-#################################################################################################################################
-# - name_analysis: analysis function. Here, of course, we set BFN
-# - parameters specific to BFN:
-#    * sigma_B : standard deviation of the background error covariance matrix
-#    * sigma_R : standard deviation of the observation error covariance matrix 
-#    * maxiter : maximal number of iteration allowwed in the minimization process
-#    * background_state : path to ncdf file containing background ssh field
-#    *
-#################################################################################################################################
+path_init_4Dvar = None 
 
-path_init_4Dvar = None
+checkpoint = 100 # Number of model timesteps separating two consecutive analysis 
 
-sigma_B = 1.
+sigma_R = 1e-2 # Observational standard deviation
 
-sigma_R = 0.1
+sigma_B_He = 1e-1 # Background variance for He
 
-maxiter = 50
+sigma_B_bc = 1e-3 # Background variance for bc
 
-gtol = 1e-5
+prec = False # preconditoning
 
-prec = False
+gtol = 1e-1 # Gradient norm must be less than gtol before successful termination.
+
+maxiter = 1 # Maximal number of iterations for the minimization process
+
+flag_use_boundary_conditions = True
+
+eps_bc = 10
+
+lenght_bc = 50
+
+
 
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
 # - satellite: list of satellite names 
 
-satellite = ["nr"]
 write_obs = False
 
-# - For each *satellite*:
-#    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
-#    * obs_path_sat: directory where the observations are stored
-#    * obs_prefixe_sat: prefixe in observation files
-#    * name_obs_var_sat: name of the observed variables
-#    * name_obs_lon_sat: name of the observation longitude
-#    * name_obs_lat_sat: name of the observation latitude
-#    * name_obs_time_sat: name of the observation time
-#    * name_obs_xac_sat: name of the observation across track distance (only for swathSSH satellites).
-#    * use_invobs_file_sat: use existing projected observations computed from SOSIE for instance (True or False). For BFN, always set False.
-#    * swath_width_swot_sat: swath width in km (only for swathSSH satellites)
-#    * gap_width_swot_sat: gap width in km (only for swathSSH satellites)
-#################################################################################################################################
+detrend = True
 
+satellite = ['nr']
 
 kind_nr = "fullSSH"
-obs_path_nr = '../../data_Example2/data_BM-IT_idealized/'
-obs_name_nr = "obs"
-name_obs_var_nr = ["ssh_meso"]
+obs_path_nr = '.'
+obs_name_nr = "../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc"
+name_obs_var_nr = ["ssh_corr"]
 name_obs_lon_nr = "lon"
 name_obs_lat_nr = "lat"
-name_obs_time_nr = "time_obs"
+name_obs_time_nr = "time"
+nudging_params_stretching_nr = None
+nudging_params_relvort_nr = None
 
 #################################################################################################################################
 # Outputs parameters
@@ -221,13 +210,11 @@ name_obs_time_nr = "time_obs"
 # - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
 #################################################################################################################################
 
-saveoutputs = False
+saveoutputs = True         
 
 name_exp_save = name_experiment 
 
-path_save = '../outputs/' + name_exp_save + '/'
-
-flag_plot = 1
+path_save = 'outputs/' + name_exp_save 
     
 #################################################################################################################################
 # Temporary DA parameters
@@ -236,9 +223,8 @@ flag_plot = 1
 # - name_grd: name used for saving the QG grid to avoid calculating it every time.
 #################################################################################################################################
         
-tmp_DA_path = "../scratch/" +  name_exp_save + '/'
- 
-name_grd = tmp_DA_path + 'QGgrid'
+tmp_DA_path = "scratch/" +  name_exp_save 
+
 
 
 

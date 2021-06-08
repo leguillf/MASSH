@@ -59,6 +59,8 @@ name_init_lat = 'lat'
 
 name_init_file = 'init_state.nc'
 
+name_init_mask = None
+
 #################################################################################################################################
 # Time parameters
 #################################################################################################################################
@@ -73,7 +75,7 @@ init_date = datetime(2010,5,1,0)
 
 final_date = datetime(2010,5,15,0)
 
-assimilation_time_step = timedelta(hours=1)  
+assimilation_time_step = timedelta(seconds=600)  
 
 saveoutput_time_step = timedelta(hours=3)
 

@@ -8,7 +8,8 @@ Created on Tue Jul 28 14:49:01 2020
 import os,sys
 import xarray as xr 
 import numpy as np 
-from datetime import datetime,timedelta
+from datetime import timedelta
+
 
 from . import grid
 
@@ -110,6 +111,29 @@ class Obsopt:
             weights.append(1/_dist[ind4])   
             
         return np.asarray(indexes),np.asarray(weights)
+    
+    
+    def H(self,t,X):
+        
+        if self.obs_sparse[t] :
+            # Get indexes and weights of neighbour grid pixels
+            ds = xr.open_dataset(os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+            indexes = ds['indexes'].values
+            weights = ds['weights'].values
+            maskobs = ds['maskobs'].values
+            
+            # Compute inerpolation of X to obs space
+            HX = np.zeros_like(indexes.size)
+            
+            for i,(mask,ind,w) in enumerate(zip(maskobs,indexes,weights)):
+                if not mask:
+                    # Average
+                    HX[i] = np.average(X[ind],weights=w)
+        else:
+            HX = X # H==Id
+        
+        return HX
 
     def misfit(self,t,State):
         
@@ -124,24 +148,8 @@ class Obsopt:
             Yobs = np.concatenate((Yobs,yobs))
         
         X = State.getvar(State.get_indobs()).ravel() # SSH from state
-        if self.obs_sparse[t] :
-            # Get indexes and weights of neighbour grid pixels
-            ds = xr.open_dataset(os.path.join(
-                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
-            indexes = ds['indexes'].values
-            weights = ds['weights'].values
-            maskobs = ds['maskobs'].values
-            
-            # Compute inerpolation of state to obs space
-            HX = np.zeros_like(Yobs)
-            
-            for i in range(Yobs.size):
-                if not maskobs[i]:
-                    # Average
-                    HX[i] = np.average(X[indexes[i]],weights=weights[i])
-        else:
-            HX = X # H==Id
-            
+        
+        HX = self.H(t,X)
         res = HX - Yobs
         res[np.isnan(res)] = 0
         
@@ -182,7 +190,28 @@ class Cov:
         return 1/self.sigma**2 * X    
     
     def sqr(self,X):
-        return self.sigma**0.5 * X   
+        return self.sigma**0.5 * X
+    
+    def diff_filter(self,X,State,wgt_coef,number=1) :
+        # reshape X as the ssh field
+        var = X.reshape(State.var[0].shape)
+        for i in range(number) :
+            # apply a laplacian operator to var
+            var_e = np.roll(var,-1,axis=1)
+            var_w = np.roll(var,1,axis=1)
+            var_n = np.roll(var,-1,axis=0)
+            var_s = np.roll(var,1,axis=0)
+            wgt_out = (1.-wgt_coef)/4
+            var = wgt_coef*var + wgt_out*(var_e + var_w + var_n + var_s)
+            # boundary conditions
+            var[0,:] = var[1,:]
+            var[-1,:] = var[-2,:]
+            var[:,0] = var[:,1]
+            var[:,-1] = var[:,-2]
+        # reshape the output as a vector
+        Xout = var.ravel()
+        return Xout
+        
         
 class Variational_QG :
     
@@ -222,7 +251,6 @@ class Variational_QG :
         else :
             self.isobs = [False]
         
-        compteur = 0
         t,i = date_ini+self.dt, 1
         while t < self.date_final :
             
@@ -240,9 +268,11 @@ class Variational_QG :
         self.n_iter = i
         self.checkpoint.append(self.n_iter)
         
+        # indicates the corresponding iteration of the timestamps
+        self.start_iter = int((self.date_ini - State.config.init_date).total_seconds()/self.dt.total_seconds())
+        
         # print("\n ** gradient test ** \n")
-        # X = np.random.random(State.lon.size)
-        # grad_test(self.cost,self.grad,X)
+        # self.grad_test(deg=8)
         
         
         
@@ -252,22 +282,25 @@ class Variational_QG :
         Compute the 4Dvar cost function for the SSH field var
         '''
         print('\n cost use \n')
+        
         # initial state
         State = self.State.free() # create new state
-        X_var = X0.reshape(self.State.getvar(0).shape) 
+        if self.prec :
+            # X0 = self.B.diff_filter(X0,self.State,1.4,number=5)
+            X = self.B.sqr(X0) + self.Xb # value of the ssh field
+            X_var = X.reshape(self.State.getvar(0).shape)
+        else :
+            X_var = X0.reshape(self.State.getvar(0).shape) 
         State.setvar(X_var,0) # initiate the State with X0
         
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
-                X  = self.B.sqr(X0) + self.Xb
-                Jb = X0.dot(X0) # cost of background term
+                Jb = X0.dot(X0) # cost of background term with change of variable
             else:
-                X  = X0 + self.Xb
-                Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
+                Jb = np.dot(X0,self.B.inv(X0))  # cost of background term
         else:
-            X  = X0 + self.Xb
-            Jb = 0
+            Jb = 0.
         
         # Observational cost function evaluation
         Jo = 0.
@@ -278,7 +311,7 @@ class Variational_QG :
         for i in range(len(self.checkpoint)-1):
             
             # time corresponding to the checkpoint
-            timestamp = self.M.timestamps[self.checkpoint[i]]
+            timestamp = self.M.timestamps[self.checkpoint[i]+self.start_iter]
             
             # Misfit
             if self.isobs[i] :
@@ -307,17 +340,13 @@ class Variational_QG :
     
     def grad(self,X0) :
         
-        X = +X0 
-        
         if self.B is not None:
             if self.prec :
-                X  = self.B.sqr(X0) + self.Xb
-                gb = X0      # gradient of background term
+                # gb = self.B.diff_filter(X0,self.State,1.4,number=5) # gradient of background term
+                gb = X0
             else:
-                X  = X0 + self.Xb
                 gb = self.B.inv(X0) # gradient of background term
         else:
-            X  = X0 + self.Xb
             gb = 0
         
         # Ajoint initialization   
@@ -337,7 +366,7 @@ class Variational_QG :
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
             
-            timestamp = self.M.timestamps[self.checkpoint[i]]
+            timestamp = self.M.timestamps[self.checkpoint[i]+self.start_iter]
             
             # Read model state
             State.load(os.path.join(self.tmp_DA_path,
@@ -371,7 +400,7 @@ class Variational_QG :
         g = self.grad(X) # grad of cost in X
         for i in range(deg) :
             Jxdx = self.cost(X+dX)
-            test = np.dot(g,dX)/(Jxdx-Jx)
+            test = abs(1 - np.dot(g,dX)/(Jxdx-Jx))
             print(f'{10**(-i):.1E} , {test:.1E}')
             dX = 0.1*dX
         
@@ -383,7 +412,8 @@ class Variational:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, Xb=None, 
-                 tmp_DA_path=None, checkpoint=1, prec=False):
+                 tmp_DA_path=None, checkpoint=1, prec=False,eps_bc=10,
+                 dist_scale=None):
         
         # Objects
         self.M = M # model
@@ -433,6 +463,13 @@ class Variational:
         # preconditioning
         self.prec = prec
         
+        # Weight map to be apply on misfit, in order to reduce the influence of boundary pixels
+        if dist_scale is not None:
+            weight_map = grid.compute_weight_map(State.lon,State.lat,State.mask,dist_scale)
+            self.tapering = (1-weight_map + eps_bc*weight_map)**-1
+        else:
+            self.tapering = np.ones((self.State.ny,self.State.nx))
+        
         # Grad test
         if False:
             X = np.random.random()
@@ -471,8 +508,12 @@ class Variational:
             
             # Misfit
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs                
-                Jo += misfit.dot(self.R.inv(misfit))
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                
+                # Apply tapering
+                tapering = self.H.H(timestamp,self.tapering.ravel())
+                
+                Jo += misfit.dot(self.R.inv(misfit)*tapering)
                 
             # Run forward model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
@@ -485,7 +526,11 @@ class Variational:
 
         if self.isobs[-1]:
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
-            Jo = Jo + misfit.dot(self.R.inv(misfit))  
+            
+            # Apply tapering
+            tapering = self.H.H(timestamp,self.tapering.ravel())
+            
+            Jo = Jo + misfit.dot(self.R.inv(misfit)*tapering)  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
@@ -519,8 +564,13 @@ class Variational:
         if self.isobs[-1]:
             State.load(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[-1]) + '.nc'))
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-yobs
-            self.H.adj(self.M.timestamps[self.checkpoint[-1]],adState,self.R.inv(misfit))
+            timestamp = self.M.timestamps[self.checkpoint[-1]]
+            misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+            
+            # Apply tapering
+            tapering = self.H.H(timestamp,self.tapering.ravel())
+            
+            self.H.adj(timestamp,adState,self.R.inv(misfit)*tapering)
             
         # Time loop
         self.M.restart()  
@@ -539,8 +589,12 @@ class Variational:
             
             # Misfit 
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs     
-                self.H.adj(timestamp,adState,self.R.inv(misfit))
+                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                
+                # Apply tapering
+                tapering = self.H.H(timestamp,self.tapering.ravel())
+            
+                self.H.adj(timestamp,adState,self.R.inv(misfit)*tapering)
                 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 

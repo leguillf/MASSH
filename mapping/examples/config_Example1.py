@@ -73,9 +73,9 @@ lat_min = 32.                                         # domain min latitude
 
 lat_max = 44.                                         # domain max latitude
 
-dx = 1/4.                                             # zonal grid spatial step (in degree)
+dx = 1/10                                             # zonal grid spatial step (in degree)
 
-dy = 1/4.                                             # meridional grid spatial step (in degree)
+dy = 1/10                                             # meridional grid spatial step (in degree)
 
 #################################################################################################################################
 # Time parameters
@@ -132,7 +132,7 @@ qgiter = 100
 
 c = 2.7
 
-dtmodel = 3600   
+dtmodel = 900   
 
 #################################################################################################################################
 # Analysis parameters
