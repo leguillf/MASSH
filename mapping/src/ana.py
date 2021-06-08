@@ -61,98 +61,131 @@ def ana_forward(config,State,Model):
     return
 
 
-def ana_4Dvar_id(config,State,Model,dict_obs=None) :
+def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     '''
-    Run a 4Dvar analysis using a identity model to propagate the state
+    Run a 4Dvar analysis
     '''
-    from .tools_4Dvar import Obsopt, Cov
-    from .tools_4Dvar import Variational_QG as Variational
-
-    #################
-    # 1. Obs op     #
-    #################
-    print('\n*** Obs op ***\n')
+    from .tools_4Dvar import Obsopt
+    
+    print('\n*** create and initialize State ***\n')
+    State_ana = State.free()
+    if config.path_init_4Dvar is not None :
+        import xarray as xr
+        with xr.open_dataset(config.path_init_4Dvar) as ds :
+            ssh_b = np.copy(ds.ssh)
+            State_ana.setvar(ssh_b,State_ana.get_indobs())
+    
+    print('\n*** Observation operator ***\n')
     H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
     
-    ###################
-    # 2. Variationnal #
-    ###################
-    print('\n*** Variational ***\n')
-    # Covariance matrixes
-    if None in [config.sigma_R,config.sigma_B]:          
-            # Least squares
-            B = None
-            R = Cov(1)
-    else:
-        sigma_B = config.sigma_B
-        sigma_R = config.sigma_R
-        B = Cov(sigma_B)
-        R = Cov(sigma_R)
-    # backgroud state 
-    n_vect = len(State.getvar(0).ravel()) # size of the control vector
-    Xb = np.zeros((n_vect))
-    # Cost and Grad functions
-    var = Variational(
-        M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec)
+    print('\n*** 4Dvar analysis ***\n')
     
-    X = np.random.random(n_vect)
-    cst = var.cost(X)
-    print(cst)
+     # date
+    init_date = config.init_date
+    final_date = config.final_date
     
-    window_1D(config,State,Model,dict_obs=dict_obs,H=H,date_ini=date_ini)
+    date = init_date # current date
+    dt_window = config.window_time_step # size of the assimilation window
     
-    # # Initial State
-    # if config.path_init_4Dvar is None:
-    #     Xopt = np.zeros_like(var.Xb)
-    # else:
-    #     # Read previous minimum
-    #     with open(config.path_init_4Dvar, 'rb') as f:
-    #         print('Read previous minimum:',config.path_init_4Dvar)
-    #         Xopt = pickle.load(f)
+    n_window = int((final_date-init_date).total_seconds()/dt_window.total_seconds())
+    
+    n_iter = 1 + 2 * (n_window - 1) # number of minimization to perform
+    
+    for i in range(n_iter) :
+        date_end = date + dt_window # date at end of the assimilation window
+        print(f'\n*** window {i}, initial date = {date.year}:{date.month}:{date.day}\
+              final date = {date_end.year}:{date_end.month}:{date_end.day} ***\n')
+        if i==0 :
+            first_assimilation = True
+        else :
+            first_assimilation = False
+        # minimization
+        res = window_4D(config,State_ana,Model,dict_obs=dict_obs,H=H,date_ini=date,\
+                        date_final=date_end,first=first_assimilation)
+        ssh0 = res.reshape(State.var.ssh.shape) # initial ssh field for the window from the 4Dvar analysis
+        State_ana.setvar(ssh0,State_ana.get_indobs())
+        
+        if config.saveoutputs :
+            
+            print('\n*** Saving trajectory ***\n')
+            
+            date_save = date
+            dt_save = config.saveoutput_time_step # time step for saving
+            
+            last_window = date_end == config.final_date
+            if last_window :
+                n_save = int((date_end - date).total_seconds()/dt_save.total_seconds()) # number of save
+            else :
+                n_save = int((dt_window//2).total_seconds()/dt_save.total_seconds()) # number of save
+            
+            n_step = int(dt_save.total_seconds()/config.dtmodel) # number of model step between two save
+            
+            for i in range(n_save) :
+                State_ana.save(date=date_save) # save state
+                Model.step(State_ana,n_step) # run forward the model
+                date_save += dt_save # update time
+                if last_window :
+                    State_ana.save(date=date_save)
+        
+        else :
+            # model propagation until next assimilation window
+            Model.step(State_ana,nstep=n_window//2)
+        
+        date += dt_window//2 # time update
+        print('\n*** final analysed state ***\n')
+        
+        
+        
+    
+    
     
 
-def window_1D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None) :
+def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :
     '''
     run one assimilation on the window considered which start at time date_ini
     '''
     from .tools_4Dvar import Obsopt, Cov
     from .tools_4Dvar import Variational_QG as Variational
     
+    # create obsopt if not filled out
     if H==None :
         H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
-    print(H.date_obs)
     
-    print('\n*** Variational ***\n')
     # Covariance matrixes
     if None in [config.sigma_R,config.sigma_B]:          
             # Least squares
             B = None
-            R = Cov(1)
+            R = Cov(1.)
     else:
         sigma_B = config.sigma_B
         sigma_R = config.sigma_R
-        B = Cov(sigma_B)
         R = Cov(sigma_R)
-    # background state 
-    n_vect = len(State.getvar(0).ravel()) # size of the control vector
-    Xb = State.getvar(0).ravel()
+        if first :
+            B = Cov(1.)
+        else :
+            B = Cov(sigma_B)
+    # background state
+    Xb = State.getvar(State.get_indobs()).ravel() # background term for analysis
+    
+    
     # Cost and Grad functions
     var = Variational(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
         tmp_DA_path=config.tmp_DA_path, date_ini=date_ini, date_final=date_final,
         prec=config.prec)
-    
-    n = len(State.getvar(0).ravel())
-    Xopt = np.zeros(n)
-    
+   
+    Xopt = np.copy(Xb)
+    if config.prec :
+        Xopt = np.zeros_like(Xb)
     J0 = var.cost(Xopt)
     g0 = var.grad(Xopt)
     projg0 = np.max(np.abs(g0))
     
     State_callback = State.free()
     def callback(XX) :
+        '''
+        function called at each iteration of the minimization process
+        '''
         var_ssh = XX.reshape(State_callback.var[0].shape)
         State_callback.setvar(var_ssh,0)
         State_callback.plot()
@@ -161,10 +194,12 @@ def window_1D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
                     method='L-BFGS-B',
                     jac=var.grad,
                     options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},callback=callback)
-    return res
+    Xout = res.x
+    if config.prec :
+        Xout = B.sqr(Xout) + Xb
     
-    
-    
+    return Xout
+       
     
     
     
