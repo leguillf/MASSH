@@ -12,8 +12,8 @@ import numpy as np
 class Qgm_adj(Qgm_tgl):
     
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
-                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None):
-        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,diff,snu)
+                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,mdt=None):
+        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,diff,snu,mdt)
     
     def qrhs_adj(self,adrq,u,v,q,way):
 
@@ -126,8 +126,8 @@ class Qgm_adj(Qgm_tgl):
 
         adh = np.zeros((self.ny,self.nx))
         
-        adu[np.where((self.mask<=1))]=0
-        adv[np.where((self.mask<=1))]=0
+        #adu[np.where((self.mask<=1))]=0
+        #adv[np.where((self.mask<=1))]=0
         
         adh[2:,:-1] += -self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]
         adh[2:,1:] += -self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]

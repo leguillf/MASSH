@@ -9,7 +9,7 @@ class Qgm:
     #                             Initialization                              #
     ###########################################################################
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
-                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None):
+                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,mdt=None):
         
         # Grid spacing
         self.dx = dx
@@ -40,10 +40,10 @@ class Qgm:
         
         # Mask array
         mask = np.zeros((ny,nx))+2
-        mask[:1,:] = 1
-        mask[:,:1] = 1
-        mask[-1:,:] = 1
-        mask[:,-1:] = 1
+        mask[:2,:] = 1
+        mask[:,:2] = 1
+        mask[-3:,:] = 1
+        mask[:,-3:] = 1
         
         if SSH is not None:
             mask[np.isnan(SSH)]=0
@@ -68,6 +68,11 @@ class Qgm:
         # Nb of iterations for elliptical inversion
         self.qgiter = qgiter
         
+        # MDT
+        self.mdt = mdt
+        if self.mdt is not None:
+            self.ubar,self.vbar = self.h2uv(self.mdt)
+            self.qbar = self.h2pv(self.mdt)
         
     
     def h2uv(self,h):
@@ -75,7 +80,7 @@ class Qgm:
     
         Args:
             h (2D array): SSH field.
-            grd (Grid() object): check modgrid.py
+            self (Grid() object): check modgrid.py
     
         Returns:
             u (2D array): Zonal velocity  
@@ -91,48 +96,18 @@ class Qgm:
         v[1:,1:-1] = + self.g/self.f0[1:,1:-1]*\
             (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx[1:,1:-1])
     
-        u[np.where((self.mask<=1))]=0
-        v[np.where((self.mask<=1))]=0
+        u[np.where((np.isnan(u)))]=0
+        v[np.where((np.isnan(v)))]=0
     
         return u,v
 
 
-
-
-    def uv2rv(self,u,v):
-        """ U,V to relative vorticity Qr
-    
-        Args:
-            u (2D array): Zonal velocity  
-            v (2D array): Meridional velocity
-    
-        Returns:
-            xi (2D array): Relative vorticity
-        """
-        
-        ny,nx, = np.shape((self.ny,self.nx))
-        
-        gradX_V = np.zeros((self.ny,self.nx))
-        gradY_U = np.zeros((self.ny,self.nx))
-        
-        xi = np.zeros((self.ny,self.nx))
-    
-        gradY_U[1:-1,1:-1] = 0.5*(u[2:,1:-1] - u[:-2,1:-1]) / self.dy[1:-1,1:-1]
-        gradX_V[1:-1,1:-1] = 0.5*(v[1:-1,2:] - v[1:-1,:-2]) / self.dx[1:-1,1:-1]
-        
-        xi[1:-1,1:-1] = gradX_V[1:-1,1:-1] - gradY_U[1:-1,1:-1]
-        
-        ind = np.where((self.mask==1))
-        xi[ind] = 0
-    
-        return xi
-    
     def h2pv(self,h):
         """ SSH to Q
     
         Args:
             h (2D array): SSH field.
-            grd (Grid() object): check modgrid.py
+            self (Grid() object): check modgrid.py
     
         Returns:
             q: Potential Vorticity field  
@@ -156,30 +131,6 @@ class Qgm:
     
         return q
     
-    def h2rv(self,h):
-        """ SSH to Q
-    
-        Args:
-            h (2D array): SSH field.
-            grd (Grid() object): check modgrid.py
-    
-        Returns:
-            q: Potential Vorticity field  
-        """
-    
-        q = np.zeros((self.ny,self.nx))
-    
-        q[1:-1,1:-1] = self.g/self.f0[1:-1,1:-1]*\
-            ((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2  +\
-             (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) 
-        
-        ind = np.where((self.mask==1))
-        q[ind] = 0
-        
-        ind = np.where((self.mask==0))
-        q[ind]=0
-    
-        return q
     
     def norm(self,r):
         return np.linalg.norm(r)
@@ -197,13 +148,6 @@ class Qgm:
         hg[self.mask==0] = 0
         hg[np.isnan(hg)] = 0
         q_tmp[np.isnan(q_tmp)] = 0
-        
-        # plt.figure()
-        # plt.pcolormesh(q_tmp)
-        # plt.show()
-        # plt.figure()
-        # plt.pcolormesh(hg)
-        # plt.show()
         
         r = +q_tmp - self.h2pv(hg)
         d = +r
@@ -237,7 +181,7 @@ class Qgm:
             u (2D array): Zonal velocity
             v (2D array): Meridional velocity
             q : Q start
-            grd (Grid() object): check modgrid.py
+            self (Grid() object): check modgrid.py
             way: forward (+1) or backward (-1)
     
         Returns:
@@ -255,7 +199,7 @@ class Qgm:
             vplus[np.where((vplus<0))] = 0
             vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
             vminus[np.where((vminus>=0))] = 0
-        
+            
             rq[2:-2,2:-2] = rq[2:-2,2:-2]\
                 - uplus*1/(6*self.dx[2:-2,2:-2])*\
                     (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4])\
@@ -265,6 +209,37 @@ class Qgm:
                     (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2])  \
                 + vminus*1/(6*self.dy[2:-2,2:-2])*\
                     (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
+            
+            if self.mdt is not None:
+                uplusbar = way*0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
+                uplusbar[np.where((uplusbar<0))] = 0
+                uminusbar = way*0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
+                uminusbar[np.where((uminusbar>0))] = 0
+                vplusbar = way*0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+                vplusbar[np.where((vplusbar<0))] = 0
+                vminusbar = way*0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+                vminusbar[np.where((vminusbar>=0))] = 0
+                
+                rq[2:-2,2:-2] = rq[2:-2,2:-2]\
+                    - uplusbar*1/(6*self.dx[2:-2,2:-2])*\
+                        (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]- 6*q[2:-2,1:-3]+q[2:-2,:-4]) \
+                    + uminusbar*1/(6*self.dx[2:-2,2:-2])*\
+                        (q[2:-2,4:]-6*q[2:-2,3:-1]+ 3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
+                    - vplusbar*1/(6*self.dy[2:-2,2:-2])*\
+                        (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]- 6*q[1:-3,2:-2]+q[:-4,2:-2]) \
+                    + vminusbar*1/(6*self.dy[2:-2,2:-2])*\
+                        (q[4:,2:-2]-6*q[3:-1,2:-2]+ 3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
+
+                rq[2:-2,2:-2] = rq[2:-2,2:-2]\
+                    - uplus*1/(6*self.dx[2:-2,2:-2])*\
+                        (2*self.qbar[2:-2,3:-1]+3*self.qbar[2:-2,2:-2]- 6*self.qbar[2:-2,1:-3]+self.qbar[2:-2,:-4]) \
+                    + uminus*1/(6*self.dx[2:-2,2:-2])*\
+                        (self.qbar[2:-2,4:]-6*self.qbar[2:-2,3:-1]+ 3*self.qbar[2:-2,2:-2]+2*self.qbar[2:-2,1:-3]) \
+                    - vplus*1/(6*self.dy[2:-2,2:-2])*\
+                        (2*self.qbar[3:-1,2:-2]+3*self.qbar[2:-2,2:-2]- 6*self.qbar[1:-3,2:-2]+self.qbar[:-4,2:-2]) \
+                    + vminus*1/(6*self.dy[2:-2,2:-2])*\
+                        (self.qbar[4:,2:-2]-6*self.qbar[3:-1,2:-2]+ 3*self.qbar[2:-2,2:-2]+2*self.qbar[1:-3,2:-2])
+
         
             rq[2:-2,2:-2] = rq[2:-2,2:-2] - way*\
                 (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
