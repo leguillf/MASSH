@@ -70,7 +70,7 @@ class State:
         
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
-        if config.name_model=='QG1L':
+        if config.name_model is None or config.name_model=='QG1L':
             self.ini_var_qg1l(config)
         elif config.name_model=='SW1L':
             self.ini_var_sw1l(config)
@@ -174,6 +174,7 @@ class State:
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
+            
     
     def ini_mask(self,config):
         
@@ -241,7 +242,7 @@ class State:
         
             
 
-    def save_output(self,date):
+    def save_output(self,date,mdt=None):
         
         name_lon = self.name_lon 
         name_lat = self.name_lat
@@ -270,11 +271,23 @@ class State:
         if self.geo_grid:
             coords[name_lon] = ((name_lon,), self.lon[0,:])
             coords[name_lat] = ((name_lat,), self.lat[:,0])
-            var = {name_var:(('time','lat','lon'),var_to_save)}
+            dims = ('time','lat','lon')
+            
         else:
             coords[name_lon] = (('y','x',), self.lon)
             coords[name_lat] = (('y','x',), self.lat)
-            var = {name_var:(('time','y','x'),var_to_save)}
+            dims = ('time','y','x')
+            
+        var = {name_var:(dims,var_to_save)}
+        
+        # If MDT provided, compute SSH from state variable (which is supposed to be SLA)
+        if mdt is not None:
+            name_ssh = 'ssh'
+            if name_var.lower=='ssh':
+                name_ssh = 'ssh_mdt'
+            var[name_ssh] =(dims,var_to_save + mdt[np.newaxis,:,:])
+
+            
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
                      encoding={'time': {'units': 'days since 1900-01-01'}},
@@ -427,7 +440,7 @@ class State:
         '''
         Return the indice of the variable to save, SSH
         '''
-        if self.config['name_model']=='QG1L' :
+        if self.config['name_model'] is None or self.config['name_model']=='QG1L' :
             return 0
         elif self.config['name_model']=='SW1L' :
             return 2

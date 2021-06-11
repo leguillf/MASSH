@@ -160,11 +160,12 @@ name_mod_lon = "nav_lon"
 
 name_mod_lat = "nav_lat"
 
-
 # - parameters specific to QG model
 #    * qgiter: number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
 #    * c: first baroclinic gravity-wave phase speed (in m/s) related to Rossby Radius of deformation
 #    * dtmodel: timestep of the model (in seconds). Typical values: between 200s and 1000s. If the model crashes, reduce its value.
+#    * path_mdt: (string) full path of the netcdf file containing MDT data
+#    _ name_var_mdt: (dict) {'lon':name_lon_mdt,'lat':name_lon_mdt,'var':name_var_mdt}
 
 dir_model =  None
 
@@ -178,7 +179,10 @@ cdiffus = 0.
 
 only_diffusion = False
 
-name_grd = tmp_DA_path + 'QGgrid'
+path_mdt = None # For CMEMS data only ! 
+
+name_var_mdt = {'lon':'','lat':'','var':''} # If provided, QGPV will be expressed
+                                            # thanks to the Reynolds decompositon
 
 # - parameters specific to SW model
 
@@ -283,6 +287,19 @@ maxiter = 20 # Maximal number of iterations for the minimization process
 
 eps_bc = 10 # Damping ratio of the R^{-1} matrix at border pixels
 
+####################################
+### MIOST-specific parameters ### 
+#################################### 
+
+dir_miost = None
+
+obs_subsampling = 1
+
+file_aux = ''
+
+filec_aux = ''
+
+
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
@@ -290,20 +307,15 @@ eps_bc = 10 # Damping ratio of the R^{-1} matrix at border pixels
 # - write_obs: (bool) save observation dictionary in *path_obs*
 # - path_obs: (string) if set to None, observations are saved in *tmp_DA_path*
 # - detrend: (bool) apply a 2D detrending on observations
-# - path_mdt: (string) full path of the netcdf file containing MDT data
-# - name_var_mdt: (dict) {'lon':name_lon_mdt,'lat':name_lon_mdt,'var':name_var_mdt}
+
 
 satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
 
-write_obs = True
+write_obs = False
 
 path_obs = None
 
 detrend = False
-
-path_mdt = None # For CMEMS data only ! 
-
-name_var_mdt = {'lon':'','lat':'','var':''}
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  

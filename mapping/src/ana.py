@@ -5,10 +5,9 @@ Created on Wed Jan  6 16:59:11 2021
 
 @author: leguillou
 """
-from datetime import timedelta
+
 import sys
 import numpy as np 
-import calendar
 import os
 import matplotlib.pylab as plt
 import pickle
@@ -16,6 +15,8 @@ from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
 import pandas as pd
+import xarray as xr
+from importlib.machinery import SourceFileLoader 
 
 from . import grid
 
@@ -36,6 +37,8 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
         return ana_bfn(config,State,Model,dict_obs)
     elif config.name_analysis=='4Dvar':
         return ana_4Dvar(config,State,Model,dict_obs)
+    elif config.name_analysis=='MIOST':
+        return ana_miost(config,State,dict_obs)
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
@@ -134,11 +137,6 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         date += dt_window//2 # time update
         print('\n*** final analysed state ***\n')
         
-        
-        
-    
-    
-    
 
 def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :
     '''
@@ -200,9 +198,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
     
     return Xout
        
-    
-    
-    
+       
 def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     """
     NAME
@@ -508,7 +504,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                  / (config.bfn_window_output/2), 1)
                         # Read previous output at this timestamp
                         ds = State.load_output(present_date)
-                        ssh1 = ds.ssh.data
+                        ssh1 = ds[config.name_mod_var[State.get_indsave()]].data
                         ds.close()
                         del ds
                         # Update state
@@ -517,7 +513,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         
                     # Save output
                     if config.saveoutputs:
-                        State_current.save_output(present_date)
+                        State_current.save_output(present_date,mdt=Model.mdt)
         
         ########################
         # 8. PARAMETERS UPDATE #
@@ -655,4 +651,141 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     print()
         
 
+def ana_miost(config,State,dict_obs=None):
+    
+    
+    if config.dir_miost is None:
+        dir_miost = os.path.realpath(
+            os.path.join(os.path.dirname(os.path.realpath(__file__)),'miost'))
+    else:
+        dir_miost = config.dir_miost  
+    SourceFileLoader("sparse_inversion",dir_miost + "/sparse_inversion.py").load_module() 
+    SourceFileLoader("allcomps",dir_miost + "/allcomps.py").load_module() 
+    SourceFileLoader("tools",dir_miost + "/tools.py").load_module() 
+    SourceFileLoader("rw",dir_miost + "/rw.py").load_module() 
+    SourceFileLoader("comp_iw",dir_miost + "/comp_iw.py").load_module() 
+    miost = SourceFileLoader("miost",dir_miost + "/miost.py").load_module() 
+    grid = SourceFileLoader("miost",dir_miost + "/grid.py").load_module()
+    comp_geo3 = SourceFileLoader("miost",dir_miost + "/comp_geo3.py").load_module()    
+    obs = SourceFileLoader("miost",dir_miost + "/obs.py").load_module()    
+    
+    
+    # Save grid 
+    grd = xr.Dataset({'lon':(('lon',),State.lon[State.ny//2,:]),
+                      'lat':(('lat',),State.lat[:,State.nx//2]),
+                      'var':(('lat','lon'),np.zeros((State.ny,State.nx)))})
+    name_grd = os.path.join(config.tmp_DA_path,'grd.nc')
+    grd.to_netcdf(name_grd)
+    
+    dlon =  (State.lon[:,1:] - State.lon[:,:-1]).max()
+    dlat =  (State.lat[1:,:] - State.lat[:-1,:]).max()
+    
+    # CONFIG MIOST
+    config_miost = dict(
+    
+    RUN_NAME = '', # Set automatically with filename
+    PATH = dict(OUTPUT= config.tmp_DA_path),
+    
+    ALGO = dict(
+        USE_MPI= False,
+        store_gtranspose= False, # only if USE_MPI
+        INV_METHOD= 'PCG_INV',
+        NITER= 800  , # Maximum number of iterations in the variational loop
+        EPSPILLON_REST= 1.e-7,
+        gsize_max = 5000000000 ,
+        float_type= 'f8',
+        int_type= 'i8'),
+    
+    GRID = grid.Grid_msit(
+        TEMPLATE_FILE= name_grd,
+        LON_NAME= 'lon',
+        LAT_NAME= 'lat',
+        MDT_NAME= 'var',
+        FLAG_MDT= False,
+        DATE_MIN= config.init_date.strftime("%Y-%m-%d"),
+        DATE_MAX= config.final_date.strftime("%Y-%m-%d"),
+        TIME_STEP= config.saveoutput_time_step.total_seconds()/(24*3600),
+        NSTEPS_NC= int((24*3600)//config.saveoutput_time_step.total_seconds()),
+        TIME_STEP_LF= 10000., # For internal tides with seasons
+        LON_MIN= State.lon.min()-dlon,
+        LON_MAX= State.lon.max()+dlon,
+        LAT_MIN= State.lat.min()-dlat,
+        LAT_MAX= State.lat.max()+dlat,
+        tref_iw= 15340.),
+    
+    PHYS_COMP=[
+    
+        comp_geo3.Comp_geo3ss6d(
+            facns= 1., #factor for wavelet spacing= space
+            facnlt= 2.,
+            npsp= 3.5, # Defines the wavelet shape
+            facpsp= 1.5, #1.5 # factor to fix df between wavelets
+            lmin= 80 ,
+            lmax= 970.,
+            cutRo= 1.6,
+            factdec= 15.,
+            tdecmin= 2.5,
+            tdecmax= 40.,
+            tssr= 0.5,
+            facRo= 8.,
+            Romax= 150.,
+            facQ= 1.,
+            depth1= 0.,
+            depth2= 30.,
+            distortion_eq= 2.,
+            lat_distortion_eq= 5.,
+            distortion_eq_law= 2.,
+            file_aux= config.file_aux,
+            filec_aux= config.filec_aux,
+            write= True,
+            Hvarname= 'Hss'),
+    
+    
+        comp_geo3.Comp_geo3ls(
+            facnls= 3., #factor for large-scale wavelet spacing
+            facnlt= 3.,
+            tdec_lw= 25.,
+            std_lw= 0.04,
+            lambda_lw= 970, #768.05127036
+            file_aux= config.file_aux,
+            filec_aux= config.filec_aux,
+            write= True,
+            Hvarname= 'Hls'),
+        ],
+    
+    OBS_COMP=[
+    
+        ],
+    
+    
+    OBS=[
+    
+        obs.MASSH(
+            name=config.name_experiment,
+            dict_obs= dict_obs,
+            subsampling= config.subsampling
+            ),
+        
+            ]
+    
+    )
+    
+    # RUN MIOST
+    miost.run_miost(config_miost)
+    
+    # READ OUTPUTS AND REFORMAT
+    ds = xr.open_mfdataset(os.path.join(config.tmp_DA_path,'_ms_analysis*.nc'),
+                           combine='by_coords')
+    ssh = ds['Hss'] + ds['Hls']
+    
+    State_tmp = State.free()
+    date = config.init_date
+    i = 0
+    while date<=config.final_date:
+        State_tmp.setvar(ssh[i].values,ind=0)
+        State_tmp.save_output(date)
+        
+        date += config.saveoutput_time_step
+        i += 1
+        
     

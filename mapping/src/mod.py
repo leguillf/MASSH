@@ -14,6 +14,7 @@ import os
 from math import sqrt,pi
 from datetime import timedelta
 import matplotlib.pylab as plt
+from scipy.interpolate import griddata
 
 from . import tools, grid
 
@@ -26,7 +27,9 @@ def Model(config,State):
         Main function calling subclass for specific models
     """
     print('Model:',config.name_model)
-    if config.name_model=='QG1L':
+    if config.name_model is None:
+        return
+    elif config.name_model=='QG1L':
         return Model_qg1l(config,State)
     elif config.name_model=='SW1L':
         return Model_sw1l(config,State)
@@ -50,6 +53,58 @@ class Model_qg1l:
         self.dt = config.dtmodel
         self.c = config.c
         
+        # Open MDT map if provided
+        if config.path_mdt is not None and os.path.exists(config.path_mdt):
+            print('MDT is prescribed, thus the QGPV will be expressed thanks \
+to Reynolds decomposition. However, be sure that observed and boundary \
+variable are SLAs!')
+                      
+            ds = xr.open_dataset(config.path_mdt)
+            
+            ds = ds.assign_coords(
+                {config.name_var_mdt['lon']:(ds[config.name_var_mdt['lon']] % 360),
+                 config.name_var_mdt['lat']:ds[config.name_var_mdt['lat']]})
+            
+            if ds[config.name_var_mdt['var']].shape[0]!=ds[config.name_var_mdt['lat']].shape[0]:
+                ds[config.name_var_mdt['var']] = ds[config.name_var_mdt['var']].transpose()
+                
+            if len(ds[config.name_var_mdt['lon']].shape)==2:
+                dlon = (ds[config.name_var_mdt['lon']][:,1:].values - ds[config.name_var_mdt['lon']][:,:-1].values).max()
+                dlat = (ds[config.name_var_mdt['lat']][1:,:].values - ds[config.name_var_mdt['lat']][:-1,:].values).max()
+    
+                
+                ds = ds.where((ds[config.name_var_mdt['lon']]<=State.lon.max()+dlon) &\
+                              (ds[config.name_var_mdt['lon']]>=State.lon.min()-dlon) &\
+                              (ds[config.name_var_mdt['lat']]<=State.lat.max()+dlat) &\
+                              (ds[config.name_var_mdt['lat']]>=State.lat.min()-dlat),drop=True)
+                    
+                lon_mdt = ds[config.name_var_mdt['lon']].values
+                lat_mdt = ds[config.name_var_mdt['lat']].values
+            
+            else:
+                dlon = (ds[config.name_var_mdt['lon']][1:].values - ds[config.name_var_mdt['lon']][:-1].values).max()
+                dlat = (ds[config.name_var_mdt['lat']][1:].values - ds[config.name_var_mdt['lat']][:-1].values).max()
+                
+                ds = ds.where((ds[config.name_var_mdt['lon']]<=State.lon.max()+dlon) &\
+                              (ds[config.name_var_mdt['lon']]>=State.lon.min()-dlon) &\
+                              (ds[config.name_var_mdt['lat']]<=State.lat.max()+dlat) &\
+                              (ds[config.name_var_mdt['lat']]>=State.lat.min()-dlat),drop=True)
+                    
+                lon_mdt,lat_mdt = np.meshgrid(
+                    ds[config.name_var_mdt['lon']].values,
+                    ds[config.name_var_mdt['lat']].values)
+            
+            mdt = ds[config.name_var_mdt['var']].values
+            
+            # Interpolate to state grid 
+            self.mdt = griddata((lon_mdt.ravel(),lat_mdt.ravel()),
+                           mdt.ravel(),
+                           (State.lon.ravel(),State.lat.ravel())).reshape((State.ny,State.nx))
+            
+        else:
+            self.mdt = None
+
+        
         # Model initialization
         SourceFileLoader("qgm", 
                                  dir_model + "/qgm.py").load_module() 
@@ -69,7 +124,8 @@ class Model_qg1l:
                          f=State.f,
                          qgiter=config.qgiter,
                          diff=config.only_diffusion,
-                         snu=config.cdiffus)
+                         snu=config.cdiffus,
+                         mdt=self.mdt)
         self.State = State
         
 
