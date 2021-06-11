@@ -50,26 +50,7 @@ def obs(config, State, *args, **kwargs):
     lon = State.lon
     lat = State.lat
     bbox = [lon.min(),lon.max(),lat.min(),lat.max()]
-    
-    # Open MDT map if provided
-    if config.path_mdt is not None and os.path.exists(config.path_mdt):
-        ds = xr.open_dataset(config.path_mdt)
-        ds[config.name_var_mdt['lon']] = ds[config.name_var_mdt['lon']] % 360
-        if ds[config.name_var_mdt['var']].shape[0]!=ds[config.name_var_mdt['lat']].shape[0]:
-            ds[config.name_var_mdt['var']] = ds[config.name_var_mdt['var']].transpose()
-        ds = ds.sel({config.name_var_mdt['lon']:slice(lon.min(),lon.max()),
-                     config.name_var_mdt['lat']:slice(lat.min(),lat.max())})
-        if len(ds[config.name_var_mdt['lon']].shape)==1:
-            
-            lon_mdt,lat_mdt = np.meshgrid(ds[config.name_var_mdt['lon']].values,
-                                          ds[config.name_var_mdt['lat']].values)
-            
-        mdt = ds[config.name_var_mdt['var']].values
-        
-    else:
-        lon_mdt = lat_mdt = mdt = None
                                       
-    
     # Compute output observation dictionnary
     dict_obs = {}
     
@@ -107,8 +88,7 @@ def obs(config, State, *args, **kwargs):
         if sat_info.kind in ['swot_simulator','CMEMS']:
             _obs_swot_simulator(ds, assim_dates, dict_obs, sat_info, 
                                 config.assimilation_time_step, 
-                                config.tmp_DA_path,bbox,
-                                lon_mdt,lat_mdt,mdt)
+                                config.tmp_DA_path,bbox)
         elif sat_info.kind=='fullSSH':
             _obs_fullSSH(ds, assim_dates,dict_obs, sat_info,
                          config.assimilation_time_step,
@@ -125,7 +105,7 @@ def obs(config, State, *args, **kwargs):
 
 
 def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
-                        bbox=None,lon_mdt=None,lat_mdt=None,mdt=None):
+                        bbox=None):
     """
     NAME
         _obs_swot_simulator
@@ -159,14 +139,7 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
                     
         if is_obs:
-            # Add MDT if provided
-            if mdt is not None:
-                mdt_on_track = interpolate.griddata(
-                    (lon_mdt.ravel(),lat_mdt.ravel()),mdt.ravel(),
-                    (lon.ravel(),lat.ravel())).reshape(lon.shape)
-                _ds[sat_info.name_obs_var[0]] += mdt_on_track
             # Save the selected dataset in a new nc file
-        
             varobs = {}
             for namevar in sat_info.name_obs_var:
                 varobs[namevar] = _ds[namevar]
