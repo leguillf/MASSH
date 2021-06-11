@@ -72,7 +72,7 @@ class Qgm:
         self.mdt = mdt
         if self.mdt is not None:
             self.ubar,self.vbar = self.h2uv(self.mdt)
-            self.qbar = self.h2pv(self.mdt)
+            self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
         
     
     def h2uv(self,h):
@@ -102,7 +102,7 @@ class Qgm:
         return u,v
 
 
-    def h2pv(self,h):
+    def h2pv(self,h,c=None):
         """ SSH to Q
     
         Args:
@@ -113,15 +113,18 @@ class Qgm:
             q: Potential Vorticity field  
         """
         
+        if c is None:
+            c = self.c
+            
         q = np.zeros((self.ny,self.nx))
-    
+        
         q[1:-1,1:-1] = self.g/self.f0[1:-1,1:-1]*\
             ((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2 +\
              (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) -\
-                self.g*self.f0[1:-1,1:-1]/(self.c[1:-1,1:-1]**2) *h[1:-1,1:-1]
+                self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
         
         ind = np.where((self.mask==1))
-        q[ind]= -self.g*self.f0[ind]/(self.c[ind]**2) * h[ind]
+        q[ind]= -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
     
         ind = np.where((np.isnan(q)))
         q[ind] = 0

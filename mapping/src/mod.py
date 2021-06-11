@@ -49,9 +49,8 @@ class Model_qg1l:
             dir_model = config.dir_model  
         SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
 
-        # Model parameters
+        # Model timestep
         self.dt = config.dtmodel
-        self.c = config.c
         
         # Open MDT map if provided
         if config.path_mdt is not None and os.path.exists(config.path_mdt):
@@ -61,49 +60,25 @@ variable are SLAs!')
                       
             ds = xr.open_dataset(config.path_mdt)
             
-            ds = ds.assign_coords(
-                {config.name_var_mdt['lon']:(ds[config.name_var_mdt['lon']] % 360),
-                 config.name_var_mdt['lat']:ds[config.name_var_mdt['lat']]})
-            
-            if ds[config.name_var_mdt['var']].shape[0]!=ds[config.name_var_mdt['lat']].shape[0]:
-                ds[config.name_var_mdt['var']] = ds[config.name_var_mdt['var']].transpose()
-                
-            if len(ds[config.name_var_mdt['lon']].shape)==2:
-                dlon = (ds[config.name_var_mdt['lon']][:,1:].values - ds[config.name_var_mdt['lon']][:,:-1].values).max()
-                dlat = (ds[config.name_var_mdt['lat']][1:,:].values - ds[config.name_var_mdt['lat']][:-1,:].values).max()
-    
-                
-                ds = ds.where((ds[config.name_var_mdt['lon']]<=State.lon.max()+dlon) &\
-                              (ds[config.name_var_mdt['lon']]>=State.lon.min()-dlon) &\
-                              (ds[config.name_var_mdt['lat']]<=State.lat.max()+dlat) &\
-                              (ds[config.name_var_mdt['lat']]>=State.lat.min()-dlat),drop=True)
-                    
-                lon_mdt = ds[config.name_var_mdt['lon']].values
-                lat_mdt = ds[config.name_var_mdt['lat']].values
-            
-            else:
-                dlon = (ds[config.name_var_mdt['lon']][1:].values - ds[config.name_var_mdt['lon']][:-1].values).max()
-                dlat = (ds[config.name_var_mdt['lat']][1:].values - ds[config.name_var_mdt['lat']][:-1].values).max()
-                
-                ds = ds.where((ds[config.name_var_mdt['lon']]<=State.lon.max()+dlon) &\
-                              (ds[config.name_var_mdt['lon']]>=State.lon.min()-dlon) &\
-                              (ds[config.name_var_mdt['lat']]<=State.lat.max()+dlat) &\
-                              (ds[config.name_var_mdt['lat']]>=State.lat.min()-dlat),drop=True)
-                    
-                lon_mdt,lat_mdt = np.meshgrid(
-                    ds[config.name_var_mdt['lon']].values,
-                    ds[config.name_var_mdt['lat']].values)
-            
-            mdt = ds[config.name_var_mdt['var']].values
-            
-            # Interpolate to state grid 
-            self.mdt = griddata((lon_mdt.ravel(),lat_mdt.ravel()),
-                           mdt.ravel(),
-                           (State.lon.ravel(),State.lat.ravel())).reshape((State.ny,State.nx))
-            
+            self.mdt = grid.interp2d(ds,
+                                     config.name_var_mdt,
+                                     State.lon,
+                                     State.lat)
         else:
             self.mdt = None
-
+        
+        # Open Rossby Radius if provided
+        if config.filec_aux is not None and os.path.exists(config.filec_aux):
+            
+            ds = xr.open_dataset(config.filec_aux)
+            
+            self.c = grid.interp2d(ds,
+                                   config.name_var_c,
+                                   State.lon,
+                                   State.lat)
+        else:
+            self.c = config.c0 * np.ones((State.ny,State.nx))
+        
         
         # Model initialization
         SourceFileLoader("qgm", 
@@ -223,14 +198,14 @@ variable are SLAs!')
         if Nudging_term is not None:
             # Nudging towards relative vorticity
             if np.any(np.isfinite(Nudging_term['rv'])):
-                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1) 
+                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1) & (self.c>1)
                 pv_1[indNoNan] += (1-Wbc[indNoNan]) *\
                     Nudging_term['rv'][indNoNan]
             # Nudging towards ssh
             if np.any(np.isfinite(Nudging_term['ssh'])):
-                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1)
+                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1) & (self.c>1)
                 pv_1[indNoNan] -= (1-Wbc[indNoNan]) *\
-                    (self.State.g*self.State.f[indNoNan])/self.c**2 * \
+                    (self.State.g*self.State.f[indNoNan])/self.c[indNoNan]**2 * \
                         Nudging_term['ssh'][indNoNan]
                 # Inversion pv -> ssh
                 ssh_b = +ssh_1

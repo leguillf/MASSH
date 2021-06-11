@@ -107,6 +107,50 @@ def laplacian(u, dx, dy):
          +  np.gradient(np.gradient(u, dy, axis=1), dy, axis=1);
     return Ml
 
+def interp2d(ds,name_vars,lon_out,lat_out):
+    
+    ds = ds.assign_coords(
+                 {name_vars['lon']:(ds[name_vars['lon']] % 360),
+                  name_vars['lat']:ds[name_vars['lat']]})
+            
+    if ds[name_vars['var']].shape[0]!=ds[name_vars['lat']].shape[0]:
+        ds[name_vars['var']] = ds[name_vars['var']].transpose()
+        
+    if len(ds[name_vars['lon']].shape)==2:
+        dlon = (ds[name_vars['lon']][:,1:].values - ds[name_vars['lon']][:,:-1].values).max()
+        dlat = (ds[name_vars['lat']][1:,:].values - ds[name_vars['lat']][:-1,:].values).max()
+
+        
+        ds = ds.where((ds[name_vars['lon']]<=lon_out.max()+dlon) &\
+                      (ds[name_vars['lon']]>=lon_out.min()-dlon) &\
+                      (ds[name_vars['lat']]<=lat_out.max()+dlat) &\
+                      (ds[name_vars['lat']]>=lat_out.min()-dlat),drop=True)
+            
+        lon_sel = ds[name_vars['lon']].values
+        lat_sel = ds[name_vars['lat']].values
+            
+    else:
+        dlon = (ds[name_vars['lon']][1:].values - ds[name_vars['lon']][:-1].values).max()
+        dlat = (ds[name_vars['lat']][1:].values - ds[name_vars['lat']][:-1].values).max()
+        
+        ds = ds.where((ds[name_vars['lon']]<=lon_out.max()+dlon) &\
+                      (ds[name_vars['lon']]>=lon_out.min()-dlon) &\
+                      (ds[name_vars['lat']]<=lat_out.max()+dlat) &\
+                      (ds[name_vars['lat']]>=lat_out.min()-dlat),drop=True)
+            
+        lon_sel,lat_sel = np.meshgrid(
+            ds[name_vars['lon']].values,
+            ds[name_vars['lat']].values)
+    
+    var_sel = ds[name_vars['var']].values
+
+    # Interpolate to state grid 
+    var_out = interpolate.griddata((lon_sel.ravel(),lat_sel.ravel()),
+                   var_sel.ravel(),
+                   (lon_out.ravel(),lat_out.ravel())).reshape((lat_out.shape))
+    
+    return var_out
+
 
 def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                         lon2d, lat2d, flag_plot=0, sponge='gaspari-cohn'):

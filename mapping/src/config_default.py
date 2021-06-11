@@ -173,16 +173,15 @@ dtmodel = 300
 
 qgiter = 20
 
-c = 2.7
+c0 = 2.7
 
 cdiffus = 0. 
 
 only_diffusion = False
 
-path_mdt = None # For CMEMS data only ! 
+path_mdt = None # If provided, QGPV will be expressed thanks to the Reynolds decompositon
 
-name_var_mdt = {'lon':'','lat':'','var':''} # If provided, QGPV will be expressed
-                                            # thanks to the Reynolds decompositon
+name_var_mdt = {'lon':'','lat':'','var':''} 
 
 # - parameters specific to SW model
 
@@ -299,6 +298,7 @@ file_aux = ''
 
 filec_aux = ''
 
+name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
 
 #################################################################################################################################
 # Observation parameters
