@@ -10,6 +10,7 @@ import xarray as xr
 import numpy as np 
 from datetime import timedelta
 
+import matplotlib.pylab as plt 
 
 from . import grid
 
@@ -469,6 +470,7 @@ class Variational:
             self.tapering = (1-weight_map + eps_bc*weight_map)**-1
         else:
             self.tapering = np.ones((self.State.ny,self.State.nx))
+        
         
         # Grad test
         if False:
