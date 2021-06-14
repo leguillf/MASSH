@@ -1,4 +1,4 @@
-mapping/src/mod.py#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jan  6 22:36:20 2021
