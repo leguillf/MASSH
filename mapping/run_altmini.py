@@ -102,7 +102,8 @@ if __name__ == "__main__":
     
     K = np.inf
     i = i0
-    while K>Kmin or i<=imax:
+    
+    while float(K)>Kmin or i<=imax:
         
         time0 = datetime.now()
         print('\n*** Iteration n°'+str(i) + ' ***')
