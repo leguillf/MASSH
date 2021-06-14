@@ -96,7 +96,7 @@ variable are SLAs!')
                          dy=State.DY,
                          dt=self.dt,
                          SSH=State.getvar(ind=0),
-                         c=config.c,
+                         c=config.c0,
                          g=State.g,
                          f=State.f,
                          qgiter=config.qgiter,
