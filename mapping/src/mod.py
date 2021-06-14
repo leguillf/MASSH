@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+mapping/src/mod.py#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jan  6 22:36:20 2021
@@ -70,6 +70,8 @@ variable are SLAs!')
         # Open Rossby Radius if provided
         if config.filec_aux is not None and os.path.exists(config.filec_aux):
             
+            print('Rossby Radius is prescribed, be sure to have provided MDT as well')
+
             ds = xr.open_dataset(config.filec_aux)
             
             self.c = grid.interp2d(ds,
