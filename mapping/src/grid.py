@@ -295,7 +295,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
 
     
     
-def compute_weight_map(lon2d,lat2d,mask,dist_scale):
+def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
     
     #####################
     # Compute weights map
@@ -307,10 +307,11 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale):
     eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
     dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
     # Add boundary pixels to mask
-    mask[0,:] = True
-    mask[-1,:] = True
-    mask[:,0] = True
-    mask[:,-1] = True
+    if bc:
+        mask[0,:] = True
+        mask[-1,:] = True
+        mask[:,0] = True
+        mask[:,-1] = True
     
     # get boundary coordinates
     lon_bc = lon2d[mask]

@@ -284,7 +284,9 @@ gtol = 1e-5 # Gradient norm must be less than gtol before successful termination
 
 maxiter = 20 # Maximal number of iterations for the minimization process
 
-eps_bc = 10 # Damping ratio of the R^{-1} matrix at border pixels
+mask_coast = True
+
+dist_coast = 100 #km
 
 ####################################
 ### MIOST-specific parameters ### 
