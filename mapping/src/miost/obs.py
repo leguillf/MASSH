@@ -170,7 +170,7 @@ class MASSH(ObsSla):
                         
                         ds = ds.where((lon0<=lon_obs) & (lon1>=lon_obs) & 
                   (lat0<=lat_obs) & (lat1>=lat_obs), drop=True)
-                        
+
                         if _sat.kind=='fullSSH':
                             if len(ds[_sat.name_obs_lon].shape)==1:
                                 lon_obs = ds[_sat.name_obs_lon].values[::self.subsampling]
@@ -180,29 +180,38 @@ class MASSH(ObsSla):
                                 lon_obs = ds[_sat.name_obs_lon].values[::self.subsampling,::self.subsampling]
                                 lat_obs = ds[_sat.name_obs_lat].values[::self.subsampling,::self.subsampling]
                             ssh_obs = ds[_sat.name_obs_var[0]].values[::self.subsampling,::self.subsampling]
+                            time_obs = time_obs * numpy.ones_like(ssh_obs)
                         
+                        elif _sat.kind=='swot_simulator':
+                            lon_obs = ds[_sat.name_obs_lon].values
+                            lat_obs = ds[_sat.name_obs_lat].values
+                            ssh_obs = ds[_sat.name_obs_var[0]].values
+                            if len(ssh_obs.shape)==2:
+                                # SWATH data
+                                time_obs = time_obs.repeat(ssh_obs.shape[1],axis=0)
+                                
                         ds.close()
                         del ds
                         
                         # Flattening
+                        time1d = time_obs.ravel()
                         lon1d = lon_obs.ravel()
                         lat1d = lat_obs.ravel()
                         ssh1d = ssh_obs.ravel()
-                        
+
                         # Remove NaN pixels
                         indNoNan= ~numpy.isnan(ssh1d)
+                        time1d = time1d[indNoNan]
                         lon1d = lon1d[indNoNan]
                         lat1d = lat1d[indNoNan]
                         ssh1d = ssh1d[indNoNan]    
                         
                         # Append to arrays
-                        time = numpy.append(time,time_obs*numpy.ones(lon1d.size))
+                        time = numpy.append(time,time1d)
                         lon = numpy.append(lon,lon1d)
                         lat = numpy.append(lat,lat1d)
                         ssh = numpy.append(ssh,ssh1d)
         
-        ssh[numpy.isnan(ssh)] = 0
-                    
         coords = [None]*3
         coords_att = { 'lon':0, 'lat':1, 'time':2, 'nobs':len(time) }
         values=None
@@ -210,7 +219,7 @@ class MASSH(ObsSla):
         if len(time)>0:
             indsort = numpy.argsort(time)
             if len(indsort)>0:
-                lon=lon[indsort]
+                lon=lon[indsort]   
                 lat=lat[indsort]
                 time=time[indsort]
                 ssh=ssh[indsort]

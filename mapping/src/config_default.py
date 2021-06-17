@@ -270,6 +270,8 @@ scalenudg = None
 
 path_init_4Dvar = None 
 
+path_H = None
+
 checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
 
 sigma_R = 1e-2 # Observational standard deviation

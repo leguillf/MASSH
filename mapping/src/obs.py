@@ -10,10 +10,10 @@ import pickle
 import xarray as xr
 import numpy as np
 from datetime import datetime
-from scipy import interpolate
+from scipy import interpolate,signal
 import pandas as pd
 import glob 
-import matplotlib.pylab as plt 
+import matplotlib.pylab as plt
 
 from .sat import read_satellite_info
 from .tools import detrendn
@@ -116,11 +116,17 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
     """
     ds = ds[sat_info.name_obs_grd + sat_info.name_obs_var]
     
+    ds = ds.assign_coords({sat_info.name_obs_time:ds[sat_info.name_obs_time]})
+
+    ds = ds.rename({ds[sat_info.name_obs_time].dims[0]:sat_info.name_obs_time})
+    
     # Select sub area
     lon_obs = ds[sat_info.name_obs_lon] % 360
     lat_obs = ds[sat_info.name_obs_lat]
     ds = ds.where((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
                   (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs), drop=True)
+    
+
                   
     # Time loop
     for dt_curr in dt_list:
@@ -128,11 +134,12 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
         
-        #_ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
+        _ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
         
-        _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
-                       (ds[sat_info.name_obs_time]>=dt1),drop=True)
         
+        # _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
+        #                (ds[sat_info.name_obs_time]>=dt1),drop=True)
+
         lon = _ds[sat_info.name_obs_lon].values
         lat = _ds[sat_info.name_obs_lat].values
         
@@ -144,14 +151,16 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
             for namevar in sat_info.name_obs_var:
                 varobs[namevar] = _ds[namevar]
             coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
-            if len(lon.shape)==1:
-                coords[sat_info.name_obs_lon] = lon
-            else:
-                varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
-            if len(lat.shape)==1:
-                coords[sat_info.name_obs_lat] = lat
-            else:
-                varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
+            # if len(lon.shape)==1:
+            #     coords[sat_info.name_obs_lon] = lon
+            # else:
+            #     
+            # if len(lat.shape)==1:
+            #     coords[sat_info.name_obs_lat] = lat
+            # else:
+            #     
+            varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
+            varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
             if sat_info.name_obs_xac is not None:
                 varobs[sat_info.name_obs_xac] = _ds[sat_info.name_obs_xac]
                 
@@ -237,7 +246,10 @@ def detrend_obs(dict_obs):
             mask = np.isnan(ssh)
             ssh[mask] = 0
             # Detrend data in all directions
-            ssh_detrended = detrendn(ssh)
+            if len(ssh.shape)==1:
+                ssh_detrended = signal.detrend(ssh)
+            else:
+                ssh_detrended = detrendn(ssh)
             # Re-mask 
             ssh_detrended[mask] = np.nan
             # Write detrended observation

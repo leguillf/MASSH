@@ -10,13 +10,15 @@ import xarray as xr
 import numpy as np 
 from datetime import timedelta
 
+from dask import delayed,compute
+
 #import matplotlib.pylab as plt 
 
 from . import grid
 
 class Obsopt:
 
-    def __init__(self,State,dict_obs,Model,tmp_DA_path=None,mask_coast=False,dist_coast=None):
+    def __init__(self,config,State,dict_obs,Model):
         
         self.npix = State.lon.size
         self.dict_obs = dict_obs        # observation dictionnary
@@ -34,92 +36,112 @@ class Obsopt:
                     self.date_obs[t] = t_obs[ind_obs]
         
         # Temporary path where to save model trajectories
-        self.tmp_DA_path = tmp_DA_path
+        if config.path_H is not None:
+            self.path_H = config.path_H
+        else:
+            self.path_H = config.tmp_DA_path
+        if not os.path.exists(self.path_H):
+            os.makedirs(self.path_H)
+        
         
         self.obs_sparse = {}
         
         # For grid interpolation:
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
+
         
         # Mask coast pixels
-        if mask_coast and dist_coast is not None and State.mask is not None and np.any(State.mask):
-            flag_mask_coast = True
+        self.dist_coast = config.dist_coast
+        if config.mask_coast and self.dist_coast is not None and State.mask is not None and np.any(State.mask):
+            self.flag_mask_coast = True
             lon_land = State.lon[State.mask].ravel()
             lat_land = State.lat[State.mask].ravel()
             coords_geo_land = np.column_stack((lon_land,lat_land))
-            coords_car_land = grid.geo2cart(coords_geo_land)
+            self.coords_car_land = grid.geo2cart(coords_geo_land)
             
-        else: flag_mask_coast = False
+        else: self.flag_mask_coast = False
         
+        
+        delayed_results = []
         for t in self.date_obs:
-            # Read obs
-            sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
-            obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
-            
-            obs_sparse = False   
-            lon_obs = np.array([])
-            lat_obs = np.array([])
-            for sat_info,obs_file in zip(sat_info_list,obs_file_list):
-                if sat_info.kind=='fullSSH':
-                    if obs_sparse:
-                        sys.exit("Error: in Obsopt: \
-                                 can't handle 'fullSSH' and 'swot_simulator'\
-                                 observations at the same time, sorry")
-                    elif len(sat_info_list)>1:
-                        sys.exit("Error: in Obsopt: \
-                                 can't handle several 'fullSSH'\
-                                 observations at the same time, sorry.\
-                                 Hint: reduce *assimiliation_time_step* parameter")
-                    
-                    
-                elif sat_info.kind=='swot_simulator':
-                    obs_sparse = True
-                with xr.open_dataset(obs_file) as ncin:
-                    lon = ncin[sat_info.name_obs_lon].values.ravel()
-                    lat = ncin[sat_info.name_obs_lat].values.ravel()
-                if lon.size!=lat.size:
-                    lon,lat = np.meshgrid(lon,lat)
-                    lon = lon.ravel()
-                    lat = lat.ravel()
-                lon_obs = np.concatenate((lon_obs,lon))
-                lat_obs = np.concatenate((lat_obs,lat))
-                                    
-            self.obs_sparse[t] = obs_sparse
-            
-            
-            
-            print(t,'Compute obs interpolator')
-            if obs_sparse:
-                # Compute indexes and weights of neighbour grid pixels
-                indexes,weights = self.interpolator(lon_obs,lat_obs)
-            else:
-                indexes,weights = np.arange(lon_obs.size),np.ones((lon_obs.size,))
-                indexes = indexes[:,np.newaxis]
-                weights = weights[:,np.newaxis]
-            
-            # Compute mask 
-            maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
-            if flag_mask_coast:
-                coords_geo_obs = np.column_stack((lon_obs,lat_obs))
-                coords_car_obs = grid.geo2cart(coords_geo_obs)
-                for i in range(lon_obs.size):
-                
+            res = delayed(self.process_obs)(t)
+            delayed_results.append(res)
+        compute(*delayed_results, scheduler="processes")
 
-                    _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-coords_car_land),axis=1)))
-                    if _dist<dist_coast:
-                        maskobs[i] = True
+    
             
-            # save in netcdf
-            dsout = xr.Dataset({"indexes": (("Nobs","Npix"), indexes),
-                                "weights": (("Nobs","Npix"), weights),
-                                "maskobs": (("Nobs"), maskobs)},                
-                               )
-            dsout.to_netcdf(os.path.join(
-                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')),
-                encoding={'indexes': {'dtype': 'int16'}})
-                
+    def process_obs(self,t):
         
+        
+        file_H = os.path.join(
+            self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+        if os.path.exists(file_H):
+            return t
+        
+        # Read obs
+        sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
+        obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
+        
+        obs_sparse = False   
+        lon_obs = np.array([])
+        lat_obs = np.array([])
+        for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+            if sat_info.kind=='fullSSH':
+                if obs_sparse:
+                    sys.exit("Error: in Obsopt: \
+                             can't handle 'fullSSH' and 'swot_simulator'\
+                             observations at the same time, sorry")
+                elif len(sat_info_list)>1:
+                    sys.exit("Error: in Obsopt: \
+                             can't handle several 'fullSSH'\
+                             observations at the same time, sorry.\
+                             Hint: reduce *assimiliation_time_step* parameter")
+                
+                
+            elif sat_info.kind=='swot_simulator':
+                obs_sparse = True
+            with xr.open_dataset(obs_file) as ncin:
+                lon = ncin[sat_info.name_obs_lon].values.ravel()
+                lat = ncin[sat_info.name_obs_lat].values.ravel()
+            if lon.size!=lat.size:
+                lon,lat = np.meshgrid(lon,lat)
+                lon = lon.ravel()
+                lat = lat.ravel()
+            lon_obs = np.concatenate((lon_obs,lon))
+            lat_obs = np.concatenate((lat_obs,lat))
+                                        
+    
+        if obs_sparse:
+            # Compute indexes and weights of neighbour grid pixels
+            indexes,weights = self.interpolator(lon_obs,lat_obs)
+        else:
+            indexes,weights = np.arange(lon_obs.size),np.ones((lon_obs.size,))
+            indexes = indexes[:,np.newaxis]
+            weights = weights[:,np.newaxis]
+        
+        # Compute mask 
+        maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
+        if self.flag_mask_coast:
+            coords_geo_obs = np.column_stack((lon_obs,lat_obs))
+            coords_car_obs = grid.geo2cart(coords_geo_obs)
+            for i in range(lon_obs.size):
+                _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
+                if _dist<self.dist_coast:
+                    maskobs[i] = True
+        
+        # save in netcdf
+        dsout = xr.Dataset({"indexes": (("Nobs","Npix"), indexes),
+                            "weights": (("Nobs","Npix"), weights),
+                            "maskobs": (("Nobs"), maskobs)},                
+                           )
+        dsout.to_netcdf(file_H,
+            encoding={'indexes': {'dtype': 'int16'}})
+        
+        return t
+                
+    
+            
     def isobserved(self,t):
         
         delta_t = [(t - tobs).total_seconds() for tobs in self.dict_obs.keys()]
@@ -129,6 +151,8 @@ class Obsopt:
         
         return is_obs
     
+        
+    
     def interpolator(self,lon_obs,lat_obs):
         
         coords_geo_obs = np.column_stack((lon_obs, lat_obs))
@@ -137,8 +161,7 @@ class Obsopt:
         indexes = []
         weights = []
         for i in range(lon_obs.size):
-            diff = np.square(coords_car_obs[i])-np.square(self.coords_car)
-            _dist = np.sqrt(np.sum(np.square(diff),axis=1))
+            _dist = np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car),axis=1))
             # 4 closest
             ind4 = np.argsort(_dist)[:4]
             indexes.append(ind4)
@@ -146,13 +169,14 @@ class Obsopt:
             
         return np.asarray(indexes),np.asarray(weights)
     
+
     
     def H(self,t,X):
         
         #if self.obs_sparse[t] :
         # Get indexes and weights of neighbour grid pixels
         ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+                self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
         indexes = ds['indexes'].values
         weights = ds['weights'].values
         maskobs = ds['maskobs'].values
@@ -169,8 +193,6 @@ class Obsopt:
                     HX[i] = X[ind[0]]
             else:
                 HX[i] = np.nan
-        #else:
-        #    HX = X # H==Id
         
         return HX
 
@@ -202,7 +224,7 @@ class Obsopt:
         #if self.obs_sparse[t]:
         adHssh = np.zeros(self.npix)
         ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+                self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
         indexes = ds['indexes'].values
         weights = ds['weights'].values
         maskobs = ds['maskobs'].values
@@ -216,8 +238,7 @@ class Obsopt:
                         adHssh[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
         
         adState.var[ind] += adHssh.reshape(adState.var[ind].shape)
-        # else:
-        #     adState.var[ind] += misfit.reshape(adState.var[ind].shape)
+
         
             
 class Cov:

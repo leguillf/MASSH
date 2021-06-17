@@ -455,7 +455,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         #####################
         # 6. SAVING OUTPUTS #
         #####################
-        # Set the saving temporal window
+        # Set the saving temporal windowx
         if config.bfn_max_iteration==1:
             write_date_min = init_bfn_date
             write_date_max = final_bfn_date
@@ -541,8 +541,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 1. Obs op     #
     #################
     print('\n*** Obs op ***\n')
-    H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path,
-               mask_coast=config.mask_coast,dist_coast=config.dist_coast)
+    H = Obsopt(config,State,dict_obs,Model)
     
     if config.detrend:
         print('\n*** Detrend obs ***\n')

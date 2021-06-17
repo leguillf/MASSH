@@ -328,7 +328,7 @@ class State:
             outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
             
         ds = xr.Dataset(outvars)
-        ds.to_netcdf(filename,engine='h5netcdf')
+        ds.to_netcdf(filename)
         ds.close()
         del ds
         
@@ -353,7 +353,7 @@ class State:
     
     def load(self,filename):
 
-        with xr.open_dataset(filename,engine='h5netcdf') as ds:
+        with xr.open_dataset(filename) as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values
                 
