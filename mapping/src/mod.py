@@ -211,11 +211,15 @@ variable are SLAs!')
                         Nudging_term['ssh'][indNoNan]
                 # Inversion pv -> ssh
                 ssh_b = +ssh_1
-                ssh_1 = self.qgm.pv2h(pv_1,ssh_b)
+                ssh_1[indNoNan] = self.qgm.pv2h(pv_1,ssh_b)[indNoNan]
         
         if np.any(np.isnan(ssh_1[self.qgm.mask>1])):
-            sys.exit('Invalid value encountered in mod_qg1l')
-        
+            if Hbc is not None:
+                ssh_1[np.isnan(ssh_1[self.qgm.mask>1])] = Hbc[np.isnan(ssh_1[self.qgm.mask>1])] 
+                print('Warning: Invalid value encountered in mod_qg1l, we replace by boundary values')
+                print(np.isnan(ssh_1[self.qgm.mask>1]))
+            else: sys.exit('Invalid value encountered in mod_qg1l')
+            
         # Update state 
         State.setvar(ssh_1,0)
         if flag_pv:

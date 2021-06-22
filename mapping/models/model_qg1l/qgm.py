@@ -125,11 +125,11 @@ class Qgm:
         
         ind = np.where((self.mask==1))
         q[ind]= -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
-    
-        ind = np.where((np.isnan(q)))
+            
+        ind = np.where((self.mask==0))
         q[ind] = 0
         
-        ind = np.where((self.mask==0))
+        ind = np.isnan(q)
         q[ind] = 0
     
         return q
@@ -306,27 +306,90 @@ if __name__ == "__main__":
     
     ds = xr.open_dataset('~/WORK/Developpement/Studies/MASSH/data_Example1/init.nc')
     print(ds)
-    SSH_true = ds.sossheig.data
-    SSH_true[500:,500:] = np.nan
+    ssh0 = ds.sossheig.data
     
-    plt.figure()
-    plt.pcolormesh(SSH_true)
-    plt.show()
     
-    ny,nx = SSH_true.shape
+    
+    
+    
+    
+    ny,nx = ssh0.shape
     dx = dy = 1e3 * np.ones((ny,nx))
+    x = np.arange(0,nx*1e3,1e3)
+    y = np.arange(0,ny*1e3,1e3)
     dt = 300
-    SSH = np.zeros((ny,nx))
     c = 2.5
     
-    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH_true,qgiter=100)
+    plt.figure()
+    plt.pcolormesh(x,y,ssh0)
+    plt.axis('off')
+    plt.title(r'$ssh_0$',size=30)
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(r'$[m]$')
+    cbar.formatter.set_powerlimits((0, 0))
+    plt.show()
     
-    ssh = +SSH_true
-    t = 0
-    for i in range(100000):
-        if i%10000==0:
-            ssh = qgm.step(ssh)
-            plt.figure()
-            plt.pcolormesh(ssh)
-            plt.show()
-        
+    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=ssh0,qgiter=100)
+    
+    psi0 = qgm.g/qgm.f0*ssh0
+    plt.figure()
+    plt.pcolormesh(x,y,psi0,cmap='winter')
+    plt.title(r'$\psi_0$',size=30)
+    plt.axis('off')
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(r'$[m^2.s^{-1}]$')
+    cbar.formatter.set_powerlimits((0, 0))
+    plt.show()
+    
+    pv0 = qgm.h2pv(ssh0)
+    plt.figure()
+    plt.pcolormesh(x,y,pv0,vmin=-4e-4,vmax=4e-4,cmap='inferno')
+    plt.axis('off')
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(r'$[s^{-1}]$')
+    cbar.formatter.set_powerlimits((0, 0))
+    plt.title(r'$q_0$',size=30)
+    plt.show()
+    
+    u0,v0 = qgm.h2uv(ssh0)
+    
+    l = 30
+    plt.figure()
+    im = plt.pcolormesh(x,y,np.sqrt(u0**2+v0**2),vmax=3,cmap='Blues_r')
+    plt.quiver(x[::l],y[::l],u0[::l,::l],v0[::l,::l],color='r')
+    plt.axis('off')
+    plt.title(r'$U_0$',size=30)
+    cbar = plt.colorbar(im)
+    cbar.ax.set_xlabel(r'$[m.s^{-1}]$')
+    cbar.formatter.set_powerlimits((0, 0))
+    plt.show()
+    
+    ssh1,pv1 = qgm.step(ssh0,q0=pv0)
+    
+    plt.figure()
+    plt.pcolormesh(x,y,pv1,vmin=-4e-4,vmax=4e-4,cmap='inferno')
+    plt.axis('off')
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(r'$[s^{-1}]$')
+    plt.title(r'$q_1$',size=30)
+    cbar.formatter.set_powerlimits((0, 0))
+    plt.show()
+    
+    psi1 = qgm.g/qgm.f0*ssh1
+    plt.figure()
+    plt.pcolormesh(x,y,psi1,cmap='winter')
+    plt.title(r'$\psi_1$',size=30)
+    plt.axis('off')
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(r'$[m^2.s^{-1}]$')
+    cbar.formatter.set_powerlimits((0, 0))
+    plt.show()
+    
+    plt.figure()
+    plt.pcolormesh(x,y,ssh1)
+    plt.title(r'$ssh_1$',size=30)
+    cbar = plt.colorbar()
+    cbar.ax.set_xlabel(r'$[m]$')
+    cbar.formatter.set_powerlimits((0, 0))
+    plt.axis('off')
+    plt.show()
