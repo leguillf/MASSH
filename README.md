@@ -1,6 +1,13 @@
 # MASSH
 MApping SSH 
 
+## Libraries
+- scipy
+- xarray
+- matplotlib
+- dask
+- netcdf4
+
 
 ## Examples
 ### 1. BFN-QG with SWOT & Nadir data
