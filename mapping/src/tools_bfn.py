@@ -249,8 +249,8 @@ class bfn_qg1l(object):
         files_back = sorted(glob.glob(path_back))
         
         for (ff,fb) in zip(files_forth,files_back):
-            dsf = xr.open_dataset(ff,engine='h5netcdf')
-            dsb = xr.open_dataset(fb,engine='h5netcdf')
+            dsf = xr.open_dataset(ff)
+            dsb = xr.open_dataset(fb)
             for name_var in self.name_mod_var:
                 varf = dsf[name_var].values
                 varb = dsb[name_var].values
@@ -260,6 +260,7 @@ class bfn_qg1l(object):
                     err += np.sum(np.abs(varf**2-varb**2))/np.std(varf)/varf.size
             dsf.close()
             dsb.close()
+            del dsf,dsb
         
         return err
 

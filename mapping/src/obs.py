@@ -246,12 +246,17 @@ def detrend_obs(dict_obs):
             mask = np.isnan(ssh)
             ssh[mask] = 0
             # Detrend data in all directions
-            if len(ssh.shape)==1:
+            print(obs_file)
+            print(ssh.shape)
+            if len(ssh.shape)==0:
+                ssh_detrended = +ssh
+            elif len(ssh.shape)==1:
                 ssh_detrended = signal.detrend(ssh)
             else:
                 ssh_detrended = detrendn(ssh)
-            # Re-mask 
-            ssh_detrended[mask] = np.nan
+            # Re-mask
+            if mask.size>1:
+                ssh_detrended[mask] = np.nan
             # Write detrended observation
             ncout[sat_info.name_obs_var[0]].data = ssh_detrended.reshape(ncout[sat_info.name_obs_var[0]].shape)
             ncout.to_netcdf(obs_file)
