@@ -219,7 +219,8 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
         
         # Read BC fields
         var_bc = ds[name_var_bc['var']]
-       
+        var_bc = var_bc.where(var_bc<10,drop=True)
+        
         #####################
         # Grid processing
         #####################
