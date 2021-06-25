@@ -14,7 +14,6 @@ from src import state as state
 from src import mod as mod
 from src import obs as obs
 from src import ana as ana
-import numpy as np
 
 
 # path of configuration file
@@ -33,7 +32,6 @@ print('\n ** create dict_obs **\n')
 # obs dictionnary
 dict_obs = obs.obs(config,State)
 
+print('\n** assimilation **\n')
+# run the 4Dvar assimilation
 ana.ana_4Dvar_QG(config, State, Model, dict_obs=dict_obs)
-
-print('\n ** assimilation **\n')
-res = ana.window_4D(config, State, Model,dict_obs=dict_obs,date_ini=config.init_date,date_final=config.final_date)
