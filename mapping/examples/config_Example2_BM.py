@@ -72,7 +72,7 @@ init_date = datetime(2010,5,1,0)
 
 final_date = datetime(2010,5,15,0)
 
-assimilation_time_step = timedelta(hours=1)  
+assimilation_time_step = timedelta(hours=3)  
 
 saveoutput_time_step = timedelta(hours=3)
 
@@ -157,7 +157,7 @@ file_boundary_conditions = '../data_Example2/data_BM-IT_idealized/bc.nc'
 
 name_var_bc = {'time':'time','lon':'lon','lat':'lat','var':'ssh_bc'}
 
-lenght_bc = 5
+lenght_bc = 50
 
 #################################################################################################################################
 # Observation parameters

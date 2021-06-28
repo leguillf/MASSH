@@ -90,7 +90,7 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     n_window = int((final_date-init_date).total_seconds()/dt_window.total_seconds())
     
     n_iter = 1 + 2 * (n_window - 1) # number of minimization to perform
-    
+    print(f'number of assimilation window : {n_iter}')
     for i in range(n_iter) :
         date_end = date + dt_window # date at end of the assimilation window
         print(f'\n*** window {i}, initial date = {date.year}:{date.month}:{date.day}\
@@ -186,7 +186,8 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
         '''
         function called at each iteration of the minimization process
         '''
-        var_ssh = XX.reshape(State_callback.var[0].shape)
+        var_ssh = B.prec_filter(XX, State_callback) + Xb
+        var_ssh = var_ssh.reshape(State_callback.var.ssh.shape)
         State_callback.setvar(var_ssh,0)
         State_callback.plot()
     
@@ -196,7 +197,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
                     options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},callback=callback)
     Xout = res.x
     if config.prec :
-        Xout = B.sqr(Xout) + Xb
+        Xout = B.prec_filter(Xout,State) + Xb
     
     return Xout
        
@@ -571,11 +572,19 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         R = Cov(config.sigma_R)
     # backgroud state 
     Xb = np.zeros((Model.nParams,))
+    # Tapering border pixel influence
+    if config.flag_use_boundary_conditions:
+        eps_bc = config.eps_bc
+        dist_scale = config.lenght_bc # tapering window length scale
+    else:
+        eps_bc = 0
+        dist_scale = None
+        
     # Cost and Grad functions
     var = Variational(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec)
+        prec=config.prec,eps_bc=eps_bc,dist_scale=dist_scale)
     # Initial State
     if config.path_init_4Dvar is None:
         Xopt = np.zeros_like(var.Xb)
@@ -590,7 +599,6 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     # 3. Minimization #
     ###################
     print('\n*** Minimization ***\n')
-    
     J0 = var.cost(Xopt)
     g0 = var.grad(Xopt)
     projg0 = np.max(np.abs(g0))

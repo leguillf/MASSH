@@ -11,7 +11,7 @@ import xarray as xr
 import sys,os
 import pandas as pd 
 from copy import deepcopy
-import matplotlib.pylab as plt
+import matplotlib.pyplot as plt
 from scipy import interpolate
 
 
@@ -188,6 +188,7 @@ class State:
         
         # Read mask
         if config.name_init_mask is None or not os.path.exists(config.name_init_mask):
+            self.mask = np.zeros((self.ny,self.nx),dtype='bool')
             return
         
         ds = xr.open_dataset(config.name_init_mask).squeeze()
@@ -237,8 +238,7 @@ class State:
         # Apply to state variable (SSH only)
         if config.name_model=='QG1L':
             self.var[0][self.mask] = np.nan
-        elif config.name_model=='SW1L':
-            self.var[-1][self.mask] = np.nan
+        
             
 
     def save_output(self,date):
@@ -257,8 +257,13 @@ class State:
         coords = {}
         coords['time'] = (('time'), [pd.to_datetime(date)],)
         
+        # Get variable to be saved
         var_to_save = self.getvar(ind=self.get_indsave())
-    
+        
+        # Apply Mask
+        if self.mask is not None:
+            var_to_save[self.mask] = np.nan
+            
         if len(var_to_save.shape)==2:
             var_to_save = var_to_save[np.newaxis,:,:]
             
@@ -331,7 +336,7 @@ class State:
         ds.close()
         del ds
         
-        return ds1
+        return ds1.squeeze()
     
     def load(self,filename):
 
@@ -386,11 +391,11 @@ class State:
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
             
-    def plot(self,title=None,cmap='RdBu_r',scale=0.7):
+    def plot(self,title=None,cmap='RdBu_r'):
         
         nvar = len(self.name_var)
-        vmin ,vmax = -scale, scale
-    
+        vmin,vmax = -0.7,0.7
+        
         fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
         
         if title is not None:
@@ -402,8 +407,8 @@ class State:
         for i in range(nvar):
             ax = axs[i]
             ax.set_title(self.name_var[i])
-            im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],cmap=cmap,\
-                               vmin=vmin, vmax=vmax, shading='auto')
+            im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],vmin=vmin,vmax=vmax,cmap=cmap,\
+                               shading='auto')
             plt.colorbar(im,ax=ax)
         
         plt.show()

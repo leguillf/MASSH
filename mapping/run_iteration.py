@@ -63,13 +63,13 @@ def compute_new_obs(it,dict_obs,config,State):
         # Load corresponding map(s)
         if date in maps_date:
             # Cool: the observation date matches exactly an estimated map
-            ssh_now = State.load_output(date=date).ssh
+            ssh_now = State.load_output(date=date).ssh.values
         else:
             # Don't panic: we just have to perform a time interpolation
             date_prev = min(maps_date, key=lambda x: (x<date, abs(x-date)) )
             date_next = min(maps_date, key=lambda x: (x>date, abs(x-date)) )
-            ssh_prev = State.load_output(date=date_prev).ssh
-            ssh_next = State.load_output(date=date_next).ssh
+            ssh_prev = State.load_output(date=date_prev).ssh.values
+            ssh_next = State.load_output(date=date_next).ssh.values
             # Time interpolation
             Wprev = 1/abs(date_prev - date).total_seconds()
             Wnext = 1/abs(date_next - date).total_seconds()
@@ -87,7 +87,7 @@ def compute_new_obs(it,dict_obs,config,State):
             # Load current state
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout[_sat.name_obs_var[0]].data -= ssh_now.data
+                dsout[_sat.name_obs_var[0]].data -= ssh_now
             elif _sat.kind=='swot_simulator':
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
@@ -131,8 +131,11 @@ def compute_convergence_criteria(config,State,i):
         # Load corresponding maps
         ssh_curr = State.load_output(date=date).ssh.values
         ssh_prev = State_prev.load_output(date=date).ssh.values
+        # Mask
+        mask = (np.isnan(ssh_curr)) | (np.isnan(ssh_prev))
+        ssh_curr[mask] = 0
+        ssh_prev[mask] = 0
         # Compare maps
-        #mask = np.isnan(ssh_curr) + np.isnan(ssh_prev)
         K_t = np.sqrt(np.sum(np.sum(np.square(ssh_curr-ssh_prev)))/ssh_prev.size) /\
             ( np.max(np.max(ssh_prev))-np.min(np.min(ssh_prev)) )    
         if np.isfinite(K_t):
@@ -167,9 +170,7 @@ if __name__ == "__main__":
     *****************************************************************\n')
     time0 = datetime.now()
     # Updtade configuration file
-    print(config1.name_init_lon)
     update_config(config1,iteration)
-    print(config1.name_init_lon)
     # State
     print('* State Initialization')
     State1 = state.State(config1)

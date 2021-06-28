@@ -227,6 +227,10 @@ He_data = None # He external data that will be used as apriori for the inversion
 
 name_analysis = 'BFN'
 
+flag_use_boundary_conditions = True
+
+lenght_bc = 50
+
 ####################################
 ### BFN-specific parameters ### 
 #################################### 
@@ -251,11 +255,7 @@ save_obs_proj = False
 
 path_save_proj = None
 
-flag_use_boundary_conditions = True
-
 file_boundary_conditions = None
-
-lenght_bc = 20
 
 name_var_bc = {'time':'','lon':'','lat':'','var':''}
 
@@ -263,7 +263,19 @@ scalenudg = None
 
 ####################################
 ### 4Dvar-specific parameters ### 
-#################################### 
+#################################################################################################################################
+# - path_ini_4Dvar : path to file used to initialize the SSH field
+# - checkpoint :  Number of model timesteps separating two consecutive analysis 
+# - sigma_R : standard deviation error of the observation error
+# - sigma_B_He : Background variance for He
+# - sigma_B_bc : Background variance for bc
+# - prec : use of a preconditionning
+# - filter_name : name of the filter used in case of preconditionning
+# - filter_order : order of the filter used
+# - gtol : Gradient norm must be less than gtol before successful termination
+# - maxiter : Maximal number of iterations for the minimization process
+# - eps_bc : Damping ratio of the R^{-1} matrix at border pixels
+#################################################################################################################################
 
 path_init_4Dvar = None 
 
@@ -277,9 +289,15 @@ sigma_B_bc = 1e-2 # Background variance for bc
 
 prec = False # preconditoning
 
+filter_name = None # name of filter used in preconditionning
+
+filter_order = None # order of the filter
+
 gtol = 1e-5 # Gradient norm must be less than gtol before successful termination.
 
 maxiter = 20 # Maximal number of iterations for the minimization process
+
+eps_bc = 10 # Damping ratio of the R^{-1} matrix at border pixels
 
 #################################################################################################################################
 # Observation parameters

@@ -147,7 +147,11 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
         
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
-        _ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
+        
+        #_ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
+        
+        _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
+                       (ds[sat_info.name_obs_time]>=dt1),drop=True)
         
         lon = _ds[sat_info.name_obs_lon].values
         lat = _ds[sat_info.name_obs_lat].values

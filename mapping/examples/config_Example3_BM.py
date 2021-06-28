@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Tue Apr 27 09:02:10 2021
+Created on Wed Jan  6 19:20:42 2021
 
-@author: renamatt
+@author: leguillou
 """
-
 
 ##########################################
 ##########################################
@@ -41,8 +40,7 @@ Created on Tue Apr 27 09:02:10 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = '4Dvar_idealized' 
-name_domain = 'GULFSTREAM'
+name_experiment = 'Example3_BM' 
 
 #################################################################################################################################
 # Global libraries     
@@ -50,6 +48,7 @@ name_domain = 'GULFSTREAM'
 # - datetime
 # - timedelta
 #################################################################################################################################
+import os
 from datetime import datetime,timedelta
     
 #################################################################################################################################
@@ -62,16 +61,17 @@ from datetime import datetime,timedelta
 # - name_init_lat: name of latitude field stored in *file_name_init_SSH_field*   
 #################################################################################################################################    
 
-name_init = 'from_file'
+name_init = 'from_file'                                # either 'geo_grid' or 'from_file'
 
-name_init_grid = '/mnt/renamatt/equipes/IGE/meom/workdir/renamatt/MASSH_dev_Matthias/MASSH/data_Example2/data_BM-IT_idealized/ref.nc'
+# - parameters specific to 'geo_grid'  
+
+name_init_grid = '../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc'
 
 name_init_lon = 'lon'
 
 name_init_lat = 'lat'
 
-name_init_file = 'init_state.nc'
-
+name_init_var = 'ssh_corr'
 
 #################################################################################################################################
 # Time parameters
@@ -81,18 +81,13 @@ name_init_file = 'init_state.nc'
 # - assimilation_time_step: assimilation time step (corresponding to observation update timestep)
 # - savepoutput_time_step: time step plot at which the states are saved 
 # - plot_time_step: time step plot at which the states are plotted (for debugging)
-# - window_time_step : time step corresponding to the size of an assimilation window
 #################################################################################################################################
    
-init_date = datetime(2010,1,2,0)     
+init_date = datetime(2012,7,1,0)     
 
-final_date = datetime(2010,1,8,0)
+final_date = datetime(2012,7,20,0)
 
-assimilation_time_step = timedelta(hours=3)  
-
-saveoutput_time_step = timedelta(hours=3) 
-
-window_time_step = timedelta(days=6)
+saveoutput_time_step = timedelta(hours=1) 
 
 #################################################################################################################################
 # Model parameters
@@ -129,7 +124,7 @@ qgiter = 20
 
 c = 2.7
 
-dtmodel = 300
+dtmodel = 300   
 
 #################################################################################################################################
 # Analysis parameters
@@ -153,68 +148,48 @@ dtmodel = 300
 #    * name_var_bc: name of the boundary conditions variable
 #################################################################################################################################
 
-name_analysis = '4Dvar'
+name_analysis = 'BFN'
 
 ####################################
-### 4Dvar-specific parameters ### 
+### Function-specific parameters ### 
 #################################### 
 
-#################################################################################################################################
-# - name_analysis: analysis function. Here, of course, we set BFN
-# - parameters specific to BFN:
-#    * sigma_B : standard deviation of the background error covariance matrix
-#    * sigma_R : standard deviation of the observation error covariance matrix 
-#    * maxiter : maximal number of iteration allowwed in the minimization process
-#    * background_state : path to ncdf file containing background ssh field
-#    *
-#################################################################################################################################
+bfn_window_size = timedelta(days=15)
 
-path_init_4Dvar = None
+bfn_window_output = timedelta(days=7)
 
-sigma_B = 1.
+bfn_propation_timestep = timedelta(hours=1)
 
-sigma_R = 0.1
+bfn_criterion = 0.01
 
-maxiter = 50
+bfn_max_iteration = 1
 
-gtol = 1e-5
+flag_use_boundary_conditions = True
 
-prec = True
+file_boundary_conditions = '../data_Example3/ssh_bc.nc'
 
-filter_name = 'shapiro'
+lenght_bc = 50
 
-filter_order = 5
+name_var_bc = {'lon':'lon','lat':'lat','var':'ssh_bc'}
 
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
 # - satellite: list of satellite names 
 
-satellite = ["nr"]
 write_obs = False
 
-# - For each *satellite*:
-#    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
-#    * obs_path_sat: directory where the observations are stored
-#    * obs_prefixe_sat: prefixe in observation files
-#    * name_obs_var_sat: name of the observed variables
-#    * name_obs_lon_sat: name of the observation longitude
-#    * name_obs_lat_sat: name of the observation latitude
-#    * name_obs_time_sat: name of the observation time
-#    * name_obs_xac_sat: name of the observation across track distance (only for swathSSH satellites).
-#    * use_invobs_file_sat: use existing projected observations computed from SOSIE for instance (True or False). For BFN, always set False.
-#    * swath_width_swot_sat: swath width in km (only for swathSSH satellites)
-#    * gap_width_swot_sat: gap width in km (only for swathSSH satellites)
-#################################################################################################################################
-
+satellite = ['nr']
 
 kind_nr = "fullSSH"
-obs_path_nr = '/mnt/renamatt/equipes/IGE/meom/workdir/renamatt/MASSH_dev_Matthias/MASSH/data_Example2/data_BM-IT_idealized/'
-obs_name_nr = "obs"
-name_obs_var_nr = ["ssh_meso"]
+obs_path_nr = '.'
+obs_name_nr = "../data_Example3/obs_ssh_BMs_ITs_0h23m50.nc"
+name_obs_var_nr = ["ssh_corr"]
 name_obs_lon_nr = "lon"
 name_obs_lat_nr = "lat"
-name_obs_time_nr = "time_obs"
+name_obs_time_nr = "time"
+nudging_params_stretching_nr = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)}
+nudging_params_relvort_nr = None
 
 #################################################################################################################################
 # Outputs parameters
@@ -225,13 +200,13 @@ name_obs_time_nr = "time_obs"
 # - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
 #################################################################################################################################
 
-saveoutputs = False
+saveoutputs = True         
 
 name_exp_save = name_experiment 
 
-path_save = '../outputs/' + name_exp_save + '/'
+path_save = 'outputs/' + name_exp_save + '/'
 
-flag_plot = 1
+flag_plot = 0
     
 #################################################################################################################################
 # Temporary DA parameters
@@ -240,7 +215,7 @@ flag_plot = 1
 # - name_grd: name used for saving the QG grid to avoid calculating it every time.
 #################################################################################################################################
         
-tmp_DA_path = "../scratch/" +  name_exp_save + '/'
+tmp_DA_path = "scratch/" +  name_exp_save + '/'
  
 name_grd = tmp_DA_path + 'QGgrid'
 
