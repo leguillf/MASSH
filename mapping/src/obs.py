@@ -133,12 +133,17 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
         
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
+       
+        try:
+            _ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
+        except:
+            try:
+                _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
+                        (ds[sat_info.name_obs_time]>=dt1),drop=True)
+            except:
+                print(dt_curr,': Warning: impossible to select data for this time')
+                continue
         
-        _ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
-        
-        
-        # _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
-        #                (ds[sat_info.name_obs_time]>=dt1),drop=True)
 
         lon = _ds[sat_info.name_obs_lon].values
         lat = _ds[sat_info.name_obs_lat].values
@@ -172,8 +177,10 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
             path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
                 '_'.join(sat_info.name_obs_var) + '_' + date + '.nc')
             print(dt_curr,': '+path)
-            dsout[sat_info.name_obs_time].encoding.pop("_FillValue", None)
-            dsout.to_netcdf(path)#, encoding={'my_variable': {'_FillValue': 1e35}})
+            #dsout[sat_info.name_obs_time].encoding.pop("_FillValue", None)
+            dsout.to_netcdf(path, encoding={sat_info.name_obs_time: {'_FillValue': None},
+                                            sat_info.name_obs_lon: {'_FillValue': None},
+                                            sat_info.name_obs_lat: {'_FillValue': None}})
             dsout.close()
             _ds.close()
             del dsout,_ds
@@ -210,7 +217,7 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path,'obs_' + date + '.nc')
             print(dt_curr,': '+path)
-            ds1[sat_info.name_obs_time].encoding.pop("_FillValue", None)
+            #ds1[sat_info.name_obs_time].encoding.pop("_FillValue", None)
             ds1.to_netcdf(path)
             ds1.close()
             del ds1

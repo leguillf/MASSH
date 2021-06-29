@@ -2,7 +2,7 @@ import logging
 import numpy
 import sparse_inversion
 import sys, os
-from mpi4py import MPI
+#from mpi4py import MPI
 import pdb
 
 

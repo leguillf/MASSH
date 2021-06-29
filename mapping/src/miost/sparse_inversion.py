@@ -17,7 +17,7 @@ import logging
 from scipy.sparse import csc_matrix, coo_matrix, csr_matrix
 import scipy.sparse
 
-from mpi4py import MPI
+#from mpi4py import MPI
 
 
 

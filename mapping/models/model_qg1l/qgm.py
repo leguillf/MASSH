@@ -257,7 +257,8 @@ class Qgm:
                     (q[3:-1,2:-2]+q[1:-3,2:-2]-2*q[2:-2,2:-2])
             
         rq[np.where((self.mask<=1))] = 0
-    
+        rq[np.isnan(rq)] = 0
+
         return rq
 
 

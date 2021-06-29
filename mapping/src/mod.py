@@ -78,6 +78,8 @@ variable are SLAs!')
                                    config.name_var_c,
                                    State.lon,
                                    State.lat)
+            self.c[self.c>3.5] = 3.5
+            self.c[self.c<2.2] = 2.2
         else:
             self.c = config.c0 * np.ones((State.ny,State.nx))
         
@@ -200,12 +202,12 @@ variable are SLAs!')
         if Nudging_term is not None:
             # Nudging towards relative vorticity
             if np.any(np.isfinite(Nudging_term['rv'])):
-                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1) & (self.c>1)
+                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1) 
                 pv_1[indNoNan] += (1-Wbc[indNoNan]) *\
                     Nudging_term['rv'][indNoNan]
             # Nudging towards ssh
             if np.any(np.isfinite(Nudging_term['ssh'])):
-                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1) & (self.c>1)
+                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1) 
                 pv_1[indNoNan] -= (1-Wbc[indNoNan]) *\
                     (self.State.g*self.State.f[indNoNan])/self.c[indNoNan]**2 * \
                         Nudging_term['ssh'][indNoNan]
@@ -215,9 +217,10 @@ variable are SLAs!')
         
         if np.any(np.isnan(ssh_1[self.qgm.mask>1])):
             if Hbc is not None:
-                ssh_1[np.isnan(ssh_1[self.qgm.mask>1])] = Hbc[np.isnan(ssh_1[self.qgm.mask>1])] 
+                ind = (np.isnan(ssh_1)) & (self.qgm.mask>1)
+                ssh_1[ind] = Hbc[ind] 
                 print('Warning: Invalid value encountered in mod_qg1l, we replace by boundary values')
-                print(np.isnan(ssh_1[self.qgm.mask>1]))
+                print(np.where(ind))
             else: sys.exit('Invalid value encountered in mod_qg1l')
             
         # Update state 
