@@ -93,7 +93,7 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     n_window = int((final_date-init_date).total_seconds()/dt_window.total_seconds())
     
     n_iter = 1 + 2 * (n_window - 1) # number of minimization to perform
-    
+    print(f'number of assimilation window : {n_iter}')
     for i in range(n_iter) :
         date_end = date + dt_window # date at end of the assimilation window
         print(f'\n*** window {i}, initial date = {date.year}:{date.month}:{date.day}\
@@ -184,7 +184,8 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
         '''
         function called at each iteration of the minimization process
         '''
-        var_ssh = XX.reshape(State_callback.var[0].shape)
+        var_ssh = B.prec_filter(XX, State_callback) + Xb
+        var_ssh = var_ssh.reshape(State_callback.var.ssh.shape)
         State_callback.setvar(var_ssh,0)
         State_callback.plot()
     
@@ -194,7 +195,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
                     options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},callback=callback)
     Xout = res.x
     if config.prec :
-        Xout = B.sqr(Xout) + Xb
+        Xout = B.prec_filter(Xout,State) + Xb
     
     return Xout
        
