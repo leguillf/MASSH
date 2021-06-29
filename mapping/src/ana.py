@@ -802,7 +802,6 @@ def ana_miost(config,State,dict_obs=None):
         # READ OUTPUTS AND REFORMAT
         ds = xr.open_mfdataset(os.path.join(config.tmp_DA_path,'_ms_analysis*.nc'),
                                combine='by_coords')
-        print(ds)
         ssh = ds['Hss'] + ds['Hls']
         
         # SAVE OUTPUTS 
@@ -820,8 +819,6 @@ def ana_miost(config,State,dict_obs=None):
         State_tmp = State.free()
         date = init_miost_date
         i = 0
-        
-        print(init_miost_date,final_miost_date,write_date_min,write_date_max)
         while date<=final_miost_date:
             if (date >= write_date_min) & (date <= write_date_max) :
                 

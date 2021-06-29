@@ -79,6 +79,8 @@ def obs(config, State, *args, **kwargs):
         else:
             files = glob.glob(os.path.join(sat_info.path,sat_info.name+'*.nc'))
             # Get time dimension to concatenate
+            if len(files)==0:
+                continue
             ds0 = xr.open_dataset(files[0])
             name_time_dim = ds0[sat_info.name_obs_time].dims[0]
             ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
