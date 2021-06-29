@@ -294,6 +294,12 @@ dist_coast = 100 #km
 ### MIOST-specific parameters ### 
 #################################### 
 
+miost_window_size = timedelta(days=15)
+
+miost_window_output = timedelta(days=15)
+
+miost_window_overlap = True
+
 dir_miost = None
 
 obs_subsampling = 1
@@ -303,6 +309,7 @@ file_aux = ''
 filec_aux = ''
 
 name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
+
 
 #################################################################################################################################
 # Observation parameters
