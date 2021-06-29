@@ -182,14 +182,15 @@ class MASSH(ObsSla):
                             ssh_obs = ds[_sat.name_obs_var[0]].values[::self.subsampling,::self.subsampling]
                             time_obs = time_obs * numpy.ones_like(ssh_obs)
                         
-                        elif _sat.kind=='swot_simulator':
+                        elif _sat.kind in['swot_simulator','CMEMS']:
                             lon_obs = ds[_sat.name_obs_lon].values
                             lat_obs = ds[_sat.name_obs_lat].values
                             ssh_obs = ds[_sat.name_obs_var[0]].values
+                            if _sat.kind=='CMEMS' and len(_sat.name_obs_var)==2:
+                                ssh_obs += ds[_sat.name_obs_var[1]].values
                             if len(ssh_obs.shape)==2:
                                 # SWATH data
                                 time_obs = time_obs.repeat(ssh_obs.shape[1],axis=0)
-                                
                         ds.close()
                         del ds
                         

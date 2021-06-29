@@ -93,7 +93,7 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     n_window = int((final_date-init_date).total_seconds()/dt_window.total_seconds())
     
     n_iter = 1 + 2 * (n_window - 1) # number of minimization to perform
-    
+    print(f'number of assimilation window : {n_iter}')
     for i in range(n_iter) :
         date_end = date + dt_window # date at end of the assimilation window
         print(f'\n*** window {i}, initial date = {date.year}:{date.month}:{date.day}\
@@ -184,7 +184,8 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
         '''
         function called at each iteration of the minimization process
         '''
-        var_ssh = XX.reshape(State_callback.var[0].shape)
+        var_ssh = B.prec_filter(XX, State_callback) + Xb
+        var_ssh = var_ssh.reshape(State_callback.var.ssh.shape)
         State_callback.setvar(var_ssh,0)
         State_callback.plot()
     
@@ -194,7 +195,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
                     options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},callback=callback)
     Xout = res.x
     if config.prec :
-        Xout = B.sqr(Xout) + Xb
+        Xout = B.prec_filter(Xout,State) + Xb
     
     return Xout
        
@@ -265,12 +266,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                        final_bfn_date,
                                        periods=periods
                                       )
-                                   #  np.arange(calendar.timegm(init_bfn_date.timetuple()),
-                                   # calendar.timegm(final_bfn_date.timetuple())+\
-                                   #     one_time_step.total_seconds(),
-                                   # one_time_step.total_seconds())
                 
-
             bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
                                                            config.lenght_bc,
                                                            config.name_var_bc,
@@ -279,7 +275,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            State.lat,
                                                            config.flag_plot,
                                                            bfn_obj.sponge)
-
         else:
             bc_field = bc_weight = bc_field_t = None
 
@@ -513,6 +508,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         
                     # Save output
                     if config.saveoutputs:
+                        print(present_date)
                         State_current.save_output(present_date,mdt=Model.mdt)
         
         ########################
@@ -659,127 +655,222 @@ def ana_miost(config,State,dict_obs=None):
     SourceFileLoader("rw",dir_miost + "/rw.py").load_module() 
     SourceFileLoader("comp_iw",dir_miost + "/comp_iw.py").load_module() 
     miost = SourceFileLoader("miost",dir_miost + "/miost.py").load_module() 
-    grid = SourceFileLoader("miost",dir_miost + "/grid.py").load_module()
+    grid_miost = SourceFileLoader("miost",dir_miost + "/grid.py").load_module()
     comp_geo3 = SourceFileLoader("miost",dir_miost + "/comp_geo3.py").load_module()    
     obs = SourceFileLoader("miost",dir_miost + "/obs.py").load_module()    
     
     
     # Save grid 
+    if config.path_mdt is not None and os.path.exists(config.path_mdt):                      
+        ds = xr.open_dataset(config.path_mdt)
+        
+        mdt = grid.interp2d(ds,
+                            config.name_var_mdt,
+                            State.lon,
+                            State.lat)
+        flag_mdt = True
+    else:
+        mdt = np.zeros_like(State.lon)
+        flag_mdt = False
     grd = xr.Dataset({'lon':(('lon',),State.lon[State.ny//2,:]),
                       'lat':(('lat',),State.lat[:,State.nx//2]),
-                      'var':(('lat','lon'),np.zeros((State.ny,State.nx)))})
+                      'mdt':(('lat','lon'),mdt)})
     name_grd = os.path.join(config.tmp_DA_path,'grd.nc')
     grd.to_netcdf(name_grd)
     
     dlon =  (State.lon[:,1:] - State.lon[:,:-1]).max()
     dlat =  (State.lat[1:,:] - State.lat[:-1,:]).max()
     
-    # CONFIG MIOST
-    config_miost = dict(
+     # Flag initialization
+    miost_first_window = True
+    miost_last_window = False
     
-    RUN_NAME = '', # Set automatically with filename
-    PATH = dict(OUTPUT= config.tmp_DA_path),
+    # MIOST middle date initialization
+    middle_miost_date = config.init_date
     
-    ALGO = dict(
-        USE_MPI= False,
-        store_gtranspose= False, # only if USE_MPI
-        INV_METHOD= 'PCG_INV',
-        NITER= 800  , # Maximum number of iterations in the variational loop
-        EPSPILLON_REST= 1.e-7,
-        gsize_max = 5000000000 ,
-        float_type= 'f8',
-        int_type= 'i8'),
-    
-    GRID = grid.Grid_msit(
-        TEMPLATE_FILE= name_grd,
-        LON_NAME= 'lon',
-        LAT_NAME= 'lat',
-        MDT_NAME= 'var',
-        FLAG_MDT= False,
-        DATE_MIN= config.init_date.strftime("%Y-%m-%d"),
-        DATE_MAX= config.final_date.strftime("%Y-%m-%d"),
-        TIME_STEP= config.saveoutput_time_step.total_seconds()/(24*3600),
-        NSTEPS_NC= int((24*3600)//config.saveoutput_time_step.total_seconds()),
-        TIME_STEP_LF= 10000., # For internal tides with seasons
-        LON_MIN= State.lon.min()-dlon,
-        LON_MAX= State.lon.max()+dlon,
-        LAT_MIN= State.lat.min()-dlat,
-        LAT_MAX= State.lat.max()+dlat,
-        tref_iw= 15340.),
-    
-    PHYS_COMP=[
-    
-        comp_geo3.Comp_geo3ss6d(
-            facns= 1., #factor for wavelet spacing= space
-            facnlt= 2.,
-            npsp= 3.5, # Defines the wavelet shape
-            facpsp= 1.5, #1.5 # factor to fix df between wavelets
-            lmin= 80 ,
-            lmax= 970.,
-            cutRo= 1.6,
-            factdec= 15.,
-            tdecmin= 2.5,
-            tdecmax= 40.,
-            tssr= 0.5,
-            facRo= 8.,
-            Romax= 150.,
-            facQ= 1.,
-            depth1= 0.,
-            depth2= 30.,
-            distortion_eq= 2.,
-            lat_distortion_eq= 5.,
-            distortion_eq_law= 2.,
-            file_aux= config.file_aux,
-            filec_aux= config.filec_aux,
-            write= True,
-            Hvarname= 'Hss'),
-    
-    
-        comp_geo3.Comp_geo3ls(
-            facnls= 3., #factor for large-scale wavelet spacing
-            facnlt= 3.,
-            tdec_lw= 25.,
-            std_lw= 0.04,
-            lambda_lw= 970, #768.05127036
-            file_aux= config.file_aux,
-            filec_aux= config.filec_aux,
-            write= True,
-            Hvarname= 'Hls'),
-        ],
-    
-    OBS_COMP=[
-    
-        ],
-    
-    
-    OBS=[
-    
-        obs.MASSH(
-            name=config.name_experiment,
-            dict_obs= dict_obs,
-            subsampling= config.subsampling
-            ),
+    # Main time loop
+    while (middle_miost_date <= config.final_date) and not miost_last_window :
+        time0 = datetime.now()
+        #############
+        # 1. SET-UP #
+        #############
+        # MIOST time period
+        init_miost_date = max(config.init_date, middle_miost_date - config.miost_window_size/2)
+        init_miost_date += timedelta(seconds=(init_miost_date - config.init_date).total_seconds()\
+                         / config.saveoutput_time_step.total_seconds()%1)
+        middle_miost_date = max(middle_miost_date, config.init_date + config.miost_window_size/2)
+        if ((middle_miost_date + config.miost_window_size/2) >= config.final_date):
+            miost_last_window = True
+            final_miost_date = config.final_date
+        else:
+            final_miost_date = init_miost_date + config.miost_window_size
         
-            ]
-    
-    )
-    
-    # RUN MIOST
-    miost.run_miost(config_miost)
-    
-    # READ OUTPUTS AND REFORMAT
-    ds = xr.open_mfdataset(os.path.join(config.tmp_DA_path,'_ms_analysis*.nc'),
-                           combine='by_coords')
-    ssh = ds['Hss'] + ds['Hls']
-    
-    State_tmp = State.free()
-    date = config.init_date
-    i = 0
-    while date<=config.final_date:
-        State_tmp.setvar(ssh[i].values,ind=0)
-        State_tmp.save_output(date)
+            
+        # CONFIG MIOST
+        config_miost = dict(
         
-        date += config.saveoutput_time_step
-        i += 1
+        RUN_NAME = '', # Set automatically with filename
+        PATH = dict(OUTPUT= config.tmp_DA_path),
+        
+        ALGO = dict(
+            USE_MPI= False,
+            store_gtranspose= False, # only if USE_MPI
+            INV_METHOD= 'PCG_INV',
+            NITER= 800  , # Maximum number of iterations in the variational loop
+            EPSPILLON_REST= 1.e-7,
+            gsize_max = 5000000000 ,
+            float_type= 'f8',
+            int_type= 'i8'),
+        
+        GRID = grid_miost.Grid_msit(
+            TEMPLATE_FILE= name_grd,
+            LON_NAME= 'lon',
+            LAT_NAME= 'lat',
+            MDT_NAME= 'mdt',
+            FLAG_MDT= flag_mdt,
+            DATE_MIN= init_miost_date.strftime("%Y-%m-%d"),
+            DATE_MAX= final_miost_date.strftime("%Y-%m-%d"),
+            TIME_STEP= config.saveoutput_time_step.total_seconds()/(24*3600),
+            NSTEPS_NC= int((24*3600)//config.saveoutput_time_step.total_seconds()),
+            TIME_STEP_LF= 10000., # For internal tides with seasons
+            LON_MIN= State.lon.min()-dlon,
+            LON_MAX= State.lon.max()+dlon,
+            LAT_MIN= State.lat.min()-dlat,
+            LAT_MAX= State.lat.max()+dlat,
+            tref_iw= 15340.),
+        
+        PHYS_COMP=[
+        
+            comp_geo3.Comp_geo3ss6d(
+                facns= 1., #factor for wavelet spacing= space
+                facnlt= 2.,
+                npsp= 3.5, # Defines the wavelet shape
+                facpsp= 1.5, #1.5 # factor to fix df between wavelets
+                lmin= 80 ,
+                lmax= 970.,
+                cutRo= 1.6,
+                factdec= 15.,
+                tdecmin= 2.5,
+                tdecmax= 40.,
+                tssr= 0.5,
+                facRo= 8.,
+                Romax= 150.,
+                facQ= 1.,
+                depth1= 0.,
+                depth2= 30.,
+                distortion_eq= 2.,
+                lat_distortion_eq= 5.,
+                distortion_eq_law= 2.,
+                file_aux= config.file_aux,
+                filec_aux= config.filec_aux,
+                write= True,
+                Hvarname= 'Hss'),
+        
+        
+            comp_geo3.Comp_geo3ls(
+                facnls= 3., #factor for large-scale wavelet spacing
+                facnlt= 3.,
+                tdec_lw= 25.,
+                std_lw= 0.04,
+                lambda_lw= 970, #768.05127036
+                file_aux= config.file_aux,
+                filec_aux= config.filec_aux,
+                write= True,
+                Hvarname= 'Hls'),
+            ],
+        
+        OBS_COMP=[
+        
+            ],
+        
+        
+        OBS=[
+        
+            obs.MASSH(
+                name=config.name_experiment,
+                dict_obs= dict_obs,
+                subsampling= config.subsampling
+                ),
+            
+                ]
+        
+        )
+        
+        # RUN MIOST
+        miost.run_miost(config_miost)
+        
+        # READ OUTPUTS AND REFORMAT
+        ds = xr.open_mfdataset(os.path.join(config.tmp_DA_path,'_ms_analysis*.nc'),
+                               combine='by_coords')
+        print(ds)
+        ssh = ds['Hss'] + ds['Hls']
+        
+        # SAVE OUTPUTS 
+        # Set the saving temporal window
+        if miost_first_window:
+            write_date_min = init_miost_date
+            write_date_max = init_miost_date + config.miost_window_size/2 + config.miost_window_output/2
+        elif miost_last_window:
+            write_date_min = middle_miost_date - config.miost_window_output/2
+            write_date_max = final_miost_date
+        else:
+            write_date_min = middle_miost_date - config.miost_window_output/2
+            write_date_max = middle_miost_date + config.miost_window_output/2
+            
+        State_tmp = State.free()
+        date = init_miost_date
+        i = 0
+        
+        print(init_miost_date,final_miost_date,write_date_min,write_date_max)
+        while date<=final_miost_date:
+            if (date >= write_date_min) & (date <= write_date_max) :
+                
+                if config.miost_window_overlap and not miost_first_window and\
+                        date<=middle_miost_date:
+                    # weight coefficients
+                    W1 = max((middle_miost_date - date)
+                             / (config.miost_window_output/2), 0)
+                    W2 = min((date - write_date_min)
+                             / (config.miost_window_output/2), 1)
+                    # Read previous output at this timestamp
+                    ds1 = State.load_output(date)
+                    ssh1 = ds1[config.name_mod_var[State.get_indsave()]].data
+                    ds1.close()
+                    del ds1
+                    # Update state
+                    State_tmp.setvar(W1*ssh1 + W2*ssh[i].values,ind=0)
+                else:
+                    State_tmp.setvar(ssh[i].values,ind=0)
+                    
+                # Save output
+                if config.saveoutputs:
+                    if flag_mdt:
+                        State_tmp.save_output(date,mdt=mdt)
+                    else:
+                        State_tmp.save_output(date)
+                
+            date += config.saveoutput_time_step
+            i += 1
+        
+        if config.miost_window_overlap:
+            window_lag = config.miost_window_output/2
+        else:
+            window_lag = config.miost_window_output
+
+        if miost_first_window:
+            middle_miost_date = config.init_date + config.miost_window_size/2 + window_lag
+            miost_first_window = False
+        else:
+            middle_miost_date += window_lag
+        
+        ds.close()
+        del ds
+        
+        cmd = 'rm ' + os.path.join(config.tmp_DA_path,'_ms_analysis*.nc')
+        os.system(cmd)
+        
+        time1 = datetime.now()
+        print('Loop from',init_miost_date.strftime("%Y-%m-%d"),'to',
+              final_miost_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
         
     

@@ -64,7 +64,7 @@ from datetime import datetime,timedelta
 
 name_init = 'from_file'
 
-name_init_grid = '../../data_Example2/data_BM-IT_idealized/ref.nc'
+name_init_grid = '/mnt/renamatt/equipes/IGE/meom/workdir/renamatt/MASSH_dev_Matthias/MASSH/data_Example2/data_BM-IT_idealized/ref.nc'
 
 name_init_lon = 'lon'
 
@@ -86,7 +86,7 @@ name_init_file = 'init_state.nc'
    
 init_date = datetime(2010,1,2,0)     
 
-final_date = datetime(2010,1,20,0)
+final_date = datetime(2010,1,8,0)
 
 assimilation_time_step = timedelta(hours=3)  
 
@@ -179,7 +179,11 @@ maxiter = 50
 
 gtol = 1e-5
 
-prec = False
+prec = True
+
+filter_name = 'shapiro'
+
+filter_order = 5
 
 #################################################################################################################################
 # Observation parameters
@@ -205,7 +209,7 @@ write_obs = False
 
 
 kind_nr = "fullSSH"
-obs_path_nr = '../../data_Example2/data_BM-IT_idealized/'
+obs_path_nr = '/mnt/renamatt/equipes/IGE/meom/workdir/renamatt/MASSH_dev_Matthias/MASSH/data_Example2/data_BM-IT_idealized/'
 obs_name_nr = "obs"
 name_obs_var_nr = ["ssh_meso"]
 name_obs_lon_nr = "lon"
