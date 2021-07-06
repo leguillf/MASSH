@@ -474,7 +474,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
             State_current.load(current_file)
             if config.saveoutputs:
-                State_current.save_output(present_date)
+                State_current.save_output(present_date,mdt=Model.mdt)
         while present_date < final_bfn_date :
             present_date += one_time_step
             if (present_date > write_date_min) & (present_date <= write_date_max) :
