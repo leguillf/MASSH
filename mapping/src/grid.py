@@ -226,7 +226,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
         #####################
         
         if np.all(lon_bc==lon2d) and np.all(lat_bc==lat2d):
-            var_bc_interp2d = var_bc.copy()
+            var_bc_interp2d = var_bc.copy().values
             
         elif flag == '2D':
             var_bc_interp2d = interpolate.griddata(
