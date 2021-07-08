@@ -65,9 +65,10 @@ class Obsopt:
         
         delayed_results = []
         for t in self.date_obs:
-            res = delayed(self.process_obs)(t)
-            delayed_results.append(res)
-        compute(*delayed_results, scheduler="processes")
+            self.process_obs(t)
+            #res = delayed(self.process_obs)(t)
+            #delayed_results.append(res)
+        #compute(*delayed_results, scheduler="processes")
 
     
             
