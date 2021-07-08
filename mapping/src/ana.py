@@ -508,7 +508,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         
                     # Save output
                     if config.saveoutputs:
-                        print(present_date)
                         State_current.save_output(present_date,mdt=Model.mdt)
         
         ########################

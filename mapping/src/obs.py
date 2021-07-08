@@ -36,15 +36,29 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
+    name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
+    
     # Check if previous *dict_obs* has been computed
-    dir_obs = config.path_obs
-    if config.path_obs is None:
-        dir_obs = config.tmp_DA_path
-    if config.write_obs and os.path.exists(os.path.join(dir_obs,'dict_obs.pic')):
+    if config.path_obs is not None and os.path.exists(os.path.join(config.path_obs,name_dict_obs)):
         print('Reading *dict_obs* from previous run')
-        with open(os.path.join(dir_obs,'dict_obs.pic'), 'rb') as f:
+        name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
+        with open(os.path.join(config.path_obs,name_dict_obs), 'rb') as f:
             dict_obs = pickle.load(f)
-            return dict_obs
+            new_dict_obs = {}
+            for date in dict_obs:
+                # Create new dict_obs by copying the obs files in tmp_DA_dir directory 
+                new_dict_obs[date] = {'obs_name':[],'satellite':[]}
+                for obs,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):
+                    file_obs = os.path.basename(obs)
+                    new_obs = os.path.join(config.tmp_DA_path,file_obs)
+                    # Copy to *tmp_DA_dir* directory
+                    if os.path.normpath(obs)!=os.path.normpath(new_obs): 
+                        os.system(f'cp {obs} {new_obs}')
+                    # Update new dictionary 
+                    new_dict_obs[date]['obs_name'].append(new_obs)
+                    new_dict_obs[date]['satellite'].append(sat)
+                    
+            return new_dict_obs
         
     # Read grid
     lon = State.lon
@@ -97,14 +111,13 @@ def obs(config, State, *args, **kwargs):
                          config.tmp_DA_path,bbox)
     
     # Write *dict_obs* for next experiment
-    if config.write_obs:
-        if not os.path.exists(dir_obs):
-            os.makedirs(dir_obs)
-        with open(os.path.join(dir_obs,'dict_obs.pic'), 'wb') as f:
+    if config.path_obs is not None:
+        if not os.path.exists(config.path_obs):
+            os.makedirs(config.path_obs)
+        with open(os.path.join(config.path_obs,name_dict_obs), 'wb') as f:
             pickle.dump(dict_obs,f)
         
     return dict_obs
-
 
 def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
                         bbox=None):
@@ -158,14 +171,6 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
             for namevar in sat_info.name_obs_var:
                 varobs[namevar] = _ds[namevar]
             coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
-            # if len(lon.shape)==1:
-            #     coords[sat_info.name_obs_lon] = lon
-            # else:
-            #     
-            # if len(lat.shape)==1:
-            #     coords[sat_info.name_obs_lat] = lat
-            # else:
-            #     
             varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
             varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
             if sat_info.name_obs_xac is not None:
@@ -255,8 +260,6 @@ def detrend_obs(dict_obs):
             mask = np.isnan(ssh)
             ssh[mask] = 0
             # Detrend data in all directions
-            print(obs_file)
-            print(ssh.shape)
             if len(ssh.shape)==0:
                 ssh_detrended = +ssh
             elif len(ssh.shape)==1:
