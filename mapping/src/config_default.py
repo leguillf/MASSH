@@ -347,8 +347,6 @@ facQ = 1.
 
 satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
 
-write_obs = False
-
 path_obs = None
 
 detrend = False

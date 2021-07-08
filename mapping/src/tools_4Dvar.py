@@ -35,14 +35,16 @@ class Obsopt:
                     ind_obs = np.argmin(np.abs(delta_t))
                     self.date_obs[t] = t_obs[ind_obs]
         
-        # Temporary path where to save model trajectories
+        # Temporary path where to save H operators
+        self.tmp_DA_path = config.tmp_DA_path
         if config.path_H is not None:
+            # We'll save to *path_H* or read in *path_H* from previous run
             self.path_H = config.path_H
+            if not os.path.exists(self.path_H):
+                os.makedirs(self.path_H)
         else:
-            self.path_H = config.tmp_DA_path
-        if not os.path.exists(self.path_H):
-            os.makedirs(self.path_H)
-        
+            # We'll use temporary directory to save the files
+            self.path_H = None
         
         self.obs_sparse = {}
         
@@ -69,16 +71,20 @@ class Obsopt:
             #res = delayed(self.process_obs)(t)
             #delayed_results.append(res)
         #compute(*delayed_results, scheduler="processes")
-
-    
             
     def process_obs(self,t):
         
-        
-        file_H = os.path.join(
-            self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
-        if os.path.exists(file_H):
-            return t
+        if self.path_H is not None:
+            file_H = os.path.join(
+                self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+            if os.path.exists(file_H):
+                new_file_H = os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                os.system(f"cp {file_H} {new_file_H}")
+                return t
+        else:
+            file_H = os.path.join(
+                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
         
         # Read obs
         sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
@@ -139,6 +145,11 @@ class Obsopt:
         dsout.to_netcdf(file_H,
             encoding={'indexes': {'dtype': 'int16'}})
         
+        if self.path_H is not None:
+                new_file_H = os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                os.system(f"cp {file_H} {new_file_H}")
+        
         return t
                 
     
@@ -177,7 +188,7 @@ class Obsopt:
         #if self.obs_sparse[t] :
         # Get indexes and weights of neighbour grid pixels
         ds = xr.open_dataset(os.path.join(
-                self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
         indexes = ds['indexes'].values
         weights = ds['weights'].values
         maskobs = ds['maskobs'].values
@@ -225,7 +236,7 @@ class Obsopt:
         #if self.obs_sparse[t]:
         adHssh = np.zeros(self.npix)
         ds = xr.open_dataset(os.path.join(
-                self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
         indexes = ds['indexes'].values
         weights = ds['weights'].values
         maskobs = ds['maskobs'].values
