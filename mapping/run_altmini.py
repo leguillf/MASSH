@@ -13,6 +13,7 @@ import subprocess
 from datetime import datetime
 import re
 
+
 def create_new_config_file(src_file,out_file,list_pattern,list_subst):
     line_added = []
     with open(out_file, 'w') as out:
@@ -44,10 +45,10 @@ if __name__ == "__main__":
                         default='Exp_joint', 
                         type=str)     
     parser.add_argument('--c1', 
-                        default=os.path.join(pwd,'examples','config_Example2_BM.py'),
+                        default=os.path.join('examples','config_Example3_BM.py'),
                         type=str)   
     parser.add_argument('--c2', 
-                        default=os.path.join(pwd,'examples','config_Example2_IT.py'),
+                        default=os.path.join('examples','config_Example3_IT.py'),
                         type=str)   
     parser.add_argument('--i0', default=0, type=int) 
     parser.add_argument('--imax', default=None, type=int) 
@@ -102,8 +103,8 @@ if __name__ == "__main__":
     
     K = np.inf
     i = i0
-    
-    while float(K)>Kmin or i<=imax:
+        
+    while K>Kmin and i<=imax:
         
         time0 = datetime.now()
         print('\n*** Iteration n°'+str(i) + ' ***')
