@@ -12,12 +12,15 @@ import time
 from  scipy import interpolate 
 from datetime import datetime
 from glob import glob
+import pickle
+
 
 from src import state as state
 from src import exp as exp
 from src import mod as mod
 from src import obs as obs
 from src import ana as ana
+
 
 def update_config(config,i):
     name_it = 'iteration_' + str(i) 
@@ -43,10 +46,45 @@ def update_config(config,i):
             path_tmp_prev = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_prev])
             config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
         
+
+def get_dict_obs(config,State):
+    name_dict_obs = os.path.join(config.path_obs,
+                                 'dict_obs_' + '_'.join(config.satellite) + '.pic')
+    if not os.path.exists(name_dict_obs):
+        dict_obs = obs.obs(config,State)
+        # Save obs for next iterations
+        for date in dict_obs:
+            for obs_name,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):
+                file_obs = os.path.basename(obs_name)
+                new_obs_name = os.path.join(config.path_obs,file_obs)
+                # Copy to *tmp_DA_path* directory
+                os.system(f'cp {obs_name} {new_obs_name}')
+    else:
+                
+        with open(name_dict_obs, 'rb') as f:
+            
+            dict_obs0 = pickle.load(f)
+            dict_obs = {}
+            
+            for date in dict_obs0:
+                # Create new dict_obs by copying the obs files in tmp_DA_dir directory 
+                dict_obs[date] = {'obs_name':[],'satellite':[]}
+                for obs_name,sat in zip(dict_obs0[date]['obs_name'],dict_obs0[date]['satellite']):
+                    file_obs = os.path.basename(obs_name)
+                    first_obs_name = os.path.join(config.path_obs,file_obs)
+                    new_obs_name = os.path.join(config.tmp_DA_path,file_obs)
+                    # Copy to *tmp_DA_path* directory
+                    os.system(f'cp {first_obs_name} {new_obs_name}')
+                    # Update new dictionary 
+                    dict_obs[date]['obs_name'].append(new_obs_name)
+                    dict_obs[date]['satellite'].append(sat)
+                
+    return dict_obs
     
 
+
 def compute_new_obs(it,dict_obs,config,State):
-    
+        
     # Read grid
     lon = State.lon 
     lat = State.lat
@@ -74,11 +112,10 @@ def compute_new_obs(it,dict_obs,config,State):
             Wprev = 1/abs(date_prev - date).total_seconds()
             Wnext = 1/abs(date_next - date).total_seconds()
             ssh_now = (Wprev*ssh_prev + Wnext*ssh_next)/(Wprev+Wnext)
-
+        
         # Open obs
         path_obs = dict_obs[date]['obs_name']
         sat =  dict_obs[date]['satellite']
-        new_path_obs = []
         for _sat,_path_obs in zip(sat,path_obs):
             ds = xr.open_dataset(_path_obs)
             dsout = ds.copy().load()
@@ -97,16 +134,10 @@ def compute_new_obs(it,dict_obs,config,State):
                                                 (lon_obs.ravel(),lat_obs.ravel()))
                 dsout[_sat.name_obs_var[0]].data -=  ssh_on_obs.reshape(lon_obs.shape).data
             # Writing new obs file
-            _dir,_name = os.path.split(_path_obs)
-            name_iteration = 'iteration_' + str(it) 
-            _new_dir = '/'.join(_dir.split('/')[:-1]+[name_iteration])
-            _new_path_obs = os.path.join(_new_dir,_name)
-            new_path_obs.append(_new_path_obs)
-            dsout.to_netcdf(_new_path_obs)
+            dsout.to_netcdf(_path_obs)
             dsout.close()
             del dsout
-        # Update dict_obs
-        dict_obs[date]['obs_name'] = new_path_obs
+        
         
             
             
@@ -179,7 +210,7 @@ if __name__ == "__main__":
     Model1 = mod.Model(config1,State1)
     # Observations
     print('* Observations')
-    dict_obs1 = obs.obs(config1,State1)
+    dict_obs1 = get_dict_obs(config1,State1)
     # Compute new observations taking into account previous estimation
     print('* Compute new observations')
     if iteration>0:
@@ -211,7 +242,7 @@ if __name__ == "__main__":
     Model2 = mod.Model(config2,State2)
     # Observations
     print('* Observations')
-    dict_obs2 = obs.obs(config2,State2)
+    dict_obs2 = get_dict_obs(config2,State2)
     # Compute new observations taking into account previous estimation
     print('* Compute new observations')
     compute_new_obs(iteration,dict_obs2,config1,State1)

@@ -51,7 +51,7 @@ def obs(config, State, *args, **kwargs):
                 for obs,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):
                     file_obs = os.path.basename(obs)
                     new_obs = os.path.join(config.tmp_DA_path,file_obs)
-                    # Copy to *tmp_DA_dir* directory
+                    # Copy to *tmp_DA_path* directory
                     if os.path.normpath(obs)!=os.path.normpath(new_obs): 
                         os.system(f'cp {obs} {new_obs}')
                     # Update new dictionary 
