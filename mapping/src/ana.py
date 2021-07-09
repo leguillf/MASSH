@@ -875,6 +875,9 @@ def ana_miost(config,State,dict_obs=None):
 
 def ana_harm(config,State,dict_obs=None):
     
+    if config.detrend:
+        from . import obs
+        obs.detrend_obs(dict_obs)
     
     time = []
     ssh = []
