@@ -39,6 +39,8 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
         return ana_4Dvar(config,State,Model,dict_obs)
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
+    elif config.name_analysis=='HARM':
+        return ana_harm(config,State,dict_obs)
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
@@ -870,3 +872,64 @@ def ana_miost(config,State,dict_obs=None):
               final_miost_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
         
     
+
+def ana_harm(config,State,dict_obs=None):
+    
+    
+    time = []
+    ssh = []
+    for date in dict_obs:
+        time.append((date - config.init_date).total_seconds())
+        path = dict_obs[date]['obs_name'][0]
+        sat = dict_obs[date]['satellite'][0]
+        ds = xr.open_dataset(path).squeeze()
+        ssh.append(ds[sat.name_obs_var[0]].values)
+        
+    time = np.asarray(time)
+    ssh = np.asarray(ssh)
+    
+    # Harmonic analysis
+    nt,ny,nx = ssh.shape
+    G = np.empty((nt,2))
+    eta1 = np.empty((2, ny,nx))
+    
+    w = config.w_igws[0]
+    G[:,0] = np.cos(w*time)
+    G[:,1] = np.sin(w*time)
+    
+    M = np.dot(np.linalg.inv(np.dot(G.T,G)) , G.T)
+    
+    for ix in range(nx):
+        for iy in range(ny):
+            eta1[:, iy, ix] = np.dot(M, ssh[:,iy,ix])
+    
+    
+    
+    # Save outputs
+    State0 = State.free()
+    date = config.init_date
+    while date <= config.final_date:
+        t = (date - config.init_date).total_seconds()
+        ssh0 = eta1[0,:,:] * np.cos(w*t) + eta1[1,:,:] * np.sin(w*t)
+        State0.setvar(ssh0,ind=0)
+        State0.save_output(date)
+        date += config.saveoutput_time_step
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+        
+        
+        
+        
