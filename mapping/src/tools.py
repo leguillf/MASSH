@@ -6,11 +6,9 @@ Created on Thu Dec 12 12:15:36 2019
 @author: leguillou
 """
 import numpy as np 
-import os
-import xarray as xr
-import pandas as pd
 import xarray as xr
 import scipy.linalg as spl
+
 
 
 def gaspari_cohn(r,c):
@@ -109,7 +107,7 @@ def detrendn(da, axes=None):
     for n in range(da.ndim):
         if n not in axes:
             M.append(da.shape[n])
-
+            
     if len(N) == 2:
         G = np.ones((N[0]*N[1],3))
         for i in range(N[0]):

@@ -14,6 +14,7 @@ import os
 from math import sqrt,pi
 from datetime import timedelta
 import matplotlib.pylab as plt
+from scipy.interpolate import griddata
 
 from . import tools, grid
 
@@ -26,7 +27,9 @@ def Model(config,State):
         Main function calling subclass for specific models
     """
     print('Model:',config.name_model)
-    if config.name_model=='QG1L':
+    if config.name_model is None:
+        return
+    elif config.name_model=='QG1L':
         return Model_qg1l(config,State)
     elif config.name_model=='SW1L':
         return Model_sw1l(config,State)
@@ -46,9 +49,40 @@ class Model_qg1l:
             dir_model = config.dir_model  
         SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
 
-        # Model parameters
+        # Model timestep
         self.dt = config.dtmodel
-        self.c = config.c
+        
+        # Open MDT map if provided
+        if config.path_mdt is not None and os.path.exists(config.path_mdt):
+            print('MDT is prescribed, thus the QGPV will be expressed thanks \
+to Reynolds decomposition. However, be sure that observed and boundary \
+variable are SLAs!')
+                      
+            ds = xr.open_dataset(config.path_mdt)
+            
+            self.mdt = grid.interp2d(ds,
+                                     config.name_var_mdt,
+                                     State.lon,
+                                     State.lat)
+        else:
+            self.mdt = None
+        
+        # Open Rossby Radius if provided
+        if config.filec_aux is not None and os.path.exists(config.filec_aux):
+            
+            print('Rossby Radius is prescribed, be sure to have provided MDT as well')
+
+            ds = xr.open_dataset(config.filec_aux)
+            
+            self.c = grid.interp2d(ds,
+                                   config.name_var_c,
+                                   State.lon,
+                                   State.lat)
+            self.c[self.c>3.5] = 3.5
+            self.c[self.c<2.2] = 2.2
+        else:
+            self.c = config.c0 * np.ones((State.ny,State.nx))
+        
         
         # Model initialization
         SourceFileLoader("qgm", 
@@ -64,12 +98,13 @@ class Model_qg1l:
                          dy=State.DY,
                          dt=self.dt,
                          SSH=State.getvar(ind=0),
-                         c=config.c,
+                         c=config.c0,
                          g=State.g,
                          f=State.f,
                          qgiter=config.qgiter,
                          diff=config.only_diffusion,
-                         snu=config.cdiffus)
+                         snu=config.cdiffus,
+                         mdt=self.mdt)
         self.State = State
         
 
@@ -166,17 +201,22 @@ class Model_qg1l:
                     Nudging_term['rv'][indNoNan]
             # Nudging towards ssh
             if np.any(np.isfinite(Nudging_term['ssh'])):
-                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1)
+                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1) 
                 pv_1[indNoNan] -= (1-Wbc[indNoNan]) *\
-                    (self.State.g*self.State.f[indNoNan])/self.c**2 * \
+                    (self.State.g*self.State.f[indNoNan])/self.c[indNoNan]**2 * \
                         Nudging_term['ssh'][indNoNan]
                 # Inversion pv -> ssh
                 ssh_b = +ssh_1
-                ssh_1 = self.qgm.pv2h(pv_1,ssh_b)
+                ssh_1[indNoNan] = self.qgm.pv2h(pv_1,ssh_b)[indNoNan]
         
         if np.any(np.isnan(ssh_1[self.qgm.mask>1])):
-            sys.exit('Invalid value encountered in mod_qg1l')
-        
+            if Hbc is not None:
+                ind = (np.isnan(ssh_1)) & (self.qgm.mask>1)
+                ssh_1[ind] = Hbc[ind] 
+                print('Warning: Invalid value encountered in mod_qg1l, we replace by boundary values')
+                print(np.where(ind))
+            else: sys.exit('Invalid value encountered in mod_qg1l')
+            
         # Update state 
         State.setvar(ssh_1,0)
         if flag_pv:

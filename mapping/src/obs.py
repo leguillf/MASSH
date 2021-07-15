@@ -10,10 +10,10 @@ import pickle
 import xarray as xr
 import numpy as np
 from datetime import datetime
-from scipy import interpolate
+from scipy import interpolate,signal
 import pandas as pd
 import glob 
-import matplotlib.pylab as plt 
+import matplotlib.pylab as plt
 
 from .sat import read_satellite_info
 from .tools import detrendn
@@ -36,40 +36,35 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
+    name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
+    
     # Check if previous *dict_obs* has been computed
-    dir_obs = config.path_obs
-    if config.path_obs is None:
-        dir_obs = config.tmp_DA_path
-    if config.write_obs and os.path.exists(os.path.join(dir_obs,'dict_obs.pic')):
+    if config.path_obs is not None and os.path.exists(os.path.join(config.path_obs,name_dict_obs)):
         print('Reading *dict_obs* from previous run')
-        with open(os.path.join(dir_obs,'dict_obs.pic'), 'rb') as f:
+        name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
+        with open(os.path.join(config.path_obs,name_dict_obs), 'rb') as f:
             dict_obs = pickle.load(f)
-            return dict_obs
+            new_dict_obs = {}
+            for date in dict_obs:
+                # Create new dict_obs by copying the obs files in tmp_DA_dir directory 
+                new_dict_obs[date] = {'obs_name':[],'satellite':[]}
+                for obs,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):
+                    file_obs = os.path.basename(obs)
+                    new_obs = os.path.join(config.tmp_DA_path,file_obs)
+                    # Copy to *tmp_DA_path* directory
+                    if os.path.normpath(obs)!=os.path.normpath(new_obs): 
+                        os.system(f'cp {obs} {new_obs}')
+                    # Update new dictionary 
+                    new_dict_obs[date]['obs_name'].append(new_obs)
+                    new_dict_obs[date]['satellite'].append(sat)
+                    
+            return new_dict_obs
         
     # Read grid
     lon = State.lon
     lat = State.lat
     bbox = [lon.min(),lon.max(),lat.min(),lat.max()]
-    
-    # Open MDT map if provided
-    if config.path_mdt is not None and os.path.exists(config.path_mdt):
-        ds = xr.open_dataset(config.path_mdt)
-        ds[config.name_var_mdt['lon']] = ds[config.name_var_mdt['lon']] % 360
-        if ds[config.name_var_mdt['var']].shape[0]!=ds[config.name_var_mdt['lat']].shape[0]:
-            ds[config.name_var_mdt['var']] = ds[config.name_var_mdt['var']].transpose()
-        ds = ds.sel({config.name_var_mdt['lon']:slice(lon.min(),lon.max()),
-                     config.name_var_mdt['lat']:slice(lat.min(),lat.max())})
-        if len(ds[config.name_var_mdt['lon']].shape)==1:
-            
-            lon_mdt,lat_mdt = np.meshgrid(ds[config.name_var_mdt['lon']].values,
-                                          ds[config.name_var_mdt['lat']].values)
-            
-        mdt = ds[config.name_var_mdt['var']].values
-        
-    else:
-        lon_mdt = lat_mdt = mdt = None
                                       
-    
     # Compute output observation dictionnary
     dict_obs = {}
     
@@ -98,6 +93,8 @@ def obs(config, State, *args, **kwargs):
         else:
             files = glob.glob(os.path.join(sat_info.path,sat_info.name+'*.nc'))
             # Get time dimension to concatenate
+            if len(files)==0:
+                continue
             ds0 = xr.open_dataset(files[0])
             name_time_dim = ds0[sat_info.name_obs_time].dims[0]
             ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
@@ -107,25 +104,23 @@ def obs(config, State, *args, **kwargs):
         if sat_info.kind in ['swot_simulator','CMEMS']:
             _obs_swot_simulator(ds, assim_dates, dict_obs, sat_info, 
                                 config.assimilation_time_step, 
-                                config.tmp_DA_path,bbox,
-                                lon_mdt,lat_mdt,mdt)
+                                config.tmp_DA_path,bbox)
         elif sat_info.kind=='fullSSH':
             _obs_fullSSH(ds, assim_dates,dict_obs, sat_info,
                          config.assimilation_time_step,
                          config.tmp_DA_path,bbox)
     
     # Write *dict_obs* for next experiment
-    if config.write_obs:
-        if not os.path.exists(dir_obs):
-            os.makedirs(dir_obs)
-        with open(os.path.join(dir_obs,'dict_obs.pic'), 'wb') as f:
+    if config.path_obs is not None:
+        if not os.path.exists(config.path_obs):
+            os.makedirs(config.path_obs)
+        with open(os.path.join(config.path_obs,name_dict_obs), 'wb') as f:
             pickle.dump(dict_obs,f)
         
     return dict_obs
 
-
 def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
-                        bbox=None,lon_mdt=None,lat_mdt=None,mdt=None):
+                        bbox=None):
     """
     NAME
         _obs_swot_simulator
@@ -136,49 +131,48 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
     """
     ds = ds[sat_info.name_obs_grd + sat_info.name_obs_var]
     
+    ds = ds.assign_coords({sat_info.name_obs_time:ds[sat_info.name_obs_time]})
+
+    ds = ds.rename({ds[sat_info.name_obs_time].dims[0]:sat_info.name_obs_time})
+    
     # Select sub area
     lon_obs = ds[sat_info.name_obs_lon] % 360
     lat_obs = ds[sat_info.name_obs_lat]
     ds = ds.where((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
                   (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs), drop=True)
+    
+
                   
     # Time loop
     for dt_curr in dt_list:
         
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
+       
+        try:
+            _ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
+        except:
+            try:
+                _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
+                        (ds[sat_info.name_obs_time]>=dt1),drop=True)
+            except:
+                print(dt_curr,': Warning: impossible to select data for this time')
+                continue
         
-        #_ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
-        
-        _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
-                       (ds[sat_info.name_obs_time]>=dt1),drop=True)
-        
+
         lon = _ds[sat_info.name_obs_lon].values
         lat = _ds[sat_info.name_obs_lat].values
         
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
                     
         if is_obs:
-            # Add MDT if provided
-            if mdt is not None:
-                mdt_on_track = interpolate.griddata(
-                    (lon_mdt.ravel(),lat_mdt.ravel()),mdt.ravel(),
-                    (lon.ravel(),lat.ravel())).reshape(lon.shape)
-                _ds[sat_info.name_obs_var[0]] += mdt_on_track
             # Save the selected dataset in a new nc file
-        
             varobs = {}
             for namevar in sat_info.name_obs_var:
                 varobs[namevar] = _ds[namevar]
             coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
-            if len(lon.shape)==1:
-                coords[sat_info.name_obs_lon] = lon
-            else:
-                varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
-            if len(lat.shape)==1:
-                coords[sat_info.name_obs_lat] = lat
-            else:
-                varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
+            varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
+            varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
             if sat_info.name_obs_xac is not None:
                 varobs[sat_info.name_obs_xac] = _ds[sat_info.name_obs_xac]
                 
@@ -190,8 +184,10 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
             path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
                 '_'.join(sat_info.name_obs_var) + '_' + date + '.nc')
             print(dt_curr,': '+path)
-            dsout[sat_info.name_obs_time].encoding.pop("_FillValue", None)
-            dsout.to_netcdf(path)#, encoding={'my_variable': {'_FillValue': 1e35}})
+            #dsout[sat_info.name_obs_time].encoding.pop("_FillValue", None)
+            dsout.to_netcdf(path, encoding={sat_info.name_obs_time: {'_FillValue': None},
+                                            sat_info.name_obs_lon: {'_FillValue': None},
+                                            sat_info.name_obs_lat: {'_FillValue': None}})
             dsout.close()
             _ds.close()
             del dsout,_ds
@@ -228,7 +224,7 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path,'obs_' + date + '.nc')
             print(dt_curr,': '+path)
-            ds1[sat_info.name_obs_time].encoding.pop("_FillValue", None)
+            #ds1[sat_info.name_obs_time].encoding.pop("_FillValue", None)
             ds1.to_netcdf(path)
             ds1.close()
             del ds1
@@ -264,9 +260,15 @@ def detrend_obs(dict_obs):
             mask = np.isnan(ssh)
             ssh[mask] = 0
             # Detrend data in all directions
-            ssh_detrended = detrendn(ssh)
-            # Re-mask 
-            ssh_detrended[mask] = np.nan
+            if len(ssh.shape)==0:
+                ssh_detrended = +ssh
+            elif len(ssh.shape)==1:
+                ssh_detrended = signal.detrend(ssh)
+            else:
+                ssh_detrended = detrendn(ssh)
+            # Re-mask
+            if mask.size>1:
+                ssh_detrended[mask] = np.nan
             # Write detrended observation
             ncout[sat_info.name_obs_var[0]].data = ssh_detrended.reshape(ncout[sat_info.name_obs_var[0]].shape)
             ncout.to_netcdf(obs_file)

@@ -11,12 +11,15 @@ import numpy as np
 from datetime import timedelta
 from src import grad_tool as grad
 
+from dask import delayed,compute
+
+#import matplotlib.pylab as plt 
 
 from . import grid
 
 class Obsopt:
 
-    def __init__(self,State,dict_obs,Model,tmp_DA_path=None,):
+    def __init__(self,config,State,dict_obs,Model):
         
         self.npix = State.lon.size
         self.dict_obs = dict_obs        # observation dictionnary
@@ -33,60 +36,125 @@ class Obsopt:
                     ind_obs = np.argmin(np.abs(delta_t))
                     self.date_obs[t] = t_obs[ind_obs]
         
-        # Temporary path where to save model trajectories
-        self.tmp_DA_path = tmp_DA_path
+        # Temporary path where to save H operators
+        self.tmp_DA_path = config.tmp_DA_path
+        if config.path_H is not None:
+            # We'll save to *path_H* or read in *path_H* from previous run
+            self.path_H = config.path_H
+            if not os.path.exists(self.path_H):
+                os.makedirs(self.path_H)
+        else:
+            # We'll use temporary directory to save the files
+            self.path_H = None
         
         self.obs_sparse = {}
         
         # For grid interpolation:
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
+
         
+        # Mask coast pixels
+        self.dist_coast = config.dist_coast
+        if config.mask_coast and self.dist_coast is not None and State.mask is not None and np.any(State.mask):
+            self.flag_mask_coast = True
+            lon_land = State.lon[State.mask].ravel()
+            lat_land = State.lat[State.mask].ravel()
+            coords_geo_land = np.column_stack((lon_land,lat_land))
+            self.coords_car_land = grid.geo2cart(coords_geo_land)
+            
+        else: self.flag_mask_coast = False
+        
+        
+        delayed_results = []
         for t in self.date_obs:
-            # Read obs
-            sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
-            obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
+            self.process_obs(t)
+            #res = delayed(self.process_obs)(t)
+            #delayed_results.append(res)
+        #compute(*delayed_results, scheduler="processes")
             
-            obs_sparse = False   
-            lon_obs = np.array([])
-            lat_obs = np.array([])
-            for sat_info,obs_file in zip(sat_info_list,obs_file_list):
-                if sat_info.kind=='fullSSH':
-                    if obs_sparse:
-                        sys.exit("Error: in Obsopt: \
-                                 can't handle 'fullSSH' and 'swot_simulator'\
-                                 observations at the same time, sorry")
-                    elif len(sat_info_list)>1:
-                        sys.exit("Error: in Obsopt: \
-                                 can't handle several 'fullSSH'\
-                                 observations at the same time, sorry.\
-                                 Hint: reduce *assimiliation_time_step* parameter")
-            
-                elif sat_info.kind=='swot_simulator':
-                    obs_sparse = True
-                    with xr.open_dataset(obs_file) as ncin:
-                        lon = ncin[sat_info.name_obs_lon].values.ravel()
-                        lat = ncin[sat_info.name_obs_lat].values.ravel()
-                    lon_obs = np.concatenate((lon_obs,lon))
-                    lat_obs = np.concatenate((lat_obs,lat))
-                                    
-            self.obs_sparse[t] = obs_sparse
-            
-            if obs_sparse :
-                # Compute indexes and weights of neighbour grid pixels
-                print(t,'Compute obs interpolator')
-                indexes,weights = self.interpolator(lon_obs,lat_obs)
-                maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
-                # save in netcdf
-                dsout = xr.Dataset({"indexes": (("Nobs","Npix"), indexes),
-                                    "weights": (("Nobs","Npix"), weights),
-                                    "maskobs": (("Nobs"), maskobs)},                
-                                   )
-                dsout.to_netcdf(os.path.join(
-                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')),
-                    encoding={'indexes': {'dtype': 'int16'}})
-                
+    def process_obs(self,t):
         
+        if self.path_H is not None:
+            file_H = os.path.join(
+                self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+            if os.path.exists(file_H):
+                new_file_H = os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                os.system(f"cp {file_H} {new_file_H}")
+                return t
+        else:
+            file_H = os.path.join(
+                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+        
+        # Read obs
+        sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
+        obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
+        
+        obs_sparse = False   
+        lon_obs = np.array([])
+        lat_obs = np.array([])
+        for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+            if sat_info.kind=='fullSSH':
+                if obs_sparse:
+                    sys.exit("Error: in Obsopt: \
+                             can't handle 'fullSSH' and 'swot_simulator'\
+                             observations at the same time, sorry")
+                elif len(sat_info_list)>1:
+                    sys.exit("Error: in Obsopt: \
+                             can't handle several 'fullSSH'\
+                             observations at the same time, sorry.\
+                             Hint: reduce *assimiliation_time_step* parameter")
+                
+                
+            elif sat_info.kind=='swot_simulator':
+                obs_sparse = True
+            with xr.open_dataset(obs_file) as ncin:
+                lon = ncin[sat_info.name_obs_lon].values.ravel()
+                lat = ncin[sat_info.name_obs_lat].values.ravel()
+            if lon.size!=lat.size:
+                lon,lat = np.meshgrid(lon,lat)
+                lon = lon.ravel()
+                lat = lat.ravel()
+            lon_obs = np.concatenate((lon_obs,lon))
+            lat_obs = np.concatenate((lat_obs,lat))
+                                        
+    
+        if obs_sparse:
+            # Compute indexes and weights of neighbour grid pixels
+            indexes,weights = self.interpolator(lon_obs,lat_obs)
+        else:
+            indexes,weights = np.arange(lon_obs.size),np.ones((lon_obs.size,))
+            indexes = indexes[:,np.newaxis]
+            weights = weights[:,np.newaxis]
+        
+        # Compute mask 
+        maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
+        if self.flag_mask_coast:
+            coords_geo_obs = np.column_stack((lon_obs,lat_obs))
+            coords_car_obs = grid.geo2cart(coords_geo_obs)
+            for i in range(lon_obs.size):
+                _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
+                if _dist<self.dist_coast:
+                    maskobs[i] = True
+        
+        # save in netcdf
+        dsout = xr.Dataset({"indexes": (("Nobs","Npix"), indexes),
+                            "weights": (("Nobs","Npix"), weights),
+                            "maskobs": (("Nobs"), maskobs)},                
+                           )
+        dsout.to_netcdf(file_H,
+            encoding={'indexes': {'dtype': 'int16'}})
+        
+        if self.path_H is not None:
+                new_file_H = os.path.join(
+                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                os.system(f"cp {file_H} {new_file_H}")
+        
+        return t
+                
+    
+            
     def isobserved(self,t):
         
         delta_t = [(t - tobs).total_seconds() for tobs in self.dict_obs.keys()]
@@ -96,6 +164,8 @@ class Obsopt:
         
         return is_obs
     
+        
+    
     def interpolator(self,lon_obs,lat_obs):
         
         coords_geo_obs = np.column_stack((lon_obs, lat_obs))
@@ -104,8 +174,7 @@ class Obsopt:
         indexes = []
         weights = []
         for i in range(lon_obs.size):
-            diff = np.square(coords_car_obs[i])-np.square(self.coords_car)
-            _dist = np.sqrt(np.sum(np.square(diff),axis=1))
+            _dist = np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car),axis=1))
             # 4 closest
             ind4 = np.argsort(_dist)[:4]
             indexes.append(ind4)
@@ -113,26 +182,30 @@ class Obsopt:
             
         return np.asarray(indexes),np.asarray(weights)
     
+
     
     def H(self,t,X):
         
-        if self.obs_sparse[t] :
-            # Get indexes and weights of neighbour grid pixels
-            ds = xr.open_dataset(os.path.join(
-                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
-            indexes = ds['indexes'].values
-            weights = ds['weights'].values
-            maskobs = ds['maskobs'].values
-            
-            # Compute inerpolation of X to obs space
-            HX = np.zeros_like(indexes.size)
-            
-            for i,(mask,ind,w) in enumerate(zip(maskobs,indexes,weights)):
-                if not mask:
-                    # Average
+        #if self.obs_sparse[t] :
+        # Get indexes and weights of neighbour grid pixels
+        ds = xr.open_dataset(os.path.join(
+                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+        indexes = ds['indexes'].values
+        weights = ds['weights'].values
+        maskobs = ds['maskobs'].values
+        
+        # Compute inerpolation of X to obs space
+        HX = np.zeros(indexes.shape[0])
+        
+        for i,(mask,ind,w) in enumerate(zip(maskobs,indexes,weights)):
+            if not mask:
+                # Average
+                if ind.size>1:
                     HX[i] = np.average(X[ind],weights=w)
-        else:
-            HX = X # H==Id
+                else:
+                    HX[i] = X[ind[0]]
+            else:
+                HX[i] = np.nan
         
         return HX
 
@@ -161,25 +234,24 @@ class Obsopt:
         
         ind = adState.get_indobs()
         
-        if self.obs_sparse[t]:
-            adHssh = np.zeros(self.npix)
-            ds = xr.open_dataset(os.path.join(
-                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
-            indexes = ds['indexes'].values
-            weights = ds['weights'].values
-            maskobs = ds['maskobs'].values
-            Nobs,Npix = indexes.shape
-            
-            for i in range(Nobs):
-                if not maskobs[i]:
-                    # Average
-                    for j in range(Npix):
-                        if weights[i].sum()!=0:
-                            adHssh[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
-            
-            adState.var[ind] += adHssh.reshape(adState.var[ind].shape)
-        else:
-            adState.var[ind] += misfit.reshape(adState.var[ind].shape)
+        #if self.obs_sparse[t]:
+        adHssh = np.zeros(self.npix)
+        ds = xr.open_dataset(os.path.join(
+                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+        indexes = ds['indexes'].values
+        weights = ds['weights'].values
+        maskobs = ds['maskobs'].values
+        Nobs,Npix = indexes.shape
+        
+        for i in range(Nobs):
+            if not maskobs[i]:
+                # Average
+                for j in range(Npix):
+                    if weights[i].sum()!=0:
+                        adHssh[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+        
+        adState.var[ind] += adHssh.reshape(adState.var[ind].shape)
+
         
             
 class Cov :
@@ -414,8 +486,7 @@ class Variational:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, Xb=None, 
-                 tmp_DA_path=None, checkpoint=1, prec=False,eps_bc=10,
-                 dist_scale=None):
+                 tmp_DA_path=None, checkpoint=1, prec=False):
         
         # Objects
         self.M = M # model
@@ -464,14 +535,7 @@ class Variational:
         
         # preconditioning
         self.prec = prec
-        
-        # Weight map to be apply on misfit, in order to reduce the influence of boundary pixels
-        if dist_scale is not None:
-            weight_map = grid.compute_weight_map(State.lon,State.lat,State.mask,dist_scale)
-            self.tapering = (1-weight_map + eps_bc*weight_map)**-1
-        else:
-            self.tapering = np.ones((self.State.ny,self.State.nx))
-        
+
         # Grad test
         if False:
             X = np.random.random()
@@ -512,10 +576,7 @@ class Variational:
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 
-                # Apply tapering
-                tapering = self.H.H(timestamp,self.tapering.ravel())
-                
-                Jo += misfit.dot(self.R.inv(misfit)*tapering)
+                Jo += misfit.dot(self.R.inv(misfit))
                 
             # Run forward model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
@@ -529,10 +590,7 @@ class Variational:
         if self.isobs[-1]:
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
             
-            # Apply tapering
-            tapering = self.H.H(timestamp,self.tapering.ravel())
-            
-            Jo = Jo + misfit.dot(self.R.inv(misfit)*tapering)  
+            Jo = Jo + misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
@@ -569,10 +627,7 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoint[-1]]
             misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
             
-            # Apply tapering
-            tapering = self.H.H(timestamp,self.tapering.ravel())
-            
-            self.H.adj(timestamp,adState,self.R.inv(misfit)*tapering)
+            self.H.adj(timestamp,adState,self.R.inv(misfit))
             
         # Time loop
         self.M.restart()  
@@ -592,11 +647,8 @@ class Variational:
             # Misfit 
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
-                
-                # Apply tapering
-                tapering = self.H.H(timestamp,self.tapering.ravel())
             
-                self.H.adj(timestamp,adState,self.R.inv(misfit)*tapering)
+                self.H.adj(timestamp,adState,self.R.inv(misfit))
                 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
