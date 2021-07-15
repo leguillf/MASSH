@@ -41,7 +41,7 @@ Created on Tue Apr 20 08:40:30 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = 'test' 
+name_experiment = 'test_4Dvar_QG_swot' 
 name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
@@ -88,15 +88,15 @@ dy = 1/5.                                            # meridional grid spatial s
 # - plot_time_step: time step plot at which the states are plotted (for debugging)
 #################################################################################################################################
    
-init_date = datetime(2012,10,2,0)     
+init_date = datetime(2013,1,2,0)     
 
-final_date = datetime(2012,10,4,0)
+final_date = datetime(2013,1,20,0)
 
 assimilation_time_step = timedelta(hours=3)  
 
 saveoutput_time_step = timedelta(hours=3) 
 
-plot_time_step = timedelta(days=1)  
+window_time_step = timedelta(days=6)
 
 #################################################################################################################################
 # Model parameters
@@ -173,13 +173,21 @@ name_analysis = '4Dvar'
 #    *
 #################################################################################################################################
 
-sigma_B = None
+path_init_4Dvar = None
 
-sigma_R = 1.
+sigma_B = 1.
 
-maxiter = 5
+sigma_R = 0.1
 
+maxiter = 15
 
+gtol = 1e-5
+
+prec = False
+
+filter_name = None
+
+filter_order = None
 
 #################################################################################################################################
 # Observation parameters
@@ -187,7 +195,7 @@ maxiter = 5
 # - satellite: list of satellite names 
 
 satellite = ["swot"]
-write_obs = True
+write_obs = False
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  

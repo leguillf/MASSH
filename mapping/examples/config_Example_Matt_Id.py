@@ -41,7 +41,7 @@ Created on Tue Apr 27 09:02:10 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = '4Dvar_idealized' 
+name_experiment = '4Dvar_QG_SWOT' 
 name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
@@ -64,7 +64,7 @@ from datetime import datetime,timedelta
 
 name_init = 'from_file'
 
-name_init_grid = '/mnt/renamatt/equipes/IGE/meom/workdir/renamatt/MASSH_dev_Matthias/MASSH/data_Example2/data_BM-IT_idealized/ref.nc'
+name_init_grid = '../../data_Example1/data_BM-IT_idealized/ref.nc'
 
 name_init_lon = 'lon'
 
@@ -84,9 +84,9 @@ name_init_file = 'init_state.nc'
 # - window_time_step : time step corresponding to the size of an assimilation window
 #################################################################################################################################
    
-init_date = datetime(2010,1,2,0)     
+init_date = datetime(2016,1,2,0)     
 
-final_date = datetime(2010,1,8,0)
+final_date = datetime(2016,1,20,0)
 
 assimilation_time_step = timedelta(hours=3)  
 
@@ -171,19 +171,25 @@ name_analysis = '4Dvar'
 
 path_init_4Dvar = None
 
-sigma_B = 1.
+sigma_B = None
 
 sigma_R = 0.1
 
-maxiter = 50
+maxiter = 15
 
 gtol = 1e-5
 
-prec = True
+prec = False
 
-filter_name = 'shapiro'
+filter_use = False
 
-filter_order = 5
+filter_name = None
+
+filter_order = None
+
+gradient term = False
+
+sigma_B_grad = None
 
 #################################################################################################################################
 # Observation parameters
@@ -209,7 +215,7 @@ write_obs = False
 
 
 kind_nr = "fullSSH"
-obs_path_nr = '/mnt/renamatt/equipes/IGE/meom/workdir/renamatt/MASSH_dev_Matthias/MASSH/data_Example2/data_BM-IT_idealized/'
+obs_path_nr = '../../data_Example2/data_BM-IT_idealized/'
 obs_name_nr = "obs"
 name_obs_var_nr = ["ssh_meso"]
 name_obs_lon_nr = "lon"
@@ -225,7 +231,7 @@ name_obs_time_nr = "time_obs"
 # - flag_plot: between 0 and 4. 0 for none plot, 4 for full plot
 #################################################################################################################################
 
-saveoutputs = False
+saveoutputs = True
 
 name_exp_save = name_experiment 
 
