@@ -69,7 +69,9 @@ class Qgm_tgl(Qgm):
                     +self.snu/(self.dy[2:-2,2:-2]**2)*\
                         (dq[3:-1,2:-2]+dq[1:-3,2:-2]-2*dq[2:-2,2:-2])
     
-            drq[np.where((self.mask<=1))]=0
+        drq[np.where((self.mask<=1))] = 0
+        drq[np.isnan(drq)] = 0
+        
     
         return drq
     
