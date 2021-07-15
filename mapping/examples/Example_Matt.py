@@ -17,7 +17,7 @@ from src import ana as ana
 
 
 # path of configuration file
-path_config = 'config_Example_Matt_Id.py'
+path_config = 'config_Example_Matt.py'
 
 config = exp.exp(path_config)
 
@@ -26,7 +26,6 @@ State = state.State(config)
 
 print('\n ** create Model **\n')
 Model = mod.Model(config,State)
-
 
 print('\n ** create dict_obs **\n')
 # obs dictionnary

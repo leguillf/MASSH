@@ -114,19 +114,13 @@ variable are SLAs!')
         while t<=config.final_date:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
-        
-        # print('Tangent test:')
-        # self.tangent_test(State,10)
-        
-        # print('Adjoint test:')
-        # self.adjoint_test(State,10)
 
-        if config.name_analysis=='4Dvar':
-            print('Tangent test:')
-            self.tangent_test(State,10)
+        # if config.name_analysis=='4Dvar':
+        #     print('Tangent test:')
+        #     self.tangent_test(State,10)
             
-            print('Adjoint test:')
-            self.adjoint_test(State,10)
+        #     print('Adjoint test:')
+        #     self.adjoint_test(State,10)
 
     def step(self,State,nstep=1):
         

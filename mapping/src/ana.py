@@ -126,19 +126,22 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
             n_step = int(dt_save.total_seconds()/config.dtmodel) # number of model step between two save
             
             for i in range(n_save) :
-                State_ana.save(date=date_save) # save state
+                filename = config.path_save + config.name_experiment\
+                    + '_y' + str(date.year)\
+                    + 'm' + str(date_save.month).zfill(2)\
+                    + 'd' + str(date_save.day).zfill(2)\
+                    + 'h' + str(date_save.hour).zfill(2)\
+                    + str(date_save.minute).zfill(2) + '.nc'
+                State_ana.save(filename) # save state
                 Model.step(State_ana,n_step) # run forward the model
-                date_save += dt_save # update time
-                if last_window :
-                    State_ana.save(date=date_save)
-        
+                date_save += dt_save # update time        
         else :
             # model propagation until next assimilation window
             Model.step(State_ana,nstep=n_window//2)
         
         date += dt_window//2 # time update
         print('\n*** final analysed state ***\n')
-        
+
 
 def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :
     '''
@@ -182,14 +185,15 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
     projg0 = np.max(np.abs(g0))
     
     State_callback = State.free()
-    def callback(XX) :
+    def callback(Xk) :
         '''
         function called at each iteration of the minimization process
         '''
-        var_ssh = B.prec_filter(XX, State_callback) + Xb
-        var_ssh = var_ssh.reshape(State_callback.var.ssh.shape)
-        State_callback.setvar(var_ssh,0)
-        State_callback.plot()
+        print('empty callback function')
+        # var_ssh = np.copy(Xk)
+        # var_ssh = var_ssh.reshape(State_callback.var.ssh.shape)
+        # State_callback.setvar(var_ssh,0)
+        # State_callback.plot()
     
     res = opt.minimize(var.cost,Xopt,
                     method='L-BFGS-B',
@@ -197,7 +201,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
                     options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},callback=callback)
     Xout = res.x
     if config.prec :
-        Xout = B.prec_filter(Xout,State) + Xb
+        Xout = B.sqr(Xout) + Xb
     
     return Xout
        

@@ -9,6 +9,7 @@ import os,sys
 import xarray as xr 
 import numpy as np 
 from datetime import timedelta
+from src import grad_tool as grad
 
 from dask import delayed,compute
 
@@ -253,7 +254,7 @@ class Obsopt:
 
         
             
-class Cov:
+class Cov :
     # case of a simple diagonal covariance matrix
     def __init__(self,sigma):
         self.sigma = sigma
@@ -263,65 +264,13 @@ class Cov:
     
     def sqr(self,X):
         return self.sigma**0.5 * X
-    
-    # case of a more complex covariance matrix (for background and precondionning)
-    def prec_filter(self,X,State) :
-        name = State.config.filter_name
-        order = State.config.filter_order
-        shape = State.var[0].shape
-        if name=='shapiro' :
-            return self.shapiro_filter(X,shape,number=order)
-        else :
-            if name != None :
-                print('filter not implemented yet')
-            return self.sqr(X)
-    
-    def std_diff_op(self,X,axis=0,number=1) :
-            '''
-            Returns the standard diffusion of the field X given at order 2*number
-            '''
-            Xout = np.copy(X)
-            for i in range(number) :
-                # apply a laplacian operator to var
-                X_up = np.roll(Xout,-1,axis=axis)
-                X_down = np.roll(Xout,1,axis=axis)
-                Xout = (X_up + X_down) - 2*Xout
-                # boundary conditions
-                # Xout[0,:] = Xout[1,:]
-                # Xout[-1,:] = Xout[-2,:]
-                # Xout[:,0] = Xout[:,1]
-                # Xout[:,-1] = Xout[:,-2]
-            return Xout
-    
-    def dissip_op(self,X,axis=0,number=1) :
-        '''
-        Returns the linear dissipative operator
-        '''
-        diff = self.std_diff_op(X,axis=axis,number=number)
-        if number%2==0 :
-            coef = -1/(2**(2*number))
-        else :
-            coef = 1/(2**(2*number))
-        return coef*diff
-                
-        
-    def shapiro_filter(self,X,shape,number=1) :
-        '''
-        Returns the Shapiro filtered X field at order 2*number
-        '''
-        var = X.reshape(shape)
-        if number==0 :
-            return X
-        n_dim = len(shape)
-        for i in range(n_dim) :
-            var = self.dissip_op(var,axis=i,number=number)
-        return X + var.ravel()
-        
-        
+
+
+
 class Variational_QG :
     
-    def __init__(self,M=None, H=None, State=None, R=None,B=None, Xb=None, 
-                 tmp_DA_path=None, date_ini=None, date_final=None, prec=False) :
+    def __init__(self,M=None, H=None, State=None, R=None,B=None, Xb=None, tmp_DA_path=None,
+                 date_ini=None, date_final=None, prec=False, grad_term=False) :
         
          # Objects
         self.M = M # model
@@ -338,8 +287,16 @@ class Variational_QG :
         # Temporary path where to save model trajectories
         self.tmp_DA_path = tmp_DA_path
         
+        # Covariance matrix building using gradient condition
+        if self.grad_term :
+            self.grad = grad.grad_op(self.State)
+            self.B_grad = Cov(self.State.config.sigma_B_grad)
+        
         # preconditioning
         self.prec = prec
+
+        # gradient term in the cost function
+        self.grad_term = grad_term
         
         # initial and final date of the assimilation window
         self.date_ini = date_ini
@@ -380,7 +337,6 @@ class Variational_QG :
         # self.grad_test(deg=8)
         
         
-        
     
     def cost(self,X0) :
         '''
@@ -392,10 +348,10 @@ class Variational_QG :
         # initial state
         State = self.State.free() # create new state
         if self.prec :
-            X = self.B.prec_filter(X0,self.State) + self.Xb
-            X_var = X.reshape(self.State.getvar(0).shape)
+            X = self.B.sqr(X0) + self.Xb
+            X_var = X.reshape(self.State.var.ssh.shape)
         else :
-            X_var = X0.reshape(self.State.getvar(0).shape) 
+            X_var = X0.reshape(self.State.var.ssh.shape)
         State.setvar(X_var,0) # initiate the State with X0
         
         # Background cost function evaluation 
@@ -403,7 +359,12 @@ class Variational_QG :
             if self.prec :
                 Jb = X0.dot(X0) # cost of background term with change of variable
             else:
-                Jb = np.dot(X0,self.B.inv(X0))  # cost of background term
+                dx = X0-self.Xb
+                Jb = np.dot(dx,self.B.inv(dx))  # cost of background term
+                if self.grad_term :
+                    # Jgrad represent a condition on the gradient of X0
+                    Jgrad = np.dot(dx,self.grad.T_grad(self.B_grad.inv(self.grad.grad(dx))))
+                    Jb += Jgrad
         else:
             Jb = 0.
         
@@ -446,7 +407,11 @@ class Variational_QG :
             if self.prec :
                 gb = X0 # gradient of the background term
             else:
-                gb = self.B.inv(X0) # gradient of background term
+                dx = X0 - self.Xb
+                gb = self.B.inv(dx) # gradient of background term
+                if self.grad_term :
+                    g_grad = self.grad.T_grad(self.B_grad.inv(self.grad.grad(dx)))
+                    gb += g_grad
         else:
             gb = 0
         
