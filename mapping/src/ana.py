@@ -580,6 +580,31 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         else:
             _sigma_B[Model.slicehbcx] = config.sigma_B_bc
             _sigma_B[Model.slicehbcy] = config.sigma_B_bc
+        
+        if np.any(State.mask):
+            # We divide the covariance by 10 for land pixels
+            land_coeff_x = np.ones(Model.shapehbcx)
+            land_coeff_y = np.ones(Model.shapehbcy)
+            # Loop over OBC coordinates 
+            for j,x in enumerate(Model.bcx): # South/North
+                # look for the closest grid pixel 
+                jS = np.argmin(np.abs(State.X[0,:]-x)) # South
+                jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
+                if State.mask[0,jS]:
+                    land_coeff_x[:,0,:,:,:,j] = 0.1
+                if State.mask[-1,jN]:
+                    land_coeff_x[:,1,:,:,:,j] = 0.1
+            for i,y in enumerate(Model.bcy): # West/East
+                # look for the closest grid pixel 
+                iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
+                iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
+                if State.mask[iW,0]:
+                    land_coeff_y[:,0,:,:,:,i] = 0.1
+                if State.mask[iE,-1]:
+                    land_coeff_y[:,1,:,:,:,i] = 0.1
+            _sigma_B[Model.slicehbcx] *= land_coeff_x.ravel()
+            _sigma_B[Model.slicehbcy] *= land_coeff_y.ravel()
+        
         # Generate Covariance matrixes
         B = Cov(_sigma_B)
         R = Cov(config.sigma_R)
