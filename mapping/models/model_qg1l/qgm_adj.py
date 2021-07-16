@@ -18,6 +18,7 @@ class Qgm_adj(Qgm_tgl):
     def qrhs_adj(self,adrq,u,v,q,way):
 
         adrq[np.isnan(adrq)]=0.
+        adrq[np.where((self.mask<=1))]=0
     
         adu=np.zeros((self.ny,self.nx))
         adv=np.zeros((self.ny,self.nx))
@@ -115,10 +116,7 @@ class Qgm_adj(Qgm_tgl):
             adq[2:-2,2:-2]=adq[2:-2,2:-2]+self.snu/(self.dx[2:-2,2:-2]**2)*(adrq[2:-2,3:-1]+adrq[2:-2,1:-3]-2*adrq[2:-2,2:-2]) \
             +self.snu/(self.dy[2:-2,2:-2]**2)*(adrq[3:-1,2:-2]+adrq[1:-3,2:-2]-2*adrq[2:-2,2:-2]) 
             
-    
-    
-            adq[np.where((self.mask<=1))]=0
-    
+        
         return adu, adv, adq
     
     

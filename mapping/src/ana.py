@@ -556,16 +556,34 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
     
     # Covariance matrixes
     if None in [config.sigma_R,config.sigma_B_He,config.sigma_B_bc]:          
-            # Least squares
-            B = None
-            R = Cov(1)
+        # Least squares
+        B = None
+        R = Cov(1)
     else:
         _sigma_B = np.zeros((Model.nParams)) 
-        _sigma_B[Model.sliceHe] = config.sigma_B_He
-        _sigma_B[Model.slicehbcx] = config.sigma_B_bc
-        _sigma_B[Model.slicehbcy] = config.sigma_B_bc
+        # error on He
+        _sigma_B[Model.sliceHe] = config.sigma_B_He 
+        # error on OBCs
+        if hasattr(config.sigma_B_bc, '__len__'):
+            # Specific value for each tidal component
+            if len(config.sigma_B_bc) == len(config.w_igws):
+                N_one_component_x = Model.nbcx//len(config.w_igws)
+                N_one_component_y = Model.nbcy//len(config.w_igws)
+                for i,_sigma in enumerate(config.sigma_B_bc):
+                    _sigma_B[Model.slicehbcx][
+                        i*N_one_component_x:(i+1)*N_one_component_x] = _sigma
+                    _sigma_B[Model.slicehbcy][
+                        i*N_one_component_y:(i+1)*N_one_component_y] = _sigma
+            else:
+                _sigma_B[Model.slicehbcx] = config.sigma_B_bc[0]
+                _sigma_B[Model.slicehbcy] = config.sigma_B_bc[0]
+        else:
+            _sigma_B[Model.slicehbcx] = config.sigma_B_bc
+            _sigma_B[Model.slicehbcy] = config.sigma_B_bc
+        # Generate Covariance matrixes
         B = Cov(_sigma_B)
         R = Cov(config.sigma_R)
+        
     # backgroud state 
     Xb = np.zeros((Model.nParams,))
         
@@ -575,11 +593,11 @@ def ana_4Dvar(config,State,Model,dict_obs=None, *args, **kwargs):
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
         prec=config.prec)
     
-    # Initial State
+    # Initial State # TODO: Use harmonic fitting for initial condition
     if config.path_init_4Dvar is None:
         Xopt = np.zeros_like(var.Xb)
     else:
-        # Read previous minimum
+        # Read previous minimum 
         with open(config.path_init_4Dvar, 'rb') as f:
             print('Read previous minimum:',config.path_init_4Dvar)
             Xopt = pickle.load(f)

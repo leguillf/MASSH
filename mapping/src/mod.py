@@ -118,7 +118,7 @@ variable are SLAs!')
         if config.name_analysis=='4Dvar':
             print('Tangent test:')
             self.tangent_test(State,10)
-          
+
             print('Adjoint test:')
             self.adjoint_test(State,10)
 
