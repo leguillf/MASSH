@@ -288,15 +288,13 @@ class Variational_QG :
         self.tmp_DA_path = tmp_DA_path
         
         # Covariance matrix building using gradient condition
+        self.grad_term = grad_term
         if self.grad_term :
             self.grad = grad.grad_op(self.State)
             self.B_grad = Cov(self.State.config.sigma_B_grad)
         
         # preconditioning
         self.prec = prec
-
-        # gradient term in the cost function
-        self.grad_term = grad_term
         
         # initial and final date of the assimilation window
         self.date_ini = date_ini
@@ -333,8 +331,8 @@ class Variational_QG :
         # indicates the corresponding iteration of the timestamps
         self.start_iter = int((self.date_ini - State.config.init_date).total_seconds()/self.dt.total_seconds())
         
-        # print("\n ** gradient test ** \n")
-        # self.grad_test(deg=8)
+        print("\n ** gradient test ** \n")
+        self.grad_test(deg=8)
         
         
     

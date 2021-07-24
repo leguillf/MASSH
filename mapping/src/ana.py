@@ -81,7 +81,7 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
             State_ana.setvar(ssh_b,State_ana.get_indobs())
     
     print('\n*** Observation operator ***\n')
-    H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
+    H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** 4Dvar analysis ***\n')
     
@@ -152,7 +152,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
     
     # create obsopt if not filled out
     if H==None :
-        H = Obsopt(State,dict_obs,Model,tmp_DA_path=config.tmp_DA_path)
+        H = Obsopt(State,dict_obs,Model)
     
     # Covariance matrixes
     if None in [config.sigma_R,config.sigma_B]:          
