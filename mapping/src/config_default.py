@@ -272,7 +272,9 @@ scalenudg = None
 # - sigma_R : standard deviation error of the observation error
 # - sigma_B_He : Background variance for He
 # - sigma_B_bc : Background variance for bc
+# - sigma_B_grad : Background variance of cost function smoothing gradient term
 # - prec : use of a preconditionning
+# - grad_term : gradient term in cost function, smooth solution
 # - filter_name : name of the filter used in case of preconditionning
 # - filter_order : order of the filter used
 # - gtol : Gradient norm must be less than gtol before successful termination
@@ -292,7 +294,11 @@ sigma_B_He = 0.2 # Background variance for He
 
 sigma_B_bc = 1e-2 # Background variance for bc
 
+sigma_B_grad = 1. # Background variance of gradient smoothing term
+
 prec = False # preconditoning
+
+grad_term = False # gradient term added in the cost function to smooth solution
 
 filter_name = None # name of filter used in preconditionning
 
