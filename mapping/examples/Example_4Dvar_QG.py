@@ -17,7 +17,7 @@ from src import ana as ana
 
 
 # path of configuration file
-path_config = 'config_Example_Matt.py'
+path_config = 'config_Example_4Dvar_QG.py'
 
 config = exp.exp(path_config)
 
