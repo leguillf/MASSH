@@ -153,7 +153,7 @@ def interp2d(ds,name_vars,lon_out,lat_out):
 
 
 def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
-                        lon2d, lat2d, flag_plot=0, sponge='gaspari-cohn'):
+                        lon2d, lat2d, flag_plot=0, sponge='gaspari-cohn', mask=None):
 
     if type(timestamps) in [int,float]:
         timestamps = np.array([timestamps])
@@ -269,8 +269,15 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
     
     var_bc_interpTime[np.abs(var_bc_interpTime)>10e10] = np.nan
     
+    #####################
+    # Weight map
+    #####################
+    if mask is None:
+        mask = np.isnan(np.sum(var_bc_interpTime,axis=0))
+    else:
+        mask += np.isnan(np.sum(var_bc_interpTime,axis=0))
     bc_weight = compute_weight_map(lon2d,lat2d,
-                                   np.isnan(np.sum(var_bc_interpTime,axis=0)),
+                                   mask,
                                    dist_bc) 
     
     var_bc_interpTime[np.isnan(var_bc_interpTime)] = 0
