@@ -407,7 +407,6 @@ class State:
     def plot(self,title=None,cmap='RdBu_r'):
         
         nvar = len(self.name_var)
-        vmin,vmax = -0.7,0.7
         
         fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
         
@@ -420,7 +419,7 @@ class State:
         for i in range(nvar):
             ax = axs[i]
             ax.set_title(self.name_var[i])
-            im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],vmin=vmin,vmax=vmax,cmap=cmap,\
+            im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],cmap=cmap,\
                                shading='auto')
             plt.colorbar(im,ax=ax)
         

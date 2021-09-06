@@ -280,7 +280,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            State.lon,
                                                            State.lat,
                                                            config.flag_plot,
-                                                           bfn_obj.sponge)
+                                                           bfn_obj.sponge,
+                                                           mask=State.mask)
         else:
             bc_field = bc_weight = bc_field_t = None
 

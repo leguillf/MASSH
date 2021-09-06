@@ -80,7 +80,6 @@ class Qgm:
     
         Args:
             h (2D array): SSH field.
-            self (Grid() object): check modgrid.py
     
         Returns:
             u (2D array): Zonal velocity  
@@ -107,7 +106,7 @@ class Qgm:
     
         Args:
             h (2D array): SSH field.
-            self (Grid() object): check modgrid.py
+            c (2D array): Phase speed of first baroclinic radius 
     
         Returns:
             q: Potential Vorticity field  
@@ -145,6 +144,19 @@ class Qgm:
         return self.norm(rnew)**2 / self.norm(r)**2
     
     def pv2h(self,q,hg):
+        
+        """ compute SSH from PV
+    
+        Args:
+            q (2D array): PV
+            hg (2D array): background SSH
+
+    
+        Returns:
+            h (2D array): SSH
+    
+        """
+    
         q_tmp = +q
         
         q_tmp[self.mask==0] = 0
@@ -183,8 +195,7 @@ class Qgm:
         Args:
             u (2D array): Zonal velocity
             v (2D array): Meridional velocity
-            q : Q start
-            self (Grid() object): check modgrid.py
+            q : PV start
             way: forward (+1) or backward (-1)
     
         Returns:
@@ -265,6 +276,19 @@ class Qgm:
     
     def step(self,h0,q0=None,way=1):
         
+        """ Propagation 
+    
+        Args:
+            h0 (2D array): initial SSH
+            q0 (2D array, optional): initial PV
+            way: forward (+1) or backward (-1)
+    
+        Returns:
+            h1 (2D array): propagated SSH
+            q1 (2D array): propagated PV (if q0 is provided)
+    
+        """
+        
         if np.all(h0==0):
             if q0 is None:
                 return h0
@@ -296,101 +320,3 @@ class Qgm:
             return h1,q1
              
 
-if __name__ == "__main__":
-    
-    
-    
-    import xarray as xr
-    from scipy.ndimage import gaussian_filter
-    import matplotlib.pylab as plt
-    
-    
-    ds = xr.open_dataset('~/WORK/Developpement/Studies/MASSH/data_Example1/init.nc')
-    print(ds)
-    ssh0 = ds.sossheig.data
-    
-    
-    
-    
-    
-    
-    ny,nx = ssh0.shape
-    dx = dy = 1e3 * np.ones((ny,nx))
-    x = np.arange(0,nx*1e3,1e3)
-    y = np.arange(0,ny*1e3,1e3)
-    dt = 300
-    c = 2.5
-    
-    plt.figure()
-    plt.pcolormesh(x,y,ssh0)
-    plt.axis('off')
-    plt.title(r'$ssh_0$',size=30)
-    cbar = plt.colorbar()
-    cbar.ax.set_xlabel(r'$[m]$')
-    cbar.formatter.set_powerlimits((0, 0))
-    plt.show()
-    
-    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=ssh0,qgiter=100)
-    
-    psi0 = qgm.g/qgm.f0*ssh0
-    plt.figure()
-    plt.pcolormesh(x,y,psi0,cmap='winter')
-    plt.title(r'$\psi_0$',size=30)
-    plt.axis('off')
-    cbar = plt.colorbar()
-    cbar.ax.set_xlabel(r'$[m^2.s^{-1}]$')
-    cbar.formatter.set_powerlimits((0, 0))
-    plt.show()
-    
-    pv0 = qgm.h2pv(ssh0)
-    plt.figure()
-    plt.pcolormesh(x,y,pv0,vmin=-4e-4,vmax=4e-4,cmap='inferno')
-    plt.axis('off')
-    cbar = plt.colorbar()
-    cbar.ax.set_xlabel(r'$[s^{-1}]$')
-    cbar.formatter.set_powerlimits((0, 0))
-    plt.title(r'$q_0$',size=30)
-    plt.show()
-    
-    u0,v0 = qgm.h2uv(ssh0)
-    
-    l = 30
-    plt.figure()
-    im = plt.pcolormesh(x,y,np.sqrt(u0**2+v0**2),vmax=3,cmap='Blues_r')
-    plt.quiver(x[::l],y[::l],u0[::l,::l],v0[::l,::l],color='r')
-    plt.axis('off')
-    plt.title(r'$U_0$',size=30)
-    cbar = plt.colorbar(im)
-    cbar.ax.set_xlabel(r'$[m.s^{-1}]$')
-    cbar.formatter.set_powerlimits((0, 0))
-    plt.show()
-    
-    ssh1,pv1 = qgm.step(ssh0,q0=pv0)
-    
-    plt.figure()
-    plt.pcolormesh(x,y,pv1,vmin=-4e-4,vmax=4e-4,cmap='inferno')
-    plt.axis('off')
-    cbar = plt.colorbar()
-    cbar.ax.set_xlabel(r'$[s^{-1}]$')
-    plt.title(r'$q_1$',size=30)
-    cbar.formatter.set_powerlimits((0, 0))
-    plt.show()
-    
-    psi1 = qgm.g/qgm.f0*ssh1
-    plt.figure()
-    plt.pcolormesh(x,y,psi1,cmap='winter')
-    plt.title(r'$\psi_1$',size=30)
-    plt.axis('off')
-    cbar = plt.colorbar()
-    cbar.ax.set_xlabel(r'$[m^2.s^{-1}]$')
-    cbar.formatter.set_powerlimits((0, 0))
-    plt.show()
-    
-    plt.figure()
-    plt.pcolormesh(x,y,ssh1)
-    plt.title(r'$ssh_1$',size=30)
-    cbar = plt.colorbar()
-    cbar.ax.set_xlabel(r'$[m]$')
-    cbar.formatter.set_powerlimits((0, 0))
-    plt.axis('off')
-    plt.show()
