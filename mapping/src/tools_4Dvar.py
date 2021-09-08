@@ -9,7 +9,7 @@ import os,sys
 import xarray as xr 
 import numpy as np 
 from datetime import timedelta
-from src import grad_tool as grad
+from src import grad_tool as grad_tool
 
 from dask import delayed,compute
 
@@ -45,7 +45,7 @@ class Obsopt:
                 os.makedirs(self.path_H)
         else:
             # We'll use temporary directory to save the files
-            self.path_H = None
+            self.path_H = self.tmp_DA_path
         
         self.obs_sparse = {}
         
@@ -290,7 +290,7 @@ class Variational_QG :
         # Covariance matrix building using gradient condition
         self.grad_term = grad_term
         if self.grad_term :
-            self.grad = grad.grad_op(self.State)
+            self.gradop = grad_tool.grad_op(self.State)
             self.B_grad = Cov(self.State.config.sigma_B_grad)
         
         # preconditioning
@@ -332,7 +332,7 @@ class Variational_QG :
         self.start_iter = int((self.date_ini - State.config.init_date).total_seconds()/self.dt.total_seconds())
         
         print("\n ** gradient test ** \n")
-        self.grad_test(deg=8)
+        #self.grad_test(deg=8)
         
         
     
@@ -341,7 +341,6 @@ class Variational_QG :
         Compute the 4Dvar cost function for the SSH field var represented by the 
         1D vector X0
         '''
-        print('\n cost use \n')
         
         # initial state
         State = self.State.free() # create new state
@@ -361,7 +360,7 @@ class Variational_QG :
                 Jb = np.dot(dx,self.B.inv(dx))  # cost of background term
                 if self.grad_term :
                     # Jgrad represent a condition on the gradient of X0
-                    Jgrad = np.dot(dx,self.grad.T_grad(self.B_grad.inv(self.grad.grad(dx))))
+                    Jgrad = np.dot(dx,self.gradop.T_grad(self.B_grad.inv(self.gradop.grad(dx))))
                     Jb += Jgrad
         else:
             Jb = 0.
@@ -395,7 +394,7 @@ class Variational_QG :
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        print(f'\n cost eval : {J}, Jobs={0.5*Jo}')
+        #print(f'\n cost eval : {J}, Jobs={0.5*Jo}')
         
         return J
     
@@ -408,7 +407,7 @@ class Variational_QG :
                 dx = X0 - self.Xb
                 gb = self.B.inv(dx) # gradient of background term
                 if self.grad_term :
-                    g_grad = self.grad.T_grad(self.B_grad.inv(self.grad.grad(dx)))
+                    g_grad = self.gradop.T_grad(self.B_grad.inv(self.gradop.grad(dx)))
                     gb += g_grad
         else:
             gb = 0
@@ -480,7 +479,7 @@ class Variational_QG :
         
         
 
-class Variational:
+class Variational_SW:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, Xb=None, 

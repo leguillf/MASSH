@@ -292,7 +292,11 @@ sigma_B_He = 0.2 # Background variance for He
 
 sigma_B_bc = 1e-2 # Background variance for bc
 
+sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
+
 prec = False # preconditoning
+
+grad_term = False # Add a term that minimizes the gradient of SSH in the cost function 
 
 filter_name = None # name of filter used in preconditionning
 

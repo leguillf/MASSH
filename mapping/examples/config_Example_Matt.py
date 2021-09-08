@@ -41,7 +41,7 @@ Created on Tue Apr 20 08:40:30 2021
 # - name_domain: name of the study domain 
 #################################################################################################################################
 
-name_experiment = 'test_4Dvar_QG_swot' 
+name_experiment = 'test_4Dvar_QG_swot_grad' 
 name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
@@ -74,9 +74,9 @@ lat_min = 33.                                         # domain min latitude
 
 lat_max = 41.                                         # domain max latitude
 
-dx = 1/5.                                            # zonal grid spatial step (in degree)
+dx = 1/10.                                            # zonal grid spatial step (in degree)
 
-dy = 1/5.                                            # meridional grid spatial step (in degree)
+dy = 1/10.                                            # meridional grid spatial step (in degree)
 
 #################################################################################################################################
 # Time parameters
@@ -88,15 +88,13 @@ dy = 1/5.                                            # meridional grid spatial s
 # - plot_time_step: time step plot at which the states are plotted (for debugging)
 #################################################################################################################################
    
-init_date = datetime(2013,1,2,0)     
+init_date = datetime(2012,10,1,0)     
 
-final_date = datetime(2013,1,20,0)
+final_date = datetime(2012,10,20,0)
 
 assimilation_time_step = timedelta(hours=3)  
 
-saveoutput_time_step = timedelta(hours=3) 
-
-window_time_step = timedelta(days=6)
+saveoutput_time_step = timedelta(hours=1) 
 
 #################################################################################################################################
 # Model parameters
@@ -175,26 +173,26 @@ name_analysis = '4Dvar'
 
 path_init_4Dvar = None
 
+window_time_step = timedelta(days=7)
+
 sigma_B = 1.
 
 sigma_R = 0.1
 
-maxiter = 15
+maxiter = 2
 
 gtol = 1e-5
 
-prec = False
+grad_term = True
 
-filter_name = None
-
-filter_order = None
+sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
 
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
 # - satellite: list of satellite names 
 
-satellite = ["swot"]
+satellite = ["swot","jason1","geosat2","envisat","topex"]
 write_obs = False
 
 # - For each *satellite*:
