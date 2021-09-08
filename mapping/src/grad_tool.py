@@ -61,7 +61,7 @@ class grad_op :
         Xout = self.dx*Xout
         return Xout
 
-    def T_grady(self,gy,shape) :
+    def T_grady(self,gy) :
         '''
         transposed operator of grady
         gy is a 2D array of shape (nx,ny)
