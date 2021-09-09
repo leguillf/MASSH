@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+mapping/src/tools_4Dvar.py #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Tue Jul 28 14:49:01 2020
@@ -327,12 +327,12 @@ class Variational_QG :
             
         self.n_iter = i
         self.checkpoint.append(self.n_iter)
-        
+    
         # indicates the corresponding iteration of the timestamps
         self.start_iter = int((self.date_ini - State.config.init_date).total_seconds()/self.dt.total_seconds())
         
-        print("\n ** gradient test ** \n")
-        #self.grad_test(deg=8)
+        # print("\n ** gradient test ** \n")
+        # self.grad_test(deg=8)
         
         
     
@@ -388,7 +388,7 @@ class Variational_QG :
                         'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
         
         if self.isobs[-1]:
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]+self.start_iter],State) # d=Hx-xobsx
             Jo = Jo + misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
@@ -423,8 +423,8 @@ class Variational_QG :
         if self.isobs[-1]:
             State.load(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[-1]) + '.nc'))
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-yobs
-            self.H.adj(self.M.timestamps[self.checkpoint[-1]],adState,self.R.inv(misfit))
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]+self.start_iter],State) # d=Hx-yobs
+            self.H.adj(self.M.timestamps[self.checkpoint[-1]+self.start_iter],adState,self.R.inv(misfit))
             
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):

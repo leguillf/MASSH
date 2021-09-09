@@ -506,7 +506,6 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
     # background state
     Xb = State.getvar(State.get_indobs()).ravel() # background term for analysis
     
-    
     # Cost and Grad functions
     var = Variational(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
@@ -842,7 +841,8 @@ def ana_miost(config,State,dict_obs=None):
             obs.MASSH(
                 name=config.name_experiment,
                 dict_obs= dict_obs,
-                subsampling= config.subsampling
+                subsampling= config.subsampling,
+                noise=config.sigma_R
                 ),
             
                 ]
