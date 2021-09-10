@@ -6,13 +6,17 @@ Created on Thu Feb  4 17:26:07 2021
 @author: leguillou
 """
 
+
+
 import os, sys
+
 
 class dotdict(dict):
     """dot.notation access to dictionary attributes"""
     __getattr__ = dict.get
     __setattr__ = dict.__setitem__
     __delattr__ = dict.__delitem__
+
 
 def exp(path_config):
     
