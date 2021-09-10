@@ -23,7 +23,7 @@ if __name__ == "__main__":
         exp_config_file = sys.argv[1]
     elif len(sys.argv)==1:
         os.chdir('examples')
-        exp_config_file = 'config_Example4.py'
+        exp_config_file = 'config_Example_Matt.py'
     elif len(sys.argv)>2:
         sys.exit('Wrong number of argument')
         

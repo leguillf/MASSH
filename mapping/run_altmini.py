@@ -12,7 +12,7 @@ import numpy as np
 import subprocess
 from datetime import datetime
 import re
-
+import json
 
 def create_new_config_file(src_file,out_file,list_pattern,list_subst):
     line_added = []
@@ -43,16 +43,19 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='')
     parser.add_argument('--p', 
                         default='Exp_joint', 
-                        type=str)     
-    parser.add_argument('--c1', 
+                        type=str) # Path of experiment (useful to restart an existing experiment)
+    parser.add_argument('--c1', # Path of 1st config file
                         default=os.path.join('examples','config_Example2_BM.py'),
                         type=str)   
-    parser.add_argument('--c2', 
+    parser.add_argument('--c2', # Path of 2nd config file
                         default=os.path.join('examples','config_Example2_IT.py'),
                         type=str)   
-    parser.add_argument('--i0', default=0, type=int) 
-    parser.add_argument('--imax', default=None, type=int) 
-    parser.add_argument('--Kmin', default=1e-3, type=float)           
+    #parser.add_argument('--d1', type=json.loads) # Dictionary that provides prescribed argument value for config1 
+                                                 # (The value can be lists, which will be iterated through iterations)
+   # parser.add_argument('--d2', type=json.loads) # Same for config2
+    parser.add_argument('--i0', default=0, type=int) # First iteration number (useful if the experiment is restarted)
+    parser.add_argument('--imax', default=None, type=int) # Maximum number of iterations
+    parser.add_argument('--Kmin', default=1e-3, type=float) # Value of K below which the iterations are stopped
     opts = parser.parse_args()
     print("* Parsing:")
     i0 = opts.i0
