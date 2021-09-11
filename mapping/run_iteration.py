@@ -46,10 +46,12 @@ def update_config(config,i):
             path_tmp_prev = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_prev])
             config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
             # TEST
-            config.sigma_R /= 2
+            config.sigma_R *= 0.5**i
+            print('R=',config.sigma_R)
         if config.name_analysis=='MIOST':
             # TEST
-            config.sigma_R /= 2
+            config.sigma_R *= 0.5**i
+            print('R=',config.sigma_R)
         
 
 def get_dict_obs(config,State):
