@@ -45,13 +45,6 @@ def update_config(config,i):
             name_prev = 'iteration_' + str(i-1) 
             path_tmp_prev = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_prev])
             config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
-            # TEST
-            config.sigma_R *= 0.5**i
-            print('R=',config.sigma_R)
-        if config.name_analysis=='MIOST':
-            # TEST
-            config.sigma_R *= 0.5**i
-            print('R=',config.sigma_R)
         
 
 def get_dict_obs(config,State):
@@ -199,6 +192,8 @@ if __name__ == "__main__":
     
     config1 = exp.exp(exp_config_file_1)
     config2 = exp.exp(exp_config_file_2)
+    
+    
         
     print('\n\n\
     *****************************************************************\n\
@@ -209,6 +204,9 @@ if __name__ == "__main__":
     time0 = datetime.now()
     # Updtade configuration file
     update_config(config1,iteration)
+    # TEST
+    config1.sigma_R *= 0.5**iteration
+    print('R=',config1.sigma_R)
     # State
     print('* State Initialization')
     State1 = state.State(config1)
@@ -242,6 +240,9 @@ if __name__ == "__main__":
     # Updtade configuration file
     print('* State Initialization')
     update_config(config2,iteration)
+    # TEST
+    config1.sigma_R *= 0.5**iteration
+    print('R=',config1.sigma_R)
     # State
     State2 = state.State(config2)
     # Model
