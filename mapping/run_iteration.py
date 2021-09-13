@@ -241,8 +241,8 @@ if __name__ == "__main__":
     print('* State Initialization')
     update_config(config2,iteration)
     # TEST
-    config1.sigma_R *= 0.5**iteration
-    print('R=',config1.sigma_R)
+    config2.sigma_R *= 0.5**iteration
+    print('R=',config2.sigma_R)
     # State
     State2 = state.State(config2)
     # Model
