@@ -353,7 +353,6 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         while present_date < final_bfn_date :
             present_date += one_time_step
             if (present_date > write_date_min) & (present_date <= write_date_max) :
-                print(present_date)
                 # Save output every *saveoutput_time_step*
                 if (((present_date - config.init_date).total_seconds()
                    /config.saveoutput_time_step.total_seconds())%1 == 0)\
