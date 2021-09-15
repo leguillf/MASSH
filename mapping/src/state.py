@@ -13,7 +13,8 @@ import pandas as pd
 from copy import deepcopy
 import matplotlib.pyplot as plt
 from scipy import interpolate
-
+import glob
+from datetime import datetime
 
 from . import grid
 
@@ -50,6 +51,8 @@ class State:
              self.ini_geo_grid(config)
         elif config.name_init == 'from_file':
              self.ini_grid_from_file(config)
+        elif config.name_init == 'restart':
+             self.ini_grid_restart()
         else:
             sys.exit("Initialization '" + config.name_init + "' not implemented yet")
             
@@ -76,7 +79,9 @@ class State:
             self.ini_var_sw1l(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
-        
+        # Read output variable from previous run 
+        if config.name_init == 'restart':
+            self.ini_var_restart()
         # Add mask if provided
         self.ini_mask(config)
             
@@ -105,6 +110,7 @@ class State:
         lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
+        self.present_date = config.init_date
     
     def ini_grid_from_file(self,config):
         """
@@ -125,9 +131,34 @@ class State:
             lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
-        
+        self.present_date = config.init_date
         dsin.close()
         del dsin
+        
+    def ini_grid_restart(self):
+        # Look for last output
+        files = sorted(glob.glob(os.path.join(self.path_save,self.name_exp_save+'*.nc')))
+        if len(files)==0:
+            sys.exit('Error: you set *name_init="restart"*, but no output files are available')
+        else:
+            # last output
+            file = files[-1]
+            # Open dataset
+            dsin = xr.open_dataset(file).squeeze()
+            # Read grid
+            lon = dsin[self.name_lon].values
+            lat = dsin[self.name_lat].values
+            if len(lon.shape)==1:
+                self.geo_grid = True
+                lon,lat = np.meshgrid(lon,lat)
+            self.lon = lon % 360
+            self.lat = lat
+            self.present_date = datetime.utcfromtimestamp(dsin['time'].values.tolist()/1e9)
+            print('Restarting experiment at',self.present_date)
+            dsin.close()
+            del dsin
+            
+            
         
     def ini_var_qg1l(self,config):
         """
@@ -174,6 +205,14 @@ class State:
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
+        
+    def ini_var_restart(self):
+        ds = self.load_output(self.present_date)
+        name = self.name_var[self.get_indsave()]
+        self.var[name] = ds[name].values
+        ds.close()
+        del ds
+        
             
     
     def ini_mask(self,config):
