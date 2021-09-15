@@ -65,11 +65,12 @@ if __name__ == "__main__":
     path_exp = opts.p 
     if i0==0:
         path_exp += '_'+datetime.now().strftime('%Y-%m-%d_%H%M')
-        exp_config_file_1 = opts.c1
-        exp_config_file_2 = opts.c2
-    
+    exp_config_file_1 = opts.c1
+    exp_config_file_2 = opts.c2
     Kmin = opts.Kmin
     print('path_exp:',path_exp)
+    print('config1:',exp_config_file_1)
+    print('config2:',exp_config_file_2)
     print('Startint at iteration n°',i0)
     print('Stopping algorithm when K <',Kmin)
     
@@ -87,27 +88,26 @@ if __name__ == "__main__":
     path_exp_config_file_1 = os.path.join(path_exp,'config1.py')
     path_exp_config_file_2 = os.path.join(path_exp,'config2.py')
     
-    if i0==0:
-        create_new_config_file(exp_config_file_1,
-                    path_exp_config_file_1,
-                    ['tmp_DA_path ','path_save ','path_obs '],
-                    ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp1/iteration_0"'),
-                     'path_save = "' + os.path.join(path_exp,'outputs/Exp1/iteration_0"'),
-                     'path_obs = "' + os.path.join(path_exp,'obs/Exp1"')]
-                    )
-        
-        create_new_config_file(exp_config_file_2,
-                    path_exp_config_file_2,
-                    ['tmp_DA_path ','path_save ','path_obs '],
-                    ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp2/iteration_0"'),
-                     'path_save = "' + os.path.join(path_exp,'outputs/Exp2/iteration_0"'),
-                     'path_obs = "' + os.path.join(path_exp,'obs/Exp2"')]
-                    )
+    create_new_config_file(exp_config_file_1,
+                path_exp_config_file_1,
+                ['tmp_DA_path ','path_save ','path_obs '],
+                ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp1/iteration_0"'),
+                 'path_save = "' + os.path.join(path_exp,'outputs/Exp1/iteration_0"'),
+                 'path_obs = "' + os.path.join(path_exp,'obs/Exp1"')]
+                )
+    
+    create_new_config_file(exp_config_file_2,
+                path_exp_config_file_2,
+                ['tmp_DA_path ','path_save ','path_obs '],
+                ['tmp_DA_path = "' + os.path.join(path_exp,'scratch/Exp2/iteration_0"'),
+                 'path_save = "' + os.path.join(path_exp,'outputs/Exp2/iteration_0"'),
+                 'path_obs = "' + os.path.join(path_exp,'obs/Exp2"')]
+                )
     
     K = np.inf
     i = i0
         
-    while K>Kmin and i<imax:
+    while K>Kmin and i<=imax:
         
         time0 = datetime.now()
         print('\n*** Iteration n°'+str(i) + ' ***')
