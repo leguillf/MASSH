@@ -258,9 +258,11 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                 var_bc_interpTime[t] = var_bc_interp2d.reshape((ny,nx))
         elif flag == '3D':
             # Time interpolations
-            var_bc_interpTime = var_bc_interp2d.interp(
-                {name_var_bc['time']:timestamps}).values
-
+            try:
+                var_bc_interpTime = var_bc_interp2d.interp(
+                    {name_var_bc['time']:timestamps}).values
+            except:
+                print('Warning: impossible to interpolate boundary conditions')
     else:
         print('Warning: no boundary conditions provided')
         
