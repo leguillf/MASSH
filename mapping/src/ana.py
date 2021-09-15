@@ -81,7 +81,12 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     from . import tools_bfn as bfn
 
     # Flag initialization
-    bfn_first_window = True
+    if config.name_init=='restart':
+        restart = True
+        bfn_first_window = False
+    else:
+        restart = False
+        bfn_first_window = True
     bfn_last_window = False
     if dict_obs is None:
         call_obs_func = True
@@ -89,14 +94,16 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     else:
         call_obs_func = False
     # BFN middle date initialization
-    middle_bfn_date = config.init_date
-    # In the case of Nudging (i.e. bfn_max_iteration=1), set the bfn window length as the entire period of the experience
+    middle_bfn_date = State.present_date
+    # In the case of Nudging (i.e. bfn_max_iteration=1), set the bfn window length as the entire experimental time period
     if config.bfn_max_iteration==1:
         new_bfn_window_size = config.final_date - config.init_date
     else:
         new_bfn_window_size = config.bfn_window_size
     name_init = ""
-    
+    # propagation timestep
+    one_time_step = config.bfn_propation_timestep
+        
     # Main time loop
     while (middle_bfn_date <= config.final_date) and not bfn_last_window :
         #############
@@ -112,11 +119,10 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             final_bfn_date = config.final_date
         else:
             final_bfn_date = init_bfn_date + new_bfn_window_size
-        # propagation timestep
-        one_time_step = config.bfn_propation_timestep
-        if bfn_first_window:
+            
+        if bfn_first_window or restart:
             present_date_forward0 = init_bfn_date
-        
+            
         ########################
         # 2. Create BFN object #
         ########################
@@ -148,7 +154,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             bc_field = bc_weight = bc_field_t = None
 
         # Use last state from the last forward loop as initialization
-        if not bfn_first_window and config.bfn_window_overlap:
+        if not (bfn_first_window or restart) and config.bfn_window_overlap and os.path.exists(name_init):
             State.load(name_init)
         
         ###################
@@ -335,18 +341,19 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         # Write outputs in the saving temporal window
 
         present_date = init_bfn_date
-        State_current = State.free()
+        #State_current = State.free()
         # Save first timestep
         if present_date==config.init_date:
             iforward = 0
             name_save = config.name_exp_save + '_' + str(0).zfill(5) + '.nc'
             current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
-            State_current.load(current_file)
+            State.load(current_file)
             if config.saveoutputs:
-                State_current.save_output(present_date,mdt=Model.mdt)
+                State.save_output(present_date,mdt=Model.mdt)
         while present_date < final_bfn_date :
             present_date += one_time_step
             if (present_date > write_date_min) & (present_date <= write_date_max) :
+                print(present_date)
                 # Save output every *saveoutput_time_step*
                 if (((present_date - config.init_date).total_seconds()
                    /config.saveoutput_time_step.total_seconds())%1 == 0)\
@@ -356,7 +363,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     iforward = int((present_date - init_bfn_date)/one_time_step) 
                     name_save = config.name_exp_save + '_' + str(iforward).zfill(5) + '.nc'
                     current_file = os.path.join(config.tmp_DA_path,'BFN_forth_' + name_save)
-                    State_current.load(current_file)
+                    State.load(current_file)
                     
                     # Smooth with previous BFN window
                     if config.bfn_window_overlap and not bfn_first_window and\
@@ -371,22 +378,13 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                         ssh1 = ds[config.name_mod_var[State.get_indsave()]].data
                         ds.close()
                         del ds
-                        plt.figure()
-                        plt.suptitle(present_date)
-                        ssh1.plot()
-                        plt.show()
                         # Update state
-                        ssh2 = State_current.getvar(ind=State_current.get_indsave())
-                        plt.figure()
-                        plt.suptitle(present_date)
-                        ssh2.plot()
-                        plt.show()
-                        State_current.setvar(W1*ssh1+W2*ssh2,ind=0)
-                        
-        
+                        ssh2 = State.getvar(ind=State.get_indsave())
+                        State.setvar(W1*ssh1+W2*ssh2,ind=0)
+                
                     # Save output
                     if config.saveoutputs:
-                        State_current.save_output(present_date,mdt=Model.mdt)
+                        State.save_output(present_date,mdt=Model.mdt)
         
         ########################
         # 8. PARAMETERS UPDATE #
@@ -401,6 +399,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
             bfn_first_window = False
         else:
             middle_bfn_date += window_lag
+        if restart:
+            restart = False
     print()
 
     return
