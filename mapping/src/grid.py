@@ -261,6 +261,10 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                 try:
                     var_bc_interpTime = var_bc_interp2d.interp(
                         {name_var_bc['time']:timestamps}).values
+                    ind_all_nan = [np.all(np.isnan(var_bc_interpTime[t])) for t in range(NT)]
+                    # We replace by 0 for missing timesteps
+                    var_bc_interpTime[ind_all_nan,:,:] = 0
+                    
                 except:
                     print('Warning: impossible to interpolate boundary conditions')
         else:
@@ -288,7 +292,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
     var_bc_interpTime[np.isnan(var_bc_interpTime)] = 0
     
     
-    if flag_plot > 1:
+    if flag_plot >= 1:
         fig, (ax0, ax1) = plt.subplots(1, 2, figsize=(15, 7))
         if NT == 1:
             im0 = ax0.pcolormesh(lon2d, lat2d, var_bc_interpTime)
