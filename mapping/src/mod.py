@@ -58,7 +58,7 @@ class Model_qg1l:
 to Reynolds decomposition. However, be sure that observed and boundary \
 variable are SLAs!')
                       
-            ds = xr.open_dataset(config.path_mdt)
+            ds = xr.open_dataset(config.path_mdt).squeeze()
             
             self.mdt = grid.interp2d(ds,
                                      config.name_var_mdt,

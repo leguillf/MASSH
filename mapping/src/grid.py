@@ -261,9 +261,19 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                 try:
                     var_bc_interpTime = var_bc_interp2d.interp(
                         {name_var_bc['time']:timestamps}).values
-                    ind_all_nan = [np.all(np.isnan(var_bc_interpTime[t])) for t in range(NT)]
+                    # Get the closest valid map for each non valid maps
+                    ind_all_nan = np.array([],dtype=int)
+                    ind_no_nan = np.array([],dtype=int)
+                    for t in range(NT):
+                        if np.all(np.isnan(var_bc_interpTime[t])):
+                            ind_all_nan = np.append(ind_all_nan,t)  
+                        else:
+                            ind_no_nan = np.append(ind_no_nan,t)  
+                    
                     # We replace by 0 for missing timesteps
-                    var_bc_interpTime[ind_all_nan,:,:] = 0
+                    for ind in ind_all_nan:
+                        ind_to_replace = ind_no_nan[np.argmin(np.abs(ind-ind_no_nan))]
+                        var_bc_interpTime[ind,:,:] = var_bc_interpTime[ind_to_replace,:,:]
                     
                 except:
                     print('Warning: impossible to interpolate boundary conditions')
