@@ -44,21 +44,7 @@ def obs(config, State, *args, **kwargs):
         name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
         with open(os.path.join(config.path_obs,name_dict_obs), 'rb') as f:
             dict_obs = pickle.load(f)
-            new_dict_obs = {}
-            for date in dict_obs:
-                # Create new dict_obs by copying the obs files in tmp_DA_dir directory 
-                new_dict_obs[date] = {'obs_name':[],'satellite':[]}
-                for obs,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):
-                    file_obs = os.path.basename(obs)
-                    new_obs = os.path.join(config.tmp_DA_path,file_obs)
-                    # Copy to *tmp_DA_path* directory
-                    if os.path.normpath(obs)!=os.path.normpath(new_obs): 
-                        os.system(f'cp {obs} {new_obs}')
-                    # Update new dictionary 
-                    new_dict_obs[date]['obs_name'].append(new_obs)
-                    new_dict_obs[date]['satellite'].append(sat)
-                    
-            return new_dict_obs
+            return _new_dict_obs(dict_obs,config.tmp_DA_path)
         
     # Read grid
     lon = State.lon
@@ -115,9 +101,43 @@ def obs(config, State, *args, **kwargs):
         if not os.path.exists(config.path_obs):
             os.makedirs(config.path_obs)
         with open(os.path.join(config.path_obs,name_dict_obs), 'wb') as f:
-            pickle.dump(dict_obs,f)
-        
+            pickle.dump(_new_dict_obs(dict_obs,config.path_obs),f)
+            
     return dict_obs
+
+def _new_dict_obs(dict_obs,new_dir):
+    """
+    NAME
+        _new_dict_obs
+
+    DESCRIPTION
+        Subfunction creating a new dict_obs, similar as dict_obs, except that 
+        the obs files are stored in *new_dir*
+        
+        Args: 
+            dict_obs(dict): initial dictionary
+            new_dir(str): new directory where the obs will be copied
+        Returns:
+            new_dict_obs (dictionary)
+    """
+    
+    new_dict_obs = {}
+    for date in dict_obs:
+        # Create new dict_obs by copying the obs files in *new_dir* directory 
+        new_dict_obs[date] = {'obs_name':[],'satellite':[]}
+        for obs,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):
+            file_obs = os.path.basename(obs)
+            new_obs = os.path.join(new_dir,file_obs)
+            # Copy to *tmp_DA_path* directory
+            if os.path.normpath(obs)!=os.path.normpath(new_obs): 
+                os.system(f'cp {obs} {new_obs}')
+            # Update new dictionary 
+            new_dict_obs[date]['obs_name'].append(new_obs)
+            new_dict_obs[date]['satellite'].append(sat)
+            
+    return new_dict_obs
+                    
+    
 
 def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
                         bbox=None):
