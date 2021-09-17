@@ -331,7 +331,7 @@ class Variational_QG :
             
         self.n_iter = i
         self.checkpoint.append(self.n_iter)
-        self.timestamps.append(self.n_iter)
+        self.timestamps.append(self.date_final)
     
                 
         # Boundary conditions
@@ -348,10 +348,11 @@ class Variational_QG :
                 config.flag_plot,
                 mask=State.mask)
         else: 
-            self.bc_field = self.bc_weight = np.array([None,]*len(self.timestamps))
+            self.bc_field = np.array([None,]*len(self.timestamps))
+            self.bc_weight = None
             
         print("\n ** gradient test ** \n")
-        self.grad_test(deg=8)
+        self.grad_test(10,config.flag_plot>=1)
         
         
     
@@ -402,7 +403,7 @@ class Variational_QG :
             # Run forward model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
             self.M.step(State, nstep=nstep,
-                        Hbc=self.bc_field[i], Wbc=self.bc_weight[i])
+                        Hbc=self.bc_field[i], Wbc=self.bc_weight)
             
             # Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
@@ -459,7 +460,7 @@ class Variational_QG :
             # Run adjoint model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
             self.M.step_adj(adState, State, nstep=nstep, 
-                            Hbc=self.bc_field[i], Wbc=self.bc_weight[i])
+                            Hbc=self.bc_field[i], Wbc=self.bc_weight)
             
             # Misfit 
             if self.isobs[i]:

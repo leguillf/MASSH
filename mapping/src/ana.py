@@ -450,6 +450,9 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
                         date_final=date_end,first=first_assimilation)
         ssh0 = res.reshape(State.var.ssh.shape) # initial ssh field for the window from the 4Dvar analysis
         State_ana.setvar(ssh0,State_ana.get_indobs())
+        if config.flag_plot>=1:
+            State_ana.plot(date)
+        
         
         if config.saveoutputs :
             
@@ -466,10 +469,31 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
             
             n_step = int(dt_save.total_seconds()/config.dtmodel) # number of model step between two save
             
+            # Boundary conditiond
+            if config.flag_use_boundary_conditions:
+                timestamps = pd.date_range(date,
+                                           date_end,
+                                           periods=n_save
+                                          )
+                bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
+                                                               config.lenght_bc,
+                                                               config.name_var_bc,
+                                                               timestamps,
+                                                               State.lon,
+                                                               State.lat,
+                                                               config.flag_plot,
+                                                               mask=State.mask)
+
+            else: 
+                bc_field = np.array([None,]*n_save)
+                bc_weight = None
+            
             for i in range(n_save) :
                 State_ana.save_output(date_save) # save state
-                Model.step(State_ana,n_step) # run forward the model
-                date_save += dt_save # update time        
+                Model.step(State_ana,n_step,bc_field[i],bc_weight) # run forward the model
+                date_save += dt_save # update time
+            if config.flag_plot>=1:
+                State_ana.plot(date)
         else :
             # model propagation until next assimilation window
             Model.step(State_ana,nstep=n_window//2)

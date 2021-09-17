@@ -117,10 +117,10 @@ variable are SLAs!')
 
         if config.name_analysis=='4Dvar':
             print('Tangent test:')
-            self.tangent_test(State,10)
+            self.tangent_test(State,10,config.flag_use_boundary_conditions)
 
             print('Adjoint test:')
-            self.adjoint_test(State,10)
+            self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
     def step(self,State,nstep=1,Hbc=None,Wbc=None):
         
@@ -293,13 +293,16 @@ variable are SLAs!')
         return
     
     
-    def tangent_test(self,State,nstep):
+    def tangent_test(self,State,nstep,bc=False):
     
         State0 = State.random(1e-2)
         dState = State.random(1e-2)
         
-        Hbc = np.random.random((State.ny,State.nx))
-        Wbc = np.random.random((State.ny,State.nx))
+        if bc:
+            Hbc = np.random.random((State.ny,State.nx))
+            Wbc = np.random.random((State.ny,State.nx))
+        else:
+            Hbc = Wbc = None
         
         State0_tmp = State0.copy()
         self.step(State0_tmp,nstep,Hbc,Wbc)
@@ -325,7 +328,7 @@ variable are SLAs!')
             print('%.E' % lambd,'%.E' % ps)
          
             
-    def adjoint_test(self,State,nstep):
+    def adjoint_test(self,State,nstep,bc=False):
         
         # Current trajectory
         State0 = State.random(1e-2)
@@ -338,8 +341,11 @@ variable are SLAs!')
         adState = State.random()
         adY = adState.getvar(vect=True)
         
-        Hbc = np.random.random((State.ny,State.nx))
-        Wbc = np.random.random((State.ny,State.nx))
+        if bc:
+            Hbc = np.random.random((State.ny,State.nx))
+            Wbc = np.random.random((State.ny,State.nx))
+        else:
+            Hbc = Wbc = None
         
         # Run TLM
         self.step_tgl(dState,State0,nstep,Hbc,Wbc)
