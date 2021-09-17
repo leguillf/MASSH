@@ -507,9 +507,8 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
     
     # Cost and Grad functions
     var = Variational(
-        M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path, date_ini=date_ini, date_final=date_final,
-        prec=config.prec, grad_term=config.grad_term)
+        config=config, M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
+        tmp_DA_path=config.tmp_DA_path, date_ini=date_ini, date_final=date_final)
    
     Xopt = np.copy(Xb)
     if config.prec :

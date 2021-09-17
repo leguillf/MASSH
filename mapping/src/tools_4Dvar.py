@@ -8,8 +8,10 @@ Created on Tue Jul 28 14:49:01 2020
 import os,sys
 import xarray as xr 
 import numpy as np 
+import pandas as pd 
 from datetime import timedelta
 from src import grad_tool as grad_tool
+from src import grid as grid
 
 from dask import delayed,compute
 
@@ -269,8 +271,8 @@ class Cov :
 
 class Variational_QG :
     
-    def __init__(self,M=None, H=None, State=None, R=None,B=None, Xb=None, tmp_DA_path=None,
-                 date_ini=None, date_final=None, prec=False, grad_term=False) :
+    def __init__(self,config=None,M=None, H=None, State=None, R=None,B=None, Xb=None, tmp_DA_path=None,
+                 date_ini=None, date_final=None) :
         
          # Objects
         self.M = M # model
@@ -288,13 +290,13 @@ class Variational_QG :
         self.tmp_DA_path = tmp_DA_path
         
         # Covariance matrix building using gradient condition
-        self.grad_term = grad_term
+        self.grad_term = config.grad_term
         if self.grad_term :
             self.gradop = grad_tool.grad_op(self.State)
             self.B_grad = Cov(self.State.config.sigma_B_grad)
         
         # preconditioning
-        self.prec = prec
+        self.prec = config.prec
         
         # initial and final date of the assimilation window
         self.date_ini = date_ini
@@ -305,6 +307,7 @@ class Variational_QG :
         
         # checkpoint indicate the iteration where the algorithm stop
         self.checkpoint = [0]
+        self.timestamps = [date_ini]
         # isobs has the same length as checkpoint and indicates when obs are available at a checkpoint
         if self.H.isobserved(self.date_ini) :
             self.isobs = [True]
@@ -316,6 +319,7 @@ class Variational_QG :
             
             if self.H.isobserved(t) :
                 self.checkpoint.append(i)
+                self.timestamps.append(t)
                 self.isobs.append(True)
             i += 1
             t += self.dt
@@ -327,12 +331,27 @@ class Variational_QG :
             
         self.n_iter = i
         self.checkpoint.append(self.n_iter)
+        self.timestamps.append(self.n_iter)
     
-        # indicates the corresponding iteration of the timestamps
-        self.start_iter = int((self.date_ini - State.config.init_date).total_seconds()/self.dt.total_seconds())
-        
-        # print("\n ** gradient test ** \n")
-        # self.grad_test(deg=8)
+                
+        # Boundary conditions
+        if config.flag_use_boundary_conditions:
+            timestamps_bc = np.array(
+                [pd.Timestamp(timestamp) for timestamp in self.timestamps])
+            self.bc_field, self.bc_weight = grid.boundary_conditions(
+                config.file_boundary_conditions,
+                config.lenght_bc,
+                config.name_var_bc,
+                timestamps_bc,
+                State.lon,
+                State.lat,
+                config.flag_plot,
+                mask=State.mask)
+        else: 
+            self.bc_field = self.bc_weight = np.array([None,]*len(self.timestamps))
+            
+        print("\n ** gradient test ** \n")
+        self.grad_test(deg=8)
         
         
     
@@ -373,7 +392,7 @@ class Variational_QG :
         for i in range(len(self.checkpoint)-1):
             
             # time corresponding to the checkpoint
-            timestamp = self.M.timestamps[self.checkpoint[i]+self.start_iter]
+            timestamp = self.timestamps[i]
             
             # Misfit
             if self.isobs[i] :
@@ -382,13 +401,15 @@ class Variational_QG :
             
             # Run forward model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
-            self.M.step(State,nstep=nstep)
+            self.M.step(State, nstep=nstep,
+                        Hbc=self.bc_field[i], Wbc=self.bc_weight[i])
+            
             # Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
         
         if self.isobs[-1]:
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]+self.start_iter],State) # d=Hx-xobsx
+            misfit = self.H.misfit(self.timestamps[-1],State) # d=Hx-xobsx
             Jo = Jo + misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
@@ -423,13 +444,13 @@ class Variational_QG :
         if self.isobs[-1]:
             State.load(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[-1]) + '.nc'))
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]+self.start_iter],State) # d=Hx-yobs
-            self.H.adj(self.M.timestamps[self.checkpoint[-1]+self.start_iter],adState,self.R.inv(misfit))
+            misfit = self.H.misfit(self.timestamps[-1],State) # d=Hx-yobs
+            self.H.adj(self.timestamps[-1],adState,self.R.inv(misfit))
             
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
             
-            timestamp = self.M.timestamps[self.checkpoint[i]+self.start_iter]
+            timestamp = self.timestamps[i]
             
             # Read model state
             State.load(os.path.join(self.tmp_DA_path,
@@ -437,7 +458,8 @@ class Variational_QG :
             
             # Run adjoint model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
-            self.M.step_adj(adState, State, nstep=nstep)
+            self.M.step_adj(adState, State, nstep=nstep, 
+                            Hbc=self.bc_field[i], Wbc=self.bc_weight[i])
             
             # Misfit 
             if self.isobs[i]:

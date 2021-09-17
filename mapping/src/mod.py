@@ -122,13 +122,18 @@ variable are SLAs!')
             print('Adjoint test:')
             self.adjoint_test(State,10)
 
-    def step(self,State,nstep=1):
+    def step(self,State,nstep=1,Hbc=None,Wbc=None):
         
         # Get state variable
         SSH0 = State.getvar(ind=0)
         
         # init
         SSH1 = +SSH0
+        
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
         
         # Time propagation
         for i in range(nstep):
@@ -222,7 +227,7 @@ variable are SLAs!')
         if flag_pv:
             State.setvar(pv_1,1)
         
-    def step_tgl(self,dState,State,nstep=1):
+    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None):
         
         # Get state variable
         dSSH0 = dState.getvar(ind=0)
@@ -231,6 +236,12 @@ variable are SLAs!')
         # init
         dSSH1 = +dSSH0
         SSH1 = +SSH0
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            dSSH1 = (1-Wbc)*dSSH1
+            SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
         
         # Time propagation
         for i in range(nstep):
@@ -241,7 +252,7 @@ variable are SLAs!')
         # Update state
         dState.setvar(dSSH1,ind=0)
         
-    def step_adj(self,adState,State,nstep=1):
+    def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None):
         
         # Get state variable
         adSSH0 = adState.getvar(ind=0)
@@ -250,6 +261,12 @@ variable are SLAs!')
         # Init
         adSSH1 = +adSSH0
         SSH1 = +SSH0
+        
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
 
         # Current trajectory
         traj = [SSH1]
@@ -264,6 +281,12 @@ variable are SLAs!')
         
             adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
         
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            adSSH1 = (1-Wbc)*adSSH1
+        
         # Update state  and parameters
         adState.setvar(adSSH1,ind=0)
         
@@ -275,8 +298,11 @@ variable are SLAs!')
         State0 = State.random(1e-2)
         dState = State.random(1e-2)
         
+        Hbc = np.random.random((State.ny,State.nx))
+        Wbc = np.random.random((State.ny,State.nx))
+        
         State0_tmp = State0.copy()
-        self.step(State0_tmp,nstep)
+        self.step(State0_tmp,nstep,Hbc,Wbc)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -286,12 +312,12 @@ variable are SLAs!')
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(State1,nstep)
+            self.step(State1,nstep,Hbc,Wbc)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(dState1,State0,nstep)
+            self.step_tgl(dState1,State0,nstep,Hbc,Wbc)
             dX = dState1.getvar(vect=True)
             
             ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
@@ -307,17 +333,20 @@ variable are SLAs!')
         # Perturbation
         dState = State.random()
         dX = dState.getvar(vect=True)
-
+        
         # Adjoint
         adState = State.random()
         adY = adState.getvar(vect=True)
         
+        Hbc = np.random.random((State.ny,State.nx))
+        Wbc = np.random.random((State.ny,State.nx))
+        
         # Run TLM
-        self.step_tgl(dState,State0,nstep=nstep)
+        self.step_tgl(dState,State0,nstep,Hbc,Wbc)
         dY = dState.getvar(vect=True)
         
         # Run ADJ
-        self.step_adj(adState,State0,nstep=nstep)
+        self.step_adj(adState,State0,nstep,Hbc,Wbc)
         adX = adState.getvar(vect=True)
        
         ps1 = np.inner(dX,adX)
