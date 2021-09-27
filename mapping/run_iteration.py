@@ -6,6 +6,7 @@ Created on Mon Mar  1 18:44:46 2021
 @author: leguillou
 """
 import sys, os 
+import argparse
 import xarray as xr
 import numpy as np
 import time 
@@ -22,7 +23,22 @@ from src import obs as obs
 from src import ana as ana
 
 
-def update_config(config,i):
+def update_config(config,i,params=None):
+    """
+    NAME
+        update_config
+
+    DESCRIPTION
+        Update experimental config file for ith iteration 
+        of the alternation minimization algorithm
+
+        Args:
+            config : configuration module specific to one experiment
+            i : iteration number
+            params : list of parameters that are iterated  
+
+    """
+    
     name_it = 'iteration_' + str(i) 
     config.tmp_DA_path = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_it])
     config.path_save = '/'.join(config.path_save.split('/')[:-1]+[name_it])
@@ -46,6 +62,23 @@ def update_config(config,i):
             path_tmp_prev = '/'.join(config.tmp_DA_path.split('/')[:-1]+[name_prev])
             config.path_init_4Dvar = os.path.join(path_tmp_prev,'Xini.pic')
         
+    # Iterable parameter update
+    if params is not None:
+        for param in params:
+            try:
+                print(param,'==',config[param][i])
+                config[param] = config[param][i]
+            except:
+                try:
+                    print(param,'==',config[param][-1])
+                    config[param] = config[param][-1]
+                    print('Warning: maximum number of iteration reached for updating '\
+                          +param+' parameter')
+                    print('We keep the last prescribed value')
+                except:
+                    sys.exit('Impossible to update parameter '+param)
+                        
+                        
 
 def get_dict_obs(config,State):
     name_dict_obs = os.path.join(config.path_obs,
@@ -177,24 +210,37 @@ def compute_convergence_criteria(config,State,i):
     return K
 
 
+
+
 if __name__ == "__main__":
     
     start = time.time()
     
-    # check number of arguments
-    if len(sys.argv)!=5:
-        sys.exit('Wrong number of argument')
     # Parsing
-    exp_config_file_1 = sys.argv[1]
-    exp_config_file_2 = sys.argv[2]
-    iteration = int(sys.argv[3])
-    path_K = sys.argv[4]
+    parser = argparse.ArgumentParser(description='')
+    parser.add_argument('--c1',type=str) # Path of 1st config file
+    parser.add_argument('--c2',type=str) # Path of 2nd config file  
+    parser.add_argument('--i', type=int) # iteration number
+    parser.add_argument('--K', type=str) # path of convergence file
+    parser.add_argument('--params1', type=str, default=None) # names of iterable parameters for 1st experiment
+    parser.add_argument('--params2', type=str, default=None) # names of iterable parameters for 2nd experiment
     
+    opts = parser.parse_args()
+    
+    exp_config_file_1 = opts.c1
+    exp_config_file_2 = opts.c2
     config1 = exp.exp(exp_config_file_1)
     config2 = exp.exp(exp_config_file_2)
+    iteration = opts.i
+    path_K = opts.K
+    params1 = opts.params1
+    if params1 is not None:
+        params1 = params1.split(' ')
+    params2 = opts.params2
+    if params2 is not None:
+        params2 = params2.split(' ')
     
     
-        
     print('\n\n\
     *****************************************************************\n\
     *****************************************************************\n\
@@ -203,10 +249,8 @@ if __name__ == "__main__":
     *****************************************************************\n')
     time0 = datetime.now()
     # Updtade configuration file
-    update_config(config1,iteration)
-    # TEST
-    config1.sigma_R *= 0.5**iteration
-    print('R=',config1.sigma_R)
+    print('* Updtade configuration file')
+    update_config(config1,iteration,params=params1)
     # State
     print('* State Initialization')
     State1 = state.State(config1)
@@ -239,10 +283,7 @@ if __name__ == "__main__":
     time0 = datetime.now()
     # Updtade configuration file
     print('* State Initialization')
-    update_config(config2,iteration)
-    # TEST
-    config2.sigma_R *= 0.5**iteration
-    print('R=',config2.sigma_R)
+    update_config(config2,iteration,params=params2)
     # State
     State2 = state.State(config2)
     # Model

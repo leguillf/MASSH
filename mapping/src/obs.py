@@ -39,7 +39,7 @@ def obs(config, State, *args, **kwargs):
     name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
     
     # Check if previous *dict_obs* has been computed
-    if config.path_obs is not None and os.path.exists(os.path.join(config.path_obs,name_dict_obs)):
+    if config.write_obs and config.path_obs is not None and os.path.exists(os.path.join(config.path_obs,name_dict_obs)):
         print('Reading *dict_obs* from previous run')
         name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
         with open(os.path.join(config.path_obs,name_dict_obs), 'rb') as f:
@@ -97,7 +97,7 @@ def obs(config, State, *args, **kwargs):
                          config.tmp_DA_path,bbox)
     
     # Write *dict_obs* for next experiment
-    if config.path_obs is not None:
+    if config.write_obs and config.path_obs is not None:
         if not os.path.exists(config.path_obs):
             os.makedirs(config.path_obs)
         with open(os.path.join(config.path_obs,name_dict_obs), 'wb') as f:

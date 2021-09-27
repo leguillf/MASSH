@@ -12,7 +12,6 @@ import numpy as np
 import subprocess
 from datetime import datetime
 import re
-import json
 
 def create_new_config_file(src_file,out_file,list_pattern,list_subst):
     line_added = []
@@ -50,9 +49,8 @@ if __name__ == "__main__":
     parser.add_argument('--c2', # Path of 2nd config file
                         default=os.path.join('examples','config_Example2_IT.py'),
                         type=str)   
-    #parser.add_argument('--d1', type=json.loads) # Dictionary that provides prescribed argument value for config1 
-                                                 # (The value can be lists, which will be iterated through iterations)
-   # parser.add_argument('--d2', type=json.loads) # Same for config2
+    parser.add_argument('--params1', type=str, default=None) # names of iterable parameters for 1st experiment
+    parser.add_argument('--params2', type=str, default=None) # names of iterable parameters for 2nd experiment
     parser.add_argument('--i0', default=0, type=int) # First iteration number (useful if the experiment is restarted)
     parser.add_argument('--imax', default=None, type=int) # Maximum number of iterations
     parser.add_argument('--Kmin', default=1e-3, type=float) # Value of K below which the iterations are stopped
@@ -67,10 +65,14 @@ if __name__ == "__main__":
         path_exp += '_'+datetime.now().strftime('%Y-%m-%d_%H%M')
     exp_config_file_1 = opts.c1
     exp_config_file_2 = opts.c2
+    params1 = opts.params1
+    params2 = opts.params2
     Kmin = opts.Kmin
     print('path_exp:',path_exp)
     print('config1:',exp_config_file_1)
     print('config2:',exp_config_file_2)
+    print('iterable parameters for config1:',params1)
+    print('iterable parameters for congig2:',params2)
     print('Startint at iteration n°',i0)
     print('Stopping algorithm when K <',Kmin)
     
@@ -111,15 +113,29 @@ if __name__ == "__main__":
         
         time0 = datetime.now()
         print('\n*** Iteration n°'+str(i) + ' ***')
+        
         # Run iteration
         print('1. Run Mapping experiments')
         run_iteration = os.path.join(pwd,'run_iteration.py')
         cmd = ['python3', run_iteration, 
-               path_exp_config_file_1,path_exp_config_file_2,str(i),path_K]
+               '--c1',path_exp_config_file_1,
+               '--c2',path_exp_config_file_2,
+               '--i',str(i),
+               '--K',path_K]
+        if params1 is not None:
+            cmd.append('--params1')
+            cmd.append(params1)
+        if params2 is not None:
+            cmd.append('--params2')
+            cmd.append(params2)
+            
+        
         print(' '.join(cmd))
+        
         out = open(os.path.join(path_exp,'logout_' + str(i) + '.txt'), "w")
         err = open(os.path.join(path_exp,'logerr_' + str(i) + '.txt'), "w")
         subprocess.call(cmd,stdout=out,stderr=err)
+        
         # Convergence criteria 
         if i>0:
             print('2. Convergence criteria:')

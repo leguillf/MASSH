@@ -264,6 +264,8 @@ name_var_bc = {'time':'','lon':'','lat':'','var':''}
 
 scalenudg = None
 
+Knudg = None
+
 ####################################
 ### 4Dvar-specific parameters ### 
 #################################################################################################################################
@@ -349,7 +351,7 @@ facQ = 1.
 # - detrend: (bool) apply a 2D detrending on observations
 
 
-satellite = ["swot","nadir_swot","jason1","geosat2","envisat","topex"]
+satellite = []
 
 path_obs = None
 
@@ -374,71 +376,6 @@ detrend = False
 #            * Tau: half of the time window for which an obervation is assimilated. 
 #################################################################################################################################
 
-kind_swot = "swot_simulator"
-obs_path_swot = 'dc_obs/'
-obs_name_swot = "2020a_SSH_mapping_NATL60_karin_swot.nc" 
-name_obs_var_swot = ["ssh_model"]     
-name_obs_lon_swot = "lon"
-name_obs_lat_swot = "lat"
-name_obs_time_swot = "time"
-name_obs_xac_swot = "x_ac"
-nudging_params_stretching_swot = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
-nudging_params_relvort_swot = {'sigma':0,'K':0.05,'Tau':timedelta(hours=12)}
-
-kind_nadir_swot = "swot_simulator"
-obs_path_nadir_swot = 'dc_obs/'
-obs_name_nadir_swot = "2020a_SSH_mapping_NATL60_nadir_swot.nc" 
-name_obs_var_nadir_swot = ["ssh_model"]     
-name_obs_lon_nadir_swot = "lon"
-name_obs_lat_nadir_swot = "lat"
-name_obs_time_nadir_swot = "time"
-name_obs_xac_nadir_swot = None
-nudging_params_stretching_nadir_swot = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
-nudging_params_relvort_nadir_swot = None
-
-kind_jason1 = "swot_simulator"
-obs_path_jason1 = 'dc_obs/'
-obs_name_jason1 = "2020a_SSH_mapping_NATL60_jason1.nc" 
-name_obs_var_jason1 = ["ssh_model"]     
-name_obs_lon_jason1 = "lon"
-name_obs_lat_jason1 = "lat"
-name_obs_time_jason1 = "time"
-name_obs_xac_jason1 = None
-nudging_params_stretching_jason1 = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
-nudging_params_relvort_jason1 = None
-
-kind_geosat2 = "swot_simulator"
-obs_path_geosat2 = 'dc_obs/'
-obs_name_geosat2 = "2020a_SSH_mapping_NATL60_geosat2.nc" 
-name_obs_var_geosat2 = ["ssh_model"]     
-name_obs_lon_geosat2 = "lon"
-name_obs_lat_geosat2 = "lat"
-name_obs_time_geosat2 = "time"
-name_obs_xac_geosat2 = None
-nudging_params_stretching_geosat2 = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
-nudging_params_relvort_geosat2 = None
-
-kind_envisat = "swot_simulator"
-obs_path_envisat = 'dc_obs/'
-obs_name_envisat = "2020a_SSH_mapping_NATL60_envisat.nc" 
-name_obs_var_envisat = ["ssh_model"]     
-name_obs_lon_envisat = "lon"
-name_obs_lat_envisat = "lat"
-name_obs_time_envisat = "time"
-name_obs_xac_envisat = None
-nudging_params_stretching_envisat = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
-nudging_params_relvort_envisat = None
-
-kind_topex = "swot_simulator"
-obs_path_topex = 'dc_obs/'
-obs_name_topex = "2020a_SSH_mapping_NATL60_topex-poseidon_interleaved.nc" 
-name_obs_var_topex = ["ssh_model"]     
-name_obs_lon_topex = "lon"
-name_obs_lat_topex = "lat"
-name_obs_time_topex = "time"
-name_obs_xac_topex = None
-nudging_params_stretching_topex = {'sigma':0,'K':0.7,'Tau':timedelta(days=1)}
-nudging_params_relvort_topex = None
 
 
 

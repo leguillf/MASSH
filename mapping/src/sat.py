@@ -51,6 +51,19 @@ def read_satellite_info(config,sat):
     if (config.name_analysis == 'BFN'):
         nudging_params_stretching = getattr(config, 'nudging_params_stretching_' + sat)
         nudging_params_relvort = getattr(config, 'nudging_params_relvort_' + sat)
+        if nudging_params_stretching is not None:
+            if nudging_params_stretching['K'] is None:
+                nudging_params_stretching['K'] = config.Knudg
+            if nudging_params_stretching['Tau'] is None:
+                nudging_params_stretching['Tau'] = \
+                    (7/2)*config.bfn_propation_timestep/nudging_params_stretching['K']
+        if nudging_params_relvort is not None:
+            if nudging_params_relvort['K'] is None:
+                nudging_params_relvort['K'] = config.Knudg
+            if nudging_params_relvort['Tau'] is None:
+                nudging_params_relvort['Tau'] = \
+                    (7/2)*config.bfn_propation_timestep/nudging_params_relvort['K']
+                
         if (kind == 'swot_simulator'):
             name_obs_xac = getattr(config, 'name_obs_xac_' + sat)
             if name_obs_xac is not None:

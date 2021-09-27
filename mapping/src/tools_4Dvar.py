@@ -494,7 +494,6 @@ class Variational_QG :
             dX = 0.1*dX
             L_result[0].append(10**-i)
             L_result[1].append(test)
-        print(L_result)
         if plot :
             plot_grad_test(L_result)
         
