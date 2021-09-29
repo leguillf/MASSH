@@ -149,7 +149,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            State.lat,
                                                            config.flag_plot,
                                                            bfn_obj.sponge,
-                                                           mask=State.mask)
+                                                           mask=+State.mask)
         else:
             bc_field = bc_weight = bc_field_t = None
 
@@ -414,92 +414,90 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     from .tools_4Dvar import Obsopt
     
     print('\n*** create and initialize State ***\n')
-    State_ana = State.free()
     if config.path_init_4Dvar is not None :
-        import xarray as xr
         with xr.open_dataset(config.path_init_4Dvar) as ds :
             ssh_b = np.copy(ds.ssh)
-            State_ana.setvar(ssh_b,State_ana.get_indobs())
+            State.setvar(ssh_b,State.get_indobs())
     
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** 4Dvar analysis ***\n')
     
-     # date
-    init_date = config.init_date
-    final_date = config.final_date
-    
-    date = init_date # current date
+    date_ini = config.init_date # current date
     dt_window = config.window_time_step # size of the assimilation window
     
-    n_window = int((final_date-init_date).total_seconds()/dt_window.total_seconds())
-    
-    n_iter = 1 + 2 * (n_window - 1) # number of minimization to perform
-    print(f'number of assimilation window : {n_iter}')
-    for i in range(n_iter) :
-        date_end = date + dt_window # date at end of the assimilation window
-        print(f'\n*** window {i}, initial date = {date.year}:{date.month}:{date.day}\
-              final date = {date_end.year}:{date_end.month}:{date_end.day} ***\n')
+    i = 0
+    while date_ini<config.final_date :
+        date_end = date_ini + dt_window # date at end of the assimilation window
+        middle_date = date_ini + dt_window/2
+        print(f'\n*** window {i} from {date_ini} to f{date_end} ***\n')
         if i==0 :
             first_assimilation = True
         else :
             first_assimilation = False
         # minimization
-        res = window_4D(config,State_ana,Model,dict_obs=dict_obs,H=H,date_ini=date,\
+        res = window_4D(config,State,Model,dict_obs=dict_obs,H=H,date_ini=date_ini,\
                         date_final=date_end,first=first_assimilation)
         ssh0 = res.reshape(State.var.ssh.shape) # initial ssh field for the window from the 4Dvar analysis
-        State_ana.setvar(ssh0,State_ana.get_indobs())
+        State.setvar(ssh0,State.get_indobs())
+        
         if config.flag_plot>=1:
-            State_ana.plot(date)
+            State.plot(date_ini)
+        
+        print('\n*** Saving trajectory ***\n')
         
         
-        if config.saveoutputs :
-            
-            print('\n*** Saving trajectory ***\n')
-            
-            date_save = date
-            dt_save = config.saveoutput_time_step # time step for saving
-            
-            last_window = date_end == config.final_date
-            if last_window :
-                n_save = int((date_end - date).total_seconds()/dt_save.total_seconds()) # number of save
-            else :
-                n_save = int((dt_window//2).total_seconds()/dt_save.total_seconds()) # number of save
-            
-            n_step = int(dt_save.total_seconds()/config.dtmodel) # number of model step between two save
-            
-            # Boundary conditiond
-            if config.flag_use_boundary_conditions:
-                timestamps = pd.date_range(date,
-                                           date_end,
-                                           periods=n_save
-                                          )
-                bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
-                                                               config.lenght_bc,
-                                                               config.name_var_bc,
-                                                               timestamps,
-                                                               State.lon,
-                                                               State.lat,
-                                                               config.flag_plot,
-                                                               mask=State.mask)
+        dt_save = config.saveoutput_time_step # time step for saving
+        n_save = int((date_end - date_ini).total_seconds()/dt_save.total_seconds())+1 # number of save            
+        n_step = int(dt_save.total_seconds()/config.dtmodel) # number of model step between two save
+        
+        # Boundary conditiond
+        if config.flag_use_boundary_conditions:
+            timestamps = pd.date_range(date_ini,
+                                       date_end,
+                                       periods=n_save
+                                      )
+            bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
+                                                           config.lenght_bc,
+                                                           config.name_var_bc,
+                                                           timestamps,
+                                                           State.lon,
+                                                           State.lat,
+                                                           config.flag_plot,
+                                                           mask=np.copy(State.mask))
 
-            else: 
-                bc_field = np.array([None,]*n_save)
-                bc_weight = None
-            
-            for i in range(n_save) :
-                State_ana.save_output(date_save) # save state
-                Model.step(State_ana,n_step,bc_field[i],bc_weight) # run forward the model
-                date_save += dt_save # update time
-            if config.flag_plot>=1:
-                State_ana.plot(date)
-        else :
-            # model propagation until next assimilation window
-            Model.step(State_ana,nstep=n_window//2)
+        else: 
+            bc_field = np.array([None,]*n_save)
+            bc_weight = None
         
-        date += dt_window//2 # time update
+        date_save = date_ini
+        while date_save<=date_end:
+            # Smoothing
+            if not first_assimilation and date_save<=middle_date:
+                try:
+                    ds1 = State.load_output(date_save)
+                    ssh1 = ds1[config.name_mod_var[State.get_indsave()]].data
+                    ds1.close()
+                    del ds1
+                    # weight coefficients
+                    W1 = max((middle_date - date_save)  / (dt_window/2), 0)
+                    W2 = min((date_save - date_ini) / (dt_window/2), 1)
+                    # Update state
+                    ssh2 = State.getvar(ind=State.get_indsave())
+                    State.setvar(W1*ssh1+W2*ssh2,ind=0)
+                except:
+                    print('No output found from previous loop at ',str(date_save))
+            State.save_output(date_save) # save state
+            Model.step(State,n_step,bc_field[i],bc_weight) # run forward the model
+            date_save += dt_save # update time
+        # State update for next window
+        date_ini += dt_window/2 
+        State.load_output(date_ini)
+        
         print('\n*** final analysed state ***\n')
+        
+        
 
 
 def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :

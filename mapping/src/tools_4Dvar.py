@@ -346,7 +346,7 @@ class Variational_QG :
                 State.lon,
                 State.lat,
                 config.flag_plot,
-                mask=State.mask)
+                mask=np.copy(State.mask))
         else: 
             self.bc_field = np.array([None,]*len(self.timestamps))
             self.bc_weight = None
@@ -415,8 +415,6 @@ class Variational_QG :
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-        
-        #print(f'\n cost eval : {J}, Jobs={0.5*Jo}')
         
         return J
     
