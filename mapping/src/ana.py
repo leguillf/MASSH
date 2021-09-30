@@ -431,7 +431,7 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     while date_ini<config.final_date :
         date_end = date_ini + dt_window # date at end of the assimilation window
         middle_date = date_ini + dt_window/2
-        print(f'\n*** window {i} from {date_ini} to f{date_end} ***\n')
+        print(f'\n*** window {i} from {date_ini} to {date_end} ***\n')
         if i==0 :
             first_assimilation = True
         else :
@@ -494,6 +494,7 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         # State update for next window
         date_ini += dt_window/2 
         State.load_output(date_ini)
+        i += 1
         
         print('\n*** final analysed state ***\n')
         
