@@ -472,6 +472,8 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
             bc_weight = None
         
         date_save = date_ini
+        State_save = State.copy()
+        
         while date_save<=date_end:
             # Smoothing
             if not first_assimilation and date_save<=middle_date:
@@ -485,10 +487,13 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
                     W2 = min((date_save - date_ini) / (dt_window/2), 1)
                     # Update state
                     ssh2 = State.getvar(ind=State.get_indsave())
-                    State.setvar(W1*ssh1+W2*ssh2,ind=0)
+                    State_save.setvar(W1*ssh1+W2*ssh2,ind=0)
                 except:
                     print('No output found from previous loop at ',str(date_save))
-            State.save_output(date_save) # save state
+                    State_save = State.copy()
+            else:
+                State_save = State.copy()
+            State_save.save_output(date_save) # save state
             Model.step(State,n_step,bc_field[i],bc_weight) # run forward the model
             date_save += dt_save # update time
         # State update for next window
