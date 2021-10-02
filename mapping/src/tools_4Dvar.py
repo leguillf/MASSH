@@ -351,8 +351,8 @@ class Variational_QG :
             self.bc_field = np.array([None,]*len(self.timestamps))
             self.bc_weight = None
             
-        print("\n ** gradient test ** \n")
-        self.grad_test(10,config.flag_plot>=1)
+        #print("\n ** gradient test ** \n")
+        #self.grad_test(10,config.flag_plot>=1)
         
         
     

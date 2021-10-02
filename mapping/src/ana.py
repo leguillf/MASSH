@@ -473,10 +473,11 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         
         date_save = date_ini
         State_save = State.copy()
+        t = 0
         
         while date_save<=date_end:
             # Smoothing
-            if not first_assimilation and date_save<=middle_date:
+            if config.window_overlap and not first_assimilation and date_save<=middle_date:
                 try:
                     ds1 = State.load_output(date_save)
                     ssh1 = ds1[config.name_mod_var[State.get_indsave()]].data
@@ -494,8 +495,9 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
             else:
                 State_save = State.copy()
             State_save.save_output(date_save) # save state
-            Model.step(State,n_step,bc_field[i],bc_weight) # run forward the model
+            Model.step(State,n_step,bc_field[t],bc_weight) # run forward the model
             date_save += dt_save # update time
+            t += 1
         # State update for next window
         date_ini += dt_window/2 
         State.load_output(date_ini)

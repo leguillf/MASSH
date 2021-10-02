@@ -288,6 +288,10 @@ path_H = None
 
 checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
 
+window_time_step = timedelta(days=3) # Length of the 4Dvar time window
+
+window_overlap = True # If True, smooth output trajectory in time 
+
 sigma_R = 1e-2 # Observational standard deviation
 
 sigma_B_He = 0.2 # Background variance for He
