@@ -288,7 +288,9 @@ path_H = None
 
 checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
 
-window_time_step = timedelta(days=3) # Length of the 4Dvar time window
+window_length = timedelta(days=3) # Length of the 4Dvar time window
+
+window_save = timedelta(days=1) # Length of the saving 4Dvar time window
 
 window_overlap = True # If True, smooth output trajectory in time 
 
