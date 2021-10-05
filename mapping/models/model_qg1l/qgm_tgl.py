@@ -70,9 +70,7 @@ class Qgm_tgl(Qgm):
                         (dq[3:-1,2:-2]+dq[1:-3,2:-2]-2*dq[2:-2,2:-2])
     
         drq[np.where((self.mask<=1))] = 0
-        drq[np.isnan(drq)] = 0
         
-    
         return drq
     
     
@@ -95,9 +93,16 @@ class Qgm_tgl(Qgm):
     
     def pv2h_tgl(self,dq,dhg,q,hg):
         
-
+        q_tmp = +q
+        dq_tmp = +dq
+        
+        q_tmp[self.mask==0] = 0
+        hg[self.mask==0] = 0
+        dq_tmp[self.mask==0] = 0
+        dhg[self.mask==0] = 0
+        
         # Current trajectory
-        r = +q - self.h2pv(hg)
+        r = +q_tmp - self.h2pv(hg)
         d = +r
         alpha = self.alpha(r,d)
         alpha_list = [alpha]
@@ -119,7 +124,7 @@ class Qgm_tgl(Qgm):
                 d_list.append(d)
                 beta_list.append(beta)
         
-        dr = +dq - self.h2pv(dhg)
+        dr = +dq_tmp - self.h2pv(dhg)
         dd = +dr        
         dalpha = self.alpha_tgl(dr,dd,r_list[0],d_list[0])
         dh = dhg + dalpha*d_list[0] + alpha_list[0]*dd
@@ -138,7 +143,9 @@ class Qgm_tgl(Qgm):
                 dd = +ddnew
                 # Update SSH
                 dh = dhg + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
-                  
+        
+        dh[self.mask==0] = np.nan
+        
         return dh
     
     
@@ -155,7 +162,7 @@ class Qgm_tgl(Qgm):
         
         # 1/ h-->q
         dq0 = self.h2pv(dh0)
-        
+
         # 2/ h-->(u,v)
         du,dv = self.h2uv(dh0)
         

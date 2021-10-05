@@ -15,7 +15,7 @@ from src import grid as grid
 
 from dask import delayed,compute
 
-#import matplotlib.pylab as plt 
+import matplotlib.pylab as plt 
 
 from . import grid
 
@@ -217,7 +217,7 @@ class Obsopt:
         sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
         obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
         
-        Yobs = np.array([])        
+        Yobs = np.array([]) 
         for sat_info,obs_file in zip(sat_info_list,obs_file_list):
             with xr.open_dataset(obs_file) as ncin:
                 yobs = ncin[sat_info.name_obs_var[0]].values.ravel() # SSH_obs
@@ -228,6 +228,7 @@ class Obsopt:
         HX = self.H(t,X)
         res = HX - Yobs
         res[np.isnan(res)] = 0
+
         
         return res
     
@@ -277,13 +278,15 @@ class Variational_QG :
          # Objects
         self.M = M # model
         self.H = H # observational operator
-        self.State = State # state variables
+        self.State = State.free() # state variables
+        self.adState = State.free()
     
         # Covariance matrixes
         self.B = B
         self.R = R
         
         # Background state
+        Xb[np.isnan(Xb)] = 0
         self.Xb = Xb
         
         # Temporary path where to save model trajectories
@@ -351,8 +354,8 @@ class Variational_QG :
             self.bc_field = np.array([None,]*len(self.timestamps))
             self.bc_weight = None
             
-        #print("\n ** gradient test ** \n")
-        #self.grad_test(10,config.flag_plot>=1)
+        print("\n ** gradient test ** \n")
+        self.grad_test(10,config.flag_plot>=1)
         
         
     
@@ -363,14 +366,16 @@ class Variational_QG :
         '''
         
         # initial state
-        State = self.State.free() # create new state
+        State = self.State
+        
         if self.prec :
             X = self.B.sqr(X0) + self.Xb
-            X_var = X.reshape(self.State.var.ssh.shape)
+            X_var = X.reshape((State.ny,State.nx))
         else :
-            X_var = X0.reshape(self.State.var.ssh.shape)
+            X_var = X0.reshape((State.ny,State.nx))
         State.setvar(X_var,0) # initiate the State with X0
         
+        X0[np.isnan(X0)] = 0
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
@@ -433,10 +438,11 @@ class Variational_QG :
             gb = 0
         
         # Ajoint initialization   
-        adState = self.State.free()
+        adState = self.adState
+        adState.setvar(np.zeros((adState.ny,adState.nx)),0) # initiate the State with X0
         
         # Current trajectory
-        State = self.State.free()
+        State = self.State
         
         
         # Last timestamp
@@ -448,7 +454,7 @@ class Variational_QG :
             
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
-            
+                
             timestamp = self.timestamps[i]
             
             # Read model state
@@ -471,7 +477,7 @@ class Variational_QG :
             adX = self.B.prec_filter(adX,State)
         
         g = adX + gb  # total gradient
-        
+            
         return g
     
     def grad_test(self,deg=5,plot=True) :

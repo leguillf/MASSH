@@ -17,7 +17,7 @@ class Qgm_adj(Qgm_tgl):
     
     def qrhs_adj(self,adrq,u,v,q,way):
 
-        adrq[np.isnan(adrq)]=0.
+        #adrq[np.isnan(adrq)]=0.
         adrq[np.where((self.mask<=1))]=0
     
         adu=np.zeros((self.ny,self.nx))
@@ -124,9 +124,9 @@ class Qgm_adj(Qgm_tgl):
 
         adh = np.zeros((self.ny,self.nx))
         
-        #adu[np.where((self.mask<=1))]=0
-        #adv[np.where((self.mask<=1))]=0
-        
+        adu[self.mask<=1] = 0
+        adv[self.mask<=1] = 0
+    
         adh[2:,:-1] += -self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]
         adh[2:,1:] += -self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]
         adh[:-2,1:] += +self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]
@@ -149,7 +149,10 @@ class Qgm_adj(Qgm_tgl):
         ind = np.where((self.mask==1))
         adh[ind] = -self.g*self.f0[ind]/(self.c[ind]**2) * adq_tmp[ind]
         adq_tmp[ind] = 0
-    
+        
+        ind = np.where((self.mask==0))
+        adh[ind] = 0
+        adq_tmp[ind] = 0
 
         adh[2:,1:-1] += self.g/self.f0[1:-1,1:-1]/self.dy[1:-1,1:-1]**2 * adq_tmp[1:-1,1:-1]
         adh[:-2,1:-1] += self.g/self.f0[1:-1,1:-1]/self.dy[1:-1,1:-1]**2 * adq_tmp[1:-1,1:-1]
@@ -182,7 +185,10 @@ class Qgm_adj(Qgm_tgl):
     def pv2h_adj(self,adh,q,hg):
         
         # Current trajectory
-        r = +q - self.h2pv(hg)
+        q_tmp = +q
+        q_tmp[self.mask==0] = 0
+        hg[self.mask==0] = 0
+        r = +q_tmp - self.h2pv(hg)
         d = +r
         alpha = self.alpha(r,d)
         alpha_list = [alpha]
@@ -281,6 +287,10 @@ class Qgm_adj(Qgm_tgl):
         adq = +adr
         adhg += -self.h2pv_adj(adr)
         adr = np.zeros((self.ny,self.nx))
+        
+        adq[self.mask==0] = 0
+        adhg[self.mask==0] = 0
+        
         
         return adq,adhg
 

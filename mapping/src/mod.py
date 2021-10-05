@@ -117,10 +117,10 @@ variable are SLAs!')
 
         if config.name_analysis=='4Dvar':
             print('Tangent test:')
-            self.tangent_test(State,10,config.flag_use_boundary_conditions)
+            self.tangent_test(State,1,config.flag_use_boundary_conditions)
 
             print('Adjoint test:')
-            self.adjoint_test(State,10,config.flag_use_boundary_conditions)
+            self.adjoint_test(State,1,config.flag_use_boundary_conditions)
 
     def step(self,State,nstep=1,Hbc=None,Wbc=None):
         
@@ -236,6 +236,7 @@ variable are SLAs!')
         # init
         dSSH1 = +dSSH0
         SSH1 = +SSH0
+        
         # Boundary conditions
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
@@ -290,9 +291,6 @@ variable are SLAs!')
         # Update state  and parameters
         adState.setvar(adSSH1,ind=0)
         
-        return
-    
-    
     def tangent_test(self,State,nstep,bc=False):
     
         State0 = State.random(1e-2)
@@ -323,7 +321,8 @@ variable are SLAs!')
             self.step_tgl(dState1,State0,nstep,Hbc,Wbc)
             dX = dState1.getvar(vect=True)
             
-            ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
+            mask = np.isnan(X1+X2+dX)
+            ps = np.linalg.norm(X1[~mask]-X2[~mask]-dX[~mask])/np.linalg.norm(dX[~mask])
 
             print('%.E' % lambd,'%.E' % ps)
          
@@ -354,9 +353,10 @@ variable are SLAs!')
         # Run ADJ
         self.step_adj(adState,State0,nstep,Hbc,Wbc)
         adX = adState.getvar(vect=True)
-       
-        ps1 = np.inner(dX,adX)
-        ps2 = np.inner(dY,adY)
+           
+        mask = np.isnan(dX + adX + dY + adY)
+        ps1 = np.inner(dX[~mask],adX[~mask])
+        ps2 = np.inner(dY[~mask],adY[~mask])
         
         print(ps1/ps2)
         

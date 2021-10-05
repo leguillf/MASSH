@@ -45,9 +45,9 @@ class Qgm:
         mask[-3:,:] = 1
         mask[:,-3:] = 1
         
+        
         if SSH is not None:
-            mask[np.isnan(SSH)]=0
-            
+            mask[np.isnan(SSH)] = 0
             indNan = np.argwhere(np.isnan(SSH))
             for i,j in indNan:
                 for p1 in [-1,0,1]:
@@ -95,8 +95,8 @@ class Qgm:
         v[1:,1:-1] = + self.g/self.f0[1:,1:-1]*\
             (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx[1:,1:-1])
     
-        u[np.where((np.isnan(u)))]=0
-        v[np.where((np.isnan(v)))]=0
+        u[self.mask<=1] = 0
+        v[self.mask<=1] = 0
     
         return u,v
 
@@ -123,12 +123,9 @@ class Qgm:
                 self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
         
         ind = np.where((self.mask==1))
-        q[ind]= -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
+        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
             
         ind = np.where((self.mask==0))
-        q[ind] = 0
-        
-        ind = np.isnan(q)
         q[ind] = 0
     
         return q
@@ -161,8 +158,8 @@ class Qgm:
         
         q_tmp[self.mask==0] = 0
         hg[self.mask==0] = 0
-        hg[np.isnan(hg)] = 0
-        q_tmp[np.isnan(q_tmp)] = 0
+        #hg[np.isnan(hg)] = 0
+        #q_tmp[np.isnan(q_tmp)] = 0
         
         r = +q_tmp - self.h2pv(hg)
         d = +r
@@ -268,7 +265,7 @@ class Qgm:
                     (q[3:-1,2:-2]+q[1:-3,2:-2]-2*q[2:-2,2:-2])
             
         rq[np.where((self.mask<=1))] = 0
-        rq[np.isnan(rq)] = 0
+        #rq[np.isnan(rq)] = 0
 
         return rq
 
