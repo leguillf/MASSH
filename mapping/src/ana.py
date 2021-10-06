@@ -449,6 +449,8 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         
         date_save = date_ini
         date_end_save = date_ini + config.window_save
+        if config.window_overlap:
+            date_end_save += config.window_save//2
         
         
         dt_save = config.saveoutput_time_step # time step for saving
@@ -477,48 +479,38 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         
         
         t = 0
-        while date_save<date_end_save:
-            State.save_output(date_save)
+        State_save = State.copy()
+        while date_save<=date_end_save:
+            
+            ssh_current = State.getvar(ind=State.get_indsave())
+            if config.window_overlap and not first_assimilation and\
+                date_save<=(date_ini+config.window_save//2):
+                    ds1 = State.load_output(date_save)
+                    ssh_prev = ds1[config.name_mod_var[State.get_indsave()]].data
+                    ds1.close()
+                    del ds1
+                    # weight coefficients
+                    W1 = max((date_ini + config.window_save//2 - date_save)  /\
+                             (config.window_save//2), 0)
+                    W2 = min((date_save - date_ini) / (config.window_save//2), 1)
+                    # Update state
+                    State_save.setvar(W1*ssh_prev+W2*ssh_current,ind=0)
+            else:
+                State_save.setvar(ssh_current,ind=0)
+
+            if date_save==date_ini + config.window_save:
+                ssh_next = State.getvar(ind=State.get_indsave())
+                
+            State_save.save_output(date_save)
             Model.step(State,n_step,bc_field[t],bc_weight) # run forward the model
             date_save += dt_save # update time
             t += 1
-        date_ini = date_end_save
+        
+        # Time update for next window
+        State.setvar(ssh_next,ind=0)
+        date_ini += config.window_save
         i += 1
-            
-            
-        
-        # date_save = date_ini
-        # State_save = State.copy()
-        # t = 0
-        # while date_save<=date_end:
-        #     # Smoothing
-        #     if config.window_overlap and not first_assimilation and date_save<=middle_date:
-        #         try:
-        #             ds1 = State.load_output(date_save)
-        #             ssh1 = ds1[config.name_mod_var[State.get_indsave()]].data
-        #             ds1.close()
-        #             del ds1
-        #             # weight coefficients
-        #             W1 = max((middle_date - date_save)  / (dt_window/2), 0)
-        #             W2 = min((date_save - date_ini) / (dt_window/2), 1)
-        #             # Update state
-        #             ssh2 = State.getvar(ind=State.get_indsave())
-        #             State_save.setvar(W1*ssh1+W2*ssh2,ind=0)
-        #         except:
-        #             print('No output found from previous loop at ',str(date_save))
-        #             State_save = State.copy()
-        #     else:
-        #         State_save = State.copy()
-        #     State_save.save_output(date_save) # save state
-        #     Model.step(State,n_step,bc_field[t],bc_weight) # run forward the model
-        #     date_save += dt_save # update time
-        #     t += 1
-        # # State update for next window
-        # date_ini += dt_window/2 
-        # State.load_output(date_ini)
-        # i += 1
-        
-        
+                    
         
         print('\n*** final analysed state ***\n')
         
