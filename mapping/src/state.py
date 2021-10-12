@@ -257,7 +257,7 @@ class State:
                 
         if len(var.shape)==2:
             mask = var.values
-        elif len(mask.shape)==3:
+        elif len(var.shape)==3:
             mask = var[0,:,:].values
         
         # Interpolate to state grid
@@ -265,7 +265,9 @@ class State:
             mask_interp = interpolate.griddata(
                 (lon_mask.ravel(),lat_mask.ravel()), mask.ravel(),
                 (self.lon.ravel(),self.lat.ravel())).reshape((self.ny,self.nx))
-        
+        else:
+            mask_interp = mask.copy()
+
         # Convert to bool if float type     
         if mask_interp.dtype!=np.bool : 
             self.mask = np.empty((self.ny,self.nx),dtype='bool')
