@@ -114,7 +114,7 @@ class Obsopt:
             with xr.open_dataset(obs_file) as ncin:
                 lon = ncin[sat_info.name_obs_lon].values
                 lat = ncin[sat_info.name_obs_lat].values
-            if lon.shape==1:
+            if lon.shape==1 and ncin[sat_info.name_obs_var[0]].shape>1:
                 lon,lat = np.meshgrid(lon,lat)
             lon = lon.ravel()
             lat = lat.ravel()
