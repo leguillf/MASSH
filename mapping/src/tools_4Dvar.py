@@ -112,12 +112,12 @@ class Obsopt:
             elif sat_info.kind=='swot_simulator':
                 obs_sparse = True
             with xr.open_dataset(obs_file) as ncin:
-                lon = ncin[sat_info.name_obs_lon].values.ravel()
-                lat = ncin[sat_info.name_obs_lat].values.ravel()
-            if lon.size!=lat.size:
+                lon = ncin[sat_info.name_obs_lon].values
+                lat = ncin[sat_info.name_obs_lat].values
+            if lon.shape==1:
                 lon,lat = np.meshgrid(lon,lat)
-                lon = lon.ravel()
-                lat = lat.ravel()
+            lon = lon.ravel()
+            lat = lat.ravel()
             lon_obs = np.concatenate((lon_obs,lon))
             lat_obs = np.concatenate((lat_obs,lat))
                                         
