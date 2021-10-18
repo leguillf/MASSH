@@ -13,11 +13,6 @@ from datetime import timedelta
 from src import grad_tool as grad_tool
 from src import grid as grid
 
-from dask import delayed,compute
-
-import matplotlib.pylab as plt 
-
-from . import grid
 
 class Obsopt:
 
@@ -53,9 +48,15 @@ class Obsopt:
         self.obs_sparse = {}
         
         # For grid interpolation:
+        self.Npix = 4
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
-
+        if State.config['name_model']=='SW1L':
+            coords_geo_bc = (
+                np.append(State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0]),
+                np.append(State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0])
+                )
+            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
         
         # Mask coast pixels
         self.dist_coast = config.dist_coast
@@ -68,13 +69,8 @@ class Obsopt:
             
         else: self.flag_mask_coast = False
         
-        
-        delayed_results = []
         for t in self.date_obs:
             self.process_obs(t)
-            #res = delayed(self.process_obs)(t)
-            #delayed_results.append(res)
-        #compute(*delayed_results, scheduler="processes")
             
     def process_obs(self,t):
         
@@ -122,7 +118,6 @@ class Obsopt:
             lon_obs = np.concatenate((lon_obs,lon))
             lat_obs = np.concatenate((lat_obs,lat))
                                         
-    
         if obs_sparse:
             # Compute indexes and weights of neighbour grid pixels
             indexes,weights = self.interpolator(lon_obs,lat_obs)
@@ -179,10 +174,12 @@ class Obsopt:
         weights = []
         for i in range(lon_obs.size):
             _dist = np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car),axis=1))
-            # 4 closest
-            ind4 = np.argsort(_dist)[:4]
-            indexes.append(ind4)
-            weights.append(1/_dist[ind4])   
+            # Npix closest
+            ind_closest = np.argsort(_dist)[self.Npix]
+            # Remove boundary pixels 
+            ind_closest = [x for x in ind_closest if self.coords_car[x] not in self.coords_car_bc]
+            indexes.append(ind_closest)
+            weights.append(1/_dist[ind_closest])   
             
         return np.asarray(indexes),np.asarray(weights)
     
