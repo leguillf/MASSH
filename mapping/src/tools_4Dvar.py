@@ -43,12 +43,13 @@ class Obsopt:
         if config.path_H is not None:
             # We'll save to *path_H* or read in *path_H* from previous run
             self.path_H = config.path_H
+            self.read_H = True
             if not os.path.exists(self.path_H):
                 os.makedirs(self.path_H)
         else:
             # We'll use temporary directory to save the files
             self.path_H = self.tmp_DA_path
-        
+            self.read_H = False
         self.obs_sparse = {}
         
         # For grid interpolation:
@@ -77,7 +78,7 @@ class Obsopt:
             
     def process_obs(self,t):
         
-        if self.path_H is not None:
+        if self.read_H:
             file_H = os.path.join(
                 self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
             if os.path.exists(file_H):
@@ -114,7 +115,7 @@ class Obsopt:
             with xr.open_dataset(obs_file) as ncin:
                 lon = ncin[sat_info.name_obs_lon].values
                 lat = ncin[sat_info.name_obs_lat].values
-            if len(lon.shape)==1:
+            if len(lon.shape)==1  and len(ncin[sat_info.name_obs_var[0]].shape)>1 :
                 lon,lat = np.meshgrid(lon,lat)
             lon = lon.ravel()
             lat = lat.ravel()
@@ -148,10 +149,11 @@ class Obsopt:
         dsout.to_netcdf(file_H,
             encoding={'indexes': {'dtype': 'int16'}})
         
-        if self.path_H is not None:
+        if self.read_H:
                 new_file_H = os.path.join(
                     self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
-                os.system(f"cp {file_H} {new_file_H}")
+                if file_H!=new_file_H:
+                    os.system(f"cp {file_H} {new_file_H}")
         
         return t
                 
