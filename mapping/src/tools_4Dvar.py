@@ -53,8 +53,8 @@ class Obsopt:
         self.coords_car = grid.geo2cart(coords_geo)
         if State.config['name_model']=='SW1L':
             coords_geo_bc = (
-                np.append(State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0]),
-                np.append(State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0])
+                np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
+                np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
                 )
             self.coords_car_bc = grid.geo2cart(coords_geo_bc)
         
@@ -175,11 +175,24 @@ class Obsopt:
         for i in range(lon_obs.size):
             _dist = np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car),axis=1))
             # Npix closest
-            ind_closest = np.argsort(_dist)[self.Npix]
-            # Remove boundary pixels 
-            ind_closest = [x for x in ind_closest if self.coords_car[x] not in self.coords_car_bc]
-            indexes.append(ind_closest)
-            weights.append(1/_dist[ind_closest])   
+            ind_closest = np.argsort(_dist)
+            # Get Npix closest pixels (ignoring boundary pixels)
+            n = 0
+            i = 0
+            ind = []
+            w = []
+            while n<self.Npix:
+                if self.coords_car[ind_closest[i]] in self.coords_car_bc:
+                    #Ignoring boundary pixels 
+                    i +=1 
+                    continue
+                else:
+                    ind.append(ind_closest[i])
+                    w.append(1/_dist[ind_closest[i]])
+                    n += 1
+                    i +=1 
+            indexes.append(ind)
+            weights.append(w)   
             
         return np.asarray(indexes),np.asarray(weights)
     
