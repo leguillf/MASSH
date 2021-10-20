@@ -51,6 +51,7 @@ class Obsopt:
         self.Npix = 4
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
+        self.coords_car_bc = []
         if State.config['name_model']=='SW1L':
             coords_geo_bc = (
                 np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
