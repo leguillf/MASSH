@@ -75,7 +75,7 @@ class State:
         self.var = pd.Series(dtype=np.float64)
         if config.name_model is None or config.name_model=='QG1L':
             self.ini_var_qg1l(config)
-        elif config.name_model=='SW1L':
+        elif config.name_model in ['SW1L','SW1LM']:
             self.ini_var_sw1l(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
@@ -472,7 +472,7 @@ class State:
         '''
         if self.config['name_model']=='QG1L' :
             return 0
-        elif self.config['name_model']=='SW1L' :
+        elif self.config['name_model'] in ['SW1LM','SW1L'] :
             return 2
         else :
             print('model not implemented')
@@ -483,7 +483,7 @@ class State:
         '''
         if self.config['name_model'] is None or self.config['name_model']=='QG1L' :
             return 0
-        elif self.config['name_model']=='SW1L' :
+        elif self.config['name_model'] in ['SW1LM','SW1L'] :
             return 2
         else :
             print('model not implemented')

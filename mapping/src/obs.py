@@ -36,13 +36,20 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
-    name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
+    
+    date1 = config.init_date.strftime('%Y%m%d')
+    date2 = config.final_date.strftime('%Y%m%d')
+    box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
+    name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic'
     
     # Check if previous *dict_obs* has been computed
-    if config.write_obs and config.path_obs is not None and os.path.exists(os.path.join(config.path_obs,name_dict_obs)):
-        print('Reading *dict_obs* from previous run')
-        name_dict_obs = 'dict_obs_' + '_'.join(config.satellite) + '.pic'
-        with open(os.path.join(config.path_obs,name_dict_obs), 'rb') as f:
+    if config.path_obs is None:
+        path_save_obs = config.tmp_DA_path
+    else:
+        path_save_obs = config.path_obs
+    if config.write_obs and os.path.exists(os.path.join(path_save_obs,name_dict_obs)):
+        print(f'Reading {name_dict_obs} from previous run')
+        with open(os.path.join(path_save_obs,name_dict_obs), 'rb') as f:
             dict_obs = pickle.load(f)
             return _new_dict_obs(dict_obs,config.tmp_DA_path)
         
@@ -97,11 +104,11 @@ def obs(config, State, *args, **kwargs):
                          config.tmp_DA_path,bbox)
     
     # Write *dict_obs* for next experiment
-    if config.write_obs and config.path_obs is not None:
-        if not os.path.exists(config.path_obs):
-            os.makedirs(config.path_obs)
-        with open(os.path.join(config.path_obs,name_dict_obs), 'wb') as f:
-            pickle.dump(_new_dict_obs(dict_obs,config.path_obs),f)
+    if config.write_obs:
+        if not os.path.exists(path_save_obs):
+            os.makedirs(path_save_obs)
+        with open(os.path.join(path_save_obs,name_dict_obs), 'wb') as f:
+            pickle.dump(_new_dict_obs(dict_obs,path_save_obs),f)
             
     return dict_obs
 

@@ -20,10 +20,10 @@ class Obsopt:
         
         self.npix = State.lon.size
         self.dict_obs = dict_obs        # observation dictionnary
-        self.dt = Model.dt
+        self.dt = config.dtmodel
         self.date_obs = {}
         
-        if State.config['name_model']=='SW1L' or State.config['name_model']=='QG1L' :
+        if State.config['name_model'] in ['SW1L','SW1LM','QG1L'] :
             for t in Model.timestamps:
                 if self.isobserved(t):
                     delta_t = [(t - tobs).total_seconds() 
@@ -573,7 +573,7 @@ class Variational_SW:
         self.prec = prec
 
         # Grad test
-        if False:
+        if True:
             X = np.random.random()
             if self.B is not None:
                 X *= self.B.sigma 

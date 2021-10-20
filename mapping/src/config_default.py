@@ -191,6 +191,8 @@ bc_kind = '1d'
 
 w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
 
+Nmodes = 1
+
 He_init = 0.9 # Mean height (in m)
 
 Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
