@@ -48,7 +48,7 @@ class Obsopt:
         self.obs_sparse = {}
         
         # For grid interpolation:
-        self.Npix = 4
+        self.Npix = config.Npix_H
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
         self.coords_car_bc = []

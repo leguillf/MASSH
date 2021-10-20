@@ -286,6 +286,8 @@ path_init_4Dvar = None
 
 path_H = None
 
+Npix_H = 4 # Number of pixels to perform projection y=Hx
+
 checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
 
 window_length = timedelta(days=3) # Length of the 4Dvar time window
