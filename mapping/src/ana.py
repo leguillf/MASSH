@@ -657,7 +657,7 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
     var = Variational_SW(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec)
+        prec=config.prec,compute_test=config.compute_test)
     
     # Initial State 
     if config.path_init_4Dvar is None:
@@ -685,11 +685,15 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
         with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
             pickle.dump(XX,f)
-
+    
+    options = {'disp': True, 'maxiter': config.maxiter}
+    if config.gtol is not None:
+        options['gtol'] = config.gtol*projg0
+        
     res = opt.minimize(var.cost,Xopt,
                     method='L-BFGS-B',
                     jac=var.grad,
-                    options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},
+                    options=options,
                     callback=callback)
 
     print ('\nIs the minimization successful? {}'.format(res.success))

@@ -31,9 +31,10 @@ class State:
     
    # __slots__ = ('config','lon','lat','var','name_lon','name_lat','name_var','name_exp_save','path_save','ny','nx','f','g')
     
-    def __init__(self,config):
+    def __init__(self,config,first=False):
         
         self.config = config
+        self.first = first
         
         # Parameters
         self.name_lon = config.name_mod_lon
@@ -75,8 +76,10 @@ class State:
         self.var = pd.Series(dtype=np.float64)
         if config.name_model is None or config.name_model=='QG1L':
             self.ini_var_qg1l(config)
-        elif config.name_model in ['SW1L','SW1LM']:
+        elif config.name_model=='SW1L':
             self.ini_var_sw1l(config)
+        elif config.name_model=='SW1LM':
+            self.ini_var_sw1lm(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
         # Read output variable from previous run 
@@ -154,7 +157,8 @@ class State:
             self.lon = lon % 360
             self.lat = lat
             self.present_date = datetime.utcfromtimestamp(dsin['time'].values.tolist()/1e9)
-            print('Restarting experiment at',self.present_date)
+            if self.first:
+                print('Restarting experiment at',self.present_date)
             dsin.close()
             del dsin
             
@@ -189,15 +193,21 @@ class State:
     def ini_var_sw1l(self,config):
         """
         NAME
-            ini_var_qg1l
+            ini_var_sw1l
     
         DESCRIPTION
-            Initialize QG1L state variables. First one is zonal velocity, 
-            second one (optional) is meridional velocity 
-            and third one (optional) is SSH
+            Initialize SW1LM state variables. First one is zonal velocity, 
+            second one is meridional velocity 
+            and third one is SSH
         """
+        
         if len(self.name_var) != 3:
-            sys.exit('For SW1L: wrong number variable names')
+            if self.first:
+                print('Warning: For SW1L: wrong number variable names')
+            self.name_var = ['u','v','h']
+        if self.first:
+                print(self.name_var)
+            
         for i, var in enumerate(self.name_var):
             if i==0:
                 self.var[var] = np.zeros((self.ny,self.nx-1))
@@ -205,6 +215,40 @@ class State:
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
+                
+    def ini_var_sw1lm(self,config):
+        """
+        NAME
+            ini_var_sw1lm
+    
+        DESCRIPTION
+            Initialize SW1LM state variables. As many (u,v,h) as the 
+            number of modes
+        """
+        
+        if len(self.name_var) != 3*(config.Nmodes+1):
+            if self.first:
+                print('Warning: For SW1LM: wrong number variable names')
+            self.name_var = []
+            for i in range(config.Nmodes):
+                self.name_var.append('u'+str(i+1))
+                self.name_var.append('v'+str(i+1))
+                self.name_var.append('h'+str(i+1))
+            self.name_var.append('u')
+            self.name_var.append('v')
+            self.name_var.append('h')
+            if self.first:
+                print(self.name_var)
+            
+        for i, var in enumerate(self.name_var):
+            if i%3==0:
+                self.var[var] = np.zeros((self.ny,self.nx-1))
+            elif i%3==1:
+                self.var[var] = np.zeros((self.ny-1,self.nx))
+            else:
+                self.var[var] = np.zeros((self.ny,self.nx))
+            
+            
         
     def ini_var_restart(self):
         ds = self.load_output(self.present_date)
@@ -287,7 +331,7 @@ class State:
         
         name_lon = self.name_lon 
         name_lat = self.name_lat
-        name_var = self.name_var[self.get_indsave()]
+        
         
         filename = os.path.join(self.path_save,self.name_exp_save\
                 + '_y' + str(date.year)\
@@ -299,34 +343,41 @@ class State:
         coords = {}
         coords['time'] = (('time'), [pd.to_datetime(date)],)
         
-        # Get variable to be saved
-        var_to_save = self.getvar(ind=self.get_indsave())
-        
-        # Apply Mask
-        if self.mask is not None:
-            var_to_save[self.mask] = np.nan
-            
-        if len(var_to_save.shape)==2:
-            var_to_save = var_to_save[np.newaxis,:,:]
-            
-        if self.geo_grid:
-            coords[name_lon] = ((name_lon,), self.lon[0,:])
-            coords[name_lat] = ((name_lat,), self.lat[:,0])
-            dims = ('time','lat','lon')
-            
+        indsave = self.get_indsave()
+        if hasattr(indsave,'__len__'):
+            names_var = [self.name_var[i] for i in indsave]
+            vars_to_save = self.getvar(ind=indsave)
         else:
-            coords[name_lon] = (('y','x',), self.lon)
-            coords[name_lat] = (('y','x',), self.lat)
-            dims = ('time','y','x')
+            names_var = [self.name_var[indsave]]
+            vars_to_save = [self.getvar(ind=indsave)]
+         
+        var = {}              
+        for name_var,var_to_save in zip(names_var,vars_to_save):
+            # Apply Mask
+            if self.mask is not None:
+                var_to_save[self.mask] = np.nan
+                
+            if len(var_to_save.shape)==2:
+                var_to_save = var_to_save[np.newaxis,:,:]
+                
+            if self.geo_grid:
+                coords[name_lon] = ((name_lon,), self.lon[0,:])
+                coords[name_lat] = ((name_lat,), self.lat[:,0])
+                dims = ('time','lat','lon')
+                
+            else:
+                coords[name_lon] = (('y','x',), self.lon)
+                coords[name_lat] = (('y','x',), self.lat)
+                dims = ('time','y','x')
             
-        var = {name_var:(dims,var_to_save)}
+            var[name_var] = (dims,var_to_save)
         
-        # If MDT provided, compute SSH from state variable (which is supposed to be SLA)
-        if mdt is not None:
-            name_ssh = 'ssh'
-            if name_var.lower=='ssh':
-                name_ssh = 'ssh_mdt'
-            var[name_ssh] =(dims,var_to_save + mdt[np.newaxis,:,:])
+            # If MDT provided, compute SSH from state variable (which is supposed to be SLA)
+            if mdt is not None:
+                name_ssh = 'ssh'
+                if name_var.lower=='ssh':
+                    name_ssh = 'ssh_mdt'
+                var[name_ssh] =(dims,var_to_save + mdt[np.newaxis,:,:])
 
             
         ds = xr.Dataset(var,coords=coords)
@@ -407,18 +458,24 @@ class State:
         return other
     
     def free(self):
-        other = State(self.config)
+        other = State(self.config,first=False)
         return other
     
     def copy(self):
-        other = State(self.config)
+        other = State(self.config,first=False)
         for i in range(len(self.name_var)):
             other.var.values[i] = deepcopy(self.var.values[i])
         return other
     
     def getvar(self,ind=None,vect=False):
         if ind is not None:
-            res = self.var.values[ind]
+            if hasattr(ind,'__len__'):
+                res = []
+                for i in ind:
+                    res.append(self.var.values[i])
+            else:
+                res = self.var.values[ind]
+            
             if vect:
                 res = res.ravel()
         else:
@@ -435,7 +492,11 @@ class State:
             for i in range(len(self.name_var)):
                 self.var.values[i] = deepcopy(var[i])
         else:
-            self.var.values[ind] = deepcopy(var)
+            if hasattr(ind,'__len__'):
+                for i,_ind in enumerate(ind):
+                    self.var.values[_ind] = deepcopy(var[i])
+            else:
+                self.var.values[ind] = deepcopy(var)
     
     def scalar(self,coeff):
         for i, name in enumerate(self.name_var):
@@ -445,10 +506,14 @@ class State:
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
             
-    def plot(self,title=None,cmap='RdBu_r'):
+    def plot(self,title=None,cmap='RdBu_r',ind=None):
         
-        nvar = len(self.name_var)
-        
+        if ind is not None:
+            indvar = ind
+        else:
+            indvar = np.arrange(0,len(self.name_var))
+        nvar = len(indvar)
+ 
         fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
         
         if title is not None:
@@ -457,14 +522,15 @@ class State:
         if nvar==1:
             axs = [axs]
             
-        for i in range(nvar):
-            ax = axs[i]
+        for ax,i in zip(axs,indvar):
             ax.set_title(self.name_var[i])
             im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],cmap=cmap,\
                                shading='auto')
             plt.colorbar(im,ax=ax)
         
         plt.show()
+        
+
     
     def get_indobs(self) :
         '''
@@ -472,8 +538,10 @@ class State:
         '''
         if self.config['name_model']=='QG1L' :
             return 0
-        elif self.config['name_model'] in ['SW1LM','SW1L'] :
+        elif self.config['name_model']=='SW1L' :
             return 2
+        elif self.config['name_model']=='SW1LM' :
+            return 2 + (self.config.Nmodes)*3
         else :
             print('model not implemented')
             
@@ -483,8 +551,10 @@ class State:
         '''
         if self.config['name_model'] is None or self.config['name_model']=='QG1L' :
             return 0
-        elif self.config['name_model'] in ['SW1LM','SW1L'] :
+        elif self.config['name_model']=='SW1L' :
             return 2
+        elif self.config['name_model']=='SW1LM' :
+            return [2 + i*3 for i in range(self.config.Nmodes+1)]
         else :
             print('model not implemented')
 

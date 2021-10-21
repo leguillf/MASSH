@@ -284,6 +284,8 @@ Knudg = None
 # - eps_bc : Damping ratio of the R^{-1} matrix at border pixels
 #################################################################################################################################
 
+compute_test = False
+
 path_init_4Dvar = None 
 
 path_H = None
@@ -303,6 +305,10 @@ sigma_B_He = 0.2 # Background variance for He
 sigma_B_bc = 1e-2 # Background variance for bc
 
 sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
+
+scalemodes = None # Only for SW1LM model, 
+
+scalew_igws = None 
 
 prec = False # preconditoning
 

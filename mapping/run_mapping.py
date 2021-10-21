@@ -23,7 +23,7 @@ if __name__ == "__main__":
         exp_config_file = sys.argv[1]
     elif len(sys.argv)==1:
         os.chdir('examples')
-        exp_config_file = 'config_Example_Matt.py'
+        exp_config_file = 'config_Example4_IT.py'
     elif len(sys.argv)>2:
         sys.exit('Wrong number of argument')
         
@@ -35,7 +35,7 @@ if __name__ == "__main__":
     
     # Init
     print("* State initialization")
-    State = state.State(config)
+    State = state.State(config,first=True)
     
     # Model
     print('* Model Initialization')
@@ -52,4 +52,3 @@ if __name__ == "__main__":
     end = time.time()
     print('computation time:',end-start,'seconds')
 
-# TEST
