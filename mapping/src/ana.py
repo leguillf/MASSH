@@ -37,7 +37,7 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
         return ana_bfn(config,State,Model,dict_obs)
     elif config.name_analysis=='4Dvar' and config.name_model=='QG1L':
         return ana_4Dvar_QG(config,State,Model,dict_obs)
-    elif config.name_analysis=='4Dvar' and config.name_model=='SW1L':
+    elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
         return ana_4Dvar_SW(config,State,Model,dict_obs)
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
@@ -606,7 +606,7 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
         _sigma_B[Model.sliceHe] = config.sigma_B_He 
         # error on OBCs
         if hasattr(config.sigma_B_bc, '__len__'):
-            # Specific value for each tidal component
+            # Specific value for each tidal cxomponent
             if len(config.sigma_B_bc) == len(config.w_igws):
                 N_one_component_x = Model.nbcx//len(config.w_igws)
                 N_one_component_y = Model.nbcy//len(config.w_igws)
@@ -657,7 +657,7 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
     var = Variational_SW(
         M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec)
+        prec=config.prec,compute_test=config.compute_test)
     
     # Initial State 
     if config.path_init_4Dvar is None:
@@ -685,11 +685,15 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
         with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
             pickle.dump(XX,f)
-
+    
+    options = {'disp': True, 'maxiter': config.maxiter}
+    if config.gtol is not None:
+        options['gtol'] = config.gtol*projg0
+        
     res = opt.minimize(var.cost,Xopt,
                     method='L-BFGS-B',
                     jac=var.grad,
-                    options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},
+                    options=options,
                     callback=callback)
 
     print ('\nIs the minimization successful? {}'.format(res.success))

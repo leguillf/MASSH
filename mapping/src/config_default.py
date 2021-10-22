@@ -191,6 +191,8 @@ bc_kind = '1d'
 
 w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
 
+Nmodes = 1
+
 He_init = 0.9 # Mean height (in m)
 
 Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
@@ -282,6 +284,8 @@ Knudg = None
 # - eps_bc : Damping ratio of the R^{-1} matrix at border pixels
 #################################################################################################################################
 
+compute_test = False
+
 path_init_4Dvar = None 
 
 path_H = None
@@ -303,6 +307,10 @@ sigma_B_He = 0.2 # Background variance for He
 sigma_B_bc = 1e-2 # Background variance for bc
 
 sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
+
+scalemodes = None # Only for SW1LM model, 
+
+scalew_igws = None 
 
 prec = False # preconditoning
 
