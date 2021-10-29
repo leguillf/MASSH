@@ -13,6 +13,7 @@ import numpy as np
 import os
 from math import sqrt,pi
 from datetime import timedelta
+from copy import deepcopy
 import matplotlib.pylab as plt
 from scipy.interpolate import griddata
 
@@ -63,12 +64,37 @@ variable are SLAs!')
                       
             ds = xr.open_dataset(config.path_mdt).squeeze()
             
-            self.mdt = grid.interp2d(ds,
-                                     config.name_var_mdt,
-                                     State.lon,
-                                     State.lat)
+            name_var_mdt = {}
+            name_var_mdt['lon'] = config.name_var_mdt['lon']
+            name_var_mdt['lat'] = config.name_var_mdt['lat']
+            
+            
+            
+            if 'mdt' in config.name_var_mdt and config.name_var_mdt['mdt'] in ds:
+                name_var_mdt['var'] = config.name_var_mdt['mdt']
+                self.mdt = grid.interp2d(ds,
+                                         name_var_mdt,
+                                         State.lon,
+                                         State.lat)
+            else:
+                sys.exit('Warning: wrong variable name for mdt')
+            if 'mdu' in config.name_var_mdt and config.name_var_mdt['mdu'] in ds \
+                and 'mdv' in config.name_var_mdt and config.name_var_mdt['mdv'] in ds:
+                name_var_mdt['var'] = config.name_var_mdt['mdu']
+                self.mdu = grid.interp2d(ds,
+                                         name_var_mdt,
+                                         State.lon,
+                                         State.lat)
+                name_var_mdt['var'] = config.name_var_mdt['mdv']
+                self.mdv = grid.interp2d(ds,
+                                         name_var_mdt,
+                                         State.lon,
+                                         State.lat)
+            else:
+                self.mdu = self.mdv = None
+                
         else:
-            self.mdt = None
+            self.mdt = self.mdu = self.mdv = None
         
         # Open Rossby Radius if provided
         if config.filec_aux is not None and os.path.exists(config.filec_aux):
@@ -93,10 +119,15 @@ variable are SLAs!')
         SourceFileLoader("qgm_tgl", 
                                  dir_model + "/qgm_tgl.py").load_module() 
         
-        qwm_adj = SourceFileLoader("qgm_adj", 
-                                 dir_model + "/qgm_adj.py").load_module() 
-        model = qwm_adj.Qgm_adj
-            
+        if config.name_analysis=='4Dvar':
+            qgm_adj = SourceFileLoader("qgm_adj", 
+                                     dir_model + "/qgm_adj.py").load_module() 
+            model = qgm_adj.Qgm_adj
+        else:
+            qgm = SourceFileLoader("qgm", 
+                                     dir_model + "/qgm.py").load_module() 
+            model = qgm.Qgm
+        
         self.qgm = model(dx=State.DX,
                          dy=State.DY,
                          dt=self.dt,
@@ -107,7 +138,9 @@ variable are SLAs!')
                          qgiter=config.qgiter,
                          diff=config.only_diffusion,
                          snu=config.cdiffus,
-                         mdt=self.mdt)
+                         mdt=self.mdt,
+                         mdv=self.mdv,
+                         mdu=self.mdu)
         self.State = State
         
 

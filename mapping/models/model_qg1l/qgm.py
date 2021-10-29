@@ -9,7 +9,8 @@ class Qgm:
     #                             Initialization                              #
     ###########################################################################
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
-                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,mdt=None):
+                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,
+                 mdt=None,mdu=None,mdv=None):
         
         # Grid spacing
         self.dx = dx
@@ -71,8 +72,13 @@ class Qgm:
         # MDT
         self.mdt = mdt
         if self.mdt is not None:
-            self.ubar,self.vbar = self.h2uv(self.mdt)
-            self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            if mdu is  None or mdv is  None:
+                self.ubar,self.vbar = self.h2uv(self.mdt)
+                self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            else:
+                self.ubar = mdu
+                self.vbar = mdv
+                self.qbar = self.huv2pv(mdt,mdu,mdv,c=np.nanmean(self.c)*np.ones_like(self.dx))
         
     
     def h2uv(self,h):
@@ -130,7 +136,26 @@ class Qgm:
     
         return q
     
+    def huv2pv(self,h,u,v,c=None):
+        
+        if c is None:
+            c = self.c
+            
+        q = np.zeros((self.ny,self.nx))
+        
+        q[1:-1,1:-1] = \
+            0.5*(v[1:-1,2:] - v[1:-1,:-2]) / self.dx[1:-1,1:-1]-\
+            0.5*(u[2:,1:-1] - u[:-2,1:-1]) / self.dy[1:-1,1:-1]  -\
+                self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
+        
+        ind = np.where((self.mask==1))
+        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
+            
+        ind = np.where((self.mask==0))
+        q[ind] = 0
     
+        return q
+        
     def norm(self,r):
         return np.linalg.norm(r)
     
