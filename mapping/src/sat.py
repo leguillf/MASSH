@@ -57,7 +57,6 @@ def read_satellite_info(config,sat):
             if nudging_params_stretching['Tau'] is None:
                 nudging_params_stretching['Tau'] = \
                     (7/2)*config.bfn_propation_timestep/nudging_params_stretching['K']
-        print(nudging_params_stretching['K'])
         if nudging_params_relvort is not None:
             if nudging_params_relvort['K'] is None:
                 nudging_params_relvort['K'] = config.Knudg

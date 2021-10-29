@@ -511,7 +511,7 @@ class State:
         if ind is not None:
             indvar = ind
         else:
-            indvar = np.arrange(0,len(self.name_var))
+            indvar = np.arange(0,len(self.name_var))
         nvar = len(indvar)
  
         fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)

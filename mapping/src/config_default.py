@@ -152,13 +152,13 @@ plot_time_step = timedelta(days=1)
        
 name_model = 'QG1L'           
     
-name_mod_var = ["ssh","pv"]  
+name_mod_var = ["ssh"]  
 
 n_mod_var = len(name_mod_var)             
 
-name_mod_lon = "nav_lon"
+name_mod_lon = "lon"
 
-name_mod_lat = "nav_lat"
+name_mod_lat = "lat"
 
 # - parameters specific to QG model
 #    * qgiter: number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
@@ -181,7 +181,7 @@ only_diffusion = False
 
 path_mdt = None # If provided, QGPV will be expressed thanks to the Reynolds decompositon
 
-name_var_mdt = {'lon':'','lat':'','var':''} 
+name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''} 
 
 # - parameters specific to SW model
 
