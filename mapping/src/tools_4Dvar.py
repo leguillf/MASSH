@@ -52,11 +52,14 @@ class Obsopt:
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
         self.coords_car_bc = []
-        if State.config['name_model']=='SW1L':
+        if State.config['name_model'] in ['SW1L','SW1LM']:
             coords_geo_bc = (
                 np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
                 np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
                 )
+            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
+        elif State.config['name_model']=='QG1L':
+            coords_geo_bc = State.lon[Model.qgm.mask<=1].ravel(),State.lat[Model.qgm.mask<=1].ravel()
             self.coords_car_bc = grid.geo2cart(coords_geo_bc)
         
         # Mask coast pixels

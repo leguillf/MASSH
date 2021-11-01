@@ -151,7 +151,7 @@ variable are SLAs!')
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
 
-        if config.name_analysis=='4Dvar':
+        if config.name_analysis=='4Dvar' and config.compute_test:
             print('Tangent test:')
             self.tangent_test(State,1,config.flag_use_boundary_conditions)
 
