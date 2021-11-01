@@ -130,17 +130,18 @@ def compute_new_obs(it,dict_obs,config,State):
         date += config.saveoutput_time_step
         
     # For each observation, remove the corresponding estimated map
+    name_ssh = config.name_mod_var[State.get_indobs()]
     for i,date in enumerate(dict_obs):
         # Load corresponding map(s)
         if date in maps_date:
             # Cool: the observation date matches exactly an estimated map
-            ssh_now = State.load_output(date=date).ssh.values
+            ssh_now = State.load_output(date=date)[name_ssh].values
         else:
             # Don't panic: we just have to perform a time interpolation
             date_prev = min(maps_date, key=lambda x: (x<date, abs(x-date)) )
             date_next = min(maps_date, key=lambda x: (x>date, abs(x-date)) )
-            ssh_prev = State.load_output(date=date_prev).ssh.values
-            ssh_next = State.load_output(date=date_next).ssh.values
+            ssh_prev = State.load_output(date=date_prev)[name_ssh].values
+            ssh_next = State.load_output(date=date_next)[name_ssh].values
             # Time interpolation
             Wprev = 1/abs(date_prev - date).total_seconds()
             Wnext = 1/abs(date_next - date).total_seconds()
@@ -190,11 +191,12 @@ def compute_convergence_criteria(config,State,i):
     State_prev.path_save = path_save_prev
     
     # Compute convergence criteria
+    name_ssh = config.name_mod_var[State.get_indobs()]
     K,c = 0,0
     for i,date in enumerate(maps_date):
         # Load corresponding maps
-        ssh_curr = State.load_output(date=date).ssh.values
-        ssh_prev = State_prev.load_output(date=date).ssh.values
+        ssh_curr = State.load_output(date=date)[name_ssh].values
+        ssh_prev = State_prev.load_output(date=date)[name_ssh].values
         # Mask
         mask = (np.isnan(ssh_curr)) | (np.isnan(ssh_prev))
         ssh_curr[mask] = 0
