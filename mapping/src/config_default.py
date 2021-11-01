@@ -152,13 +152,13 @@ plot_time_step = timedelta(days=1)
        
 name_model = 'QG1L'           
     
-name_mod_var = ["ssh","pv"]  
+name_mod_var = ["ssh"]  
 
 n_mod_var = len(name_mod_var)             
 
-name_mod_lon = "nav_lon"
+name_mod_lon = "lon"
 
-name_mod_lat = "nav_lat"
+name_mod_lat = "lat"
 
 # - parameters specific to QG model
 #    * qgiter: number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
@@ -181,7 +181,7 @@ only_diffusion = False
 
 path_mdt = None # If provided, QGPV will be expressed thanks to the Reynolds decompositon
 
-name_var_mdt = {'lon':'','lat':'','var':''} 
+name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''} 
 
 # - parameters specific to SW model
 
@@ -190,6 +190,8 @@ sw_time_scheme = 'lf' # Time scheme of the model (e.g. Euler,rk4,lf)
 bc_kind = '1d'
 
 w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
+
+Nmodes = 1
 
 He_init = 0.9 # Mean height (in m)
 
@@ -282,6 +284,8 @@ Knudg = None
 # - eps_bc : Damping ratio of the R^{-1} matrix at border pixels
 #################################################################################################################################
 
+compute_test = False
+
 path_init_4Dvar = None 
 
 path_H = None
@@ -303,6 +307,10 @@ sigma_B_He = 0.2 # Background variance for He
 sigma_B_bc = 1e-2 # Background variance for bc
 
 sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
+
+scalemodes = None # Only for SW1LM model, 
+
+scalew_igws = None 
 
 prec = False # preconditoning
 

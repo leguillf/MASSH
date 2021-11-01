@@ -20,10 +20,10 @@ class Obsopt:
         
         self.npix = State.lon.size
         self.dict_obs = dict_obs        # observation dictionnary
-        self.dt = Model.dt
+        self.dt = config.dtmodel
         self.date_obs = {}
         
-        if State.config['name_model']=='SW1L' or State.config['name_model']=='QG1L' :
+        if State.config['name_model'] in ['SW1L','SW1LM','QG1L'] :
             for t in Model.timestamps:
                 if self.isobserved(t):
                     delta_t = [(t - tobs).total_seconds() 
@@ -236,7 +236,8 @@ class Obsopt:
                 yobs = ncin[sat_info.name_obs_var[0]].values.ravel() # SSH_obs
             Yobs = np.concatenate((Yobs,yobs))
         
-        X = State.getvar(State.get_indobs()).ravel() # SSH from state
+        X = State.getvar(ind=State.get_indobs()).ravel() # SSH from state
+        
         
         HX = self.H(t,X)
         res = HX - Yobs
@@ -248,7 +249,7 @@ class Obsopt:
     
     def adj(self,t,adState,misfit):
         
-        ind = adState.get_indobs()
+        
         
         #if self.obs_sparse[t]:
         adHssh = np.zeros(self.npix)
@@ -266,6 +267,8 @@ class Obsopt:
                     if weights[i].sum()!=0:
                         adHssh[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
         
+        ind = adState.get_indobs()
+
         adState.var[ind] += adHssh.reshape(adState.var[ind].shape)
 
         
@@ -522,7 +525,7 @@ class Variational_SW:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, Xb=None, 
-                 tmp_DA_path=None, checkpoint=1, prec=False):
+                 tmp_DA_path=None, checkpoint=1, prec=False,compute_test=False):
         
         # Objects
         self.M = M # model
@@ -573,7 +576,7 @@ class Variational_SW:
         self.prec = prec
 
         # Grad test
-        if False:
+        if compute_test:
             X = np.random.random()
             if self.B is not None:
                 X *= self.B.sigma 

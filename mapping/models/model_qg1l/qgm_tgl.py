@@ -12,8 +12,9 @@ import numpy as np
 class Qgm_tgl(Qgm):
     
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
-                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,mdt=None):
-        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,diff,snu,mdt)
+                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,
+                 mdt=None,mdu=None,mdv=None):
+        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,diff,snu,mdt,mdu,mdv)
     
     
     def qrhs_tgl(self,du,dv,dq,u,v,q,way):
