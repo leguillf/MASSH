@@ -543,7 +543,7 @@ class State:
         elif self.config['name_model']=='SW1LM' :
             return 2 + (self.config.Nmodes)*3
         else :
-            print('model not implemented')
+            return 0
             
     def get_indsave(self) :
         '''
@@ -556,7 +556,7 @@ class State:
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]
         else :
-            print('model not implemented')
+            return 0
 
 
     

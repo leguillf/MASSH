@@ -81,8 +81,11 @@ def update_config(config,i,params=None):
                         
 
 def get_dict_obs(config,State):
+    date1 = config.init_date.strftime('%Y%m%d')
+    date2 = config.final_date.strftime('%Y%m%d')
+    box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
     name_dict_obs = os.path.join(config.path_obs,
-                                 'dict_obs_' + '_'.join(config.satellite) + '.pic')
+                                 'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic')
     if not os.path.exists(name_dict_obs):
         dict_obs = obs.obs(config,State)
         # Save obs for next iterations
@@ -130,7 +133,7 @@ def compute_new_obs(it,dict_obs,config,State):
         date += config.saveoutput_time_step
         
     # For each observation, remove the corresponding estimated map
-    name_ssh = config.name_mod_var[State.get_indobs()]
+    name_ssh = State.name_var[State.get_indobs()]
     for i,date in enumerate(dict_obs):
         # Load corresponding map(s)
         if date in maps_date:
@@ -191,7 +194,7 @@ def compute_convergence_criteria(config,State,i):
     State_prev.path_save = path_save_prev
     
     # Compute convergence criteria
-    name_ssh = config.name_mod_var[State.get_indobs()]
+    name_ssh = State.name_var[State.get_indobs()]
     K,c = 0,0
     for i,date in enumerate(maps_date):
         # Load corresponding maps
