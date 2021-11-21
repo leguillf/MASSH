@@ -13,6 +13,10 @@ from datetime import timedelta
 from src import grad_tool as grad_tool
 from src import grid as grid
 
+from scipy.sparse import csc_matrix, coo_matrix, csr_matrix
+import scipy.sparse
+
+import matplotlib.pylab as plt 
 
 class Obsopt:
 
@@ -22,6 +26,11 @@ class Obsopt:
         self.dict_obs = dict_obs        # observation dictionnary
         self.dt = config.dtmodel
         self.date_obs = {}
+        
+        date1 = config.init_date.strftime('%Y%m%d')
+        date2 = config.final_date.strftime('%Y%m%d')
+        box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
+        self.name_H = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}'
         
         if State.config['name_model'] in ['SW1L','SW1LM','QG1L'] :
             for t in Model.timestamps:
@@ -80,15 +89,15 @@ class Obsopt:
         
         if self.read_H:
             file_H = os.path.join(
-                self.path_H,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                self.path_H,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
             if os.path.exists(file_H):
                 new_file_H = os.path.join(
-                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                    self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
                 os.system(f"cp {file_H} {new_file_H}")
                 return t
         else:
             file_H = os.path.join(
-                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
         
         # Read obs
         sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
@@ -150,7 +159,7 @@ class Obsopt:
         
         if self.read_H:
                 new_file_H = os.path.join(
-                    self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc'))
+                    self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
                 if file_H!=new_file_H:
                     os.system(f"cp {file_H} {new_file_H}")
         
@@ -207,7 +216,7 @@ class Obsopt:
         #if self.obs_sparse[t] :
         # Get indexes and weights of neighbour grid pixels
         ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')))
         indexes = ds['indexes'].values
         weights = ds['weights'].values
         maskobs = ds['maskobs'].values
@@ -252,12 +261,10 @@ class Obsopt:
     
     def adj(self,t,adState,misfit):
         
-        
-        
         #if self.obs_sparse[t]:
         adHssh = np.zeros(self.npix)
         ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,'H_'+t.strftime('%Y%m%d_%H%M.nc')))
+                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')))
         indexes = ds['indexes'].values
         weights = ds['weights'].values
         maskobs = ds['maskobs'].values
@@ -286,10 +293,462 @@ class Cov :
     
     def sqr(self,X):
         return self.sigma**0.5 * X
+    
+class Variational_QG_wave:
+    
+    def __init__(self, 
+                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None, 
+                 tmp_DA_path=None, init_date=None,checkpoint=1, freq_flux=1, prec=False,compute_test=False):
+        
+        # Objects
+        self.M = M # model
+        self.H = H # observational operator
+        self.State = State # state variables
+    
+        # Covariance matrixes
+        self.B = B
+        self.R = R
+        
+        # Background state
+        self.Xb = Xb
+        
+        # Temporary path where to save model trajectories
+        self.tmp_DA_path = tmp_DA_path
+        
+        # Compute checkpoints
+        self.checkpoint = [0]
+        if H.isobserved(M.timestamps[0]):
+            self.isobs = [True]
+        else:
+            self.isobs = [False]
+        check = 0
+        for i,t in enumerate(M.timestamps[:-1]):
+            if i>0 and (H.isobserved(t) or check==checkpoint):
+                self.checkpoint.append(i)
+                check = 0
+                if H.isobserved(t):
+                    self.isobs.append(True)
+                else:
+                    self.isobs.append(False)
+            check += 1
+        if H.isobserved(M.timestamps[-1]):
+            self.isobs.append(True)
+        else:
+            self.isobs.append(False)   
+        self.checkpoint.append(len(M.timestamps)-1) # last timestep
+        
+        
+        
+        # preconditioning
+        self.prec = prec
+        
+        # Wavelet reduced basis
+        self.comp = comp # Wavelet components
+        self.coords = [None]*3
+        self.coords[0] = State.lon.flatten()
+        self.coords[1] = State.lat.flatten()
+        self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint[:-1]]
+        self.coords_name = {'lon':0, 'lat':1, 'time':2}
+        self.nFluxPoints = (len(self.checkpoint)-1) * State.ny * State.nx 
+        
+        # Grad test
+        if compute_test:
+            print('Gradient test:')
+            X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
+            grad_test(self.cost,self.grad,X)
+        
+        
+    def cost(self,X0):
+        
+        # initial state
+        State = self.State.free()
+        
+        # Background cost function evaluation 
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
+        else:
+            X  = X0 + self.Xb
+            Jb = 0
+    
+        # Observational cost function evaluation
+        Jo = 0.
+        State.save(os.path.join(self.tmp_DA_path,
+                    'model_state_' + str(self.checkpoint[0]) + '.nc'))
+        
+        # Compute flux forcing
+        G,F = self.comp.operg(coords=self.coords,coords_name=self.coords_name, coordtype='reg', 
+                              compute_g=True,compute_geta=True,eta=X)
+        self.G = G
+        # # # TEST
+        # if False:
+        #     cumsize = np.empty((self.comp.nwave + 1), dtype='i8')
+        #     cumsize[0] = 0
+        #     cumsize[1:] = np.cumsum(G[0])
+        #     G_mat = csc_matrix((G[2], G[1], cumsize),
+        #                         shape=(self.nFluxPoints, self.comp.nwave), dtype='f8')
+        #     GX = G_mat.dot(X)
+        #     print(np.sum(np.abs(F.flatten()-GX)))
+        
+        F = F.reshape((len(self.coords[2]),State.ny,State.nx))
+        for i in range(len(self.checkpoint)-1):
+            timestamp = self.M.timestamps[self.checkpoint[i]]
+            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            
+            # 1. Misfit
+            if self.isobs[i]:
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                Jo += misfit.dot(self.R.inv(misfit))
+                
+            # 2. Run forward model
+            self.M.step(State,nstep=nstep)
+            
+            # 3. Add flux from wavelet
+            var = State.getvar(ind=State.get_indobs())
+            State.setvar(var + nstep*self.M.dt*F[i]/(3600*24),
+                         ind=State.get_indobs())
+            
+            # 4. Save state for adj computation 
+            State.save(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
+            
+        if self.isobs[-1]:
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
+            Jo += misfit.dot(self.R.inv(misfit))  
+        
+        # Cost function 
+        J = 1/2 * (Jo + Jb)
 
+        return J
+    
+        
+    def grad(self,X0): 
+                
+        X = +X0 
+        
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                gb = X0      # gradient of background term
+            else:
+                X  = X0 + self.Xb
+                gb = self.B.inv(X0) # gradient of background term
+        else:
+            X  = X0 + self.Xb
+            gb = 0
+            
+        # Ajoint initialization   
+        adState = self.State.free()
+        adX = np.zeros_like(X)
+        
+        # Current trajectory
+        State = self.State.free()
+        
+        # Last timestamp
+        if self.isobs[-1]:
+            State.load(os.path.join(self.tmp_DA_path,
+                       'model_state_' + str(self.checkpoint[-1]) + '.nc'))
+            timestamp = self.M.timestamps[self.checkpoint[-1]]
+            misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+            self.H.adj(timestamp,adState,self.R.inv(misfit))
+        
+        advar_traj = np.zeros((len(self.checkpoint)-1,self.State.ny*self.State.nx))
+        
+        # Time loop
+        for i in reversed(range(0,len(self.checkpoint)-1)):
+            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+ 
+            # 4. Read model state
+            State.load(os.path.join(self.tmp_DA_path,
+                       'model_state_' + str(self.checkpoint[i]) + '.nc'))
+            
+            # 3. Add flux from wavelet
+            advar_traj[i] = self.M.dt/(3600*24)* nstep *\
+                adState.getvar(ind=State.get_indobs()).flatten() # i+1
+            
+            # 2. Run adjoint model
+            self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
+                
+            # 1. Misfit 
+            if self.isobs[i]:
+                timestamp = self.M.timestamps[self.checkpoint[i]]
+                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                self.H.adj(timestamp,adState,self.R.inv(misfit))
 
+        G_mat = self.compute_G_mat(self.G)
+        adX += G_mat.T.dot(advar_traj.flatten())
+        plt.figure()
+        plt.plot(adX)
+        plt.suptitle(adX.mean())
+        plt.show()
+        if self.prec :
+            adX = np.transpose(self.B.sqr(adX)) 
+        
+        g = adX + gb  # total gradient
+        
+        return g 
+    
+    def compute_G_mat(self,G):
+        cumsize = np.empty((self.comp.nwave + 1), dtype='i8')
+        cumsize[0] = 0
+        cumsize[1:] = np.cumsum(G[0])
+        G_mat = csc_matrix((G[2], G[1], cumsize),
+                           shape=(self.nFluxPoints, self.comp.nwave), dtype='f8')
+        return G_mat
+    
 
-class Variational_QG :
+class Variational_QG_wave_2:
+    
+    def __init__(self, 
+                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None, 
+                 tmp_DA_path=None, init_date=None,checkpoint=1, freq_flux=1, prec=False,compute_test=False):
+        
+        # Objects
+        self.M = M # model
+        self.H = H # observational operator
+        self.State = State # state variables
+    
+        # Covariance matrixes
+        self.B = B
+        self.R = R
+        
+        # Background state
+        self.Xb = Xb
+        
+        # Temporary path where to save model trajectories
+        self.tmp_DA_path = tmp_DA_path
+        
+        # Compute checkpoints
+        self.checkpoint = [0]
+        if H.isobserved(M.timestamps[0]):
+            self.isobs = [True]
+        else:
+            self.isobs = [False]
+        check = 0
+        flux = 0
+        for i,t in enumerate(M.timestamps[:-1]):
+            if i>0 and (H.isobserved(t) or check==checkpoint or flux==freq_flux):
+                self.checkpoint.append(i)
+                check = 0
+                if flux==freq_flux:
+                    flux = 0
+                if H.isobserved(t):
+                    self.isobs.append(True)
+                else:
+                    self.isobs.append(False)
+            check += 1
+            flux += 1
+        if H.isobserved(M.timestamps[-1]):
+            self.isobs.append(True)
+        else:
+            self.isobs.append(False)   
+        self.checkpoint.append(len(M.timestamps)-1) # last timestep
+        
+        
+        print(self.checkpoint)
+        
+        # preconditioning
+        self.prec = prec
+        
+        # Wavelet reduced basis
+        self.freq_flux = freq_flux # Number of model timestep between two consecutive flux forcing
+        self.comp = comp # Wavelet components
+        self.G = {} # Matrix to project wavelet components to the full 3D grid
+        self.coords = [None]*3
+        self.coords[0] = State.lon.flatten()
+        self.coords[1] = State.lat.flatten()
+        step = freq_flux*M.dt/(3600*24)
+        self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
+        self.coords_name = {'lon':0, 'lat':1, 'time':2}
+        self.nFluxPoints = len(self.coords[0]) * len(self.coords[1]) * len(self.coords[2])
+        
+        # Grad test
+        if compute_test:
+            print('Gradient test:')
+            X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
+            grad_test(self.cost,self.grad,X)
+        
+        
+    def cost(self,X0):
+        
+        # initial state
+        State = self.State.free()
+        
+        # Background cost function evaluation 
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
+        else:
+            X  = X0 + self.Xb
+            Jb = 0
+        
+            
+        # Observational cost function evaluation
+        Jo = 0.
+        State.save(os.path.join(self.tmp_DA_path,
+                    'model_state_' + str(self.checkpoint[0]) + '.nc'))
+
+        for i in range(len(self.checkpoint)-1):
+            
+            timestamp = self.M.timestamps[self.checkpoint[i]]
+
+            # Misfit
+            if self.isobs[i]:
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                
+                Jo += misfit.dot(self.R.inv(misfit))
+                
+            # Run forward model
+            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            self.M.step(State,nstep=nstep)
+            
+            # add flux from wavelet
+            coords = [self.coords[0],self.coords[1],[self.coords[2][i]]]
+            G,F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                             compute_g=True,compute_geta=True,eta=X)
+            self.G[i] = G
+            F = F.reshape((State.ny,State.nx))
+                
+            # TEST
+            if False:
+                cumsize = np.empty((self.comp.nwave + 1), dtype='i8')
+                cumsize[0] = 0
+                cumsize[1:] = np.cumsum(G[0])
+                G_mat = csc_matrix((G[2], G[1], cumsize),
+                                    shape=(self.State.ny*self.State.nx, self.comp.nwave), dtype='f8')
+                GX = G_mat.dot(X)
+                print(np.sum(np.abs(F.flatten()-GX)))
+                
+            State.setvar(State.getvar(ind=State.get_indobs()) + nstep*self.M.dt*F/(3600*24),
+                         ind=State.get_indobs())
+            
+            # Save state for adj computation 
+            State.save(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
+            
+
+        if self.isobs[-1]:
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
+            
+            Jo = Jo + misfit.dot(self.R.inv(misfit))  
+        
+        # Cost function 
+        J = 1/2 * (Jo + Jb)
+
+        return J
+    
+        
+    def grad(self,X0): 
+                
+        X = +X0 
+        
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                gb = X0      # gradient of background term
+            else:
+                X  = X0 + self.Xb
+                gb = self.B.inv(X0) # gradient of background term
+        else:
+            X  = X0 + self.Xb
+            gb = 0
+            
+        # Ajoint initialization   
+        adState = self.State.free()
+        adX = np.zeros_like(X)
+        
+        # Current trajectory
+        State = self.State.free()
+        
+        # Last timestamp
+        if self.isobs[-1]:
+            State.load(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoint[-1]) + '.nc'))
+            timestamp = self.M.timestamps[self.checkpoint[-1]]
+            misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+            
+            self.H.adj(timestamp,adState,self.R.inv(misfit))
+            
+        # Compute G transpose for last timestamp
+        k = np.max(list(self.G.keys()))
+        Gt = self.compute_G_transpose(self.G[k])
+            
+        # Time loop
+        for i in reversed(range(0,len(self.checkpoint)-1)):
+            timestamp = self.M.timestamps[self.checkpoint[i]]
+            
+            # Read model state
+            State.load(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
+            
+            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            
+            # add flux from wavelet
+            Gt = self.compute_G_transpose(self.G[i])
+            Y = adState.getvar(ind=State.get_indobs()).flatten()
+            adX += nstep*self.M.dt/(3600*24)* Gt.dot(Y)
+            
+            # if i-1 in self.G:
+            #     # Compute G transpose
+            #     Gt = self.compute_G_transpose(self.G[i-1])
+                
+            # Misfit 
+            if self.isobs[i]:
+                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                self.H.adj(timestamp,adState,self.R.inv(misfit))
+                
+            # Run adjoint model
+            self.M.step_adj(adState, State, nstep=nstep)
+            
+            
+                
+        if self.prec :
+            adX = np.transpose(self.B.sqr(adX)) 
+        
+        g = adX + gb  # total gradient
+        
+        return g 
+    
+    def compute_G_transpose(self,G):
+        cumsize = np.empty((self.comp.nwave + 1), dtype='i8')
+        cumsize[0] = 0
+        cumsize[1:] = np.cumsum(G[0])
+        G_mat = csc_matrix((G[2], G[1], cumsize),
+                            shape=(self.State.ny*self.State.nx, self.comp.nwave), dtype='f8')
+        return G_mat.transpose()
+    
+    
+    def grad_test(self,deg=5,plot=True) :
+        '''
+        performs a gradient test
+         - deg : degree of precision of the test
+        '''
+        
+        X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
+        dX = np.ones(self.comp.nwave)*self.B.sigma 
+        Jx = self.cost(X) # cost in X
+        g = self.grad(X) # grad of cost in X
+        L_result = [[],[]]
+        for i in range(deg) :
+            Jxdx = self.cost(X+dX)
+            test = abs(1 - np.dot(g,dX)/(Jxdx-Jx))
+            print(f'{10**(-i):.1E} , {test:.1E}')
+            dX = 0.1*dX
+            L_result[0].append(10**-i)
+            L_result[1].append(test)
+        if plot :
+            plot_grad_test(L_result)
+        
+
+class Variational_QG_init :
     
     def __init__(self,config=None,M=None, H=None, State=None, R=None,B=None, Xb=None, tmp_DA_path=None,
                  date_ini=None, date_final=None) :

@@ -178,7 +178,9 @@ class Qgm:
             h (2D array): SSH
     
         """
-    
+        if np.all(q==0):
+            return hg
+        
         q_tmp = +q
         
         q_tmp[self.mask==0] = 0

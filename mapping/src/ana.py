@@ -36,7 +36,10 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     if config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
     elif config.name_analysis=='4Dvar' and config.name_model=='QG1L':
-        return ana_4Dvar_QG(config,State,Model,dict_obs)
+        if config.reduced_basis==True:
+            return ana_4Dvar_QG_wave(config,State,Model,dict_obs)
+        else:
+            return ana_4Dvar_QG_init(config,State,Model,dict_obs)
     elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
         return ana_4Dvar_SW(config,State,Model,dict_obs)
     elif config.name_analysis=='MIOST':
@@ -404,10 +407,155 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
     return
 
+def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
+    '''
+    Run a 4Dvar analysis
+    '''
+    from .tools_4Dvar import Obsopt, Cov, Variational_QG_wave
+    from .tools_reduced_basis import RedBasis_QG
+    
+    print('\n*** create and initialize State ***\n')
+    if config.path_init_4Dvar is not None :
+        with xr.open_dataset(config.path_init_4Dvar) as ds :
+            ssh_b = np.copy(ds.ssh)
+            State.setvar(ssh_b,State.get_indobs())
+    
+    print('\n*** Observation operator ***\n')
+    H = Obsopt(config,State,dict_obs,Model)
+    
+    print('\n*** Wavelet reduced basis ***\n')
+    comp = RedBasis_QG(config,State)
+    qinv = comp.set_basis(return_qinv=True)
+    
+    print('\n*** Variational ***\n')
+    # Covariance matrix
+    if config.sigma_B is not None:          
+        # Least squares
+        B = Cov(config.sigma_B)
+        R = Cov(config.sigma_R)
+    else:
+        B = Cov(1/np.sqrt(qinv))
+        R = Cov(config.sigma_R)
+    # backgroud state 
+    Xb = np.zeros((comp.nwave,))
+    # Cost and Grad functions
+    var = Variational_QG_wave(
+        M=Model, H=H, State=State, B=B, R=R, comp=comp, Xb=Xb, 
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,freq_flux=config.freq_flux,
+        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date)
+    # Initial State 
+    if config.path_init_4Dvar is None:
+        Xopt = (np.random.random(comp.nwave)-0.5)*B.sigma 
+    else:
+        # Read previous minimum 
+        with open(config.path_init_4Dvar, 'rb') as f:
+            print('Read previous minimum:',config.path_init_4Dvar)
+            Xopt = pickle.load(f)
+            
+    ###################
+    # Minimization    #
+    ###################
+    print('\n*** Minimization ***\n')
+    plt.figure()
+    plt.plot(Xopt)
+    plt.suptitle('Xini')
+    plt.show()
+    J0 = var.cost(Xopt)
+    g0 = var.grad(Xopt)
+    projg0 = np.max(np.abs(g0))
+    print('J0=',"{:e}".format(J0))
+    print('projg0=',"{:e}".format(projg0))
+    
+    
+    def callback(XX,projg0=projg0):
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d_%H%M%S")
+        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
+            pickle.dump(XX,f)
+        plt.figure()
+        plt.plot(XX)
+        plt.suptitle('Xi')
+        plt.show()
+    
+    options = {'disp': True, 'maxiter': config.maxiter}
+    if config.gtol is not None:
+        options['gtol'] = config.gtol*projg0
+        
+    res = opt.minimize(var.cost,Xopt,
+                    method='L-BFGS-B',
+                    jac=var.grad,
+                    options=options,
+                    callback=callback)
 
+    print ('\nIs the minimization successful? {}'.format(res.success))
+    print ('\nFinal cost function value: {}'.format(res.fun))
+    print ('\nNumber of iterations: {}'.format(res.nit))
 
-
-def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    
+    if config.prec:
+        Xa = var.Xb + B.sqr(res.x)
+    else:
+        Xa = var.Xb + res.x
+        
+    # Save minimum for next experiments
+    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
+        pickle.dump(Xa,f)
+    
+    plt.figure()
+    plt.plot(Xa)
+    plt.suptitle('Xa')
+    plt.show()
+    
+    # Dates to save
+    maps_date = []
+    date = config.init_date
+    while date<=config.final_date:
+        maps_date.append(date)
+        date += config.saveoutput_time_step
+    
+    
+    # Flux
+    coords = [None]*3
+    coords[0] = State.lon.flatten()
+    coords[1] = State.lat.flatten()
+    date = config.init_date
+    coords[2] = []
+    while date<=config.final_date:
+        coords[2].append((date-config.init_date).total_seconds()/24/3600)
+        date += config.saveoutput_time_step
+    coords_name = {'lon':0, 'lat':1, 'time':2}
+    F = comp.operg(coords=coords,coords_name=coords_name, coordtype='reg', 
+                   compute_geta=True,eta=Xa).reshape((len(coords[2]),
+                                                      State.ny,State.nx))
+    
+    # Forward propagation
+    State0 = State.free()
+    State0.save_output(config.init_date)
+    date = config.init_date
+    nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
+    i = 0
+    while date<=config.final_date:
+    
+        Model.step(State0,nstep=nstep)
+        var = State0.getvar(ind=State.get_indobs())
+        State0.setvar(var + nstep*Model.dt*F[i]/(3600*24),
+                      ind=State.get_indobs())
+        State0.save_output(date)
+        
+        date += config.saveoutput_time_step
+        i += 1
+    
+    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
+    gc.collect()
+    print()
+        
+    
+    
+def ana_4Dvar_QG_init(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
@@ -514,15 +662,13 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         
         print('\n*** final analysed state ***\n')
         
-        
-
 
 def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :
     '''
     run one assimilation on the window considered which start at time date_ini
     '''
     from .tools_4Dvar import Obsopt, Cov
-    from .tools_4Dvar import Variational_QG as Variational
+    from .tools_4Dvar import Variational_QG_init as Variational
     
     # create obsopt if not filled out
     if H==None :
@@ -963,8 +1109,7 @@ def ana_miost(config,State,dict_obs=None):
         time1 = datetime.now()
         print('Loop from',init_miost_date.strftime("%Y-%m-%d"),'to',
               final_miost_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
-        
-    
+         
 
 def ana_harm(config,State,dict_obs=None):
     

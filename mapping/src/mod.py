@@ -19,6 +19,8 @@ from scipy.interpolate import griddata
 
 from . import tools, grid
 
+
+
 def Model(config,State):
     """
     NAME
@@ -53,8 +55,10 @@ class Model_qg1l:
             dir_model = config.dir_model  
         SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
 
-        # Model timestep
+        # Time parameters
         self.dt = config.dtmodel
+        self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
+        self.T = np.arange(self.nt) * self.dt
         
         # Open MDT map if provided
         if config.path_mdt is not None and os.path.exists(config.path_mdt):
@@ -153,10 +157,10 @@ variable are SLAs!')
 
         if config.name_analysis=='4Dvar' and config.compute_test:
             print('Tangent test:')
-            self.tangent_test(State,1,config.flag_use_boundary_conditions)
+            self.tangent_test(State,10,config.flag_use_boundary_conditions)
 
             print('Adjoint test:')
-            self.adjoint_test(State,1,config.flag_use_boundary_conditions)
+            self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
     def step(self,State,nstep=1,Hbc=None,Wbc=None):
         
@@ -174,7 +178,7 @@ variable are SLAs!')
         # Time propagation
         for i in range(nstep):
             SSH1 = self.qgm.step(SSH1,way=1)
-            
+
         # Update state
         State.setvar(SSH1,ind=0)
     
@@ -315,7 +319,7 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         State0_tmp = State0.copy()
-        self.step(State0_tmp,nstep,Hbc,Wbc)
+        self.step(State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -325,12 +329,12 @@ variable are SLAs!')
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(State1,nstep,Hbc,Wbc)
+            self.step(State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(dState1,State0,nstep,Hbc,Wbc)
+            self.step_tgl(dState1,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             dX = dState1.getvar(vect=True)
             
             mask = np.isnan(X1+X2+dX)
@@ -359,11 +363,11 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         # Run TLM
-        self.step_tgl(dState,State0,nstep,Hbc,Wbc)
+        self.step_tgl(dState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         dY = dState.getvar(vect=True)
         
         # Run ADJ
-        self.step_adj(adState,State0,nstep,Hbc,Wbc)
+        self.step_adj(adState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         adX = adState.getvar(vect=True)
            
         mask = np.isnan(dX + adX + dY + adY)
