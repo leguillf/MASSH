@@ -13,8 +13,7 @@ from datetime import timedelta
 from src import grad_tool as grad_tool
 from src import grid as grid
 
-from scipy.sparse import csc_matrix, coo_matrix, csr_matrix
-import scipy.sparse
+from scipy.sparse import csc_matrix
 
 import matplotlib.pylab as plt 
 
@@ -404,7 +403,7 @@ class Variational_QG_wave:
             self.M.step(State,nstep=nstep)
             
             # 3. Add flux from wavelet
-            if i in self.checkpoint_flux:
+            if self.checkpoint[i] in self.checkpoint_flux:
                 var = State.getvar(ind=State.get_indobs())
                 State.setvar(var + nstep*self.M.dt*F[iflux]/(3600*24),
                              ind=State.get_indobs())
@@ -457,7 +456,7 @@ class Variational_QG_wave:
         advar_traj = np.zeros((len(self.coords[2]),self.State.ny*self.State.nx))
         
         # Time loop
-        iflux = len(self.coords[2])-1
+        iflux = -1
         for i in reversed(range(0,len(self.checkpoint)-1)):
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
  
@@ -466,7 +465,7 @@ class Variational_QG_wave:
                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
             
             # 3. Add flux from wavelet
-            if i in self.checkpoint_flux:
+            if self.checkpoint[i] in self.checkpoint_flux:
                 advar_traj[iflux] = self.M.dt/(3600*24)* nstep *\
                     adState.getvar(ind=State.get_indobs()).flatten() # i+1
                 iflux -= 1
