@@ -497,19 +497,13 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
         pickle.dump(Xa,f)
     
-    plt.figure()
-    plt.plot(Xa)
-    plt.suptitle('Xa')
-    plt.show()
-    
     # Dates to save
     maps_date = []
     date = config.init_date
     while date<=config.final_date:
         maps_date.append(date)
         date += config.saveoutput_time_step
-    
-    
+  
     # Flux
     coords = [None]*3
     coords[0] = State.lon.flatten()

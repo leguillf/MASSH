@@ -284,15 +284,19 @@ Knudg = None
 # - eps_bc : Damping ratio of the R^{-1} matrix at border pixels
 #################################################################################################################################
 
-compute_test = False
+reduced_basis = False # whether to compute wavelet basis for 4DvarQG system
+
+compute_test = False # TLM,ADJ & GRAD tests
 
 path_init_4Dvar = None 
 
-path_H = None
+path_H = None 
 
 Npix_H = 4 # Number of pixels to perform projection y=Hx
 
 checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
+
+checkpoint_flux = 1 # Number of model timesteps separating two consecutive flux forcing 
 
 window_length = timedelta(days=3) # Length of the 4Dvar time window
 
