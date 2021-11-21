@@ -298,7 +298,7 @@ class Variational_QG_wave:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None, 
-                 tmp_DA_path=None, init_date=None,checkpoint=1, freq_flux=1, prec=False,compute_test=False):
+                 tmp_DA_path=None, init_date=None,checkpoint=1, checkpoint_flux=1, prec=False,compute_test=False):
         
         # Objects
         self.M = M # model
@@ -317,28 +317,33 @@ class Variational_QG_wave:
         
         # Compute checkpoints
         self.checkpoint = [0]
+        self.checkpoint_flux = [0]
         if H.isobserved(M.timestamps[0]):
             self.isobs = [True]
         else:
             self.isobs = [False]
         check = 0
+        flux = 0
         for i,t in enumerate(M.timestamps[:-1]):
-            if i>0 and (H.isobserved(t) or check==checkpoint):
+            if i>0 and (H.isobserved(t) or (check==checkpoint or flux==checkpoint_flux)):
                 self.checkpoint.append(i)
                 check = 0
                 if H.isobserved(t):
                     self.isobs.append(True)
                 else:
                     self.isobs.append(False)
+                if flux==checkpoint_flux:
+                    self.checkpoint_flux.append(i)
+                    flux = 0
             check += 1
+            flux += 1
         if H.isobserved(M.timestamps[-1]):
             self.isobs.append(True)
         else:
             self.isobs.append(False)   
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
         
-        
-        
+    
         # preconditioning
         self.prec = prec
         
@@ -347,9 +352,9 @@ class Variational_QG_wave:
         self.coords = [None]*3
         self.coords[0] = State.lon.flatten()
         self.coords[1] = State.lat.flatten()
-        self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint[:-1]]
+        self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint_flux]
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
-        self.nFluxPoints = (len(self.checkpoint)-1) * State.ny * State.nx 
+        self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
         
         # Grad test
         if compute_test:
@@ -383,18 +388,9 @@ class Variational_QG_wave:
         # Compute flux forcing
         G,F = self.comp.operg(coords=self.coords,coords_name=self.coords_name, coordtype='reg', 
                               compute_g=True,compute_geta=True,eta=X)
-        self.G = G
-        # # # TEST
-        # if False:
-        #     cumsize = np.empty((self.comp.nwave + 1), dtype='i8')
-        #     cumsize[0] = 0
-        #     cumsize[1:] = np.cumsum(G[0])
-        #     G_mat = csc_matrix((G[2], G[1], cumsize),
-        #                         shape=(self.nFluxPoints, self.comp.nwave), dtype='f8')
-        #     GX = G_mat.dot(X)
-        #     print(np.sum(np.abs(F.flatten()-GX)))
-        
+        self.G = G        
         F = F.reshape((len(self.coords[2]),State.ny,State.nx))
+        
         for i in range(len(self.checkpoint)-1):
             timestamp = self.M.timestamps[self.checkpoint[i]]
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
@@ -408,9 +404,10 @@ class Variational_QG_wave:
             self.M.step(State,nstep=nstep)
             
             # 3. Add flux from wavelet
-            var = State.getvar(ind=State.get_indobs())
-            State.setvar(var + nstep*self.M.dt*F[i]/(3600*24),
-                         ind=State.get_indobs())
+            if i in self.checkpoint_flux:
+                var = State.getvar(ind=State.get_indobs())
+                State.setvar(var + nstep*self.M.dt*F[i]/(3600*24),
+                             ind=State.get_indobs())
             
             # 4. Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
@@ -456,7 +453,7 @@ class Variational_QG_wave:
             misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
             self.H.adj(timestamp,adState,self.R.inv(misfit))
         
-        advar_traj = np.zeros((len(self.checkpoint)-1,self.State.ny*self.State.nx))
+        advar_traj = np.zeros((len(self.coords[2]),self.State.ny*self.State.nx))
         
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
@@ -467,8 +464,9 @@ class Variational_QG_wave:
                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
             
             # 3. Add flux from wavelet
-            advar_traj[i] = self.M.dt/(3600*24)* nstep *\
-                adState.getvar(ind=State.get_indobs()).flatten() # i+1
+            if i in self.checkpoint_flux:
+                advar_traj[i] = self.M.dt/(3600*24)* nstep *\
+                    adState.getvar(ind=State.get_indobs()).flatten() # i+1
             
             # 2. Run adjoint model
             self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
@@ -481,10 +479,7 @@ class Variational_QG_wave:
 
         G_mat = self.compute_G_mat(self.G)
         adX += G_mat.T.dot(advar_traj.flatten())
-        plt.figure()
-        plt.plot(adX)
-        plt.suptitle(adX.mean())
-        plt.show()
+
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
@@ -612,21 +607,11 @@ class Variational_QG_wave_2:
             
             # add flux from wavelet
             coords = [self.coords[0],self.coords[1],[self.coords[2][i]]]
-            G,F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                             compute_g=True,compute_geta=True,eta=X)
-            self.G[i] = G
+            F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                             compute_geta=True,eta=X)
+
             F = F.reshape((State.ny,State.nx))
-                
-            # TEST
-            if False:
-                cumsize = np.empty((self.comp.nwave + 1), dtype='i8')
-                cumsize[0] = 0
-                cumsize[1:] = np.cumsum(G[0])
-                G_mat = csc_matrix((G[2], G[1], cumsize),
-                                    shape=(self.State.ny*self.State.nx, self.comp.nwave), dtype='f8')
-                GX = G_mat.dot(X)
-                print(np.sum(np.abs(F.flatten()-GX)))
-                
+                                
             State.setvar(State.getvar(ind=State.get_indobs()) + nstep*self.M.dt*F/(3600*24),
                          ind=State.get_indobs())
             
@@ -692,23 +677,20 @@ class Variational_QG_wave_2:
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
             
             # add flux from wavelet
-            Gt = self.compute_G_transpose(self.G[i])
+            coords = [self.coords[0],self.coords[1],[self.coords[2][i]]]
+            G = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                             compute_g=True,eta=X)
+            Gt = self.compute_G_transpose(G)
             Y = adState.getvar(ind=State.get_indobs()).flatten()
             adX += nstep*self.M.dt/(3600*24)* Gt.dot(Y)
             
-            # if i-1 in self.G:
-            #     # Compute G transpose
-            #     Gt = self.compute_G_transpose(self.G[i-1])
+            # Run adjoint model
+            self.M.step_adj(adState, State, nstep=nstep)
                 
             # Misfit 
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-                
-            # Run adjoint model
-            self.M.step_adj(adState, State, nstep=nstep)
-            
-            
                 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 

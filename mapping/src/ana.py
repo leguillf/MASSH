@@ -441,11 +441,11 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Cost and Grad functions
     var = Variational_QG_wave(
         M=Model, H=H, State=State, B=B, R=R, comp=comp, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,freq_flux=config.freq_flux,
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,checkpoint_flux=config.checkpoint_flux,
         prec=config.prec,compute_test=config.compute_test,init_date=config.init_date)
     # Initial State 
     if config.path_init_4Dvar is None:
-        Xopt = (np.random.random(comp.nwave)-0.5)*B.sigma 
+        Xopt = var.Xb*0
     else:
         # Read previous minimum 
         with open(config.path_init_4Dvar, 'rb') as f:
@@ -456,10 +456,6 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Minimization    #
     ###################
     print('\n*** Minimization ***\n')
-    plt.figure()
-    plt.plot(Xopt)
-    plt.suptitle('Xini')
-    plt.show()
     J0 = var.cost(Xopt)
     g0 = var.grad(Xopt)
     projg0 = np.max(np.abs(g0))
@@ -472,10 +468,6 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
         with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
             pickle.dump(XX,f)
-        plt.figure()
-        plt.plot(XX)
-        plt.suptitle('Xi')
-        plt.show()
     
     options = {'disp': True, 'maxiter': config.maxiter}
     if config.gtol is not None:
