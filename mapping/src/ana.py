@@ -497,13 +497,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
         pickle.dump(Xa,f)
     
-    # Dates to save
-    maps_date = []
-    date = config.init_date
-    while date<=config.final_date:
-        maps_date.append(date)
-        date += config.saveoutput_time_step
-  
+
     # Flux
     coords = [None]*3
     coords[0] = State.lon.flatten()
@@ -520,20 +514,26 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     
     # Forward propagation
     State0 = State.free()
-    State0.save_output(config.init_date)
     date = config.init_date
-    nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
-    i = 0
-    while date<=config.final_date:
-    
-        Model.step(State0,nstep=nstep)
-        var = State0.getvar(ind=State.get_indobs())
-        State0.setvar(var + nstep*Model.dt*F[i]/(3600*24),
-                      ind=State.get_indobs())
-        State0.save_output(date)
-        
-        date += config.saveoutput_time_step
-        i += 1
+    iflux = 0
+    State0.save_output(date)
+    for i in range(len(var.checkpoint)-1):
+        nstep = var.checkpoint[i+1] - var.checkpoint[i]
+        # Forward
+        for j in range(nstep):
+            Model.step(State0)
+            date += timedelta(seconds=config.dtmodel)
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                State0.save_output(date)
+        # Flux
+        if var.checkpoint[i] in var.checkpoint_flux:
+            _var = State0.getvar(ind=State.get_indobs())
+            State0.setvar(_var + nstep*Model.dt*F[iflux]/(3600*24),
+                         ind=State.get_indobs())
+            iflux += 1
+
     
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
