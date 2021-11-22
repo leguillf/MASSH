@@ -346,6 +346,11 @@ dir_miost = None
 
 obs_subsampling = 1
 
+
+#########################################
+### Wavelet basis specific parameters ### 
+#########################################
+
 file_aux = ''
 
 filec_aux = ''
@@ -355,6 +360,8 @@ name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
 lmin = 80.
 
 lmax = 970.
+
+factdec = 15
 
 tdecmin = 2.5
 
