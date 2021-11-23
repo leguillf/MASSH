@@ -496,22 +496,11 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Save minimum for next experiments
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
         pickle.dump(Xa,f)
-    
 
-    # Flux
-    coords = [None]*3
-    coords[0] = State.lon.flatten()
-    coords[1] = State.lat.flatten()
-    date = config.init_date
-    coords[2] = []
-    while date<=config.final_date:
-        coords[2].append((date-config.init_date).total_seconds()/24/3600)
-        date += config.saveoutput_time_step
-    coords_name = {'lon':0, 'lat':1, 'time':2}
-    F = comp.operg(coords=coords,coords_name=coords_name, coordtype='reg', 
-                   compute_geta=True,eta=Xa).reshape((len(coords[2]),
+    # compute Fluxes
+    F = comp.operg(coords=var.coords,coords_name=var.coords_name, coordtype='reg', 
+                   compute_geta=True,eta=Xa).reshape((len(var.coords[2]),
                                                       State.ny,State.nx))
-    
     # Forward propagation
     State0 = State.free()
     date = config.init_date
@@ -527,7 +516,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date)
-        # Flux
+        # add Flux
         if var.checkpoint[i] in var.checkpoint_flux:
             _var = State0.getvar(ind=State.get_indobs())
             State0.setvar(_var + nstep*Model.dt*F[iflux]/(3600*24),
