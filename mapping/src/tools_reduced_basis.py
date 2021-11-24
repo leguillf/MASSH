@@ -49,6 +49,7 @@ class RedBasis_QG:
         self.distortion_eq_law= 2.
         self.file_aux = config.file_aux
         self.filec_aux = config.filec_aux
+        
      
 
     def set_basis(self,return_qinv=False):
@@ -138,6 +139,8 @@ class RedBasis_QG:
                 fc = (2*2*np.pi/86164*np.sin(ENSLAT[iff][P]*np.pi/180.))
                 Ro = C / np.abs(fc) /1000. # Rossby radius (km)
                 if Ro>self.Romax: Ro=self.Romax
+                
+                
                 if C>0: td1=self.factdec / (1./(self.facRo*Ro)*C/1000*86400)
                 else: td1 = np.nan
                 
@@ -147,14 +150,17 @@ class RedBasis_QG:
                 if PSDS<=PSDSR: tdec[-1][-1] = td1 * (PSDS/PSDSR)**self.tssr
                 else: tdec[-1][-1] = td1
                 if tdec[-1][-1]>self.tdecmax: tdec[-1][-1]=self.tdecmax
+                if tdec[-1][-1]<self.tdecmin: tdec[-1][-1]=self.tdecmin
                 
                 cp=1./(2*2*np.pi/86164*np.sin(max(10,np.abs(ENSLAT[iff][P]))*np.pi/180.))/300000
                 tdecp=(1./ff[iff])*1000/cp/86400/4
                 if tdecp<tdec[-1][-1]: tdec[-1][-1]=tdecp
                 
-                try: enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt) , deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
+                try: enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
                 except: pass
                 nt = len(enst[iff][P])
+                
+                
                 nwave += ntheta*2*nt
 
         
