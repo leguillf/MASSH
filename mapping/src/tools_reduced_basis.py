@@ -49,6 +49,7 @@ class RedBasis_QG:
         self.distortion_eq_law= 2.
         self.file_aux = config.file_aux
         self.filec_aux = config.filec_aux
+        self.gsize_max = config.gsize_max
         
      
 
@@ -150,7 +151,6 @@ class RedBasis_QG:
                 if PSDS<=PSDSR: tdec[-1][-1] = td1 * (PSDS/PSDSR)**self.tssr
                 else: tdec[-1][-1] = td1
                 if tdec[-1][-1]>self.tdecmax: tdec[-1][-1]=self.tdecmax
-                if tdec[-1][-1]<self.tdecmin: tdec[-1][-1]=self.tdecmin
                 
                 cp=1./(2*2*np.pi/86164*np.sin(max(10,np.abs(ENSLAT[iff][P]))*np.pi/180.))/300000
                 tdecp=(1./ff[iff])*1000/cp/86400/4
@@ -162,6 +162,8 @@ class RedBasis_QG:
                 
                 
                 nwave += ntheta*2*nt
+                
+        print(nwave)
 
         
 
@@ -171,6 +173,7 @@ class RedBasis_QG:
         iwave = -1
         self.iff_wavebounds = [None]*(nf+1)
         self.P_wavebounds = [None]*(nf+1)
+          
         # Loop on all wavelets of given pseudo-period
         for iff in range(nf):
             self.iff_wavebounds[iff] = iwave+1
@@ -186,7 +189,8 @@ class RedBasis_QG:
                     Ro = C / np.abs(fc) /1000.  # Rossby radius (km)
                     if Ro>self.Romax: Ro = self.Romax
                 if ((1./ff[iff] < self.cutRo * Ro) ): self.wavetest[iff][P]=False
-                if tdec[iff][P]<self.tdecmin: self.wavetest[iff][P]=False
+                if tdec[iff][P]<self.tdecmin: 
+                    self.wavetest[iff][P]=False
                 if np.isnan(PSDLOC): self.wavetest[iff][P]=False
                 if ((np.isnan(Cb1[iff][P]))|(Cb1[iff][P]==0)): self.wavetest[iff][P]=False
                 if self.wavetest[iff][P]==True:
@@ -233,7 +237,7 @@ class RedBasis_QG:
     def operg(self, coords=None, coords_name=None, compute_g=False, 
             compute_geta=False, eta=None, 
             coordtype='scattered', iwave0=0, iwave1=None,
-            int_type='i8', float_type='f8',gsize_max=500000000):
+            int_type='i8', float_type='f8'):
         
 
         if iwave1==None: iwave1=self.nwave
@@ -254,13 +258,15 @@ class RedBasis_QG:
         if compute_g:
             G=[None]*3
             G[0]=np.zeros((iwave1-iwave0), dtype=int_type)
-            G[1]=np.empty((gsize_max), dtype=int_type)
-            G[2]=np.empty((gsize_max), dtype=float_type)
+            G[1]=np.empty((self.gsize_max), dtype=int_type)
+            G[2]=np.empty((self.gsize_max), dtype=float_type)
             ind_tmp = 0
 
         iwave = -1
         for iff in range(self.nf):
             for P in range(self.NP[iff]):
+                    if self.wavetest[iff][P]:
+                        continue
                     distortion=self.finterpdist(self.ENSLAT[iff][P])
                     # Obs selection around point P
                     iobs = np.where((np.abs((np.mod(lon - self.ENSLON[iff][P]+180,360)-180) / km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.))/distortion <= self.DX[iff]) &
