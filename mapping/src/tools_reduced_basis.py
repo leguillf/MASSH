@@ -163,7 +163,6 @@ class RedBasis_QG:
                 
                 nwave += ntheta*2*nt
                 
-        print(nwave)
 
         
 
@@ -266,59 +265,58 @@ class RedBasis_QG:
         for iff in range(self.nf):
             for P in range(self.NP[iff]):
                     if self.wavetest[iff][P]:
-                        continue
-                    distortion=self.finterpdist(self.ENSLAT[iff][P])
-                    # Obs selection around point P
-                    iobs = np.where((np.abs((np.mod(lon - self.ENSLON[iff][P]+180,360)-180) / km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.))/distortion <= self.DX[iff]) &
-                                (np.abs((lat - self.ENSLAT[iff][P]) / km2deg) <= self.DX[iff]))[0]
-                    xx = (np.mod(lon[iobs] - self.ENSLON[iff][P]+180,360)-180) / km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) /distortion
-                    yy = (lat[iobs] - self.ENSLAT[iff][P]) / km2deg
-
-                    # Spatial tapering shape of the wavelet and its derivative if velocity
-                    facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) 
-                
-                    enstloc = self.enst[iff][P]
-                    for it in range(len(enstloc)):
-                        nobs = 0
-                        iiobs=[]
-                        if iobs.shape[0] > 0:
-                            if coordtype=='reg':
-                                diff = time - enstloc[it]
-                                iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0] 
-                                for i2 in iobs2:
-                                    for i in iobs:
-                                        iiobs.append(np.ravel_multi_index(
-                                            (i2,i), (len(time),len(lon))))
-                                nobs = len(iiobs)
-                            else:
-                                diff = time[iobs] - enstloc[it]
-                                iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0]
-                                iiobs = iobs[iobs2]
-                                nobs = iiobs.shape[0]
-
-                            if nobs > 0:
-                                tt2 = diff[iobs2]
-                                fact = mywindow_flux(tt2 / self.tdec[iff][P])
-
-                        for itheta in range(self.ntheta):
-                            kx = self.k[iff] * np.cos(self.theta[itheta])
-                            ky = self.k[iff] * np.sin(self.theta[itheta])
-                            for phase in [0, np.pi / 2]:
-                                iwave += 1
-                                if ((iwave >= iwave0) & (iwave <iwave1)):
-                                    if ((nobs > 0)):
-                                        if compute_g:
-                                            G[0][iwave-iwave0] = nobs
-                                            if coordtype=='reg':
-                                                G[1][ind_tmp:ind_tmp+nobs] = iiobs
-                                                G[2][ind_tmp:ind_tmp+nobs] = np.sqrt(2) * np.outer(fact,np.cos(kx*(xx)+ky*(yy)-phase)*facs).flatten()
-                                            ind_tmp += nobs
-                              
-                                        if compute_geta:
-                                            if coordtype=='reg':
-                                                Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-phase)*facs)
-                                            else:
-                                                Geta[iiobs] += eta[iwave] * np.sqrt(2)*np.cos(kx*(xx[iobs2])+ky*(yy[iobs2])-phase)*facs[iobs2]*fact
+                        distortion=self.finterpdist(self.ENSLAT[iff][P])
+                        # Obs selection around point P
+                        iobs = np.where((np.abs((np.mod(lon - self.ENSLON[iff][P]+180,360)-180) / km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.))/distortion <= self.DX[iff]) &
+                                    (np.abs((lat - self.ENSLAT[iff][P]) / km2deg) <= self.DX[iff]))[0]
+                        xx = (np.mod(lon[iobs] - self.ENSLON[iff][P]+180,360)-180) / km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) /distortion
+                        yy = (lat[iobs] - self.ENSLAT[iff][P]) / km2deg
+    
+                        # Spatial tapering shape of the wavelet and its derivative if velocity
+                        facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) 
+                    
+                        enstloc = self.enst[iff][P]
+                        for it in range(len(enstloc)):
+                            nobs = 0
+                            iiobs=[]
+                            if iobs.shape[0] > 0:
+                                if coordtype=='reg':
+                                    diff = time - enstloc[it]
+                                    iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0] 
+                                    for i2 in iobs2:
+                                        for i in iobs:
+                                            iiobs.append(np.ravel_multi_index(
+                                                (i2,i), (len(time),len(lon))))
+                                    nobs = len(iiobs)
+                                else:
+                                    diff = time[iobs] - enstloc[it]
+                                    iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0]
+                                    iiobs = iobs[iobs2]
+                                    nobs = iiobs.shape[0]
+    
+                                if nobs > 0:
+                                    tt2 = diff[iobs2]
+                                    fact = mywindow_flux(tt2 / self.tdec[iff][P])
+    
+                            for itheta in range(self.ntheta):
+                                kx = self.k[iff] * np.cos(self.theta[itheta])
+                                ky = self.k[iff] * np.sin(self.theta[itheta])
+                                for phase in [0, np.pi / 2]:
+                                    iwave += 1
+                                    if ((iwave >= iwave0) & (iwave <iwave1)):
+                                        if ((nobs > 0)):
+                                            if compute_g:
+                                                G[0][iwave-iwave0] = nobs
+                                                if coordtype=='reg':
+                                                    G[1][ind_tmp:ind_tmp+nobs] = iiobs
+                                                    G[2][ind_tmp:ind_tmp+nobs] = np.sqrt(2) * np.outer(fact,np.cos(kx*(xx)+ky*(yy)-phase)*facs).flatten()
+                                                ind_tmp += nobs
+                                  
+                                            if compute_geta:
+                                                if coordtype=='reg':
+                                                    Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-phase)*facs)
+                                                else:
+                                                    Geta[iiobs] += eta[iwave] * np.sqrt(2)*np.cos(kx*(xx[iobs2])+ky*(yy[iobs2])-phase)*facs[iobs2]*fact
                                         
         if compute_g and compute_geta:           
             return [np.copy(G[0]), np.copy(G[1][:ind_tmp]), np.copy(G[2][:ind_tmp])],Geta
