@@ -504,7 +504,6 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Forward propagation
     State0 = State.free()
     date = config.init_date
-    iflux = 0
     State0.save_output(date)
     for i in range(len(var.checkpoint)-1):
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
@@ -517,12 +516,12 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date)
         # add Flux
-        if var.checkpoint[i] in var.checkpoint_flux:
-            _var = State0.getvar(ind=State.get_indobs())
-            State0.setvar(_var + nstep*Model.dt*F[iflux]/(3600*24),
-                         ind=State.get_indobs())
-            iflux += 1
-
+        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                           compute_geta=True,eta=Xa).reshape((State.ny,State.nx))  
+        _var = State0.getvar(ind=State.get_indobs())
+        State0.setvar(_var + nstep*Model.dt*F/(3600*24),
+                     ind=State.get_indobs())
     
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
