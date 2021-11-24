@@ -296,8 +296,6 @@ Npix_H = 4 # Number of pixels to perform projection y=Hx
 
 checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
 
-checkpoint_flux = 1 # Number of model timesteps separating two consecutive flux forcing 
-
 window_length = timedelta(days=3) # Length of the 4Dvar time window
 
 window_save = timedelta(days=1) # Length of the saving 4Dvar time window

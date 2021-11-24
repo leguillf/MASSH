@@ -234,7 +234,7 @@ class RedBasis_QG:
         
         
     def operg(self, coords=None, coords_name=None, compute_g=False, 
-            compute_geta=False, eta=None, 
+            compute_geta=False, eta=None, transpose=False,
             coordtype='scattered', iwave0=0, iwave1=None,
             int_type='i8', float_type='f8'):
         
@@ -247,12 +247,22 @@ class RedBasis_QG:
         lon = coords[coords_name['lon']]
         lat = coords[coords_name['lat']]
         time = coords[coords_name['time']]
-
+        
+        
+        if hasattr(time,'__len__'):
+            nt = len(time)
+        else:
+            nt = 1
+            time = [time]
+        
         if compute_geta:
-            if coordtype=='reg':
-                Geta = np.zeros((len(time),len(lon)))
+            if transpose:
+                Geta = np.zeros((self.nwave))
             else:
-                Geta = np.zeros((len(time)))
+                if coordtype=='reg':
+                    Geta = np.zeros((nt,len(lon)))
+                else:
+                    Geta = np.zeros((nt))
                 
         if compute_g:
             G=[None]*3
@@ -286,7 +296,7 @@ class RedBasis_QG:
                                     for i2 in iobs2:
                                         for i in iobs:
                                             iiobs.append(np.ravel_multi_index(
-                                                (i2,i), (len(time),len(lon))))
+                                                (i2,i), (nt,len(lon))))
                                     nobs = len(iiobs)
                                 else:
                                     diff = time[iobs] - enstloc[it]
@@ -296,7 +306,8 @@ class RedBasis_QG:
     
                                 if nobs > 0:
                                     tt2 = diff[iobs2]
-                                    fact = mywindow_flux(tt2 / self.tdec[iff][P])
+                                    fact = mywindow(tt2 / self.tdec[iff][P])
+                                    fact /= 3*self.tdec[iff][P] # For flux
     
                             for itheta in range(self.ntheta):
                                 kx = self.k[iff] * np.cos(self.theta[itheta])
@@ -313,10 +324,16 @@ class RedBasis_QG:
                                                 ind_tmp += nobs
                                   
                                             if compute_geta:
-                                                if coordtype=='reg':
-                                                    Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-phase)*facs)
+                                                if transpose:
+                                                    Geta[iwave] = np.sum(eta[iobs2[0]:iobs2[-1]+1,iobs] * np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-phase)*facs))
                                                 else:
-                                                    Geta[iiobs] += eta[iwave] * np.sqrt(2)*np.cos(kx*(xx[iobs2])+ky*(yy[iobs2])-phase)*facs[iobs2]*fact
+                                                    if coordtype=='reg':
+                                                        Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-phase)*facs)
+                                                    else:
+                                                        Geta[iiobs] += eta[iwave] * np.sqrt(2)*np.cos(kx*(xx[iobs2])+ky*(yy[iobs2])-phase)*facs[iobs2]*fact
+                                            
+                                                
+
                                         
         if compute_g and compute_geta:           
             return [np.copy(G[0]), np.copy(G[1][:ind_tmp]), np.copy(G[2][:ind_tmp])],Geta
