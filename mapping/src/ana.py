@@ -496,11 +496,6 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Save minimum for next experiments
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
         pickle.dump(Xa,f)
-
-    # compute Fluxes
-    F = comp.operg(coords=var.coords,coords_name=var.coords_name, coordtype='reg', 
-                   compute_geta=True,eta=Xa).reshape((len(var.coords[2]),
-                                                      State.ny,State.nx))
     # Forward propagation
     State0 = State.free()
     date = config.init_date
@@ -519,6 +514,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
                            compute_geta=True,eta=Xa).reshape((State.ny,State.nx))  
+    
         _var = State0.getvar(ind=State.get_indobs())
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),
                      ind=State.get_indobs())

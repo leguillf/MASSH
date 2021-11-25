@@ -9,9 +9,10 @@ import os,sys
 import xarray as xr 
 import numpy as np 
 import pandas as pd 
-from datetime import timedelta
+from datetime import timedelta,datetime
 from src import grad_tool as grad_tool
 from src import grid as grid
+
 
 from scipy.sparse import csc_matrix
 
@@ -359,7 +360,7 @@ class Variational_QG_wave:
         
         
     def cost(self,X0):
-        
+                
         # initial state
         State = self.State.free()
         
@@ -381,6 +382,8 @@ class Variational_QG_wave:
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
         for i in range(len(self.checkpoint)-1):
+            
+            
             timestamp = self.M.timestamps[self.checkpoint[i]]
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
             
@@ -388,7 +391,8 @@ class Variational_QG_wave:
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
-                
+            
+            
             # 2. Run forward model
             self.M.step(State,nstep=nstep)
             
@@ -404,13 +408,14 @@ class Variational_QG_wave:
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
             
+            
         if self.isobs[-1]:
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-
+        
         return J
     
         

@@ -26,7 +26,8 @@ class RedBasis_QG:
         self.LAT_MIN = config.lat_min
         self.LAT_MAX = config.lat_max   
         
-        self.C = config.c
+        self.km2deg=1./110
+        
         
         self.facns= 1. #factor for wavelet spacing= space
         self.facnlt= 2.
@@ -50,12 +51,16 @@ class RedBasis_QG:
         self.file_aux = config.file_aux
         self.filec_aux = config.filec_aux
         self.gsize_max = config.gsize_max
+        self.kind_flux = config.kind_flux
+        
+        # Dictionnaries to save wave coefficients and indexes for repeated runs
+        self.indx = {}
+        self.indt = {}
+        self.facGeta = {}
         
      
 
     def set_basis(self,return_qinv=False):
-
-        km2deg=1./110
         
         # Definition of the wavelet basis in the domain
         lat_tmp = np.arange(-90,90,0.1)
@@ -99,14 +104,15 @@ class RedBasis_QG:
         lonmax=self.LON_MAX
         
         if (self.LON_MAX<self.LON_MIN): lonmax=self.LON_MAX+360.
+            
         for iff in range(nf):
             ENSLON[iff]=[]
             ENSLAT[iff]=[]
-            ENSLAT1 = np.arange(self.LAT_MIN-(DX[iff]-DXG[iff])*km2deg,self.LAT_MAX+DX[iff]*km2deg,DXG[iff]*km2deg)
+            ENSLAT1 = np.arange(self.LAT_MIN-(DX[iff]-DXG[iff])*self.km2deg,self.LAT_MAX+DX[iff]*self.km2deg,DXG[iff]*self.km2deg)
             for I in range(len(ENSLAT1)):
-                ENSLON1 = np.mod(np.arange(self.LON_MIN -(DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*km2deg*finterpdist(ENSLAT1[I]),
-                        lonmax+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*km2deg*finterpdist(ENSLAT1[I]),
-                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*km2deg*finterpdist(ENSLAT1[I])) , 360)
+                ENSLON1 = np.mod(np.arange(self.LON_MIN -(DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
+                        lonmax+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
+                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I])) , 360)
                 ENSLAT[iff]=np.concatenate(([ENSLAT[iff],np.repeat(ENSLAT1[I],len(ENSLON1))]))
                 ENSLON[iff]=np.concatenate(([ENSLON[iff],ENSLON1]))
 
@@ -123,8 +129,8 @@ class RedBasis_QG:
                 tdec[-1].append(list())
                 Cb1[-1].append(list())
 
-                dlon = DX[iff]*km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)*finterpdist(ENSLAT[iff][P])
-                dlat = DX[iff]*km2deg
+                dlon = DX[iff]*self.km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)*finterpdist(ENSLAT[iff][P])
+                dlat = DX[iff]*self.km2deg
                 elon = np.linspace(ENSLON[iff][P]-dlon,ENSLON[iff][P]+dlon,10)
                 elat = np.linspace(ENSLAT[iff][P]-dlat,ENSLAT[iff][P]+dlat,10)
                 elon2,elat2 = np.meshgrid(elon,elat)
@@ -156,30 +162,27 @@ class RedBasis_QG:
                 tdecp=(1./ff[iff])*1000/cp/86400/4
                 if tdecp<tdec[-1][-1]: tdec[-1][-1]=tdecp
                 
-                try: enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
-                except: pass
+                enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
+
                 nt = len(enst[iff][P])
-                
-                
+            
                 nwave += ntheta*2*nt
                 
 
-        
-
-        # Fill the Q diagonal matrix (expected variace for each wavelet)
+        # Fill the Q diagonal matrix (expected variance for each wavelet)            
         self.wavetest = [None]*nf
         Q = np.zeros((nwave))
-        iwave = -1
+        iwave = 0
         self.iff_wavebounds = [None]*(nf+1)
         self.P_wavebounds = [None]*(nf+1)
           
         # Loop on all wavelets of given pseudo-period
         for iff in range(nf):
-            self.iff_wavebounds[iff] = iwave+1
+            self.iff_wavebounds[iff] = iwave
             self.P_wavebounds[iff] = [None]*(NP[iff]+1)
             self.wavetest[iff] = np.ones((NP[iff]), dtype=bool)
             for P in range(NP[iff]):
-                self.P_wavebounds[iff][P] = iwave+1
+                self.P_wavebounds[iff][P] = iwave
                 PSDLOC = abs(finterpPSDS((ff[iff],ENSLAT[iff][P],ENSLON[iff][P])))
                 C = Cb1[iff][P]
                 fc = (2*2*np.pi/86164*np.sin(ENSLAT[iff][P]*np.pi/180.))
@@ -187,23 +190,21 @@ class RedBasis_QG:
                 else:
                     Ro = C / np.abs(fc) /1000.  # Rossby radius (km)
                     if Ro>self.Romax: Ro = self.Romax
-                if ((1./ff[iff] < self.cutRo * Ro) ): self.wavetest[iff][P]=False
-                if tdec[iff][P]<self.tdecmin: 
+
+                if (1./ff[iff] < self.cutRo * Ro) or (tdec[iff][P]<self.tdecmin) or np.isnan(PSDLOC) or np.isnan(Cb1[iff][P]) or (Cb1[iff][P]==0):
                     self.wavetest[iff][P]=False
-                if np.isnan(PSDLOC): self.wavetest[iff][P]=False
-                if ((np.isnan(Cb1[iff][P]))|(Cb1[iff][P]==0)): self.wavetest[iff][P]=False
+                    
                 if self.wavetest[iff][P]==True:
-                    for it in range(len(enst[iff][P])):
-                        for itheta in range(len(theta)):
-                            iwave += 1
-                            Q[iwave] = PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)
-                            iwave += 1
-                            Q[iwave] = PSDLOC*ff[iff]**2 * self.facQ* np.exp(-3*(self.cutRo * Ro*ff[iff])**3)
+                    nt = len(enst[iff][P])
+                    _nwave = 2*nt*ntheta
+                    Q[iwave:iwave+_nwave] = PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)
+                    iwave += _nwave
+                
 
-            self.P_wavebounds[iff][P+1] = iwave +1
-        self.iff_wavebounds[iff+1] = iwave +1
+            self.P_wavebounds[iff][P+1] = iwave 
+        self.iff_wavebounds[iff+1] = iwave 
 
-        nwave = iwave+1
+        nwave = iwave
         Q=Q[:nwave]
 
         self.DX=DX
@@ -238,12 +239,10 @@ class RedBasis_QG:
             coordtype='scattered', iwave0=0, iwave1=None,
             int_type='i8', float_type='f8'):
         
-
+        
+        
         if iwave1==None: iwave1=self.nwave
 
-        km2deg=1./110 # A bouger, redondant
-
-    
         lon = coords[coords_name['lon']]
         lat = coords[coords_name['lat']]
         time = coords[coords_name['time']]
@@ -255,6 +254,7 @@ class RedBasis_QG:
             nt = 1
             time = [time]
         
+        Geta = None
         if compute_geta:
             if transpose:
                 Geta = np.zeros((self.nwave))
@@ -263,78 +263,109 @@ class RedBasis_QG:
                     Geta = np.zeros((nt,len(lon)))
                 else:
                     Geta = np.zeros((nt))
-                
+        
+        G=[None]*3
         if compute_g:
-            G=[None]*3
             G[0]=np.zeros((iwave1-iwave0), dtype=int_type)
             G[1]=np.empty((self.gsize_max), dtype=int_type)
             G[2]=np.empty((self.gsize_max), dtype=float_type)
             ind_tmp = 0
-
-        iwave = -1
+            
+        iwave = 0
         for iff in range(self.nf):
             for P in range(self.NP[iff]):
                     if self.wavetest[iff][P]:
-                        distortion=self.finterpdist(self.ENSLAT[iff][P])
+                        
+                        if nt==1 and (iff,P) not in self.indt:
+                            self.indt[(iff,P)] = {}
+                            
+                        if coordtype=='reg' and nt==1 and (iff,P) not in self.facGeta:
+                            self.facGeta[(iff,P)] = {}
+                            
                         # Obs selection around point P
-                        iobs = np.where((np.abs((np.mod(lon - self.ENSLON[iff][P]+180,360)-180) / km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.))/distortion <= self.DX[iff]) &
-                                    (np.abs((lat - self.ENSLAT[iff][P]) / km2deg) <= self.DX[iff]))[0]
-                        xx = (np.mod(lon[iobs] - self.ENSLON[iff][P]+180,360)-180) / km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) /distortion
-                        yy = (lat[iobs] - self.ENSLAT[iff][P]) / km2deg
+                        if (iff,P) in self.indx:
+                            iobs,xx,yy,facs = self.indx[(iff,P)]
+                        else:
+                            distortion=self.finterpdist(self.ENSLAT[iff][P])
+                            iobs = np.where((np.abs((np.mod(lon - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.))/distortion <= self.DX[iff]) &
+                                        (np.abs((lat - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff]))[0]
+                            xx = (np.mod(lon[iobs] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) /distortion
+                            yy = (lat[iobs] - self.ENSLAT[iff][P]) / self.km2deg
+                            # Spatial tapering shape of the wavelet and its derivative if velocity
+                            facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) 
+                            self.indx[(iff,P)] = (iobs,xx,yy,facs)
     
-                        # Spatial tapering shape of the wavelet and its derivative if velocity
-                        facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) 
-                    
                         enstloc = self.enst[iff][P]
                         for it in range(len(enstloc)):
-                            nobs = 0
-                            iiobs=[]
-                            if iobs.shape[0] > 0:
-                                if coordtype=='reg':
-                                    diff = time - enstloc[it]
-                                    iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0] 
-                                    for i2 in iobs2:
-                                        for i in iobs:
-                                            iiobs.append(np.ravel_multi_index(
-                                                (i2,i), (nt,len(lon))))
-                                    nobs = len(iiobs)
-                                else:
-                                    diff = time[iobs] - enstloc[it]
-                                    iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0]
-                                    iiobs = iobs[iobs2]
-                                    nobs = iiobs.shape[0]
-    
-                                if nobs > 0:
-                                    tt2 = diff[iobs2]
-                                    fact = mywindow(tt2 / self.tdec[iff][P])
-                                    fact /= 3*self.tdec[iff][P] # For flux
-    
-                            for itheta in range(self.ntheta):
-                                kx = self.k[iff] * np.cos(self.theta[itheta])
-                                ky = self.k[iff] * np.sin(self.theta[itheta])
-                                for phase in [0, np.pi / 2]:
-                                    iwave += 1
-                                    if ((iwave >= iwave0) & (iwave <iwave1)):
-                                        if ((nobs > 0)):
+                            
+                            if nt==1 and (time[0],it) not in self.facGeta[(iff,P)]:
+                                self.facGeta[(iff,P)][(time[0],it)] = {}
+                                
+                            if nt==1 and (time[0],it) in self.indt[(iff,P)]:
+                                    iobs2,iiobs,nobs,fact = self.indt[iff,P][time[0],it]
+                            else:
+                                nobs = 0
+                                iiobs=[]
+                                if iobs.shape[0] > 0:
+                                    if coordtype=='reg':
+                                        diff = time - enstloc[it]
+                                        iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0] 
+                                        for i2 in iobs2:
+                                            for i in iobs:
+                                                iiobs.append(np.ravel_multi_index(
+                                                    (i2,i), (nt,len(lon))))
+                                        nobs = len(iiobs)
+                                    else:
+                                        diff = time[iobs] - enstloc[it]
+                                        iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0]
+                                        iiobs = iobs[iobs2]
+                                        nobs = iiobs.shape[0]
+        
+                                    if nobs > 0:
+                                        tt2 = diff[iobs2]
+                                        fact = mywindow_flux(tt2 / self.tdec[iff][P])
+                                    else:
+                                        fact = None
+                                        
+                                    if nt==1:
+                                        self.indt[iff,P][time[0],it] = (iobs2,iiobs,nobs,fact)
+
+                            if ((nobs == 0)):
+                                iwave += 2*self.ntheta
+                            else:
+                                for itheta in range(self.ntheta):
+                                    
+                                    if coordtype=='reg' and nt==1 and itheta in self.facGeta[(iff,P)][(time[0],it)]:
+                                        facGeta = self.facGeta[iff,P][time[0],it][itheta]
+                                    else:
+                                        kx = self.k[iff] * np.cos(self.theta[itheta])
+                                        ky = self.k[iff] * np.sin(self.theta[itheta])
+                                        if coordtype=='reg':
+                                            facGeta = [[],[]]
+                                            facGeta[0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
+                                            facGeta[1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
+                                            self.facGeta[iff,P][time[0],it][itheta] = facGeta
+                                        
+                                    for iphase,phase in enumerate([0, np.pi / 2]):
+                                        if ((iwave >= iwave0) & (iwave <iwave1)):
                                             if compute_g:
                                                 G[0][iwave-iwave0] = nobs
                                                 if coordtype=='reg':
                                                     G[1][ind_tmp:ind_tmp+nobs] = iiobs
-                                                    G[2][ind_tmp:ind_tmp+nobs] = np.sqrt(2) * np.outer(fact,np.cos(kx*(xx)+ky*(yy)-phase)*facs).flatten()
+                                                    G[2][ind_tmp:ind_tmp+nobs] = facGeta[iphase].flatten()
                                                 ind_tmp += nobs
                                   
                                             if compute_geta:
                                                 if transpose:
-                                                    Geta[iwave] = np.sum(eta[iobs2[0]:iobs2[-1]+1,iobs] * np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-phase)*facs))
+                                                    Geta[iwave] = np.sum(eta[iobs2[0]:iobs2[-1]+1,iobs] * facGeta[iphase])
                                                 else:
                                                     if coordtype=='reg':
-                                                        Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-phase)*facs)
+                                                        Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * facGeta[iphase]
                                                     else:
                                                         Geta[iiobs] += eta[iwave] * np.sqrt(2)*np.cos(kx*(xx[iobs2])+ky*(yy[iobs2])-phase)*facs[iobs2]*fact
-                                            
-                                                
+                                            iwave += 1
 
-                                        
+
         if compute_g and compute_geta:           
             return [np.copy(G[0]), np.copy(G[1][:ind_tmp]), np.copy(G[2][:ind_tmp])],Geta
         elif compute_g and not compute_geta:
@@ -343,7 +374,7 @@ class RedBasis_QG:
             return Geta
         else:
             return
-
+    
 
 def mywindow(x): #xloc must be between -1 and 1
      y  = np.cos(x*0.5*np.pi)**2
