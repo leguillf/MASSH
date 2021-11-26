@@ -197,7 +197,7 @@ class RedBasis_QG:
                 if self.wavetest[iff][P]==True:
                     nt = len(enst[iff][P])
                     _nwave = 2*nt*ntheta
-                    Q[iwave:iwave+_nwave] = {PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)}
+                    Q[iwave:iwave+_nwave] = PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)
                     iwave += _nwave
                 
 

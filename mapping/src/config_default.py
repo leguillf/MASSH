@@ -381,7 +381,7 @@ facRo= 8.
 
 Romax= 150.
 
-facQ= 1,
+facQ= 1
 
 depth1= 200.  
 
