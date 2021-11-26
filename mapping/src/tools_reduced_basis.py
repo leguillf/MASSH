@@ -29,30 +29,29 @@ class RedBasis_QG:
         self.km2deg=1./110
         
         
-        self.facns= 1. #factor for wavelet spacing= space
-        self.facnlt= 2.
-        self.npsp= 3.5 # Defines the wavelet shape (nb de pseudopériode)
-        self.facpsp= 1.5 #1.5 # factor to fix df between wavelets 
+        self.facns= config.facns #factor for wavelet spacing= space
+        self.facnlt= config.facnlt
+        self.npsp= config.npsp # Defines the wavelet shape (nb de pseudopériode)
+        self.facpsp= config.facpsp #1.5 # factor to fix df between wavelets 
         self.lmin= config.lmin 
         self.lmax= config.lmax
-        self.cutRo= 1.6
+        self.cutRo= config.cutRo
         self.factdec= config.factdec
         self.tdecmin= config.tdecmin
         self.tdecmax= config.tdecmax
-        self.tssr= 0.5
-        self.facRo= 8.
-        self.Romax= 150. #bidouille avec maxime
+        self.tssr= config.tssr
+        self.facRo= config.facRo
+        self.Romax= config.Romax
         self.facQ= config.facQ
-        self.depth1= 0.
-        self.depth2= 30.
-        self.distortion_eq= 2.
-        self.lat_distortion_eq= 5.
-        self.distortion_eq_law= 2.
+        self.depth1= config.depth1
+        self.depth2= config.depth2
+        self.distortion_eq= config.distortion_eq
+        self.lat_distortion_eq= config.lat_distortion_eq
+        self.distortion_eq_law= config.distortion_eq_law
         self.file_aux = config.file_aux
         self.filec_aux = config.filec_aux
         self.gsize_max = config.gsize_max
-        self.kind_flux = config.kind_flux
-        
+
         # Dictionnaries to save wave coefficients and indexes for repeated runs
         self.indx = {}
         self.indt = {}
@@ -162,7 +161,8 @@ class RedBasis_QG:
                 tdecp=(1./ff[iff])*1000/cp/86400/4
                 if tdecp<tdec[-1][-1]: tdec[-1][-1]=tdecp
                 
-                enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
+                try:enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
+                except: print(f'Warning: unable to estimate ensts for (iff,P)=({iff},{P})')
 
                 nt = len(enst[iff][P])
             
@@ -191,13 +191,13 @@ class RedBasis_QG:
                     Ro = C / np.abs(fc) /1000.  # Rossby radius (km)
                     if Ro>self.Romax: Ro = self.Romax
 
-                if (1./ff[iff] < self.cutRo * Ro) or (tdec[iff][P]<self.tdecmin) or np.isnan(PSDLOC) or np.isnan(Cb1[iff][P]) or (Cb1[iff][P]==0):
+                if np.isnan(tdec[iff][P]) or (1./ff[iff] < self.cutRo * Ro) or (tdec[iff][P]<self.tdecmin) or np.isnan(PSDLOC) or np.isnan(Cb1[iff][P]) or (Cb1[iff][P]==0):
                     self.wavetest[iff][P]=False
                     
                 if self.wavetest[iff][P]==True:
                     nt = len(enst[iff][P])
                     _nwave = 2*nt*ntheta
-                    Q[iwave:iwave+_nwave] = PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)
+                    Q[iwave:iwave+_nwave] = {PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)}
                     iwave += _nwave
                 
 
@@ -237,7 +237,7 @@ class RedBasis_QG:
     def operg(self, coords=None, coords_name=None, compute_g=False, 
             compute_geta=False, eta=None, transpose=False,
             coordtype='scattered', iwave0=0, iwave1=None,
-            int_type='i8', float_type='f8'):
+            int_type='i8', float_type='f8',save_wave_basis=True):
         
         
         
@@ -246,6 +246,9 @@ class RedBasis_QG:
         lon = coords[coords_name['lon']]
         lat = coords[coords_name['lat']]
         time = coords[coords_name['time']]
+        
+        depth = -self.finterpDEPTH((lon,lat))
+        depth[np.isnan(depth)] = 0.
         
         
         if hasattr(time,'__len__'):
@@ -291,9 +294,14 @@ class RedBasis_QG:
                                         (np.abs((lat - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff]))[0]
                             xx = (np.mod(lon[iobs] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) /distortion
                             yy = (lat[iobs] - self.ENSLAT[iff][P]) / self.km2deg
-                            # Spatial tapering shape of the wavelet and its derivative if velocity
-                            facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) 
-                            self.indx[(iff,P)] = (iobs,xx,yy,facs)
+                            # Spatial tapering shape of the wavelet 
+                            facd = np.ones((len(iobs)))
+                            facd = (depth[iobs]-self.depth1)/(self.depth2-self.depth1)
+                            facd[facd>1] = 1.
+                            facd[facd<0] = 0.
+                            facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
+                            if save_wave_basis:
+                                self.indx[(iff,P)] = (iobs,xx,yy,facs)
     
                         enstloc = self.enst[iff][P]
                         for it in range(len(enstloc)):
@@ -327,12 +335,14 @@ class RedBasis_QG:
                                     else:
                                         fact = None
                                         
-                                    if nt==1:
+                                    if nt==1 and save_wave_basis:
                                         self.indt[iff,P][time[0],it] = (iobs2,iiobs,nobs,fact)
 
                             if ((nobs == 0)):
                                 iwave += 2*self.ntheta
+                                
                             else:
+                                
                                 for itheta in range(self.ntheta):
                                     
                                     if coordtype=='reg' and nt==1 and itheta in self.facGeta[(iff,P)][(time[0],it)]:
@@ -344,7 +354,8 @@ class RedBasis_QG:
                                             facGeta = [[],[]]
                                             facGeta[0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
                                             facGeta[1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
-                                            self.facGeta[iff,P][time[0],it][itheta] = facGeta
+                                            if save_wave_basis:
+                                                self.facGeta[iff,P][time[0],it][itheta] = facGeta
                                         
                                     for iphase,phase in enumerate([0, np.pi / 2]):
                                         if ((iwave >= iwave0) & (iwave <iwave1)):

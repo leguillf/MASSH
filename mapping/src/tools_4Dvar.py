@@ -415,7 +415,7 @@ class Variational_QG_wave:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-        
+        State.plot()
         return J
     
         
@@ -456,7 +456,7 @@ class Variational_QG_wave:
             # 4. Read model state
             State.load(os.path.join(self.tmp_DA_path,
                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
-                        
+            
             # 3. Add flux from wavelet
             advar = adState.getvar(ind=State.get_indobs()).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]

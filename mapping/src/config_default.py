@@ -355,17 +355,43 @@ filec_aux = ''
 
 name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
 
-lmin = 80.
+facns= 1. #factor for wavelet spacing= space
 
-lmax = 970.
+facnlt= 2.
 
-factdec = 15
+npsp= 3.5 # Defines the wavelet shape
 
-tdecmin = 2.5
+facpsp= 1.5 #1.5 # factor to fix df between wavelets
 
-tdecmax = 40.
+lmin= 80 
 
-facQ = 1.
+lmax= 970.
+
+cutRo= 1.6
+
+factdec= 15.
+
+tdecmin= 2.5
+
+tdecmax= 30.
+
+tssr= 0.5
+
+facRo= 8.
+
+Romax= 150.
+
+facQ= 1,
+
+depth1= 200.  
+
+depth2= 2000.   
+
+distortion_eq= 2.
+
+lat_distortion_eq= 5.
+
+distortion_eq_law= 2.
 
 gsize_max = 500000000
 
