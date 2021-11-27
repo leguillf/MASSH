@@ -34,17 +34,25 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     
     if config.name_analysis is None: 
         return ana_forward(config,State,Model)
-    if config.name_analysis=='BFN':
+    
+    elif config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
+    
     elif config.name_analysis=='4Dvar' and config.name_model=='QG1L':
         if config.reduced_basis==True:
             return ana_4Dvar_QG_wave(config,State,Model,dict_obs)
         else:
             return ana_4Dvar_QG_init(config,State,Model,dict_obs)
+        
     elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
         return ana_4Dvar_SW(config,State,Model,dict_obs)
+    
+    elif config.name_analysis=='4Dvar' and config.name_model=='QG1L_SW1L':
+        return ana_4Dvar_QG_SW(config,State,Model,dict_obs)
+    
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
+    
     elif config.name_analysis=='HARM':
         return ana_harm(config,State,dict_obs)
     else:
@@ -414,13 +422,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     '''
     from .tools_4Dvar import Obsopt, Cov, Variational_QG_wave
     from .tools_reduced_basis import RedBasis_QG#,RedBasis_ls
-    #from .obs import get_obs
-    
-    print('\n*** create and initialize State ***\n')
-    if config.path_init_4Dvar is not None :
-        with xr.open_dataset(config.path_init_4Dvar) as ds :
-            ssh_b = np.copy(ds.ssh)
-            State.setvar(ssh_b,State.get_indobs())
+
     
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
@@ -535,6 +537,148 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         _var = State0.getvar(ind=State.get_indobs())
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),
                      ind=State.get_indobs())
+    
+    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
+    gc.collect()
+    print()
+    
+    
+def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
+    '''
+    Run a 4Dvar analysis
+    '''
+    from .tools_4Dvar import Obsopt, Cov, Variational_QG_SW
+    from .tools_reduced_basis import RedBasis_QG
+
+    print('\n*** create and initialize State ***\n')
+    if config.path_init_4Dvar is not None :
+        with xr.open_dataset(config.path_init_4Dvar) as ds :
+            ssh_b = np.copy(ds.ssh)
+            State.setvar(ssh_b,State.get_indobs())
+    
+    print('\n*** Observation operator ***\n')
+    H = Obsopt(config,State,dict_obs,Model)
+    
+    print('\n*** Wavelet reduced basis ***\n')
+    comp_qg = RedBasis_QG(config,State)
+    qinv_qg = comp_qg.set_basis(return_qinv=True)
+    
+    ###################
+    # Variational    #
+    ###################
+    print('\n*** Variational ***\n')
+    
+    # Covariance matrix
+    R = Cov(config.sigma_R)
+    _sigma_B = np.zeros((Model.nParams)) 
+    # error on He
+    _sigma_B[Model.sliceHe] = config.sigma_B_He 
+    # error on OBCs
+    if hasattr(config.sigma_B_bc, '__len__'):
+        # Specific value for each tidal cxomponent
+        if len(config.sigma_B_bc) == len(config.w_igws):
+            N_one_component_x = Model.nbcx//len(config.w_igws)
+            N_one_component_y = Model.nbcy//len(config.w_igws)
+            for i,_sigma in enumerate(config.sigma_B_bc):
+                _sigma_B[Model.slicehbcx][
+                    i*N_one_component_x:(i+1)*N_one_component_x] = _sigma
+                _sigma_B[Model.slicehbcy][
+                    i*N_one_component_y:(i+1)*N_one_component_y] = _sigma
+        else:
+            _sigma_B[Model.slicehbcx] = config.sigma_B_bc[0]
+            _sigma_B[Model.slicehbcy] = config.sigma_B_bc[0]
+    else:
+        _sigma_B[Model.slicehbcx] = config.sigma_B_bc
+        _sigma_B[Model.slicehbcy] = config.sigma_B_bc
+    B = Cov(np.concatenate((1/np.sqrt(qinv_qg),_sigma_B)))
+    
+    # backgroud state 
+    Xb = np.zeros((comp_qg.nwave+Model.nParams,))
+    
+    # Cost and Grad functions
+    var = Variational_QG_SW(
+        M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,checkpoint_flux=config.checkpoint_flux,
+        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date)
+    
+    # Initial State 
+    if config.path_init_4Dvar is None:
+        Xopt = var.Xb*0
+    else:
+        # Read previous minimum 
+        with open(config.path_init_4Dvar, 'rb') as f:
+            print('Read previous minimum:',config.path_init_4Dvar)
+            Xopt = pickle.load(f)
+            
+    ###################
+    # Minimization    #
+    ###################
+    print('\n*** Minimization ***\n')
+    J0 = var.cost(Xopt)
+    g0 = var.grad(Xopt)
+    projg0 = np.max(np.abs(g0))
+    print('J0=',"{:e}".format(J0))
+    print('projg0=',"{:e}".format(projg0))
+    
+    
+    def callback(XX,projg0=projg0):
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d_%H%M%S")
+        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
+            pickle.dump(XX,f)
+    
+    options = {'disp': True, 'maxiter': config.maxiter}
+    if config.gtol is not None:
+        options['gtol'] = config.gtol*projg0
+        
+    res = opt.minimize(var.cost,Xopt,
+                    method='L-BFGS-B',
+                    jac=var.grad,
+                    options=options,
+                    callback=callback)
+
+    print ('\nIs the minimization successful? {}'.format(res.success))
+    print ('\nFinal cost function value: {}'.format(res.fun))
+    print ('\nNumber of iterations: {}'.format(res.nit))
+
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    
+    if config.prec:
+        Xa = var.Xb + B.sqr(res.x)
+    else:
+        Xa = var.Xb + res.x
+    
+    Xqg = Xa[:var.comp.nwave]
+    Xsw = Xa[var.comp.nwave:]
+        
+    # Save minimum for next experiments
+    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
+        pickle.dump(Xa,f)
+    # Forward propagation
+    State0 = State.free()
+    date = config.init_date
+    State0.save_output(date)
+    for i in range(len(var.checkpoint)-1):
+        t = Model.T[var.checkpoint[i]]
+        nstep = var.checkpoint[i+1] - var.checkpoint[i]
+        # Forward
+        for j in range(nstep):
+            Model.step(t,State0,Xsw,nstep=nstep)
+            date += timedelta(seconds=config.dtmodel)
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                State0.save_output(date,mdt=Model.mdt)
+        # add Flux
+        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                           compute_geta=True,eta=Xqg).reshape((State.ny,State.nx))  
+    
+        _var = State0.getvar(ind=0)
+        State0.setvar(_var + nstep*Model.dt*F/(3600*24),ind=0)
     
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()

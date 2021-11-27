@@ -33,7 +33,7 @@ class Obsopt:
         self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)
         
-        if State.config['name_model'] in ['SW1L','SW1LM','QG1L'] :
+        if State.config['name_model'] in ['SW1L','SW1LM','QG1L','QG1L_SW1L'] :
             for t in Model.timestamps:
                 if self.isobserved(t):
                     delta_t = [(t - tobs).total_seconds() 
@@ -482,11 +482,11 @@ class Variational_QG_wave:
     
     
 
-class Variational_QG_wave_2:
+class Variational_QG_SW:
     
     def __init__(self, 
-                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None, 
-                 tmp_DA_path=None, init_date=None,checkpoint=1, freq_flux=1, prec=False,compute_test=False):
+                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
+                 tmp_DA_path=None, init_date=None,checkpoint=1, checkpoint_flux=1, prec=False,compute_test=False):
         
         # Objects
         self.M = M # model
@@ -505,57 +505,49 @@ class Variational_QG_wave_2:
         
         # Compute checkpoints
         self.checkpoint = [0]
+        self.checkpoint_flux = [0]
         if H.isobserved(M.timestamps[0]):
             self.isobs = [True]
         else:
             self.isobs = [False]
         check = 0
-        flux = 0
         for i,t in enumerate(M.timestamps[:-1]):
-            if i>0 and (H.isobserved(t) or check==checkpoint or flux==freq_flux):
+            if i>0 and (H.isobserved(t) or check==checkpoint):
                 self.checkpoint.append(i)
                 check = 0
-                if flux==freq_flux:
-                    flux = 0
                 if H.isobserved(t):
                     self.isobs.append(True)
                 else:
                     self.isobs.append(False)
             check += 1
-            flux += 1
         if H.isobserved(M.timestamps[-1]):
             self.isobs.append(True)
         else:
             self.isobs.append(False)   
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
         
-        
-        print(self.checkpoint)
-        
+    
         # preconditioning
         self.prec = prec
         
         # Wavelet reduced basis
-        self.freq_flux = freq_flux # Number of model timestep between two consecutive flux forcing
         self.comp = comp # Wavelet components
-        self.G = {} # Matrix to project wavelet components to the full 3D grid
         self.coords = [None]*3
         self.coords[0] = State.lon.flatten()
         self.coords[1] = State.lat.flatten()
-        step = freq_flux*M.dt/(3600*24)
         self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
-        self.nFluxPoints = len(self.coords[0]) * len(self.coords[1]) * len(self.coords[2])
-        
+        self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
+               
         # Grad test
         if compute_test:
             print('Gradient test:')
-            X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
+            X = (np.random.random(self.comp.nwave+self.M.nParams)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
         
         
     def cost(self,X0):
-        
+                
         # initial state
         State = self.State.free()
         
@@ -570,50 +562,51 @@ class Variational_QG_wave_2:
         else:
             X  = X0 + self.Xb
             Jb = 0
-        
-            
+    
         # Observational cost function evaluation
         Jo = 0.
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
-
+        
+        # split control vector
+        Xqg = X[:self.comp.nwave]
+        Xsw = X[self.comp.nwave:]
+        
         for i in range(len(self.checkpoint)-1):
             
+            
             timestamp = self.M.timestamps[self.checkpoint[i]]
-
-            # Misfit
+            t = self.M.T[self.checkpoint[i]]
+            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            
+            # 1. Misfit
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
-                
                 Jo += misfit.dot(self.R.inv(misfit))
-                
-            # Run forward model
-            nstep = self.checkpoint[i+1] - self.checkpoint[i]
-            self.M.step(State,nstep=nstep)
             
-            # add flux from wavelet
-            coords = [self.coords[0],self.coords[1],[self.coords[2][i]]]
+            
+            # 2. Run forward model
+            self.M.step(t,State,Xsw,nstep=nstep)
+            
+            # 3. Add flux from wavelet
+            coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                             compute_geta=True,eta=X)
-
-            F = F.reshape((State.ny,State.nx))
-                                
-            State.setvar(State.getvar(ind=State.get_indobs()) + nstep*self.M.dt*F/(3600*24),
-                         ind=State.get_indobs())
+                                compute_geta=True,eta=Xqg).reshape((State.ny,State.nx))  
+            var = State.getvar(ind=0)
+            State.setvar(var + nstep*self.M.dt*F/(3600*24),ind=0)
             
-            # Save state for adj computation 
+            # 4. Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
             
-
+            
         if self.isobs[-1]:
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
-            
-            Jo = Jo + misfit.dot(self.R.inv(misfit))  
+            Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-
+        
         return J
     
         
@@ -636,84 +629,57 @@ class Variational_QG_wave_2:
         adState = self.State.free()
         adX = np.zeros_like(X)
         
+        # split control vector
+        Xsw = X[self.comp.nwave:]
+        adXqg = adX[:self.comp.nwave]
+        adXsw = adX[self.comp.nwave:]
+        
         # Current trajectory
         State = self.State.free()
         
         # Last timestamp
         if self.isobs[-1]:
             State.load(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.checkpoint[-1]) + '.nc'))
+                       'model_state_' + str(self.checkpoint[-1]) + '.nc'))
             timestamp = self.M.timestamps[self.checkpoint[-1]]
             misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
-            
             self.H.adj(timestamp,adState,self.R.inv(misfit))
-            
-        # Compute G transpose for last timestamp
-        k = np.max(list(self.G.keys()))
-        Gt = self.compute_G_transpose(self.G[k])
-            
+
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
-            timestamp = self.M.timestamps[self.checkpoint[i]]
-            
-            # Read model state
-            State.load(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
-            
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            t = self.M.T[self.checkpoint[i]]
+ 
+            # 4. Read model state
+            State.load(os.path.join(self.tmp_DA_path,
+                       'model_state_' + str(self.checkpoint[i]) + '.nc'))
             
-            # add flux from wavelet
-            coords = [self.coords[0],self.coords[1],[self.coords[2][i]]]
-            G = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                             compute_g=True,eta=X)
-            Gt = self.compute_G_transpose(G)
-            Y = adState.getvar(ind=State.get_indobs()).flatten()
-            adX += nstep*self.M.dt/(3600*24)* Gt.dot(Y)
+            # 3. Add flux from wavelet
+            advar = adState.getvar(ind=0).flatten()
+            coords = [self.coords[0],self.coords[1],self.coords[2][i]]
+            adXqg += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                                   compute_geta=True,transpose=True,
+                                   eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
-            # Run adjoint model
-            self.M.step_adj(adState, State, nstep=nstep)
+            # 2. Run adjoint model
+            adXsw = self.M.step_adj(t,adState, State, adXsw, Xsw, nstep=nstep) # i+1 --> i
                 
-            # Misfit 
+            # 1. Misfit 
             if self.isobs[i]:
+                timestamp = self.M.timestamps[self.checkpoint[i]]
                 misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-                
+        
+        adX[:self.comp.nwave] = adXqg
+        adX[self.comp.nwave:] = adXsw
+        
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
-        
+
         return g 
     
-    def compute_G_transpose(self,G):
-        cumsize = np.empty((self.comp.nwave + 1), dtype='i8')
-        cumsize[0] = 0
-        cumsize[1:] = np.cumsum(G[0])
-        G_mat = csc_matrix((G[2], G[1], cumsize),
-                            shape=(self.State.ny*self.State.nx, self.comp.nwave), dtype='f8')
-        return G_mat.transpose()
-    
-    
-    def grad_test(self,deg=5,plot=True) :
-        '''
-        performs a gradient test
-         - deg : degree of precision of the test
-        '''
-        
-        X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
-        dX = np.ones(self.comp.nwave)*self.B.sigma 
-        Jx = self.cost(X) # cost in X
-        g = self.grad(X) # grad of cost in X
-        L_result = [[],[]]
-        for i in range(deg) :
-            Jxdx = self.cost(X+dX)
-            test = abs(1 - np.dot(g,dX)/(Jxdx-Jx))
-            print(f'{10**(-i):.1E} , {test:.1E}')
-            dX = 0.1*dX
-            L_result[0].append(10**-i)
-            L_result[1].append(test)
-        if plot :
-            plot_grad_test(L_result)
         
 
 class Variational_QG_init :

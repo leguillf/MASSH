@@ -28,10 +28,10 @@ class RedBasis_QG:
         self.km2deg=1./110
         
         
-        self.facns= config.facns #factor for wavelet spacing= space
+        self.facns= config.facns # factor for wavelet spacing= space
         self.facnlt= config.facnlt
         self.npsp= config.npsp # Defines the wavelet shape (nb de pseudopériode)
-        self.facpsp= config.facpsp #1.5 # factor to fix df between wavelets 
+        self.facpsp= config.facpsp # 1.5 # factor to fix df between wavelets 
         self.lmin= config.lmin 
         self.lmax= config.lmax
         self.cutRo= config.cutRo
@@ -485,8 +485,6 @@ class RedBasis_ls:
 
         if iwave1==None: iwave1=self.nwave
 
-
-
         lon = coords[coords_name['lon']]
         lat = coords[coords_name['lat']]
         time = coords[coords_name['time']]
@@ -520,7 +518,7 @@ class RedBasis_ls:
                 xx = (np.mod(lon[iobs] - self.ENSLON[P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[P] * np.pi / 180.)
                 yy = (lat[iobs] - self.ENSLAT[P]) / self.km2deg
 
-                # Spatial tapering shape of the wavelet and its derivative if velocity
+                # Spatial tapering shape of the wavelet 
                 facs = mywindow(xx / self.DX) * mywindow(yy / self.DX)
             
             else: iobs=np.empty((0))
@@ -564,8 +562,6 @@ class RedBasis_ls:
                             else:
                                 Geta[iiobs] += eta[iwave] * (facs[iobs2]*fact)**2
                         
-
-
         if compute_g and compute_geta:           
             return [np.copy(G[0]), np.copy(G[1][:ind_tmp]), np.copy(G[2][:ind_tmp])],Geta
         elif compute_g and not compute_geta:

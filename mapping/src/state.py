@@ -80,6 +80,8 @@ class State:
             self.ini_var_sw1l(config)
         elif config.name_model=='SW1LM':
             self.ini_var_sw1lm(config)
+        elif config.name_model=='QG1L_SW1L':
+            self.ini_var_qg1l_sw1l(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
         # Read output variable from previous run 
@@ -206,7 +208,7 @@ class State:
                 print('Warning: For SW1L: wrong number variable names')
             self.name_var = ['u','v','h']
         if self.first:
-                print(self.name_var)
+            print(self.name_var)
             
         for i, var in enumerate(self.name_var):
             if i==0:
@@ -247,7 +249,25 @@ class State:
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
-            
+        
+    def ini_var_qg1l_sw1l(self,config):
+        if len(self.name_var) != 5:
+            if self.first:
+                print('Warning: For SW1L: wrong number variable names')
+            self.name_var = ["h_bm","u_it","v_it","h_it","h"]             
+        if self.first:
+            print(self.name_var)
+        for i, var in enumerate(self.name_var):
+            if i in [0,3,4]:
+                # SSH
+                self.var[var] = np.zeros((self.ny,self.nx))
+            elif i==1:
+                # U
+                self.var[var] = np.zeros((self.ny,self.nx-1))
+            elif i==2:
+                # V
+                self.var[var] = np.zeros((self.ny-1,self.nx))
+        
             
         
     def ini_var_restart(self):
@@ -352,7 +372,7 @@ class State:
             vars_to_save = [self.getvar(ind=indsave)]
          
         var = {}              
-        for name_var,var_to_save in zip(names_var,vars_to_save):
+        for i,(name_var,var_to_save) in enumerate(zip(names_var,vars_to_save)):
             # Apply Mask
             if self.mask is not None:
                 var_to_save[self.mask] = np.nan
@@ -374,10 +394,11 @@ class State:
         
             # If MDT provided, compute SSH from state variable (which is supposed to be SLA)
             if mdt is not None:
-                name_ssh = 'ssh'
-                if name_var.lower=='ssh':
-                    name_ssh = 'ssh_mdt'
-                var[name_ssh] =(dims,var_to_save + mdt[np.newaxis,:,:])
+                if self.config['name_model']=='QG1L_SW1L' and i!=1: # Avoid IT ssh (we could do better...)
+                    name_ssh = 'ssh'
+                    if name_var.lower=='ssh':
+                        name_ssh = 'ssh_mdt'
+                    var[name_ssh] =(dims,var_to_save + mdt[np.newaxis,:,:])
 
             
         ds = xr.Dataset(var,coords=coords)
@@ -542,6 +563,8 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return 2 + (self.config.Nmodes)*3
+        elif self.config['name_model']=='QG1L_SW1L' :
+            return 4
         else :
             return 0
             
@@ -555,6 +578,8 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]
+        elif self.config['name_model']=='QG1L_SW1L' :
+            return 0,3,4
         else :
             return 0
 
