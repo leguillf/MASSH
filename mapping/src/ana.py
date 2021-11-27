@@ -17,6 +17,7 @@ import gc
 import pandas as pd
 import xarray as xr
 from importlib.machinery import SourceFileLoader 
+from scipy.sparse import csc_matrix, coo_matrix, csr_matrix
 
 from . import grid
 
@@ -412,7 +413,8 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     Run a 4Dvar analysis
     '''
     from .tools_4Dvar import Obsopt, Cov, Variational_QG_wave
-    from .tools_reduced_basis import RedBasis_QG
+    from .tools_reduced_basis import RedBasis_QG#,RedBasis_ls
+    #from .obs import get_obs
     
     print('\n*** create and initialize State ***\n')
     if config.path_init_4Dvar is not None :
@@ -424,8 +426,23 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    comp = RedBasis_QG(config,State)
-    qinv = comp.set_basis(return_qinv=True)
+    # print('--> large scales')
+    # comp_ls = RedBasis_ls(config,State)
+    # qinv_ls = comp_ls.set_basis(return_qinv=True)
+    # print('--> meso scales')
+    comp_qg = RedBasis_QG(config,State)
+    qinv_qg = comp_qg.set_basis(return_qinv=True)
+    
+    # print('\n*** Static OI ***\n')
+    # box = [comp_ls.LON_MIN, comp_ls.LON_MAX, comp_ls.LAT_MIN, comp_ls.LAT_MAX, comp_ls.TIME_MIN, comp_ls.TIME_MAX]
+    # values, coords, coords_att = get_obs(dict_obs,box)
+    # G = comp_ls.operg(coords=coords,coords_name=coords_att, compute_g=True)
+    # cumsize = np.empty((comp_ls.nwave + 1))
+    # cumsize[0] = 0
+    # cumsize[1:] = np.cumsum(G[0])
+    # G_mat = csr_matrix(csc_matrix((G[2], G[1], cumsize),   shape=(values.size, comp_ls.nwave)))
+    # X_ls = solve_pcg(G_mat, qinv_ls, config.sigma_R**(-2)*values)
+    
     
     print('\n*** Variational ***\n')
     # Covariance matrix
@@ -434,13 +451,13 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         B = Cov(config.sigma_B)
         R = Cov(config.sigma_R)
     else:
-        B = Cov(1/np.sqrt(qinv))
+        B = Cov(1/np.sqrt(qinv_qg))
         R = Cov(config.sigma_R)
     # backgroud state 
-    Xb = np.zeros((comp.nwave,))
+    Xb = np.zeros((comp_qg.nwave,))
     # Cost and Grad functions
     var = Variational_QG_wave(
-        M=Model, H=H, State=State, B=B, R=R, comp=comp, Xb=Xb, 
+        M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,checkpoint_flux=config.checkpoint_flux,
         prec=config.prec,compute_test=config.compute_test,init_date=config.init_date)
     # Initial State 
@@ -509,7 +526,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
-                State0.save_output(date)
+                State0.save_output(date,mdt=Model.mdt)
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
@@ -1127,7 +1144,51 @@ def ana_harm(config,State,dict_obs=None):
         date += config.saveoutput_time_step
     
     
+def solve_pcg(G, comp_Qinv, obs_invnois2,eps_rest=1.e-7,niter=800):
+
+    comp_CFAC = comp_Qinv**-0.5
     
+    comp_rest = G.T.dot(obs_invnois2) * comp_CFAC
+
+    comp_p = 1*comp_rest
+    comp_x = np.zeros_like((comp_rest))
+
+    rest = np.inner(comp_rest, comp_rest)
+    rest0 = +rest
+
+    itr = int(-1)
+    rest2 = 0
+    while ((rest / rest0 > eps_rest) & (itr < niter)):
+        itr += 1
+        ###########################################
+        # Compute A*p
+        ###########################################
+        cvec = G.T.dot(G.dot(comp_p * comp_CFAC) * obs_invnois2)
+        comp_Ap =  comp_p * comp_Qinv * comp_CFAC**2 + cvec * comp_CFAC
+
+        if itr >0: rest = +rest2
+
+        tmp = np.inner(comp_p, comp_Ap)
+        alphak = rest / tmp
+
+        ###########################################
+        # New state
+        ###########################################
+        comp_x += alphak * comp_p
+
+        # ###########################################
+        # New direction of descent
+        ###########################################
+        rest2 = np.inner(comp_rest - alphak * comp_Ap, comp_rest - alphak * comp_Ap)
+        betak = rest2 / rest
+
+        # Loop updates
+        comp_p *= betak
+        comp_p += comp_rest - alphak * comp_Ap 
+        comp_rest += -alphak * comp_Ap      
+            
+    return comp_x * comp_CFAC
+
     
     
     

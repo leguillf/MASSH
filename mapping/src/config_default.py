@@ -381,7 +381,7 @@ facRo= 8.
 
 Romax= 150.
 
-facQ= 1,
+facQ= 1
 
 depth1= 200.  
 
@@ -403,12 +403,13 @@ gsize_max = 500000000
 # - path_obs: (string) if set to None, observations are saved in *tmp_DA_path*
 # - detrend: (bool) apply a 2D detrending on observations
 
-
 satellite = []
 
 path_obs = None
 
 detrend = False
+
+substract_mdt = False
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  

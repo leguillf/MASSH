@@ -18,7 +18,7 @@ class Qgm_adj(Qgm_tgl):
     
     def qrhs_adj(self,adrq,u,v,q,way):
 
-        #adrq[np.isnan(adrq)]=0.
+        adrq[np.isnan(adrq)]=0.
         adrq[np.where((self.mask<=1))]=0
     
         adu=np.zeros((self.ny,self.nx))
@@ -26,40 +26,41 @@ class Qgm_adj(Qgm_tgl):
         adq=np.zeros((self.ny,self.nx))
     
         uplus=way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-        # uplus[np.where((uplus<0))]=0
         uminus=way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-        # uminus[np.where((uminus>=0))]=0
         vplus=way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-        # vplus[np.where((vplus<0))]=0
         vminus=way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-        # vminus[np.where((vminus>=0))]=0
     
-        aduplus= -adrq[2:-2,2:-2]*1/(6*self.dx[2:-2,2:-2])*\
-        (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]- \
-         6*q[2:-2,1:-3]+q[2:-2,:-4] )
-        aduplus[np.where((uplus<0))]=0
-    
-        aduminus= adrq[2:-2,2:-2]*1/(6*self.dx[2:-2,2:-2])*\
-        (q[2:-2,4:]-6*q[2:-2,3:-1]+ \
-         3*q[2:-2,2:-2]+2*q[2:-2,1:-3] ) 
-        aduminus[np.where((uminus>=0))]=0
-    
+        induplus = np.where((uplus<0))
+        uplus[induplus]=0
+        induminus = np.where((uminus>=0))
+        uminus[induminus]=0
+        indvplus = np.where((vplus<0))
+        vplus[indvplus]=0
+        indvminus = np.where((vminus>=0))
+        vminus[indvminus]=0
+        
+        
+        aduplus,advplus,aduminus,advminus,adq = self._rq_adj(adrq,adq,
+                                             uplus,vplus,uminus,vminus,q)
+        
+        if self.mdt is not None:
+            _aduplus,_advplus,_aduminus,_advminus,adq = self._rq_adj(adrq,adq,
+                     way*self.uplusbar,way*self.vplusbar,way*self.uminusbar,way*self.vminusbar,self.qbar)
+            aduplus += _aduplus
+            advplus += _advplus
+            aduminus += _aduminus
+            advminus += _advminus
+        
+        aduplus[induplus]=0
+        aduminus[induminus]=0
+        advplus[indvplus]=0
+        advminus[indvminus]=0
+        
         adu[2:-2,2:-2]=adu[2:-2,2:-2] + way*0.5*aduplus
         adu[2:-2,3:-1]=adu[2:-2,3:-1] + way*0.5*aduplus
         adu[2:-2,2:-2]=adu[2:-2,2:-2] + way*0.5*aduminus
         adu[2:-2,3:-1]=adu[2:-2,3:-1] + way*0.5*aduminus
-    
-    
-        advplus = -adrq[2:-2,2:-2]*1/(6*self.dy[2:-2,2:-2])*\
-        (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-  \
-         6*q[1:-3,2:-2]+q[:-4,2:-2])
-        advplus[np.where((vplus<0))]=0
-    
-        advminus = adrq[2:-2,2:-2]*1/(6*self.dy[2:-2,2:-2])*\
-        (q[4:,2:-2]-6*q[3:-1,2:-2]+ \
-         3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
-        advminus[np.where((vminus>0))]=0
-    
+        
         adv[2:-2,2:-2]=adv[2:-2,2:-2] + way*0.5*advplus
         adv[3:-1,2:-2]=adv[3:-1,2:-2] + way*0.5*advplus
         adv[2:-2,2:-2]=adv[2:-2,2:-2] + way*0.5*advminus
@@ -67,13 +68,34 @@ class Qgm_adj(Qgm_tgl):
     
         adv[2:-2,2:-2]=adv[2:-2,2:-2]-(self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])*way*0.5*(adrq[2:-2,2:-2])
         adv[3:-1,2:-2]=adv[3:-1,2:-2]-(self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])*way*0.5*(adrq[2:-2,2:-2])
+        
+        #diffusion
+        if self.snu is not None:
+            adq[2:-2,2:-2]=adq[2:-2,2:-2]+self.snu/(self.dx[2:-2,2:-2]**2)*(adrq[2:-2,3:-1]+adrq[2:-2,1:-3]-2*adrq[2:-2,2:-2]) \
+            +self.snu/(self.dy[2:-2,2:-2]**2)*(adrq[3:-1,2:-2]+adrq[1:-3,2:-2]-2*adrq[2:-2,2:-2]) 
+            
+        
+        return adu, adv, adq
     
     
-        uplus[np.where((uplus<0))]=0
-        uminus[np.where((uminus>=0))]=0
-        vplus[np.where((vplus<0))]=0
-        vminus[np.where((vminus>=0))]=0
-    
+    def _rq_adj(self,adrq,adq,uplus,vplus,uminus,vminus,q):
+        
+        aduplus= -adrq[2:-2,2:-2]*1/(6*self.dx[2:-2,2:-2])*\
+        (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]- \
+         6*q[2:-2,1:-3]+q[2:-2,:-4] )
+        
+        aduminus= adrq[2:-2,2:-2]*1/(6*self.dx[2:-2,2:-2])*\
+        (q[2:-2,4:]-6*q[2:-2,3:-1]+ \
+         3*q[2:-2,2:-2]+2*q[2:-2,1:-3] ) 
+            
+        advplus = -adrq[2:-2,2:-2]*1/(6*self.dy[2:-2,2:-2])*\
+        (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-  \
+         6*q[1:-3,2:-2]+q[:-4,2:-2])
+            
+        advminus = adrq[2:-2,2:-2]*1/(6*self.dy[2:-2,2:-2])*\
+        (q[4:,2:-2]-6*q[3:-1,2:-2]+ \
+         3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
+            
         adq[2:-2,2:-2]=adq[2:-2,2:-2] - uplus*1/(6*self.dx[2:-2,2:-2])*\
         (3*adrq[2:-2,2:-2])\
         + uminus*1/(6*self.dx[2:-2,2:-2])*\
@@ -110,15 +132,9 @@ class Qgm_adj(Qgm_tgl):
     
         adq[:-4,2:-2]=adq[:-4,2:-2] \
         - vplus*1/(6*self.dy[2:-2,2:-2])*(adrq[2:-2,2:-2])
-    
-    
-        #diffusion
-        if self.snu is not None:
-            adq[2:-2,2:-2]=adq[2:-2,2:-2]+self.snu/(self.dx[2:-2,2:-2]**2)*(adrq[2:-2,3:-1]+adrq[2:-2,1:-3]-2*adrq[2:-2,2:-2]) \
-            +self.snu/(self.dy[2:-2,2:-2]**2)*(adrq[3:-1,2:-2]+adrq[1:-3,2:-2]-2*adrq[2:-2,2:-2]) 
             
         
-        return adu, adv, adq
+        return aduplus,advplus,aduminus,advminus,adq
     
     
     def h2uv_adj(self,adu,adv):

@@ -6,12 +6,11 @@ Created on Mon Nov 15 16:24:24 2021
 @author: leguillou
 """
 
-from datetime import datetime
+from datetime import datetime,timedelta
 import numpy as np
 import scipy
 import logging
-import matplotlib.pylab as plt
-from copy import deepcopy
+import xarray as xr
 
 from . import tools
 
@@ -197,7 +196,7 @@ class RedBasis_QG:
                 if self.wavetest[iff][P]==True:
                     nt = len(enst[iff][P])
                     _nwave = 2*nt*ntheta
-                    Q[iwave:iwave+_nwave] = {PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)}
+                    Q[iwave:iwave+_nwave] = PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3)
                     iwave += _nwave
                 
 
@@ -385,6 +384,197 @@ class RedBasis_QG:
             return Geta
         else:
             return
+        
+        
+class RedBasis_ls:
+    # For large scales
+
+    """
+    """
+
+    def __init__(self,config,State):
+
+        self.TIME_MIN = (config.init_date - datetime.strptime('1950-1-1', '%Y-%m-%d')).days
+        self.TIME_MAX = (config.final_date - datetime.strptime('1950-1-1', '%Y-%m-%d')).days
+        self.LON_MIN = config.lon_min
+        self.LON_MAX = config.lon_max
+        self.LAT_MIN = config.lat_min
+        self.LAT_MAX = config.lat_max   
+        
+        self.km2deg=1./110
+        
+        
+        self.facnls = 3.
+        self.facnlt = 3.
+        self.tdec_lw = 25.
+        self.std_lw = 0.04
+        self.lambda_lw = 970
+        self.depth1= 0,
+        self.depth2= 30.
+        self.file_aux= config.file_aux
+        self.filec_aux= config.filec_aux
+        self.fcor = 0.5
+        self.gsize_max = config.gsize_max
+        
+
+    def set_basis(self, return_qinv=False):
+        
+        # Global time window
+        deltat = self.TIME_MAX - self.TIME_MIN
+        DX = self.lambda_lw #* 0.5 #wavelet extension
+        DXG = DX / self.facnls
+
+        nwave=0
+        lonmax=self.LON_MAX
+        if (self.LON_MAX<self.LON_MIN): lonmax=self.LON_MAX+360.
+
+        ENSLON=[]
+        ENSLAT=[]
+
+        ENSLAT1 = np.arange(self.LAT_MIN-(DX-DXG)*self.km2deg,self.LAT_MAX+DX*self.km2deg,DXG*self.km2deg)
+        for I in range(len(ENSLAT1)):
+            ENSLON1 = np.mod(np.arange(self.LON_MIN -(DX-DXG)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                                    lonmax+DX/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                                    DXG/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg) , 360)
+            ENSLAT = np.concatenate(([ENSLAT,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+            ENSLON = np.concatenate(([ENSLON,ENSLON1]))
+
+           
+        NP = len(ENSLON)
+
+
+        enst=[None]*NP
+        tdec=[None]*NP
+        for P in range(NP):
+            tdec[P] = self.tdec_lw
+
+            enst[P] = np.arange(-tdec[P]*(1-1./self.facnlt) , deltat+tdec[P]/self.facnlt , tdec[P]/self.facnlt)
+            nt = len(enst[P])
+            nwave += nt
+
+
+        # Fill the Q diagonal matrix (expected variace for each wavelet)
+        Q = np.zeros((nwave))
+        iwave=-1
+        self.P_wavebounds = [None]*(NP+1)
+        varHlw = self.std_lw**2 * self.fcor
+        for P in range(NP):
+            self.P_wavebounds[P] = iwave+1
+            for it in range(len(enst[P])):
+                iwave += 1
+                Q[iwave]=varHlw/(self.facnls*self.facnlt)
+        self.P_wavebounds[P+1] = iwave +1
+
+        self.DX=DX
+        self.ENSLON=ENSLON
+        self.ENSLAT=ENSLAT
+        self.NP=NP
+        self.enst=enst
+        self.nwave=nwave
+        self.tdec=tdec
+        
+        print('nwaves=',nwave)
+        
+        if return_qinv==True:
+            return 1./Q
+
+
+    def operg(self, coords=None, coords_name=None, cdir=None, config=None, nature=None, compute_g=False, 
+                compute_geta=False, eta=None, coordtype='scattered', iwave0=0, iwave1=None, obs_name=None, int_type='i8', float_type='f4', label=None):
+
+
+        if iwave1==None: iwave1=self.nwave
+
+
+
+        lon = coords[coords_name['lon']]
+        lat = coords[coords_name['lat']]
+        time = coords[coords_name['time']]
+        
+        if hasattr(time,'__len__'):
+            nt = len(time)
+        else:
+            nt = 1
+            time = [time]
+
+        
+        if compute_geta:
+            if coordtype=='reg':
+                Geta = np.zeros((len(time),len(lon)))
+            else:
+                Geta = np.zeros((len(time)))
+
+        if compute_g:
+            G=[None]*3
+            G[0]=np.zeros((iwave1-iwave0), dtype=int_type)
+            G[1]=np.empty((self.gsize_max), dtype=int_type)
+            G[2]=np.empty((self.gsize_max), dtype=float_type)
+            ind_tmp = 0
+
+        iwave = -1
+        for P in range(self.NP):
+            if ((iwave1>=self.P_wavebounds[P])&(iwave0<self.P_wavebounds[P+1])):
+                # Obs selection around point P
+                iobs = np.where((np.abs((np.mod(lon - self.ENSLON[P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[P] * np.pi / 180.)) < self.DX) &
+                            (np.abs((lat - self.ENSLAT[P]) / self.km2deg) < self.DX))[0]
+                xx = (np.mod(lon[iobs] - self.ENSLON[P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[P] * np.pi / 180.)
+                yy = (lat[iobs] - self.ENSLAT[P]) / self.km2deg
+
+                # Spatial tapering shape of the wavelet and its derivative if velocity
+                facs = mywindow(xx / self.DX) * mywindow(yy / self.DX)
+            
+            else: iobs=np.empty((0))
+
+            enstloc = self.enst[P]
+            for it in range(len(enstloc)):
+                nobs = 0
+                iiobs=[]
+                if iobs.shape[0] > 0:                        
+                    if coordtype=='reg':
+                        diff = time - enstloc[it]
+                        iobs2 = np.where(abs(diff) < self.tdec[P])[0] 
+                        for i2 in iobs2:
+                            for i in iobs:
+                                iiobs.append(np.ravel_multi_index(
+                                    (i2,i), (nt,len(lon))))
+                        nobs = len(iiobs)
+                    else:
+                        diff = time[iobs] - enstloc[it]
+                        iobs2 = np.where(abs(diff) < self.tdec[P])[0]
+                        iiobs = iobs[iobs2]
+                        nobs = iiobs.shape[0]
+
+                    if nobs > 0:
+                        tt2 = diff[iobs2]
+                        fact = mywindow(tt2 / self.tdec[P])
+
+
+                iwave += 1
+                if ((iwave >= iwave0) & (iwave <iwave1)):
+                    if (nobs > 0): 
+                        if compute_g:
+                            G[0][iwave-iwave0] = nobs
+                            G[1][ind_tmp:ind_tmp+nobs] = iiobs
+                            G[2][ind_tmp:ind_tmp+nobs] = (facs[iobs2]*fact)**2
+                            ind_tmp += nobs
+                        
+                        if compute_geta:
+                            if coordtype=='reg':
+                                Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * np.outer(fact**2 , facs**2)
+                            else:
+                                Geta[iiobs] += eta[iwave] * (facs[iobs2]*fact)**2
+                        
+
+
+        if compute_g and compute_geta:           
+            return [np.copy(G[0]), np.copy(G[1][:ind_tmp]), np.copy(G[2][:ind_tmp])],Geta
+        elif compute_g and not compute_geta:
+            return [np.copy(G[0]), np.copy(G[1][:ind_tmp]), np.copy(G[2][:ind_tmp])]
+        elif compute_geta and not compute_g:
+            return Geta
+        else:
+            return
+    
     
 
 def mywindow(x): #xloc must be between -1 and 1

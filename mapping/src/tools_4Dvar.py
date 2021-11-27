@@ -30,7 +30,8 @@ class Obsopt:
         date1 = config.init_date.strftime('%Y%m%d')
         date2 = config.final_date.strftime('%Y%m%d')
         box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
-        self.name_H = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}'
+        self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
+        print(self.name_H)
         
         if State.config['name_model'] in ['SW1L','SW1LM','QG1L'] :
             for t in Model.timestamps:
@@ -297,7 +298,7 @@ class Cov :
 class Variational_QG_wave:
     
     def __init__(self, 
-                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None, 
+                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
                  tmp_DA_path=None, init_date=None,checkpoint=1, checkpoint_flux=1, prec=False,compute_test=False):
         
         # Objects
@@ -331,7 +332,6 @@ class Variational_QG_wave:
                     self.isobs.append(True)
                 else:
                     self.isobs.append(False)
-                    flux = 0
             check += 1
         if H.isobserved(M.timestamps[-1]):
             self.isobs.append(True)
@@ -351,7 +351,7 @@ class Variational_QG_wave:
         self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
         self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
-        
+               
         # Grad test
         if compute_test:
             print('Gradient test:')
@@ -415,7 +415,7 @@ class Variational_QG_wave:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-        State.plot()
+
         return J
     
         
@@ -477,7 +477,7 @@ class Variational_QG_wave:
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
-        
+
         return g 
     
     

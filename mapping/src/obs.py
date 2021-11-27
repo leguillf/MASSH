@@ -9,14 +9,14 @@ import os
 import pickle
 import xarray as xr
 import numpy as np
-from datetime import datetime
+from datetime import datetime,timedelta
 from scipy import interpolate,signal
 import pandas as pd
 import glob 
 import matplotlib.pylab as plt
 
 from .sat import read_satellite_info
-from .tools import detrendn
+from .tools import detrendn,read_auxdata_mdt
 
 def obs(config, State, *args, **kwargs):
     """
@@ -40,7 +40,11 @@ def obs(config, State, *args, **kwargs):
     date1 = config.init_date.strftime('%Y%m%d')
     date2 = config.final_date.strftime('%Y%m%d')
     box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
-    name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic'
+    name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}'
+    if config.substract_mdt:
+        name_dict_obs += '_submdt.pic'
+    else:
+        name_dict_obs += '.pic'
     
     # Check if previous *dict_obs* has been computed
     if config.path_obs is None:
@@ -57,6 +61,11 @@ def obs(config, State, *args, **kwargs):
     lon = State.lon
     lat = State.lat
     bbox = [lon.min(),lon.max(),lat.min(),lat.max()]
+    
+    # MDT
+    finterpmdt = None
+    if config.substract_mdt:
+        finterpmdt = read_auxdata_mdt(config.path_mdt,config.name_var_mdt)
                                       
     # Compute output observation dictionnary
     dict_obs = {}
@@ -97,11 +106,11 @@ def obs(config, State, *args, **kwargs):
         if sat_info.kind in ['swot_simulator','CMEMS']:
             _obs_swot_simulator(ds, assim_dates, dict_obs, sat_info, 
                                 config.assimilation_time_step, 
-                                config.tmp_DA_path,bbox)
+                                config.tmp_DA_path,bbox,finterpmdt)
         elif sat_info.kind=='fullSSH':
             _obs_fullSSH(ds, assim_dates,dict_obs, sat_info,
                          config.assimilation_time_step,
-                         config.tmp_DA_path,bbox)
+                         config.tmp_DA_path,bbox,finterpmdt)
     
     # Write *dict_obs* for next experiment
     if config.write_obs:
@@ -147,7 +156,7 @@ def _new_dict_obs(dict_obs,new_dir):
     
 
 def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
-                        bbox=None):
+                        bbox=None,finterpmdt=None):
     """
     NAME
         _obs_swot_simulator
@@ -197,6 +206,9 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
             varobs = {}
             for namevar in sat_info.name_obs_var:
                 varobs[namevar] = _ds[namevar]
+                if finterpmdt is not None:
+                    mdt_on_obs = finterpmdt((lon,lat))
+                    varobs[namevar].data = varobs[namevar].data - mdt_on_obs
             coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
             varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
             varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
@@ -228,7 +240,7 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
                 dict_obs[dt_curr]['obs_name'] = [path]
     
     
-def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None):
+def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None,finterpmdt=None):
     
     name_dim_time_obs = ds[sat_info.name_obs_time].dims[0]
     # read time variable
@@ -301,4 +313,106 @@ def detrend_obs(dict_obs):
             ncout.to_netcdf(obs_file)
             ncout.close()
             del ncout
+            
+            
+            
+    
+
+def get_obs(dict_obs,box,subsampling=1):
+
+        lon0 = box[0]
+        lon1 = box[1]
+        lat0 = box[2]
+        lat1 = box[3]
+        
+        time0 = datetime(2003,1,1) + timedelta(days=box[4]-19358)
+        time1 = datetime(2003,1,1) + timedelta(days=box[5]-19358)
+
+        lon= np.array([])
+        lat= np.array([])
+        time= np.array([])
+        ssh= np.array([])
+        
+        for dt in dict_obs:
+            
+            if (dt<=time1) & (dt>=time0):
                 
+                    path_obs = dict_obs[dt]['obs_name']
+                    sat =  dict_obs[dt]['satellite']
+                    
+                    for _sat,_path_obs in zip(sat,path_obs):
+                        
+                        ds = xr.open_dataset(_path_obs).squeeze() 
+                        lon_obs = ds[_sat.name_obs_lon] % 360
+                        lat_obs = ds[_sat.name_obs_lat]
+                        
+                        ds = ds.where((lon0<=lon_obs) & (lon1>=lon_obs) & 
+                  (lat0<=lat_obs) & (lat1>=lat_obs), drop=True)
+                        time_obs = ds[_sat.name_obs_time].values
+                        time_obs = (time_obs-np.datetime64(time0))/np.timedelta64(1, 'D')
+
+                        if _sat.kind=='fullSSH':
+                            if len(ds[_sat.name_obs_lon].shape)==1:
+                                lon_obs = ds[_sat.name_obs_lon].values[::subsampling]
+                                lat_obs = ds[_sat.name_obs_lat].values[::subsampling]
+                                lon_obs,lat_obs = np.meshgrid(lon_obs,lat_obs)
+                            else:
+                                lon_obs = ds[_sat.name_obs_lon].values[::subsampling,::subsampling]
+                                lat_obs = ds[_sat.name_obs_lat].values[::subsampling,::subsampling]
+                            ssh_obs = ds[_sat.name_obs_var[0]].values[::subsampling,::subsampling]
+                            time_obs = time_obs * np.ones_like(ssh_obs)
+                        
+                        elif _sat.kind in ['swot_simulator','CMEMS']:
+                            lon_obs = ds[_sat.name_obs_lon].values
+                            lat_obs = ds[_sat.name_obs_lat].values
+                            ssh_obs = ds[_sat.name_obs_var[0]].values
+                            if _sat.kind=='CMEMS' and len(_sat.name_obs_var)==2:
+                                ssh_obs += ds[_sat.name_obs_var[1]].values
+                            if len(ssh_obs.shape)==2:
+                                # SWATH data
+                                if ssh_obs.shape[0]==time_obs.size:
+                                    dim = 1
+                                else:
+                                    dim = 0
+                                time_obs = time_obs.repeat(ssh_obs.shape[dim],axis=0)
+                        ds.close()
+                        del ds
+                        
+                        # Flattening
+                        time1d = time_obs.ravel()
+                        lon1d = lon_obs.ravel()
+                        lat1d = lat_obs.ravel()
+                        ssh1d = ssh_obs.ravel()
+
+                        # Remove NaN pixels
+                        indNoNan= ~np.isnan(ssh1d)
+                        time1d = time1d[indNoNan]
+                        lon1d = lon1d[indNoNan]
+                        lat1d = lat1d[indNoNan]
+                        ssh1d = ssh1d[indNoNan]    
+                        
+                        # Append to arrays
+                        time = np.append(time,time1d)
+                        lon = np.append(lon,lon1d)
+                        lat = np.append(lat,lat1d)
+                        ssh = np.append(ssh,ssh1d)
+        
+        coords = [None]*3
+        coords_att = { 'lon':0, 'lat':1, 'time':2, 'nobs':len(time) }
+        values=None
+
+        if len(time)>0:
+            indsort = np.argsort(time)
+            if len(indsort)>0:
+                lon=lon[indsort]   
+                lat=lat[indsort]
+                time=time[indsort]
+                ssh=ssh[indsort]
+
+            coords[coords_att['lon']] = lon
+            coords[coords_att['lat']] = lat
+            coords[coords_att['time']] = time      
+            values =  ssh
+
+                    
+        return [values, coords, coords_att]

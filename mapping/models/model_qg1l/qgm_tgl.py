@@ -38,26 +38,17 @@ class Qgm_tgl(Qgm):
         dvminus[np.where((vminus>=0))] = 0
         vminus[np.where((vminus>=0))] = 0
     
-        drq[2:-2,2:-2] = drq[2:-2,2:-2] \
-            - uplus*1/(6*self.dx[2:-2,2:-2])*(2*dq[2:-2,3:-1]+3*dq[2:-2,2:-2]-\
-                                            6*dq[2:-2,1:-3]+dq[2:-2,:-4]) \
-            + uminus*1/(6*self.dx[2:-2,2:-2])*(dq[2:-2,4:]-6*dq[2:-2,3:-1]+\
-                                               3*dq[2:-2,2:-2]+2*dq[2:-2,1:-3])\
-            - vplus*1/(6*self.dy[2:-2,2:-2])*(2*dq[3:-1,2:-2]+3*dq[2:-2,2:-2]-\
-                                              6*dq[1:-3,2:-2]+dq[:-4,2:-2])\
-            + vminus*1/(6*self.dy[2:-2,2:-2])*(dq[4:,2:-2]-6*dq[3:-1,2:-2]+ \
-                                               3*dq[2:-2,2:-2]+2*dq[1:-3,2:-2])
-    
-        drq[2:-2,2:-2] = drq[2:-2,2:-2] \
-            - duplus*1/(6*self.dx[2:-2,2:-2])*(2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-\
-                                               6*q[2:-2,1:-3]+q[2:-2,:-4] ) \
-            + duminus*1/(6*self.dx[2:-2,2:-2])*(q[2:-2,4:]-6*q[2:-2,3:-1]+ \
-                                                3*q[2:-2,2:-2]+2*q[2:-2,1:-3])\
-            - dvplus*1/(6*self.dy[2:-2,2:-2])*(2*q[3:-1,2:-2]+3*q[2:-2,2:-2]- \
-                                               6*q[1:-3,2:-2]+q[:-4,2:-2])  \
-            + dvminus*1/(6*self.dy[2:-2,2:-2])*(q[4:,2:-2]-6*q[3:-1,2:-2]+ \
-                                                3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
-    
+        drq[2:-2,2:-2] = drq[2:-2,2:-2] + self._rq_tgl(duplus,dvplus,duminus,dvminus,dq,
+                                                       uplus,vplus,uminus,vminus,q)
+        
+            
+        if self.mdt is not None:
+               
+            drq[2:-2,2:-2] = drq[2:-2,2:-2] + self._rq_tgl(
+                duplus,dvplus,duminus,dvminus,dq,
+                way*self.uplusbar,way*self.vplusbar,way*self.uminusbar,way*self.vminusbar,self.qbar)
+
+                
         drq[2:-2,2:-2] = drq[2:-2,2:-2]-\
             (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/\
                 (2*self.dy[2:-2,2:-2])*way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2]) 
@@ -74,7 +65,28 @@ class Qgm_tgl(Qgm):
         
         return drq
     
-    
+    def _rq_tgl(self,duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q):
+        
+        res = \
+            - uplus*1/(6*self.dx[2:-2,2:-2])*\
+                (2*dq[2:-2,3:-1]+3*dq[2:-2,2:-2]-6*dq[2:-2,1:-3]+dq[2:-2,:-4])\
+            + uminus*1/(6*self.dx[2:-2,2:-2])*\
+                (dq[2:-2,4:]-6*dq[2:-2,3:-1]+3*dq[2:-2,2:-2]+2*dq[2:-2,1:-3]) \
+            - vplus*1/(6*self.dy[2:-2,2:-2])*\
+                (2*dq[3:-1,2:-2]+3*dq[2:-2,2:-2]-6*dq[1:-3,2:-2]+dq[:-4,2:-2])  \
+            + vminus*1/(6*self.dy[2:-2,2:-2])*\
+                (dq[4:,2:-2]-6*dq[3:-1,2:-2]+3*dq[2:-2,2:-2]+2*dq[1:-3,2:-2]) \
+            - duplus*1/(6*self.dx[2:-2,2:-2])*\
+                (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4])\
+            + duminus*1/(6*self.dx[2:-2,2:-2])*\
+                (q[2:-2,4:]-6*q[2:-2,3:-1]+3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
+            - dvplus*1/(6*self.dy[2:-2,2:-2])*\
+                (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2])  \
+            + dvminus*1/(6*self.dy[2:-2,2:-2])*\
+                (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
+            
+        return res
+        
     def alpha_tgl(self,dr,dd,r,d):
         norm_r = self.norm(r)
         dAd = d.ravel().dot(self.h2pv(d).ravel())

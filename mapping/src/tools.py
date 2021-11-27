@@ -200,3 +200,16 @@ def read_auxdata_varcit(file_aux):
     finterpVARIANCE = scipy.interpolate.RegularGridInterpolator((lon,lat),VARIANCE.T,bounds_error=False,fill_value=None)
     return finterpVARIANCE   
 
+
+def read_auxdata_mdt(filemdt_aux,name_var):
+
+    # Read spectrum database
+    fcid = Dataset(filemdt_aux, 'r')
+    lon = np.array(fcid.variables[name_var['lon']][:])
+    lat = np.array(fcid.variables[name_var['lat']][:])
+    mdt = np.array(fcid.variables[name_var['mdt']]).squeeze()
+    if mdt.shape[1]==lon.size:
+        mdt = mdt.transpose()
+    finterpMDT = scipy.interpolate.RegularGridInterpolator((lon,lat),mdt,bounds_error=False,fill_value=None)
+    return finterpMDT
+

@@ -43,13 +43,22 @@ class Qgm:
         mask = np.zeros((ny,nx))+2
         mask[:2,:] = 1
         mask[:,:2] = 1
-        mask[-3:,:] = 1
-        mask[:,-3:] = 1
+        mask[-2:,:] = 1
+        mask[:,-2:] = 1
         
-        
-        if SSH is not None:
-            mask[np.isnan(SSH)] = 0
-            indNan = np.argwhere(np.isnan(SSH))
+    
+        if SSH is not None and mdt is not None:
+            isNAN = np.isnan(SSH) | np.isnan(mdt)
+        elif SSH is not None:
+            isNAN = np.isnan(SSH)
+        elif mdt is not None:
+            isNAN = np.isnan(mdt)
+        else:
+            isNAN = None
+            
+        if isNAN is not None: 
+            mask[isNAN] = 0
+            indNan = np.argwhere(isNAN)
             for i,j in indNan:
                 for p1 in [-1,0,1]:
                     for p2 in [-1,0,1]:
@@ -72,16 +81,28 @@ class Qgm:
         # MDT
         self.mdt = mdt
         if self.mdt is not None:
-            if mdu is  None or mdv is  None:
-                self.ubar,self.vbar = self.h2uv(self.mdt)
-                self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
-            else:
-                self.ubar = mdu
-                self.vbar = mdv
-                self.qbar = self.huv2pv(mdt,mdu,mdv,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            # if mdu is  None or mdv is  None:
+            #     self.ubar,self.vbar = self.h2uv(self.mdt)
+            #     self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            # else:
+                # self.ubar = mdu
+                # self.vbar = mdv
+                # self.qbar = self.huv2pv(mdt,mdu,mdv,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            self.ubar,self.vbar = self.h2uv(self.mdt,ubc=mdu,vbc=mdv)
+            self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            
+            # For qrhs
+            self.uplusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
+            self.uplusbar[np.where((self.uplusbar<0))] = 0
+            self.uminusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
+            self.uminusbar[np.where((self.uminusbar>0))] = 0
+            self.vplusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+            self.vplusbar[np.where((self.vplusbar<0))] = 0
+            self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+            self.vminusbar[np.where((self.vminusbar>=0))] = 0
         
     
-    def h2uv(self,h):
+    def h2uv(self,h,ubc=None,vbc=None):
         """ SSH to U,V
     
         Args:
@@ -100,9 +121,15 @@ class Qgm:
              
         v[1:,1:-1] = + self.g/self.f0[1:,1:-1]*\
             (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx[1:,1:-1])
-    
-        u[self.mask<=1] = 0
-        v[self.mask<=1] = 0
+        
+        if ubc is not None and vbc is not None:
+            u[self.mask==1] = ubc[self.mask==1]
+            v[self.mask==1] = vbc[self.mask==1]
+        else:
+            u[self.mask==1] = 0
+            v[self.mask==1] = 0
+        u[self.mask==0] = 0
+        v[self.mask==0] = 0
     
         return u,v
 
@@ -238,47 +265,14 @@ class Qgm:
             vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
             vminus[np.where((vminus>=0))] = 0
             
-            rq[2:-2,2:-2] = rq[2:-2,2:-2]\
-                - uplus*1/(6*self.dx[2:-2,2:-2])*\
-                    (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4])\
-                + uminus*1/(6*self.dx[2:-2,2:-2])*\
-                    (q[2:-2,4:]-6*q[2:-2,3:-1]+3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
-                - vplus*1/(6*self.dy[2:-2,2:-2])*\
-                    (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2])  \
-                + vminus*1/(6*self.dy[2:-2,2:-2])*\
-                    (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
-            
+            rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,q)
+               
             if self.mdt is not None:
-                uplusbar = way*0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
-                uplusbar[np.where((uplusbar<0))] = 0
-                uminusbar = way*0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
-                uminusbar[np.where((uminusbar>0))] = 0
-                vplusbar = way*0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-                vplusbar[np.where((vplusbar<0))] = 0
-                vminusbar = way*0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-                vminusbar[np.where((vminusbar>=0))] = 0
                 
-                rq[2:-2,2:-2] = rq[2:-2,2:-2]\
-                    - uplusbar*1/(6*self.dx[2:-2,2:-2])*\
-                        (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]- 6*q[2:-2,1:-3]+q[2:-2,:-4]) \
-                    + uminusbar*1/(6*self.dx[2:-2,2:-2])*\
-                        (q[2:-2,4:]-6*q[2:-2,3:-1]+ 3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
-                    - vplusbar*1/(6*self.dy[2:-2,2:-2])*\
-                        (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]- 6*q[1:-3,2:-2]+q[:-4,2:-2]) \
-                    + vminusbar*1/(6*self.dy[2:-2,2:-2])*\
-                        (q[4:,2:-2]-6*q[3:-1,2:-2]+ 3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
-
-                rq[2:-2,2:-2] = rq[2:-2,2:-2]\
-                    - uplus*1/(6*self.dx[2:-2,2:-2])*\
-                        (2*self.qbar[2:-2,3:-1]+3*self.qbar[2:-2,2:-2]- 6*self.qbar[2:-2,1:-3]+self.qbar[2:-2,:-4]) \
-                    + uminus*1/(6*self.dx[2:-2,2:-2])*\
-                        (self.qbar[2:-2,4:]-6*self.qbar[2:-2,3:-1]+ 3*self.qbar[2:-2,2:-2]+2*self.qbar[2:-2,1:-3]) \
-                    - vplus*1/(6*self.dy[2:-2,2:-2])*\
-                        (2*self.qbar[3:-1,2:-2]+3*self.qbar[2:-2,2:-2]- 6*self.qbar[1:-3,2:-2]+self.qbar[:-4,2:-2]) \
-                    + vminus*1/(6*self.dy[2:-2,2:-2])*\
-                        (self.qbar[4:,2:-2]-6*self.qbar[3:-1,2:-2]+ 3*self.qbar[2:-2,2:-2]+2*self.qbar[1:-3,2:-2])
-
-        
+                rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(
+                    way*self.uplusbar,way*self.vplusbar,way*self.uminusbar,way*self.vminusbar,q)
+                rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,self.qbar)
+                    
             rq[2:-2,2:-2] = rq[2:-2,2:-2] - way*\
                 (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
                     *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
@@ -292,10 +286,26 @@ class Qgm:
                     (q[3:-1,2:-2]+q[1:-3,2:-2]-2*q[2:-2,2:-2])
             
         rq[np.where((self.mask<=1))] = 0
-        #rq[np.isnan(rq)] = 0
+        rq[np.isnan(rq)] = 0
 
         return rq
-
+    
+    
+    def _rq(self,uplus,vplus,uminus,vminus,q):
+        
+        res = \
+            - uplus*1/(6*self.dx[2:-2,2:-2])*\
+                (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4])\
+            + uminus*1/(6*self.dx[2:-2,2:-2])*\
+                (q[2:-2,4:]-6*q[2:-2,3:-1]+3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
+            - vplus*1/(6*self.dy[2:-2,2:-2])*\
+                (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2])  \
+            + vminus*1/(6*self.dy[2:-2,2:-2])*\
+                (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
+        
+        return res
+            
+        
 
     
     def step(self,h0,q0=None,way=1):
