@@ -607,6 +607,8 @@ class Variational_QG_SW:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
+        State.plot()
+        
         return J
     
         
