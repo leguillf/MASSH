@@ -26,6 +26,7 @@ class Obsopt:
         self.dict_obs = dict_obs        # observation dictionnary
         self.dt = config.dtmodel
         self.date_obs = {}
+        self.obs_data = {}
         
         date1 = config.init_date.strftime('%Y%m%d')
         date2 = config.final_date.strftime('%Y%m%d')
@@ -237,26 +238,39 @@ class Obsopt:
         
         return HX
 
-    def misfit(self,t,State):
+    def misfit(self,t,State,square=False):
         
-        # Read obs
-        sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
-        obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
-        
-        Yobs = np.array([]) 
-        for sat_info,obs_file in zip(sat_info_list,obs_file_list):
-            with xr.open_dataset(obs_file) as ncin:
-                yobs = ncin[sat_info.name_obs_var[0]].values.ravel() # SSH_obs
-            Yobs = np.concatenate((Yobs,yobs))
+        if t in self.obs_data:
+            Yobs,noise = self.obs_data[t]
+        else:
+            # Read obs
+            sat_info_list = self.dict_obs[self.date_obs[t]]['satellite']
+            obs_file_list = self.dict_obs[self.date_obs[t]]['obs_name']
+            
+            Yobs = np.array([]) 
+            noise = np.array([]) 
+            for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+                with xr.open_dataset(obs_file) as ncin:
+                    yobs = ncin[sat_info.name_obs_var[0]].values.ravel() # SSH_obs
+                Yobs = np.concatenate((Yobs,yobs))
+                if sat_info.sigma_noise is not None:
+                    _noise = sat_info.sigma_noise
+                else:
+                    _noise = 1
+                noise = np.concatenate((noise,np.ones_like(yobs)*_noise))
+            self.obs_data[t] = (Yobs,noise)
+            
         
         X = State.getvar(ind=State.get_indobs()).ravel() # SSH from state
         
-        
         HX = self.H(t,X)
-        res = HX - Yobs
+        if square:
+            res = (HX - Yobs) * noise**(-2)
+        else:
+            res = (HX - Yobs) * noise**(-1)
+            
         res[np.isnan(res)] = 0
 
-        
         return res
     
     
@@ -286,7 +300,11 @@ class Obsopt:
             
 class Cov :
     # case of a simple diagonal covariance matrix
-    def __init__(self,sigma):
+    def __init__(self,sigma=None):
+        
+        if sigma is None:
+            sigma = 1
+            
         self.sigma = sigma
         
     def inv(self,X):
@@ -389,8 +407,8 @@ class Variational_QG_wave:
             
             # 1. Misfit
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
-                Jo += misfit.dot(self.R.inv(misfit))
+                misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
+                Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
             
             # 2. Run forward model
@@ -410,7 +428,7 @@ class Variational_QG_wave:
             
             
         if self.isobs[-1]:
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State,square=False) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
@@ -446,11 +464,12 @@ class Variational_QG_wave:
             State.load(os.path.join(self.tmp_DA_path,
                        'model_state_' + str(self.checkpoint[-1]) + '.nc'))
             timestamp = self.M.timestamps[self.checkpoint[-1]]
-            misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+            misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
             self.H.adj(timestamp,adState,self.R.inv(misfit))
 
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
+            
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
  
             # 4. Read model state
@@ -470,16 +489,16 @@ class Variational_QG_wave:
             # 1. Misfit 
             if self.isobs[i]:
                 timestamp = self.M.timestamps[self.checkpoint[i]]
-                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
-
-        return g 
+        
     
+        return g 
     
 
 class Variational_QG_SW:
@@ -581,7 +600,7 @@ class Variational_QG_SW:
             
             # 1. Misfit
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
             
             
@@ -601,13 +620,11 @@ class Variational_QG_SW:
             
             
         if self.isobs[-1]:
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State,square=False) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-        
-        State.plot()
         
         return J
     
@@ -644,7 +661,7 @@ class Variational_QG_SW:
             State.load(os.path.join(self.tmp_DA_path,
                        'model_state_' + str(self.checkpoint[-1]) + '.nc'))
             timestamp = self.M.timestamps[self.checkpoint[-1]]
-            misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+            misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
             self.H.adj(timestamp,adState,self.R.inv(misfit))
 
         # Time loop
@@ -669,7 +686,7 @@ class Variational_QG_SW:
             # 1. Misfit 
             if self.isobs[i]:
                 timestamp = self.M.timestamps[self.checkpoint[i]]
-                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
         
         adX[:self.comp.nwave] = adXqg
@@ -682,8 +699,7 @@ class Variational_QG_SW:
 
         return g 
     
-        
-
+    
 class Variational_QG_init :
     
     def __init__(self,config=None,M=None, H=None, State=None, R=None,B=None, Xb=None, tmp_DA_path=None,
@@ -816,7 +832,7 @@ class Variational_QG_init :
             
             # Misfit
             if self.isobs[i] :
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs                
+                misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs                
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # Run forward model
@@ -829,7 +845,7 @@ class Variational_QG_init :
                         'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
         
         if self.isobs[-1]:
-            misfit = self.H.misfit(self.timestamps[-1],State) # d=Hx-xobsx
+            misfit = self.H.misfit(self.timestamps[-1],State,square=False) # d=Hx-xobsx
             Jo = Jo + misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
@@ -863,7 +879,7 @@ class Variational_QG_init :
         if self.isobs[-1]:
             State.load(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[-1]) + '.nc'))
-            misfit = self.H.misfit(self.timestamps[-1],State) # d=Hx-yobs
+            misfit = self.H.misfit(self.timestamps[-1],State,square=True) # d=Hx-yobs
             self.H.adj(self.timestamps[-1],adState,self.R.inv(misfit))
             
         # Time loop
@@ -882,7 +898,7 @@ class Variational_QG_init :
             
             # Misfit 
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
         adX = adState.getvar(0).ravel()
         if self.prec :
@@ -916,9 +932,6 @@ class Variational_QG_init :
             plot_grad_test(L_result)
         
         
-        
-        
-
 class Variational_SW:
     
     def __init__(self, 
@@ -1011,8 +1024,7 @@ class Variational_SW:
             
             # Misfit
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
-                
+                misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
                 
             # Run forward model
@@ -1025,8 +1037,7 @@ class Variational_SW:
             
 
         if self.isobs[-1]:
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State) # d=Hx-xobsx
-            
+            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State,square=False) # d=Hx-xobsx
             Jo = Jo + misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
@@ -1062,7 +1073,7 @@ class Variational_SW:
             State.load(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[-1]) + '.nc'))
             timestamp = self.M.timestamps[self.checkpoint[-1]]
-            misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+            misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
             
             self.H.adj(timestamp,adState,self.R.inv(misfit))
             
@@ -1083,7 +1094,7 @@ class Variational_SW:
             
             # Misfit 
             if self.isobs[i]:
-                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs
+                misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
             
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
                 

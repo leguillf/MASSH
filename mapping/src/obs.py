@@ -259,11 +259,16 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
         # Select the data for theses indexes
         ds1 = ds.isel(**{name_dim_time_obs: idx_obs},drop=True)
         if len(ds1[sat_info.name_obs_time])>0:
+            if finterpmdt is not None:
+                mdt_on_obs = finterpmdt((ds1[sat_info.name_obs_lon],ds1[sat_info.name_obs_lat]))
+                for namevar in sat_info.name_obs_var:
+                    ds1[namevar].data = ds1[namevar].data - mdt_on_obs
+                    
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path,'obs_' + date + '.nc')
             print(dt_curr,': '+path)
-            #ds1[sat_info.name_obs_time].encoding.pop("_FillValue", None)
+           
             ds1.to_netcdf(path)
             ds1.close()
             del ds1
