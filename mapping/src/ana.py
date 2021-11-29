@@ -550,12 +550,6 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     from .tools_4Dvar import Obsopt, Cov, Variational_QG_SW
     from .tools_reduced_basis import RedBasis_QG
 
-    print('\n*** create and initialize State ***\n')
-    if config.path_init_4Dvar is not None :
-        with xr.open_dataset(config.path_init_4Dvar) as ds :
-            ssh_b = np.copy(ds.ssh)
-            State.setvar(ssh_b,State.get_indobs())
-    
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
     
@@ -666,7 +660,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         # Forward
         for j in range(nstep):
-            Model.step(t,State0,Xsw,nstep=nstep)
+            Model.step(t+j*Model.dt,State0,Xsw,nstep=1)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\

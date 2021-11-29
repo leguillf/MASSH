@@ -59,12 +59,10 @@ class RedBasis_QG:
      
 
     def set_basis(self,return_qinv=False):
-        
         # Definition of the wavelet basis in the domain
         lat_tmp = np.arange(-90,90,0.1)
         alpha=(self.distortion_eq-1)*np.sin(self.lat_distortion_eq*np.pi/180)**self.distortion_eq_law
         finterpdist = scipy.interpolate.interp1d(lat_tmp, 1+alpha/(np.sin(np.maximum(self.lat_distortion_eq,np.abs(lat_tmp))*np.pi/180)**self.distortion_eq_law))
-
         # Ensemble of pseudo-frequencies for the wavelets (spatial)
         logff = np.arange(
             np.log(1./self.lmin ),
@@ -72,19 +70,16 @@ class RedBasis_QG:
             -np.log(1 + self.facpsp / self.npsp))[::-1]
         ff = np.exp(logff)
         dff = ff[1:] - ff[:-1]
-        
         # Ensemble of directions for the wavelets (2D plane)
         theta = np.linspace(0, np.pi, int(np.pi * ff[0] / dff[0] * self.facpsp))[:-1]
         ntheta = len(theta)
         nf=len(ff)
         logging.info('spatial normalized wavelengths: %s', 1./np.exp(logff))
         logging.info('ntheta: %s', ntheta)
-        
         # Auxillary data 
         finterpPSDS, finterpTDEC, finterpNOISEFLOOR = tools.read_auxdata_geos(self.file_aux)
         finterpC = tools.read_auxdata_geosc(self.filec_aux)
         finterpDEPTH = tools.read_auxdata_depth(self.filec_aux)
-
         # Global time window
         deltat = self.TIME_MAX - self.TIME_MIN
 
@@ -100,7 +95,6 @@ class RedBasis_QG:
         NP = np.empty(nf, dtype='int16') # Nomber of spatial wavelet locations for a given frequency
         nwave=0
         lonmax=self.LON_MAX
-        
         if (self.LON_MAX<self.LON_MIN): lonmax=self.LON_MAX+360.
             
         for iff in range(nf):
@@ -167,7 +161,6 @@ class RedBasis_QG:
             
                 nwave += ntheta*2*nt
                 
-
         # Fill the Q diagonal matrix (expected variance for each wavelet)            
         self.wavetest = [None]*nf
         Q = np.zeros((nwave))
