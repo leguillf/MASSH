@@ -263,7 +263,7 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
                 mdt_on_obs = finterpmdt((ds1[sat_info.name_obs_lon],ds1[sat_info.name_obs_lat]))
                 for namevar in sat_info.name_obs_var:
                     ds1[namevar].data = ds1[namevar].data - mdt_on_obs
-                    
+                    ds1[namevar].plot()
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path,'obs_' + date + '.nc')
