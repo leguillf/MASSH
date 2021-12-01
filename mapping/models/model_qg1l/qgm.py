@@ -212,8 +212,6 @@ class Qgm:
         
         q_tmp[self.mask==0] = 0
         hg[self.mask==0] = 0
-        #hg[np.isnan(hg)] = 0
-        #q_tmp[np.isnan(q_tmp)] = 0
         
         r = +q_tmp - self.h2pv(hg)
         d = +r

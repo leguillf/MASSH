@@ -102,9 +102,10 @@ variable are SLAs!')
                 
         else:
             self.mdt = self.mdu = self.mdv = None
+    
         
         # Open Rossby Radius if provided
-        if config.filec_aux is not None and os.path.exists(config.filec_aux):
+        if config.c0 is None and config.filec_aux is not None and os.path.exists(config.filec_aux):
             
             print('Rossby Radius is prescribed, be sure to have provided MDT as well')
 
@@ -1238,10 +1239,7 @@ class Model_sw1lm:
         
         print(ps1/ps2)
         
-           
-
-
-    
+            
 class Model_qg1l_sw1l:
     
     def __init__(self,config,State):

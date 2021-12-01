@@ -6,6 +6,8 @@ Created on Thu Apr  8 19:22:53 2021
 @author: leguillou
 """
 
+import matplotlib.pylab as plt
+
 from qgm_tgl import Qgm_tgl
 import numpy as np
 
@@ -201,6 +203,8 @@ class Qgm_adj(Qgm_tgl):
     
     def pv2h_adj(self,adh,q,hg):
         
+        adh[self.mask==0] = 0
+        
         # Current trajectory
         q_tmp = +q
         q_tmp[self.mask==0] = 0
@@ -305,8 +309,8 @@ class Qgm_adj(Qgm_tgl):
         adhg += -self.h2pv_adj(adr)
         adr = np.zeros((self.ny,self.nx))
         
-        adq[self.mask==0] = 0
-        adhg[self.mask==0] = 0
+        adq[self.mask==0] = np.nan
+        adhg[self.mask==0] = np.nan
         
         
         return adq,adhg
@@ -316,7 +320,7 @@ class Qgm_adj(Qgm_tgl):
         
         azeros = +adh1*0
         
-        if np.all(h0==0):
+        if np.all(h0[self.mask>=1]==0):
             return adh1
         
         # Tangent trajectory

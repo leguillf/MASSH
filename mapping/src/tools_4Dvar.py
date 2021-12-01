@@ -27,6 +27,9 @@ class Obsopt:
         self.dt = config.dtmodel
         self.date_obs = {}
         self.obs_data = {}
+        self.adH = {}
+        
+        self.save_var_tmp = True
         
         date1 = config.init_date.strftime('%Y%m%d')
         date2 = config.final_date.strftime('%Y%m%d')
@@ -240,7 +243,7 @@ class Obsopt:
 
     def misfit(self,t,State,square=False):
         
-        if t in self.obs_data:
+        if self.save_var_tmp and t in self.obs_data:
             Yobs,noise = self.obs_data[t]
         else:
             # Read obs
@@ -258,9 +261,9 @@ class Obsopt:
                 else:
                     _noise = 1
                 noise = np.concatenate((noise,np.ones_like(yobs)*_noise))
-            self.obs_data[t] = (Yobs,noise)
+            if self.save_var_tmp:
+                self.obs_data[t] = (Yobs,noise)
             
-        
         X = State.getvar(ind=State.get_indobs()).ravel() # SSH from state
         
         HX = self.H(t,X)
@@ -277,24 +280,29 @@ class Obsopt:
     def adj(self,t,adState,misfit):
         
         #if self.obs_sparse[t]:
-        adHssh = np.zeros(self.npix)
-        ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')))
-        indexes = ds['indexes'].values
-        weights = ds['weights'].values
-        maskobs = ds['maskobs'].values
-        Nobs,Npix = indexes.shape
-        
-        for i in range(Nobs):
-            if not maskobs[i]:
-                # Average
-                for j in range(Npix):
-                    if weights[i].sum()!=0:
-                        adHssh[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+        if self.save_var_tmp and t in self.adH:
+            adH = self.adH[t]
+        else:
+            adH = np.zeros(self.npix)
+            ds = xr.open_dataset(os.path.join(
+                    self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')))
+            indexes = ds['indexes'].values
+            weights = ds['weights'].values
+            maskobs = ds['maskobs'].values
+            Nobs,Npix = indexes.shape
+            
+            for i in range(Nobs):
+                if not maskobs[i]:
+                    # Average
+                    for j in range(Npix):
+                        if weights[i].sum()!=0:
+                            adH[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+            if self.save_var_tmp:
+                self.adH[t] = adH
         
         ind = adState.get_indobs()
 
-        adState.var[ind] += adHssh.reshape(adState.var[ind].shape)
+        adState.var[ind] += adH.reshape(adState.var[ind].shape)
 
         
             
@@ -369,13 +377,15 @@ class Variational_QG_wave:
         self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
         self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
+        
+        #self.spinup = np.max(comp.tdec1d)
+        #print(f'spin-up: {self.spinup} days')
                
         # Grad test
         if compute_test:
             print('Gradient test:')
             X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
-        
         
     def cost(self,X0):
                 
@@ -396,11 +406,18 @@ class Variational_QG_wave:
     
         # Observational cost function evaluation
         Jo = 0.
+        
+        # # 1st timestamp
+        # coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        # var_init = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+        #                         compute_geta=True,eta=X,save_wave_basis=False) 
+        # State.setvar(var_init.reshape((State.ny,State.nx)),
+        #              ind=State.get_indobs())
+            
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
-        
+        #State.plot(title='init')
         for i in range(len(self.checkpoint)-1):
-            
             
             timestamp = self.M.timestamps[self.checkpoint[i]]
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
@@ -409,15 +426,14 @@ class Variational_QG_wave:
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
-            
-            
+                
             # 2. Run forward model
             self.M.step(State,nstep=nstep)
             
             # 3. Add flux from wavelet
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X).reshape((State.ny,State.nx))  
+                                compute_geta=True,eta=X,mode='flux').reshape((State.ny,State.nx))  
             var = State.getvar(ind=State.get_indobs())
             State.setvar(var + nstep*self.M.dt*F/(3600*24),
                          ind=State.get_indobs())
@@ -433,6 +449,8 @@ class Variational_QG_wave:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
+        
+        #State.plot(title='end')
 
         return J
     
@@ -480,7 +498,7 @@ class Variational_QG_wave:
             advar = adState.getvar(ind=State.get_indobs()).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                   compute_geta=True,transpose=True,
+                                   compute_geta=True,transpose=True,mode='flux',
                                    eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
             # 2. Run adjoint model
@@ -491,11 +509,19 @@ class Variational_QG_wave:
                 timestamp = self.M.timestamps[self.checkpoint[i]]
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-
+        
+        # # 1st timestamp
+        # coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        # advar = adState.getvar(ind=State.get_indobs()).flatten()[np.newaxis,:]
+        # adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+        #                         compute_geta=True,eta=advar,transpose=True,save_wave_basis=False)
+            
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
+        
+        #adState.plot(title='adj')
         
     
         return g 
@@ -626,6 +652,8 @@ class Variational_QG_SW:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
+        State.plot()
+        
         return J
     
         
@@ -666,6 +694,7 @@ class Variational_QG_SW:
 
         # Time loop
         for i in reversed(range(0,len(self.checkpoint)-1)):
+            
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
             t = self.M.T[self.checkpoint[i]]
  
@@ -696,7 +725,9 @@ class Variational_QG_SW:
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
-
+        
+        adState.plot()
+        
         return g 
     
     
@@ -975,6 +1006,9 @@ class Variational_SW:
             self.isobs.append(False)
             
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
+        
+        dmax = np.sqrt((State.dx*State.nx)**2+(State.dy*State.ny)**2)
+        
         
         print('checkpoint:')
         for i,check in enumerate(self.checkpoint):

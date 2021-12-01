@@ -209,12 +209,13 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
                 if finterpmdt is not None:
                     mdt_on_obs = finterpmdt((lon,lat))
                     varobs[namevar].data = varobs[namevar].data - mdt_on_obs
+                    
             coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
             varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
             varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
             if sat_info.name_obs_xac is not None:
                 varobs[sat_info.name_obs_xac] = _ds[sat_info.name_obs_xac]
-                
+            
             dsout = xr.Dataset(varobs,
                                coords=coords
                                )
@@ -263,7 +264,6 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
                 mdt_on_obs = finterpmdt((ds1[sat_info.name_obs_lon],ds1[sat_info.name_obs_lat]))
                 for namevar in sat_info.name_obs_var:
                     ds1[namevar].data = ds1[namevar].data - mdt_on_obs
-                    ds1[namevar].plot()
             # Save the selected dataset in a new nc file
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path,'obs_' + date + '.nc')

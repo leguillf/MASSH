@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+mapping/models/model_qg1l/qgm_adj.py#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jan  6 19:35:02 2021
@@ -253,7 +253,7 @@ class State:
     def ini_var_qg1l_sw1l(self,config):
         if len(self.name_var) != 5:
             if self.first:
-                print('Warning: For SW1L: wrong number variable names')
+                print('Warning: For QG1L_SW1L: wrong number variable names')
             self.name_var = ["h_bm","u_it","v_it","h_it","h"]             
         if self.first:
             print(self.name_var)
@@ -335,7 +335,7 @@ class State:
         # Convert to bool if float type     
         if mask_interp.dtype!=np.bool : 
             self.mask = np.empty((self.ny,self.nx),dtype='bool')
-            ind_mask = (np.isnan(mask_interp)) | (np.abs(mask_interp)>10)
+            ind_mask = (np.isnan(mask_interp)) | (mask_interp==1) | (np.abs(mask_interp)>10)
             self.mask[ind_mask] = True
             self.mask[~ind_mask] = False
         else:
