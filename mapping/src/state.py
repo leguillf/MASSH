@@ -1,4 +1,4 @@
-mapping/models/model_qg1l/qgm_adj.py#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jan  6 19:35:02 2021
