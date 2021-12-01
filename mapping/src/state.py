@@ -342,7 +342,7 @@ class State:
             self.mask = mask_interp.copy()
                 
         # Apply to state variable (SSH only)
-        if config.name_model=='QG1L':
+        if config.name_model in ['QG1L','QG1L_SW1L']:
             self.var[0][self.mask] = np.nan
         
             

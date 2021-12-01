@@ -309,8 +309,8 @@ class Qgm_adj(Qgm_tgl):
         adhg += -self.h2pv_adj(adr)
         adr = np.zeros((self.ny,self.nx))
         
-        adq[self.mask==0] = np.nan
-        adhg[self.mask==0] = np.nan
+        adq[self.mask==0] = 0
+        adhg[self.mask==0] = 0
         
         
         return adq,adhg

@@ -309,6 +309,7 @@ variable are SLAs!')
             adSSH1 = (1-Wbc)*adSSH1
         
         # Update state  and parameters
+        adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)
         
     def tangent_test(self,State,nstep,bc=False):

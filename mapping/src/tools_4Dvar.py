@@ -646,7 +646,7 @@ class Variational_QG_SW:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        #State.plot()
+        State.plot()
         
         return J
     
@@ -726,7 +726,7 @@ class Variational_QG_SW:
         
         g = adX + gb  # total gradient
         
-        #adState.plot()
+        adState.plot()
         
         return g 
     
