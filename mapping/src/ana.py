@@ -515,10 +515,17 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Save minimum for next experiments
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
         pickle.dump(Xa,f)
-    # Forward propagation
+    # Init
     State0 = State.free()
     date = config.init_date
+    # 1st timestep
+    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
+    var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xa) 
+    State0.setvar(var_init.reshape((State.ny,State.nx)),
+                  ind=State.get_indobs())
     State0.save_output(date)
+    # Forward propagation
     for i in range(len(var.checkpoint)-1):
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         # Forward
@@ -532,7 +539,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xa).reshape((State.ny,State.nx))  
+                           compute_geta=True,eta=Xa,mode='flux').reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=State.get_indobs())
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),
@@ -651,10 +658,18 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     # Save minimum for next experiments
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
         pickle.dump(Xa,f)
-    # Forward propagation
+        
+    # init
     State0 = State.free()
     date = config.init_date
+    # 1st timestep
+    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
+    var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                              compute_geta=True,eta=Xqg) 
+    State0.setvar(var_init.reshape((State.ny,State.nx)),
+                  ind=State.get_indobs())
     State0.save_output(date)
+    # Forward propagation
     for i in range(len(var.checkpoint)-1):
         t = Model.T[var.checkpoint[i]]
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
@@ -669,7 +684,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xqg).reshape((State.ny,State.nx))  
+                           compute_geta=True,eta=Xqg,mode='flux').reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=0)
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),ind=0)
