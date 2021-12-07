@@ -362,17 +362,17 @@ class RedBasis_QG:
                                 
                                 for itheta in range(self.ntheta):
                                     
-                                    if coordtype=='reg' and save_wave_basis and nt==1 and itheta in self.facGeta[(iff,P)][(time[0],it)]:
-                                        facGeta = self.facGeta[iff,P][time[0],it][itheta]
-                                    else:
-                                        kx = self.k[iff] * np.cos(self.theta[itheta])
-                                        ky = self.k[iff] * np.sin(self.theta[itheta])
-                                        if coordtype=='reg':
-                                            facGeta = [[],[]]
-                                            facGeta[0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
-                                            facGeta[1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
-                                            if save_wave_basis:
-                                                self.facGeta[iff,P][time[0],it][itheta] = facGeta
+                                    #if coordtype=='reg' and save_wave_basis and nt==1 and itheta in self.facGeta[(iff,P)][(time[0],it)]:
+                                    #    facGeta = self.facGeta[iff,P][time[0],it][itheta]
+                                    #else:
+                                    kx = self.k[iff] * np.cos(self.theta[itheta])
+                                    ky = self.k[iff] * np.sin(self.theta[itheta])
+                                    if coordtype=='reg':
+                                        facGeta = [[],[]]
+                                        facGeta[0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
+                                        facGeta[1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
+                                            #if save_wave_basis:
+                                            #    self.facGeta[iff,P][time[0],it][itheta] = facGeta
                                         
                                     for iphase,phase in enumerate([0, np.pi / 2]):
                                         if ((iwave >= iwave0) & (iwave <iwave1)):

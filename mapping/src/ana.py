@@ -521,7 +521,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # 1st timestep
     coords = [var.coords[0],var.coords[1],var.coords[2][0]]
     var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xa) 
+                            compute_geta=True,eta=Xa,save_wave_basis=False) 
     State0.setvar(var_init.reshape((State.ny,State.nx)),
                   ind=State.get_indobs())
     State0.save_output(date)
@@ -539,7 +539,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xa,mode='flux').reshape((State.ny,State.nx))  
+                           compute_geta=True,eta=Xa,mode='flux',save_wave_basis=False).reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=State.get_indobs())
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),
@@ -646,7 +646,6 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     #    Saving trajectory #
     ########################
     print('\n*** Saving trajectory ***\n')
-    
     if config.prec:
         Xa = var.Xb + B.sqr(res.x)
     else:
@@ -665,7 +664,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     # 1st timestep
     coords = [var.coords[0],var.coords[1],var.coords[2][0]]
     var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                              compute_geta=True,eta=Xqg) 
+                              compute_geta=True,eta=Xqg,save_wave_basis=False) 
     State0.setvar(var_init.reshape((State.ny,State.nx)),
                   ind=State.get_indobs())
     State0.save_output(date)
@@ -684,7 +683,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xqg,mode='flux').reshape((State.ny,State.nx))  
+                           compute_geta=True,eta=Xqg,mode='flux',save_wave_basis=False).reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=0)
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),ind=0)
