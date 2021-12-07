@@ -5,12 +5,13 @@ Created on Mon Nov 15 16:24:24 2021
 
 @author: leguillou
 """
-
+import os
 from datetime import datetime,timedelta
 import numpy as np
 import scipy
 import logging
-import xarray as xr
+import pickle 
+
 
 from . import tools
 
@@ -57,9 +58,10 @@ class RedBasis_QG:
         self.gsize_max = config.gsize_max
 
         # Dictionnaries to save wave coefficients and indexes for repeated runs
+        self.path_save_tmp = config.tmp_DA_path
         self.indx = {}
         self.indt = {}
-        self.facGeta = {}
+
         
      
 
@@ -268,38 +270,28 @@ class RedBasis_QG:
             nt = 1
             time = [time]
         
-        Geta = None
-        if compute_geta:
-            if transpose:
-                Geta = np.zeros((self.nwave))
-            else:
-                if coordtype=='reg':
-                    Geta = np.zeros((nt,len(lon)))
-                else:
-                    Geta = np.zeros((nt))
-        
-        G=[None]*3
-        if compute_g:
-            G[0]=np.zeros((iwave1-iwave0), dtype=int_type)
-            G[1]=np.empty((self.gsize_max), dtype=int_type)
-            G[2]=np.empty((self.gsize_max), dtype=float_type)
-            ind_tmp = 0
-            
-        iwave = 0
-        for iff in range(self.nf):
-            for P in range(self.NP[iff]):
-                    if self.wavetest[iff][P]:
+        name_facGeta = os.path.join(self.path_save_tmp,f'facGeta_{time[0]}.pic')
+        name_indt = os.path.join(self.path_save_tmp,f'indt_{time[0]}.pic')
+        name_indx = os.path.join(self.path_save_tmp,f'indx.pic')
+        if save_wave_basis and os.path.exists(name_facGeta) and os.path.exists(name_indt) and os.path.exists(name_indx):
+            with open(name_facGeta, 'rb') as f:
+                facGeta = pickle.load(f)
+            with open(name_indt, 'rb') as f:
+                indt = pickle.load(f)
+            with open(name_indx, 'rb') as f:
+                indx = pickle.load(f)
+        else:
+            facGeta = {}
+            indt = {}
+            indx = {}
+            for iff in range(self.nf):
+                for P in range(self.NP[iff]):
+                        if self.wavetest[iff][P]:
                         
-                        if nt==1 and (iff,P) not in self.indt:
-                            self.indt[(iff,P)] = {}
+                            indt[(iff,P)] = {}
+                            facGeta[(iff,P)] = {}
                             
-                        if coordtype=='reg' and nt==1 and (iff,P) not in self.facGeta:
-                            self.facGeta[(iff,P)] = {}
-                            
-                        # Obs selection around point P
-                        if save_wave_basis and (iff,P) in self.indx:
-                            iobs,xx,yy,facs = self.indx[(iff,P)]
-                        else:
+                            # Obs selection around point P
                             distortion=self.finterpdist(self.ENSLAT[iff][P])
                             iobs = np.where((np.abs((np.mod(lon - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.))/distortion <= self.DX[iff]) &
                                         (np.abs((lat - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff]))[0]
@@ -311,35 +303,22 @@ class RedBasis_QG:
                             facd[facd>1] = 1.
                             facd[facd<0] = 0.
                             facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
-                            if save_wave_basis:
-                                self.indx[(iff,P)] = (iobs,xx,yy,facs)
-    
-                        enstloc = self.enst[iff][P]
-                        for it in range(len(enstloc)):
                             
-                            if nt==1 and (time[0],it) not in self.facGeta[(iff,P)] and save_wave_basis:
-                                self.facGeta[(iff,P)][(time[0],it)] = {}
-                                
-                            if nt==1 and (time[0],it) in self.indt[(iff,P)] and save_wave_basis:
-                                    iobs2,iiobs,nobs,fact = self.indt[iff,P][time[0],it]
-                            else:
-                                nobs = 0
-                                iiobs=[]
-                                if iobs.shape[0] > 0:
-                                    if coordtype=='reg':
-                                        diff = time - enstloc[it]
-                                        iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0] 
-                                        for i2 in iobs2:
-                                            for i in iobs:
-                                                iiobs.append(np.ravel_multi_index(
-                                                    (i2,i), (nt,len(lon))))
-                                        nobs = len(iiobs)
-                                    else:
-                                        diff = time[iobs] - enstloc[it]
-                                        iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0]
-                                        iiobs = iobs[iobs2]
-                                        nobs = iiobs.shape[0]
+                            indx[(iff,P)] = iobs
         
+                            enstloc = self.enst[iff][P]
+                            
+                            if iobs.shape[0] > 0:
+                                for it in range(len(enstloc)):
+                                    nobs = 0
+                                    iiobs=[]
+                                    diff = time - enstloc[it]
+                                    iobs2 = np.where(abs(diff) < self.tdec[iff][P])[0] 
+                                    for i2 in iobs2:
+                                        for i in iobs:
+                                            iiobs.append(np.ravel_multi_index(
+                                                (i2,i), (nt,len(lon))))
+                                    nobs = len(iiobs)
                                     if nobs > 0:
                                         tt2 = diff[iobs2]
                                         if mode=='flux':
@@ -351,49 +330,76 @@ class RedBasis_QG:
                                             fact = mywindow(tt2 / self.tdec[iff][P])
                                     else:
                                         fact = None
+                                    indt[iff,P][it] = (iobs2,iiobs,nobs)
                                         
-                                    if nt==1 and save_wave_basis:
-                                        self.indt[iff,P][time[0],it] = (iobs2,iiobs,nobs,fact)
+                                    if ((nobs != 0)):                
+                                        facGeta[(iff,P)][it] = [None,]*self.ntheta
+                                        for itheta in range(self.ntheta):
+                                            facGeta[(iff,P)][it][itheta] = [[],[]]
+                                            kx = self.k[iff] * np.cos(self.theta[itheta])
+                                            ky = self.k[iff] * np.sin(self.theta[itheta])
+                                            facGeta[(iff,P)][it][itheta][0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
+                                            facGeta[(iff,P)][it][itheta][1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
 
-                            if ((nobs == 0)):
-                                iwave += 2*self.ntheta
-                                
-                            else:
-                                
-                                for itheta in range(self.ntheta):
-                                    
-                                    #if coordtype=='reg' and save_wave_basis and nt==1 and itheta in self.facGeta[(iff,P)][(time[0],it)]:
-                                    #    facGeta = self.facGeta[iff,P][time[0],it][itheta]
-                                    #else:
-                                    kx = self.k[iff] * np.cos(self.theta[itheta])
-                                    ky = self.k[iff] * np.sin(self.theta[itheta])
-                                    if coordtype=='reg':
-                                        facGeta = [[],[]]
-                                        facGeta[0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
-                                        facGeta[1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
-                                            #if save_wave_basis:
-                                            #    self.facGeta[iff,P][time[0],it][itheta] = facGeta
+            if save_wave_basis:
+                if not os.path.exists(name_facGeta):
+                    with open(name_facGeta, 'wb') as f:
+                        pickle.dump(facGeta,f)  
+                if not os.path.exists(name_indt):
+                    with open(name_indt, 'wb') as f:
+                        pickle.dump(indt,f)
+                if not os.path.exists(name_indx):
+                    with open(name_indx, 'wb') as f:
+                        pickle.dump(indx,f)                          
                                         
-                                    for iphase,phase in enumerate([0, np.pi / 2]):
-                                        if ((iwave >= iwave0) & (iwave <iwave1)):
+                                        
+        Geta = None
+        if compute_geta:
+            if transpose:
+                Geta = np.zeros((self.nwave))
+            else:
+                Geta = np.zeros((nt,lon.size))
+        
+        G=[None]*3
+        if compute_g:
+            G[0]=np.zeros((iwave1-iwave0), dtype=int_type)
+            G[1]=np.empty((self.gsize_max), dtype=int_type)
+            G[2]=np.empty((self.gsize_max), dtype=float_type)
+            ind_tmp = 0
+                
+                                    
+        iwave = 0
+        for iff in range(self.nf):
+            for P in range(self.NP[iff]):
+                    if self.wavetest[iff][P]:
+                        enstloc = self.enst[iff][P]
+                        iobs = indx[(iff,P)]
+                        if iobs.shape[0] == 0:
+                            iwave += 2*self.ntheta*len(enstloc)
+                        else:
+                            for it in range(len(enstloc)):
+                                iobs2,iiobs,nobs = indt[iff,P][it]
+                                if ((nobs == 0)):
+                                    iwave += 2*self.ntheta
+                                else:
+                                    for itheta in range(self.ntheta):
+                                        for iphase,phase in enumerate([0, np.pi / 2]):
                                             if compute_g:
                                                 G[0][iwave-iwave0] = nobs
-                                                if coordtype=='reg':
-                                                    G[1][ind_tmp:ind_tmp+nobs] = iiobs
-                                                    G[2][ind_tmp:ind_tmp+nobs] = facGeta[iphase].flatten()
-                                                ind_tmp += nobs
-                                  
+                                                G[1][ind_tmp:ind_tmp+nobs] = iiobs
+                                                G[2][ind_tmp:ind_tmp+nobs] = facGeta[(iff,P)][it][itheta][iphase].flatten()                              
                                             if compute_geta:
                                                 if transpose:
-                                                    Geta[iwave] = np.sum(eta[iobs2[0]:iobs2[-1]+1,iobs] * facGeta[iphase])
+                                                    Geta[iwave] = np.sum(eta[iobs2[0]:iobs2[-1]+1,iobs] * facGeta[(iff,P)][it][itheta][iphase])
                                                 else:
-                                                    if coordtype=='reg':
-                                                        Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * facGeta[iphase]
-                                                    else:
-                                                        Geta[iiobs] += eta[iwave] * np.sqrt(2)*np.cos(kx*(xx[iobs2])+ky*(yy[iobs2])-phase)*facs[iobs2]*fact
-                                            iwave += 1
-
-
+                                                    Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * facGeta[(iff,P)][it][itheta][iphase]
+    
+                                        iwave += 2  
+                                
+                            
+                            
+                            
+                            
         if compute_g and compute_geta:           
             return [np.copy(G[0]), np.copy(G[1][:ind_tmp]), np.copy(G[2][:ind_tmp])],Geta
         elif compute_g and not compute_geta:

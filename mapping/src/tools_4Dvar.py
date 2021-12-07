@@ -406,7 +406,7 @@ class Variational_QG_wave:
             
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
-        State.plot(title='init')
+        
         for i in range(len(self.checkpoint)-1):
             
             timestamp = self.M.timestamps[self.checkpoint[i]]
@@ -440,7 +440,6 @@ class Variational_QG_wave:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        State.plot(title='end')
 
         return J
     
@@ -510,8 +509,6 @@ class Variational_QG_wave:
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
-        
-        adState.plot(title='adj')
         
     
         return g 
