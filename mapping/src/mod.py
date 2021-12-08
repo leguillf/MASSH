@@ -105,7 +105,7 @@ variable are SLAs!')
     
         
         # Open Rossby Radius if provided
-        if config.c0 is None and config.filec_aux is not None and os.path.exists(config.filec_aux):
+        if config.c0 is None and self.mdt is not None and config.filec_aux is not None and os.path.exists(config.filec_aux):
             
             print('Rossby Radius is prescribed, be sure to have provided MDT as well')
 
@@ -119,7 +119,7 @@ variable are SLAs!')
             self.c[self.c<2.2] = 2.2
         else:
             self.c = config.c0 * np.ones((State.ny,State.nx))
-        
+            
         
         # Model initialization
         SourceFileLoader("qgm", 
@@ -140,7 +140,7 @@ variable are SLAs!')
                          dy=State.DY,
                          dt=self.dt,
                          SSH=State.getvar(ind=0),
-                         c=config.c0,
+                         c=self.c,
                          g=State.g,
                          f=State.f,
                          qgiter=config.qgiter,

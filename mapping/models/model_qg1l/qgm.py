@@ -79,27 +79,26 @@ class Qgm:
         self.qgiter = qgiter
         
         # MDT
-        self.mdt = mdt
+        self.mdt = +mdt
         if self.mdt is not None:
-            # if mdu is  None or mdv is  None:
-            #     self.ubar,self.vbar = self.h2uv(self.mdt)
-            #     self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
-            # else:
-                # self.ubar = mdu
-                # self.vbar = mdv
-                # self.qbar = self.huv2pv(mdt,mdu,mdv,c=np.nanmean(self.c)*np.ones_like(self.dx))
-            self.ubar,self.vbar = self.h2uv(self.mdt,ubc=mdu,vbc=mdv)
-            self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
-            
+            if mdu is  None or mdv is  None:
+                self.ubar,self.vbar = self.h2uv(self.mdt)
+                self.qbar = self.h2pv(self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            else:
+                self.ubar = mdu
+                self.vbar = mdv
+                self.qbar = self.huv2pv(mdt,mdu,mdv,c=np.nanmean(self.c)*np.ones_like(self.dx))
+                self.mdt = self.pv2h(self.qbar,+mdt)
+            #self.ubar,self.vbar = self.h2uv(self.mdt,ubc=mdu,vbc=mdv)
+            #self.qbar = self.h2pv(self.mdt)
+            #self.qbar = self.huv2pv(self.ubar,self.vbar,self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            #self.mdt = self.pv2h(self.qbar,+mdt)
             # For qrhs
             self.uplusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
-            self.uplusbar[np.where((self.uplusbar<0))] = 0
             self.uminusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
-            self.uminusbar[np.where((self.uminusbar>0))] = 0
             self.vplusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-            self.vplusbar[np.where((self.vplusbar<0))] = 0
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-            self.vminusbar[np.where((self.vminusbar>=0))] = 0
+
         
     
     def h2uv(self,h,ubc=None,vbc=None):
@@ -255,13 +254,9 @@ class Qgm:
           
         if not self.diff:
             uplus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-            uplus[np.where((uplus<0))] = 0
             uminus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-            uminus[np.where((uminus>0))] = 0
             vplus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-            vplus[np.where((vplus<0))] = 0
             vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-            vminus[np.where((vminus>=0))] = 0
             
             rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,q)
                
@@ -290,6 +285,11 @@ class Qgm:
     
     
     def _rq(self,uplus,vplus,uminus,vminus,q):
+        
+        uplus[np.where((uplus<0))] = 0
+        uminus[np.where((uminus>0))] = 0
+        vplus[np.where((vplus<0))] = 0
+        vminus[np.where((vminus>=0))] = 0
         
         res = \
             - uplus*1/(6*self.dx[2:-2,2:-2])*\
@@ -344,7 +344,7 @@ class Qgm:
         q1 = qb0 + self.dt*rq
         
         # 5/ q-->h
-        h1 = self.pv2h(q1,h0)
+        h1 = self.pv2h(q1,+h0)
         
         if q0 is None:
             return h1

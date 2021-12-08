@@ -123,7 +123,7 @@ class Obsopt:
                              Hint: reduce *assimiliation_time_step* parameter")
                 
                 
-            elif sat_info.kind=='swot_simulator':
+            elif sat_info.kind in ['swot_simulator','CMEMS']:
                 obs_sparse = True
             with xr.open_dataset(obs_file) as ncin:
                 lon = ncin[sat_info.name_obs_lon].values
@@ -439,7 +439,6 @@ class Variational_QG_wave:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-        
 
         return J
     

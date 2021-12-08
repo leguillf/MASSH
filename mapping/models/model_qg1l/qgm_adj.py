@@ -330,7 +330,7 @@ class Qgm_adj(Qgm_tgl):
         q1 = qb0 + self.dt*rq
         
         # 5/ q-->h
-        adq1,adh0 = self.pv2h_adj(adh1,q1,h0)
+        adq1,adh0 = self.pv2h_adj(adh1,q1,+h0)
         adh1 = +azeros
         
         # 4/ Time increment
