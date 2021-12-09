@@ -79,7 +79,7 @@ class Qgm:
         self.qgiter = qgiter
         
         # MDT
-        self.mdt = +mdt
+        self.mdt = mdt
         if self.mdt is not None:
             if mdu is  None or mdv is  None:
                 self.ubar,self.vbar = self.h2uv(self.mdt)
@@ -258,12 +258,27 @@ class Qgm:
             vplus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
             vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
             
+            uplus[np.where((uplus<0))] = 0
+            uminus[np.where((uminus>0))] = 0
+            vplus[np.where((vplus<0))] = 0
+            vminus[np.where((vminus>=0))] = 0
+            
             rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,q)
                
             if self.mdt is not None:
                 
+                uplusbar = way*self.uplusbar
+                uplusbar[np.where((uplus<0))] = 0
+                vplusbar = way*self.vplusbar
+                vplusbar[np.where((vplus<0))] = 0
+                uminusbar = way*self.uminusbar
+                uminusbar[np.where((uminus>0))] = 0
+                vminusbar = way*self.vminusbar
+                vminusbar[np.where((vminus>0))] = 0
+                
+                
                 rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(
-                    way*self.uplusbar,way*self.vplusbar,way*self.uminusbar,way*self.vminusbar,q)
+                    uplusbar,vplusbar,uminusbar,vminusbar,q)
                 rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,self.qbar)
                     
             rq[2:-2,2:-2] = rq[2:-2,2:-2] - way*\
@@ -285,11 +300,6 @@ class Qgm:
     
     
     def _rq(self,uplus,vplus,uminus,vminus,q):
-        
-        uplus[np.where((uplus<0))] = 0
-        uminus[np.where((uminus>0))] = 0
-        vplus[np.where((vplus<0))] = 0
-        vminus[np.where((vminus>=0))] = 0
         
         res = \
             - uplus*1/(6*self.dx[2:-2,2:-2])*\

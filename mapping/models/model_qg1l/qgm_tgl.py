@@ -20,38 +20,52 @@ class Qgm_tgl(Qgm):
     def qrhs_tgl(self,du,dv,dq,u,v,q,way):
 
         drq = np.zeros((self.ny,self.nx))
-    
-        uplus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-        duplus = way*0.5*(du[2:-2,2:-2]+du[2:-2,3:-1])
-        duplus[np.where((uplus<0))] = 0
-        uplus[np.where((uplus<0))] = 0
-        uminus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-        duminus = way*0.5*(du[2:-2,2:-2]+du[2:-2,3:-1])
-        duminus[np.where((uminus>=0))] = 0
-        uminus[np.where((uminus>=0))] = 0
-        vplus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-        dvplus = way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2])
-        dvplus[np.where((vplus<0))] = 0
-        vplus[np.where((vplus<0))] = 0
-        vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-        dvminus = way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2])
-        dvminus[np.where((vminus>=0))] = 0
-        vminus[np.where((vminus>=0))] = 0
-    
-        drq[2:-2,2:-2] = drq[2:-2,2:-2] + self._rq_tgl(duplus,dvplus,duminus,dvminus,dq,
-                                                       uplus,vplus,uminus,vminus,q)
         
+        if not self.diff:
+            uplus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
+            duplus = way*0.5*(du[2:-2,2:-2]+du[2:-2,3:-1])
+            uminus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
+            duminus = way*0.5*(du[2:-2,2:-2]+du[2:-2,3:-1])
+            vplus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
+            dvplus = way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2])
+            vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
+            dvminus = way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2])
             
-        if self.mdt is not None:
-               
-            drq[2:-2,2:-2] = drq[2:-2,2:-2] + self._rq_tgl(
-                duplus,dvplus,duminus,dvminus,dq,
-                way*self.uplusbar,way*self.vplusbar,way*self.uminusbar,way*self.vminusbar,self.qbar)
-
+            duplus[np.where((uplus<0))] = 0
+            duminus[np.where((uminus>0))] = 0
+            dvplus[np.where((vplus<0))] = 0
+            dvminus[np.where((vminus>=0))] = 0
+            
+            uplus[np.where((uplus<0))] = 0
+            uminus[np.where((uminus>0))] = 0
+            vplus[np.where((vplus<0))] = 0
+            vminus[np.where((vminus>=0))] = 0
+            
+            
+        
+            drq[2:-2,2:-2] = drq[2:-2,2:-2] + self._rq_tgl(+duplus,+dvplus,+duminus,+dvminus,+dq,
+                                                           +uplus,+vplus,+uminus,+vminus,+q)
+            
                 
-        drq[2:-2,2:-2] = drq[2:-2,2:-2]-\
-            (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/\
-                (2*self.dy[2:-2,2:-2])*way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2]) 
+            if self.mdt is not None:
+                
+                uplusbar = way*self.uplusbar
+                uplusbar[np.where((uplus<0))] = 0
+                vplusbar = way*self.vplusbar
+                vplusbar[np.where((vplus<0))] = 0
+                uminusbar = way*self.uminusbar
+                uminusbar[np.where((uminus>0))] = 0
+                vminusbar = way*self.vminusbar
+                vminusbar[np.where((vminus>0))] = 0
+                   
+                drq[2:-2,2:-2] = drq[2:-2,2:-2] + self._rq_tgl(
+                    duplus,dvplus,duminus,dvminus,dq,
+                    uplusbar,vplusbar,uminusbar,vminusbar,self.qbar)
+    
+                    
+            drq[2:-2,2:-2] = drq[2:-2,2:-2]-\
+                (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/\
+                    (2*self.dy[2:-2,2:-2])*way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2]) 
     
         #diffusion
         if self.snu is not None:
@@ -62,10 +76,12 @@ class Qgm_tgl(Qgm):
                         (dq[3:-1,2:-2]+dq[1:-3,2:-2]-2*dq[2:-2,2:-2])
     
         drq[np.where((self.mask<=1))] = 0
+        drq[np.isnan(drq)] = 0
         
         return drq
     
     def _rq_tgl(self,duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q):
+        
         
         res = \
             - uplus*1/(6*self.dx[2:-2,2:-2])*\
@@ -73,9 +89,10 @@ class Qgm_tgl(Qgm):
             + uminus*1/(6*self.dx[2:-2,2:-2])*\
                 (dq[2:-2,4:]-6*dq[2:-2,3:-1]+3*dq[2:-2,2:-2]+2*dq[2:-2,1:-3]) \
             - vplus*1/(6*self.dy[2:-2,2:-2])*\
-                (2*dq[3:-1,2:-2]+3*dq[2:-2,2:-2]-6*dq[1:-3,2:-2]+dq[:-4,2:-2])  \
+                (2*dq[3:-1,2:-2]+3*dq[2:-2,2:-2]-6*dq[1:-3,2:-2]+dq[:-4,2:-2]) \
             + vminus*1/(6*self.dy[2:-2,2:-2])*\
                 (dq[4:,2:-2]-6*dq[3:-1,2:-2]+3*dq[2:-2,2:-2]+2*dq[1:-3,2:-2]) \
+    \
             - duplus*1/(6*self.dx[2:-2,2:-2])*\
                 (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4])\
             + duminus*1/(6*self.dx[2:-2,2:-2])*\
