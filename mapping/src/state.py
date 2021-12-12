@@ -395,7 +395,8 @@ class State:
             # If MDT provided, compute SSH from state variable (which is supposed to be SLA)
             if mdt is not None:
                 if self.config['name_model']!='QG1L_SW1L' or (self.config['name_model']=='QG1L_SW1L' and i!=1): # Avoid IT ssh (we could do better...)
-                    var[name_var] =(dims,var_to_save + mdt[np.newaxis,:,:])
+                    name_var += '_mdt'
+                    var[name_var] = (dims,var_to_save + mdt[np.newaxis,:,:])
             
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
