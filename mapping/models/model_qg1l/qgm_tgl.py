@@ -50,13 +50,13 @@ class Qgm_tgl(Qgm):
             if self.mdt is not None:
                 
                 uplusbar = way*self.uplusbar
-                uplusbar[np.where((uplus<0))] = 0
+                uplusbar[np.where((uplusbar<0))] = 0
                 vplusbar = way*self.vplusbar
-                vplusbar[np.where((vplus<0))] = 0
+                vplusbar[np.where((vplusbar<0))] = 0
                 uminusbar = way*self.uminusbar
-                uminusbar[np.where((uminus>0))] = 0
+                uminusbar[np.where((uminusbar>0))] = 0
                 vminusbar = way*self.vminusbar
-                vminusbar[np.where((vminus>0))] = 0
+                vminusbar[np.where((vminusbar>0))] = 0
                    
                 drq[2:-2,2:-2] = drq[2:-2,2:-2] + self._rq_tgl(
                     duplus,dvplus,duminus,dvminus,dq,

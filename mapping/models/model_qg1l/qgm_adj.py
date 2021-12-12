@@ -46,8 +46,18 @@ class Qgm_adj(Qgm_tgl):
                                              uplus,vplus,uminus,vminus,q)
         
         if self.mdt is not None:
+            
+            uplusbar = way*self.uplusbar
+            uplusbar[np.where((uplusbar<0))] = 0
+            vplusbar = way*self.vplusbar
+            vplusbar[np.where((vplusbar<0))] = 0
+            uminusbar = way*self.uminusbar
+            uminusbar[np.where((uminusbar>0))] = 0
+            vminusbar = way*self.vminusbar
+            vminusbar[np.where((vminusbar>0))] = 0
+                
             _aduplus,_advplus,_aduminus,_advminus,adq = self._rq_adj(adrq,adq,
-                     way*self.uplusbar,way*self.vplusbar,way*self.uminusbar,way*self.vminusbar,self.qbar)
+                     uplusbar,vplusbar,uminusbar,vminusbar,self.qbar)
             aduplus += _aduplus
             advplus += _advplus
             aduminus += _aduminus

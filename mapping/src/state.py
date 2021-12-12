@@ -31,7 +31,7 @@ class State:
     
    # __slots__ = ('config','lon','lat','var','name_lon','name_lat','name_var','name_exp_save','path_save','ny','nx','f','g')
     
-    def __init__(self,config,first=False):
+    def __init__(self,config,first=True):
         
         self.config = config
         self.first = first
@@ -88,7 +88,8 @@ class State:
         if config.name_init == 'restart':
             self.ini_var_restart()
         # Add mask if provided
-        self.ini_mask(config)
+        if self.first:
+            self.ini_mask(config)
             
         if not os.path.exists(config.tmp_DA_path):
             os.makedirs(config.tmp_DA_path)
@@ -291,14 +292,25 @@ class State:
         """
         
         # Read mask
-        if config.name_init_mask is None or not os.path.exists(config.name_init_mask):
+        if config.name_init_mask is not None and os.path.exists(config.name_init_mask):
+            ds = xr.open_dataset(config.name_init_mask).squeeze()
+            name_lon = config.name_var_mask['lon']
+            name_lat = config.name_var_mask['lat']
+            lon = ds[config.name_var_mask['lon']]
+            lat = ds[config.name_var_mask['lat']]
+            var = ds[config.name_var_mask['var']]
+        elif config.path_mdt is not None and os.path.exists(config.path_mdt):
+            ds = xr.open_dataset(config.path_mdt).squeeze()
+            name_lon = config.name_var_mdt['lon']
+            name_lat = config.name_var_mdt['lat']
+            lon = ds[config.name_var_mdt['lon']]
+            lat = ds[config.name_var_mdt['lat']]
+            var = ds[config.name_var_mdt['mdt']]
+        else:
             self.mask = np.zeros((self.ny,self.nx),dtype='bool')
             return
         
-        ds = xr.open_dataset(config.name_init_mask).squeeze()
-        lon = ds[config.name_var_mask['lon']]
-        lat = ds[config.name_var_mask['lat']]
-        var = ds[config.name_var_mask['var']]
+        
         
         lon = lon % 360
         
@@ -310,8 +322,8 @@ class State:
             dlat = (lat[1:] - lat[:-1]).max().values
             
         ds = ds.sel(
-            {config.name_var_mask['lon']:slice(self.lon.min()-dlon,self.lon.max()+dlon),
-             config.name_var_mask['lat']:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
+            {name_lon:slice(self.lon.min()-dlon,self.lon.max()+dlon),
+             name_lat:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
         
         if len(lon.shape)==1:
             lon_mask,lat_mask = np.meshgrid(lon.values,lat.values)
@@ -477,12 +489,14 @@ class State:
     
     def free(self):
         other = State(self.config,first=False)
+        other.mask = self.mask
         return other
     
     def copy(self):
         other = State(self.config,first=False)
         for i in range(len(self.name_var)):
             other.var.values[i] = deepcopy(self.var.values[i])
+        other.mask = self.mask
         return other
     
     def getvar(self,ind=None,vect=False):

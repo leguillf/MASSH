@@ -94,9 +94,9 @@ class Qgm:
             #self.qbar = self.huv2pv(self.ubar,self.vbar,self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
             #self.mdt = self.pv2h(self.qbar,+mdt)
             # For qrhs
-            self.uplusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
+            self.uplusbar  = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
             self.uminusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
-            self.vplusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+            self.vplusbar  = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
 
         
@@ -268,13 +268,13 @@ class Qgm:
             if self.mdt is not None:
                 
                 uplusbar = way*self.uplusbar
-                uplusbar[np.where((uplus<0))] = 0
+                uplusbar[np.where((uplusbar<0))] = 0
                 vplusbar = way*self.vplusbar
-                vplusbar[np.where((vplus<0))] = 0
+                vplusbar[np.where((vplusbar<0))] = 0
                 uminusbar = way*self.uminusbar
-                uminusbar[np.where((uminus>0))] = 0
+                uminusbar[np.where((uminusbar>0))] = 0
                 vminusbar = way*self.vminusbar
-                vminusbar[np.where((vminus>0))] = 0
+                vminusbar[np.where((vminusbar>0))] = 0
                 
                 
                 rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(

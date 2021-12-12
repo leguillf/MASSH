@@ -43,6 +43,8 @@ def obs(config, State, *args, **kwargs):
     name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}'
     if config.substract_mdt:
         name_dict_obs += '_submdt.pic'
+    elif config.add_mdt:
+        name_dict_obs += '_addmdt.pic'
     else:
         name_dict_obs += '.pic'
     
@@ -63,9 +65,13 @@ def obs(config, State, *args, **kwargs):
     bbox = [lon.min(),lon.max(),lat.min(),lat.max()]
     
     # MDT
-    finterpmdt = None
-    if config.substract_mdt:
+    finterpmdt = sign = None
+    if config.substract_mdt or config.add_mdt:
         finterpmdt = read_auxdata_mdt(config.path_mdt,config.name_var_mdt)
+        if config.add_mdt:
+            sign = 1
+        else:
+            sign = -1
                                       
     # Compute output observation dictionnary
     dict_obs = {}
@@ -106,11 +112,11 @@ def obs(config, State, *args, **kwargs):
         if sat_info.kind in ['swot_simulator','CMEMS']:
             _obs_swot_simulator(ds, assim_dates, dict_obs, sat_info, 
                                 config.assimilation_time_step, 
-                                config.tmp_DA_path,bbox,finterpmdt)
+                                config.tmp_DA_path,bbox,finterpmdt,sign)
         elif sat_info.kind=='fullSSH':
             _obs_fullSSH(ds, assim_dates,dict_obs, sat_info,
                          config.assimilation_time_step,
-                         config.tmp_DA_path,bbox,finterpmdt)
+                         config.tmp_DA_path,bbox,finterpmdt,sign)
     
     # Write *dict_obs* for next experiment
     if config.write_obs:
@@ -156,7 +162,7 @@ def _new_dict_obs(dict_obs,new_dir):
     
 
 def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
-                        bbox=None,finterpmdt=None):
+                        bbox=None,finterpmdt=None,sign=None):
     """
     NAME
         _obs_swot_simulator
@@ -208,7 +214,7 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
                 varobs[namevar] = _ds[namevar]
                 if finterpmdt is not None:
                     mdt_on_obs = finterpmdt((lon,lat))
-                    varobs[namevar].data = varobs[namevar].data - mdt_on_obs
+                    varobs[namevar].data = varobs[namevar].data + sign*mdt_on_obs
                     
             coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
             varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
@@ -222,7 +228,13 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
             
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
-                '_'.join(sat_info.name_obs_var) + '_' + date + '.nc')
+                '_'.join(sat_info.name_obs_var) + '_' + date)
+            if finterpmdt is not None:
+                if sign==1:
+                    path += '_addmdt'
+                elif sign==-1:
+                    path += '_submdt'
+            path += '.nc'
             print(dt_curr,': '+path)
             #dsout[sat_info.name_obs_time].encoding.pop("_FillValue", None)
             dsout.to_netcdf(path, encoding={sat_info.name_obs_time: {'_FillValue': None},

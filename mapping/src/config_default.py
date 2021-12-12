@@ -171,6 +171,8 @@ dir_model =  None
 
 dtmodel = 300   
 
+Reynolds = False # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
+
 qgiter = 20
 
 c0 = 2.7
@@ -410,6 +412,8 @@ path_obs = None
 detrend = False
 
 substract_mdt = False
+
+add_mdt = False
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  

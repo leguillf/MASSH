@@ -64,7 +64,7 @@ class Model_qg1l:
         self.T = np.arange(self.nt) * self.dt
         
         # Open MDT map if provided
-        if config.path_mdt is not None and os.path.exists(config.path_mdt):
+        if config.Reynolds and config.path_mdt is not None and os.path.exists(config.path_mdt):
             print('MDT is prescribed, thus the QGPV will be expressed thanks \
 to Reynolds decomposition. However, be sure that observed and boundary \
 variable are SLAs!')
