@@ -300,45 +300,38 @@ class State:
             ds = xr.open_dataset(config.name_init_mask).squeeze()
             name_lon = config.name_var_mask['lon']
             name_lat = config.name_var_mask['lat']
-            lon = ds[config.name_var_mask['lon']]
-            lat = ds[config.name_var_mask['lat']]
-            var = ds[config.name_var_mask['var']]
+            name_var = config.name_var_mdt['var']
         elif config.path_mdt is not None and os.path.exists(config.path_mdt):
             ds = xr.open_dataset(config.path_mdt).squeeze()
             name_lon = config.name_var_mdt['lon']
             name_lat = config.name_var_mdt['lat']
-            lon = ds[config.name_var_mdt['lon']]
-            lat = ds[config.name_var_mdt['lat']]
-            var = ds[config.name_var_mdt['mdt']]
+            name_var = config.name_var_mdt['mdt']
         else:
             self.mask = np.zeros((self.ny,self.nx),dtype='bool')
             return
         
-        
-        
-        lon = lon % 360
-        
-        if len(lon.shape)==2:
-            dlon =  (lon[:,1:] - lon[:,:-1]).max().values
-            dlat =  (lat[1:,:] - lat[:-1,:]).max().values
-        else:
-            dlon = (lon[1:] - lon[:-1]).max().values
-            dlat = (lat[1:] - lat[:-1]).max().values
-            
+        dlon =  (self.lon[:,1:] - self.lon[:,:-1]).max()
+        dlat =  (self.lat[1:,:] - self.lat[:-1,:]).max()
+       
         ds = ds.sel(
             {name_lon:slice(self.lon.min()-dlon,self.lon.max()+dlon),
              name_lat:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
         
+        lon = ds[name_lon].values
+        lat = ds[name_lat].values
+        var = ds[name_var].values
+        lon = lon % 360
+        
         if len(lon.shape)==1:
-            lon_mask,lat_mask = np.meshgrid(lon.values,lat.values)
+            lon_mask,lat_mask = np.meshgrid(lon,lat)
         else:
-            lon_mask = lon.values
-            lat_mask = lat.values
+            lon_mask = +lon
+            lat_mask = +lat
                 
         if len(var.shape)==2:
-            mask = var.values
+            mask = +var
         elif len(var.shape)==3:
-            mask = var[0,:,:].values
+            mask = +var[0,:,:]
         
         # Interpolate to state grid
         if np.any(lon_mask!=self.lon) or np.any(lat_mask!=self.lat):
@@ -347,7 +340,7 @@ class State:
                 (self.lon.ravel(),self.lat.ravel())).reshape((self.ny,self.nx))
         else:
             mask_interp = mask.copy()
-
+        
         # Convert to bool if float type     
         if mask_interp.dtype!=np.bool : 
             self.mask = np.empty((self.ny,self.nx),dtype='bool')
@@ -356,7 +349,7 @@ class State:
             self.mask[~ind_mask] = False
         else:
             self.mask = mask_interp.copy()
-                
+                            
         # Apply to state variable (SSH only)
         if config.name_model in ['QG1L','QG1L_SW1L']:
             self.var[0][self.mask] = np.nan
