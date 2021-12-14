@@ -460,8 +460,9 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Cost and Grad functions
     var = Variational_QG_wave(
         M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,checkpoint_flux=config.checkpoint_flux,
-        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date)
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
+        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
+        save_wave_basis=config.save_wave_basis)
     # Initial State 
     if config.path_init_4Dvar is None:
         Xopt = var.Xb*0
@@ -521,7 +522,8 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # 1st timestep
     coords = [var.coords[0],var.coords[1],var.coords[2][0]]
     var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xa,save_wave_basis=False) 
+                            compute_geta=True,eta=Xa,
+                            save_wave_basis=config.save_wave_basis) 
     State0.setvar(var_init.reshape((State.ny,State.nx)),
                   ind=0)
     State0.save_output(date)
@@ -539,7 +541,8 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xa,mode='flux').reshape((State.ny,State.nx))  
+                           compute_geta=True,eta=Xa,mode='flux',
+                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=0)
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),
@@ -599,8 +602,9 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     # Cost and Grad functions
     var = Variational_QG_SW(
         M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,checkpoint_flux=config.checkpoint_flux,
-        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date)
+        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
+        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
+        save_wave_basis=config.save_wave_basis)
     
     # Initial State 
     if config.path_init_4Dvar is None:
@@ -664,7 +668,8 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     # 1st timestep
     coords = [var.coords[0],var.coords[1],var.coords[2][0]]
     var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                              compute_geta=True,eta=Xqg,save_wave_basis=False) 
+                              compute_geta=True,eta=Xqg,
+                              save_wave_basis=config.save_wave_basis) 
     State0.setvar(var_init.reshape((State.ny,State.nx)),
                   ind=0)
     State0.save_output(date)
@@ -683,7 +688,8 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xqg,mode='flux').reshape((State.ny,State.nx))  
+                           compute_geta=True,eta=Xqg,mode='flux',
+                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=0)
         State0.setvar(_var + nstep*Model.dt*F/(3600*24),ind=0)

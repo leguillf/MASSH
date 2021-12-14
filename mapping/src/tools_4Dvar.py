@@ -318,7 +318,8 @@ class Variational_QG_wave:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
-                 tmp_DA_path=None, init_date=None,checkpoint=1, checkpoint_flux=1, prec=False,compute_test=False):
+                 tmp_DA_path=None, init_date=None,checkpoint=1,
+                 prec=False,compute_test=False,save_wave_basis=False):
         
         # Objects
         self.M = M # model
@@ -363,6 +364,7 @@ class Variational_QG_wave:
         self.prec = prec
         
         # Wavelet reduced basis
+        self.save_wave_basis = save_wave_basis
         self.comp = comp # Wavelet components
         self.coords = [None]*3
         self.coords[0] = State.lon.flatten()
@@ -400,7 +402,7 @@ class Variational_QG_wave:
         # 1st timestamp
         coords = [self.coords[0],self.coords[1],self.coords[2][0]]
         var_init = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,save_wave_basis=False) 
+                                compute_geta=True,eta=X,save_wave_basis=self.save_wave_basis) 
         State.setvar(var_init.reshape((State.ny,State.nx)),
                       ind=State.get_indobs())
             
@@ -423,7 +425,9 @@ class Variational_QG_wave:
             # 3. Add flux from wavelet
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,mode='flux').reshape((State.ny,State.nx))  
+                                compute_geta=True,eta=X,mode='flux',
+                                save_wave_basis=self.save_wave_basis).reshape(
+                                    (State.ny,State.nx))  
             var = State.getvar(ind=State.get_indobs())
             State.setvar(var + nstep*self.M.dt*F/(3600*24),
                          ind=State.get_indobs())
@@ -487,6 +491,7 @@ class Variational_QG_wave:
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                                    compute_geta=True,transpose=True,mode='flux',
+                                   save_wave_basis=self.save_wave_basis,
                                    eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
             # 2. Run adjoint model
@@ -502,7 +507,8 @@ class Variational_QG_wave:
         coords = [self.coords[0],self.coords[1],self.coords[2][0]]
         advar = adState.getvar(ind=State.get_indobs()).flatten()[np.newaxis,:]
         adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=advar,transpose=True,save_wave_basis=False)
+                                compute_geta=True,eta=advar,transpose=True,
+                                save_wave_basis=self.save_wave_basis)
             
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -517,7 +523,8 @@ class Variational_QG_SW:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
-                 tmp_DA_path=None, init_date=None,checkpoint=1, checkpoint_flux=1, prec=False,compute_test=False):
+                 tmp_DA_path=None, init_date=None,checkpoint=1,
+                 prec=False,compute_test=False,save_wave_basis=False):
         
         # Objects
         self.M = M # model
@@ -562,6 +569,7 @@ class Variational_QG_SW:
         self.prec = prec
         
         # Wavelet reduced basis
+        self.save_wave_basis = save_wave_basis
         self.comp = comp # Wavelet components
         self.coords = [None]*3
         self.coords[0] = State.lon.flatten()
@@ -604,7 +612,7 @@ class Variational_QG_SW:
          # 1st timestamp
         coords = [self.coords[0],self.coords[1],self.coords[2][0]]
         var_init = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=Xqg,save_wave_basis=False) 
+                                compute_geta=True,eta=Xqg,save_wave_basis=self.save_wave_basis) 
         State.setvar(var_init.reshape((State.ny,State.nx)),ind=0)
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
@@ -626,7 +634,9 @@ class Variational_QG_SW:
             # 3. Add flux from wavelet
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg',
-                                compute_geta=True,eta=Xqg,mode='flux').reshape((State.ny,State.nx))  
+                                compute_geta=True,eta=Xqg,mode='flux',
+                                save_wave_basis=self.save_wave_basis).reshape(
+                                    (State.ny,State.nx))  
             var = State.getvar(ind=0)
             State.setvar(var + nstep*self.M.dt*F/(3600*24),ind=0)
             
@@ -697,6 +707,7 @@ class Variational_QG_SW:
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             adXqg += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                                    compute_geta=True,transpose=True,mode='flux',
+                                   save_wave_basis=self.save_wave_basis,
                                    eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
             # 2. Run adjoint model
@@ -712,7 +723,8 @@ class Variational_QG_SW:
         coords = [self.coords[0],self.coords[1],self.coords[2][0]]
         advar = adState.getvar(ind=0).flatten()[np.newaxis,:]
         adXqg += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=advar,transpose=True,save_wave_basis=False)
+                                compute_geta=True,eta=advar,transpose=True,
+                                save_wave_basis=self.save_wave_basis)
         
         adX[:self.comp.nwave] = adXqg
         adX[self.comp.nwave:] = adXsw

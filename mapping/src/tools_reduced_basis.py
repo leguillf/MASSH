@@ -60,6 +60,7 @@ class RedBasis_QG:
         self.path_save_tmp = config.tmp_DA_path
         self.indx = {}
         self.indt = {}
+        self.facGeta = {}
 
         
      
@@ -285,17 +286,31 @@ class RedBasis_QG:
             
             
         
-        name_facGeta = os.path.join(self.path_save_tmp,f'facGeta_{time[0]}_{mode}.pic')
-        name_indt = os.path.join(self.path_save_tmp,f'indt_{time[0]}.pic')
-        name_indx = os.path.join(self.path_save_tmp,f'indx.pic')
-        if save_wave_basis and os.path.exists(name_facGeta) and os.path.exists(name_indt) and os.path.exists(name_indx):
-            with open(name_facGeta, 'rb') as f:
-                facGeta = pickle.load(f)
-            with open(name_indt, 'rb') as f:
-                indt = pickle.load(f)
-            with open(name_indx, 'rb') as f:
-                indx = pickle.load(f)
-        else:
+        compute_basis = False
+        if save_wave_basis:
+            # Offline
+            name_facGeta = os.path.join(self.path_save_tmp,f'facGeta_{time[0]}_{mode}.pic')
+            name_indt = os.path.join(self.path_save_tmp,f'indt_{time[0]}.pic')
+            name_indx = os.path.join(self.path_save_tmp,'indx.pic')
+            if os.path.exists(name_facGeta) and os.path.exists(name_indt) and os.path.exists(name_indx):
+                with open(name_facGeta, 'rb') as f:
+                    facGeta = pickle.load(f)
+                with open(name_indt, 'rb') as f:
+                    indt = pickle.load(f)
+                with open(name_indx, 'rb') as f:
+                    indx = pickle.load(f)
+            else: 
+                compute_basis = True
+
+        
+        elif (time[0] in self.facGeta) and (time[0] in self.indt) and self.indx!={}:
+            # Inline
+            facGeta = self.facGeta[time[0]]
+            indt = self.indt[time[0]]
+            indx = self.indx
+        else: 
+            compute_basis = True
+        if compute_basis:
             facGeta = {}
             indt = {}
             indx = {}
@@ -369,10 +384,12 @@ class RedBasis_QG:
                         pickle.dump(indt,f)
                 if not os.path.exists(name_indx):
                     with open(name_indx, 'wb') as f:
-                        pickle.dump(indx,f)                          
+                        pickle.dump(indx,f)     
+            else:
+                self.facGeta[time[0]] = facGeta
+                self.indt[time[0]] = indt
+                self.indx = indx
                                         
-                    
-                                    
         iwave = 0
         for iff in range(self.nf):
             for P in range(self.NP[iff]):
