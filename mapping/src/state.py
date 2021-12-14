@@ -89,7 +89,10 @@ class State:
             self.ini_var_restart()
         # Add mask if provided
         if self.first:
-            self.ini_mask(config)
+            try: self.ini_mask(config)
+            except: 
+                print('Warning: unable to compute mask')
+                self.mask = np.zeros((self.ny,self.nx),dtype='bool')
             
         if not os.path.exists(config.tmp_DA_path):
             os.makedirs(config.tmp_DA_path)
