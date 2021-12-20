@@ -288,6 +288,8 @@ Knudg = None
 
 reduced_basis = False # whether to compute wavelet basis for 4DvarQG system
 
+save_wave_basis = False
+
 compute_test = False # TLM,ADJ & GRAD tests
 
 path_init_4Dvar = None 
