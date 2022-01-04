@@ -5,9 +5,6 @@ Created on Thu Apr  8 19:22:53 2021
 
 @author: leguillou
 """
-
-import matplotlib.pylab as plt
-
 from qgm_tgl import Qgm_tgl
 import numpy as np
 
@@ -22,69 +19,81 @@ class Qgm_adj(Qgm_tgl):
 
         adrq[np.isnan(adrq)]=0.
         adrq[np.where((self.mask<=1))]=0
-    
+        
         adu=np.zeros((self.ny,self.nx))
         adv=np.zeros((self.ny,self.nx))
         adq=np.zeros((self.ny,self.nx))
-    
-        uplus=way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-        uminus=way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-        vplus=way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-        vminus=way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-    
-        induplus = np.where((uplus<0))
-        uplus[induplus]=0
-        induminus = np.where((uminus>=0))
-        uminus[induminus]=0
-        indvplus = np.where((vplus<0))
-        vplus[indvplus]=0
-        indvminus = np.where((vminus>=0))
-        vminus[indvminus]=0
         
+        if not self.diff:
+
+            uplus=way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
+            uminus=way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
+            vplus=way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
+            vminus=way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
         
-        aduplus,advplus,aduminus,advminus,adq = self._rq_adj(adrq,adq,
-                                             uplus,vplus,uminus,vminus,q)
-        
-        if self.mdt is not None:
+            induplus = np.where((uplus<0))
+            uplus[induplus]=0
+            induminus = np.where((uminus>=0))
+            uminus[induminus]=0
+            indvplus = np.where((vplus<0))
+            vplus[indvplus]=0
+            indvminus = np.where((vminus>=0))
+            vminus[indvminus]=0
             
-            uplusbar = way*self.uplusbar
-            uplusbar[np.where((uplusbar<0))] = 0
-            vplusbar = way*self.vplusbar
-            vplusbar[np.where((vplusbar<0))] = 0
-            uminusbar = way*self.uminusbar
-            uminusbar[np.where((uminusbar>0))] = 0
-            vminusbar = way*self.vminusbar
-            vminusbar[np.where((vminusbar>0))] = 0
+            
+            aduplus,advplus,aduminus,advminus,adq = self._rq_adj(adrq,adq,
+                                                 uplus,vplus,uminus,vminus,q)
+            
+            if self.mdt is not None:
                 
-            _aduplus,_advplus,_aduminus,_advminus,adq = self._rq_adj(adrq,adq,
-                     uplusbar,vplusbar,uminusbar,vminusbar,self.qbar)
-            aduplus += _aduplus
-            advplus += _advplus
-            aduminus += _aduminus
-            advminus += _advminus
+                uplusbar = way*self.uplusbar
+                uplusbar[np.where((uplusbar<0))] = 0
+                vplusbar = way*self.vplusbar
+                vplusbar[np.where((vplusbar<0))] = 0
+                uminusbar = way*self.uminusbar
+                uminusbar[np.where((uminusbar>0))] = 0
+                vminusbar = way*self.vminusbar
+                vminusbar[np.where((vminusbar>0))] = 0
+                    
+                _aduplus,_advplus,_aduminus,_advminus,adq = self._rq_adj(adrq,adq,
+                         uplusbar,vplusbar,uminusbar,vminusbar,self.qbar)
+                aduplus += _aduplus
+                advplus += _advplus
+                aduminus += _aduminus
+                advminus += _advminus
+            
+            aduplus[induplus]=0
+            aduminus[induminus]=0
+            advplus[indvplus]=0
+            advminus[indvminus]=0
+            
+            adu[2:-2,2:-2]=adu[2:-2,2:-2] + way*0.5*aduplus
+            adu[2:-2,3:-1]=adu[2:-2,3:-1] + way*0.5*aduplus
+            adu[2:-2,2:-2]=adu[2:-2,2:-2] + way*0.5*aduminus
+            adu[2:-2,3:-1]=adu[2:-2,3:-1] + way*0.5*aduminus
+            
+            adv[2:-2,2:-2]=adv[2:-2,2:-2] + way*0.5*advplus
+            adv[3:-1,2:-2]=adv[3:-1,2:-2] + way*0.5*advplus
+            adv[2:-2,2:-2]=adv[2:-2,2:-2] + way*0.5*advminus
+            adv[3:-1,2:-2]=adv[3:-1,2:-2] + way*0.5*advminus
         
-        aduplus[induplus]=0
-        aduminus[induminus]=0
-        advplus[indvplus]=0
-        advminus[indvminus]=0
-        
-        adu[2:-2,2:-2]=adu[2:-2,2:-2] + way*0.5*aduplus
-        adu[2:-2,3:-1]=adu[2:-2,3:-1] + way*0.5*aduplus
-        adu[2:-2,2:-2]=adu[2:-2,2:-2] + way*0.5*aduminus
-        adu[2:-2,3:-1]=adu[2:-2,3:-1] + way*0.5*aduminus
-        
-        adv[2:-2,2:-2]=adv[2:-2,2:-2] + way*0.5*advplus
-        adv[3:-1,2:-2]=adv[3:-1,2:-2] + way*0.5*advplus
-        adv[2:-2,2:-2]=adv[2:-2,2:-2] + way*0.5*advminus
-        adv[3:-1,2:-2]=adv[3:-1,2:-2] + way*0.5*advminus
-    
-        adv[2:-2,2:-2]=adv[2:-2,2:-2]-(self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])*way*0.5*(adrq[2:-2,2:-2])
-        adv[3:-1,2:-2]=adv[3:-1,2:-2]-(self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])*way*0.5*(adrq[2:-2,2:-2])
+            adv[2:-2,2:-2]=adv[2:-2,2:-2]-(self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])*way*0.5*(adrq[2:-2,2:-2])
+            adv[3:-1,2:-2]=adv[3:-1,2:-2]-(self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])*way*0.5*(adrq[2:-2,2:-2])
         
         #diffusion
         if self.snu is not None:
-            adq[2:-2,2:-2]=adq[2:-2,2:-2]+self.snu/(self.dx[2:-2,2:-2]**2)*(adrq[2:-2,3:-1]+adrq[2:-2,1:-3]-2*adrq[2:-2,2:-2]) \
-            +self.snu/(self.dy[2:-2,2:-2]**2)*(adrq[3:-1,2:-2]+adrq[1:-3,2:-2]-2*adrq[2:-2,2:-2]) 
+            adq[2:-2,3:-1] += self.snu/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[2:-2,1:-3] += self.snu/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[2:-2,2:-2] += -2*self.snu/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[3:-1,2:-2] += self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[1:-3,2:-2] += self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[2:-2,2:-2] += -2*self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            
+            # adq[2:-2,2:-2] = adq[2:-2,2:-2]+\
+            #     self.snu/(self.dx[2:-2,2:-2]**2)*\
+            #         (adrq[2:-2,3:-1]+adrq[2:-2,1:-3]-2*adrq[2:-2,2:-2]) +\
+            #     self.snu/(self.dy[2:-2,2:-2]**2)*\
+            #         (adrq[3:-1,2:-2]+adrq[1:-3,2:-2]-2*adrq[2:-2,2:-2]) 
             
         
         return adu, adv, adq

@@ -699,7 +699,6 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     print()
         
     
-    
 def ana_4Dvar_QG_init(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis

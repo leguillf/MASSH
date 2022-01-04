@@ -71,9 +71,9 @@ class Qgm_tgl(Qgm):
         if self.snu is not None:
             drq[2:-2,2:-2] = drq[2:-2,2:-2] +\
                 self.snu/(self.dx[2:-2,2:-2]**2)*\
-                    (dq[2:-2,3:-1]+dq[2:-2,1:-3]-2*dq[2:-2,2:-2]) \
-                    +self.snu/(self.dy[2:-2,2:-2]**2)*\
-                        (dq[3:-1,2:-2]+dq[1:-3,2:-2]-2*dq[2:-2,2:-2])
+                    (dq[2:-2,3:-1]+dq[2:-2,1:-3]-2*dq[2:-2,2:-2]) +\
+                self.snu/(self.dy[2:-2,2:-2]**2)*\
+                    (dq[3:-1,2:-2]+dq[1:-3,2:-2]-2*dq[2:-2,2:-2])
     
         drq[np.where((self.mask<=1))] = 0
         drq[np.isnan(drq)] = 0
