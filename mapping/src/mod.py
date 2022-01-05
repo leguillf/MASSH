@@ -166,7 +166,7 @@ variable are SLAs!')
             print('Adjoint test:')
             self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
-    def step(self,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step(self,State,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         SSH0 = State.getvar(ind=ind)
@@ -181,7 +181,7 @@ variable are SLAs!')
         
         # Time propagation
         for i in range(nstep):
-            SSH1 = self.qgm.step(SSH1,way=1)
+            SSH1 = self.qgm.step(SSH1,dphidt=dphidt,way=1)
 
         # Update state
         State.setvar(SSH1,ind=ind)
@@ -247,7 +247,7 @@ variable are SLAs!')
         if flag_pv:
             State.setvar(pv_1,1)
         
-    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step_tgl(self,dState,State,ddphidt=None,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         dSSH0 = dState.getvar(ind=ind)
@@ -267,13 +267,13 @@ variable are SLAs!')
         # Time propagation
         for i in range(nstep):
             
-            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1)
-            SSH1 = self.qgm.step(h0=SSH1)
+            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1,ddphidt=ddphidt,dphidt=dphidt)
+            SSH1 = self.qgm.step(h0=SSH1,dphidt=dphidt)
         
         # Update state
         dState.setvar(dSSH1,ind=ind)
         
-    def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step_adj(self,adState,State,addphidt=None,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         adSSH0 = adState.getvar(ind=ind)
@@ -293,14 +293,14 @@ variable are SLAs!')
         traj = [SSH1]
         if nstep>1:
             for i in range(nstep):
-                SSH1 = self.qgm.step(SSH1)
+                SSH1 = self.qgm.step(SSH1,dphidt=dphidt)
                 traj.append(SSH1)
         
         # Time propagation
         for i in reversed(range(nstep)):
             SSH1 = traj[i]
         
-            adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
+            adSSH1 = self.qgm.step_adj(adSSH1,SSH1,addphidt=addphidt,dphidt=dphidt)
         
         # Boundary conditions
         if Wbc is None:
@@ -312,10 +312,16 @@ variable are SLAs!')
         adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)
         
+        return addphidt
+    
+        
     def tangent_test(self,State,nstep,bc=False):
     
         State0 = State.random(1e-2)
         dState = State.random(1e-2)
+        
+        dphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
+        ddphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
         
         if bc:
             Hbc = np.random.random((State.ny,State.nx))
@@ -324,7 +330,7 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         State0_tmp = State0.copy()
-        self.step(State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        self.step(State0_tmp,dphidt=dphidt,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -334,12 +340,14 @@ variable are SLAs!')
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+            self.step(State1,dphidt=dphidt+lambd*ddphidt,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(dState1,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+            self.step_tgl(dState1,State0,
+                          ddphidt=lambd*ddphidt,dphidt=dphidt,
+                          nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             dX = dState1.getvar(vect=True)
             
             mask = np.isnan(X1+X2+dX)
@@ -352,14 +360,17 @@ variable are SLAs!')
         
         # Current trajectory
         State0 = State.random(1e-2)
+        dphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
         
         # Perturbation
         dState = State.random()
-        dX = dState.getvar(vect=True)
+        ddphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
+        dX = np.concatenate((dState.getvar(vect=True),ddphidt.ravel()))
         
         # Adjoint
         adState = State.random()
-        adY = adState.getvar(vect=True)
+        addphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
+        adY = np.concatenate((adState.getvar(vect=True),addphidt.ravel()))
         
         if bc:
             Hbc = np.random.random((State.ny,State.nx))
@@ -368,12 +379,16 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         # Run TLM
-        self.step_tgl(dState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
-        dY = dState.getvar(vect=True)
+        self.step_tgl(dState,State0,
+                      dphidt=dphidt,ddphidt=ddphidt,
+                      nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        dY = np.concatenate((dState.getvar(vect=True),dphidt.ravel()))
         
         # Run ADJ
-        self.step_adj(adState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
-        adX = adState.getvar(vect=True)
+        addphidt = self.step_adj(adState,State0,
+                                addphidt=addphidt,dphidt=dphidt,
+                                nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        adX = np.concatenate((adState.getvar(vect=True),addphidt.ravel()))
            
         mask = np.isnan(dX + adX + dY + adY)
         ps1 = np.inner(dX[~mask],adX[~mask])

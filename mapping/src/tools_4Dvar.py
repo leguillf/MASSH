@@ -418,19 +418,17 @@ class Variational_QG_wave:
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
-                
-            # 2. Run forward model
-            self.M.step(State,nstep=nstep)
             
-            # 3. Add flux from wavelet
+            # 2. Compute Flux
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
-            F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+            dphidt = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                                 compute_geta=True,eta=X,mode='flux',
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))  
-            var = State.getvar(ind=State.get_indobs())
-            State.setvar(var + nstep*self.M.dt*F/(3600*24),
-                         ind=State.get_indobs())
+            dphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv        
+            
+            # 3. Run forward model
+            self.M.step(State,nstep=nstep,dphidt=dphidt)
             
             # 4. Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
@@ -465,6 +463,7 @@ class Variational_QG_wave:
         # Ajoint initialization   
         adState = self.State.free()
         adX = np.zeros_like(X)
+        addphidt = np.zeros((self.State.ny,self.State.nx))
         
         # Current trajectory
         State = self.State.free()
@@ -485,18 +484,25 @@ class Variational_QG_wave:
             # 4. Read model state
             State.load(os.path.join(self.tmp_DA_path,
                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
-            
-            # 3. Add flux from wavelet
-            advar = adState.getvar(ind=State.get_indobs()).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
+            dphidt = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                                compute_geta=True,eta=X,mode='flux',
+                                save_wave_basis=self.save_wave_basis).reshape(
+                                    (State.ny,State.nx))  
+            dphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv        
+            
+            # 3. Run adjoint model
+            addphidt = self.M.step_adj(adState, State, 
+                                       addphidt=addphidt, dphidt=dphidt, 
+                                       nstep=nstep) # i+1 --> i
+            addphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv        
+            
+            # 2. Compute Flux
             adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                                    compute_geta=True,transpose=True,mode='flux',
                                    save_wave_basis=self.save_wave_basis,
-                                   eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
+                                   eta=addphidt.ravel()[np.newaxis,:])
             
-            # 2. Run adjoint model
-            self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
-                
             # 1. Misfit 
             if self.isobs[i]:
                 timestamp = self.M.timestamps[self.checkpoint[i]]

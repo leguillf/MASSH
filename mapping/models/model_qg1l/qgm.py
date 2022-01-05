@@ -316,7 +316,7 @@ class Qgm:
         
 
     
-    def step(self,h0,q0=None,way=1):
+    def step(self,h0,q0=None,dphidt=None,way=1):
         
         """ Propagation 
     
@@ -352,6 +352,8 @@ class Qgm:
         
         # 4/ increment integration 
         q1 = qb0 + self.dt*rq
+        if dphidt is not None:
+            q1 += self.dt*dphidt
         
         # 5/ q-->h
         h1 = self.pv2h(q1,+h0)

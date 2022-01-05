@@ -428,24 +428,9 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    # print('--> large scales')
-    # comp_ls = RedBasis_ls(config,State)
-    # qinv_ls = comp_ls.set_basis(return_qinv=True)
-    # print('--> meso scales')
     comp_qg = RedBasis_QG(config,State)
     qinv_qg = comp_qg.set_basis(return_qinv=True)
-    
-    # print('\n*** Static OI ***\n')
-    # box = [comp_ls.LON_MIN, comp_ls.LON_MAX, comp_ls.LAT_MIN, comp_ls.LAT_MAX, comp_ls.TIME_MIN, comp_ls.TIME_MAX]
-    # values, coords, coords_att = get_obs(dict_obs,box)
-    # G = comp_ls.operg(coords=coords,coords_name=coords_att, compute_g=True)
-    # cumsize = np.empty((comp_ls.nwave + 1))
-    # cumsize[0] = 0
-    # cumsize[1:] = np.cumsum(G[0])
-    # G_mat = csr_matrix(csc_matrix((G[2], G[1], cumsize),   shape=(values.size, comp_ls.nwave)))
-    # X_ls = solve_pcg(G_mat, qinv_ls, config.sigma_R**(-2)*values)
-    
-    
+   
     print('\n*** Variational ***\n')
     # Covariance matrix
     if config.sigma_B is not None:          
@@ -530,24 +515,23 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # Forward propagation
     for i in range(len(var.checkpoint)-1):
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
+        
+        # Flux 
+        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        dphidt = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                           compute_geta=True,eta=Xa,mode='flux',
+                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+        dphidt *= -State.g*State.f/(Model.c**2)/(3600*24) # Scale ssh -> pv      
+        
         # Forward
         for j in range(nstep):
-            Model.step(State0)
+            Model.step(State0,dphidt=dphidt)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date,mdt=Model.mdt)
-        # add Flux
-        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
-        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xa,mode='flux',
-                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-    
-        _var = State0.getvar(ind=0)
-        State0.setvar(_var + nstep*Model.dt*F/(3600*24),
-                     ind=State.get_indobs())
-    
+                
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
     print()

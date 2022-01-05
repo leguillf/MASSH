@@ -335,7 +335,7 @@ class Qgm_adj(Qgm_tgl):
         return adq,adhg
 
         
-    def step_adj(self,adh1,h0,way=1):
+    def step_adj(self,adh1,h0,addphidt=None,dphidt=None,way=1):
         
         azeros = +adh1*0
         
@@ -347,7 +347,9 @@ class Qgm_adj(Qgm_tgl):
         u,v = self.h2uv(h0)
         rq = self.qrhs(u,v,qb0,way)
         q1 = qb0 + self.dt*rq
-        
+        if dphidt is not None:
+            q1 += self.dt*dphidt
+            
         # 5/ q-->h
         adq1,adh0 = self.pv2h_adj(adh1,q1,+h0)
         adh1 = +azeros
@@ -355,6 +357,8 @@ class Qgm_adj(Qgm_tgl):
         # 4/ Time increment
         adq0 = +adq1
         adrq = self.dt * adq1
+        if addphidt is not None:
+            addphidt += self.dt * adq1
         adq1 = +azeros
          
         # 3/ (u,v,q)-->rq
@@ -369,7 +373,7 @@ class Qgm_adj(Qgm_tgl):
             
         # 1/ h-->q
         adh0 += self.h2pv_adj(adq0)
-    
+        
         return adh0
         
         
