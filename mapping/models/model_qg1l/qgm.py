@@ -9,7 +9,7 @@ class Qgm:
     #                             Initialization                              #
     ###########################################################################
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
-                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,
+                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
                  mdt=None,mdu=None,mdv=None):
         
         # Grid spacing
@@ -77,6 +77,11 @@ class Qgm:
         
         # Nb of iterations for elliptical inversion
         self.qgiter = qgiter
+        if qgiter_adj is not None:
+            self.qgiter_adj = qgiter_adj
+        else:
+            self.qgiter_adj = qgiter
+        
         
         # MDT
         self.mdt = mdt

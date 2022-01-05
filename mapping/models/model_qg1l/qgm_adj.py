@@ -11,9 +11,9 @@ import numpy as np
 class Qgm_adj(Qgm_tgl):
     
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
-                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,
+                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
                  mdt=None,mdu=None,mdv=None):
-        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,diff,snu,mdt,mdu,mdv)
+        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,qgiter_adj,diff,snu,mdt,mdu,mdv)
     
     def qrhs_adj(self,adrq,u,v,q,way):
 
@@ -260,9 +260,9 @@ class Qgm_adj(Qgm_tgl):
         adrnew = np.zeros((self.ny,self.nx))
         add = np.zeros((self.ny,self.nx))
         addnew = np.zeros((self.ny,self.nx))
-        if self.qgiter>1:
+        if self.qgiter_adj>1:
             # Adjoint Loop
-            for itr in reversed(range(self.qgiter)):
+            for itr in reversed(range(self.qgiter_adj)):
                 # Update SSH
                 # dh = dhg + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
                 adhg += adh

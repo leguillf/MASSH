@@ -175,6 +175,8 @@ Reynolds = False # If True, Reynolds decomposition will be applied. Be sure to h
 
 qgiter = 20
 
+qgiter_adj = None
+
 c0 = 2.7
 
 cdiffus = 0. 

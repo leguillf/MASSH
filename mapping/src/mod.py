@@ -144,6 +144,7 @@ variable are SLAs!')
                          g=State.g,
                          f=State.f,
                          qgiter=config.qgiter,
+                         qgiter_adj=config.qgiter_adj,
                          diff=config.only_diffusion,
                          snu=config.cdiffus,
                          mdt=self.mdt,
