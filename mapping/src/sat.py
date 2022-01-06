@@ -12,6 +12,7 @@ class Satellite:
         self, satellite, kind, path, name,
         name_obs_var, name_obs_lon, name_obs_lat, name_obs_time, name_obs_xac,
         name_obs_grd,
+        add_mdt,substract_mdt,
         nudging_params_stretching, nudging_params_relvort,
         sigma_noise
     ):
@@ -25,6 +26,8 @@ class Satellite:
         self.name_obs_time = name_obs_time
         self.name_obs_xac = name_obs_xac
         self.name_obs_grd = name_obs_grd
+        self.add_mdt = add_mdt
+        self.substract_mdt = substract_mdt
         self.nudging_params_stretching = nudging_params_stretching
         self.nudging_params_relvort = nudging_params_relvort
         self.sigma_noise = sigma_noise
@@ -49,6 +52,12 @@ def read_satellite_info(config,sat):
     
     try: sigma_noise = getattr(config, 'sigma_noise_' + sat)
     except: sigma_noise = None
+    
+    try: add_mdt = getattr(config, 'add_mdt_' + sat)
+    except: add_mdt = False
+    
+    try: substract_mdt = getattr(config, 'substract_mdt_' + sat)
+    except: substract_mdt = False
     
     name_obs_grd = [name_obs_lon,name_obs_lat,name_obs_time]
     
@@ -83,5 +92,6 @@ def read_satellite_info(config,sat):
         satellite=sat, kind=kind, path=path, name=name,
         name_obs_var=name_obs_var, name_obs_lon=name_obs_lon, name_obs_lat=name_obs_lat, name_obs_time=name_obs_time,
         name_obs_xac=name_obs_xac, name_obs_grd=name_obs_grd, 
+        substract_mdt=substract_mdt,add_mdt=add_mdt,
         nudging_params_relvort=nudging_params_relvort, nudging_params_stretching=nudging_params_stretching,
         sigma_noise=sigma_noise)

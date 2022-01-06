@@ -97,6 +97,25 @@ class State:
             self.mask = np.zeros((self.ny,self.nx),dtype='bool')   
         if not os.path.exists(config.tmp_DA_path):
             os.makedirs(config.tmp_DA_path)
+            
+        # MDT
+        if first:
+            if config.path_mdt is not None and os.path.exists(config.path_mdt):
+            
+                ds = xr.open_dataset(config.path_mdt).squeeze()
+                
+                name_var_mdt = {}
+                name_var_mdt['lon'] = config.name_var_mdt['lon']
+                name_var_mdt['lat'] = config.name_var_mdt['lat']
+                
+                
+                
+                if 'mdt' in config.name_var_mdt and config.name_var_mdt['mdt'] in ds:
+                    name_var_mdt['var'] = config.name_var_mdt['mdt']
+                    self.mdt = grid.interp2d(ds,
+                                             name_var_mdt,
+                                             self.lon,
+                                             self.lat)
         
     def __str__(self):
         message = ''

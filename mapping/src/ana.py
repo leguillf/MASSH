@@ -162,6 +162,13 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            config.flag_plot,
                                                            bfn_obj.sponge,
                                                            mask=+State.mask)
+            # Add mdt if provided 
+            if config.add_mdt_bc:
+                try: 
+                    mdt = +State.mdt[np.newaxis,:,:]
+                    mdt[np.isnan(mdt)] = 0
+                    bc_field += mdt
+                except : print('Warning : unable to add MDT to boundary field')
         else:
             bc_field = bc_weight = bc_field_t = None
 

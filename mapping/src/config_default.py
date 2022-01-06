@@ -268,6 +268,8 @@ file_boundary_conditions = None
 
 name_var_bc = {'time':'','lon':'','lat':'','var':''}
 
+add_mdt_bc = False
+
 scalenudg = None
 
 Knudg = None
@@ -417,8 +419,6 @@ detrend = False
 
 substract_mdt = False
 
-add_mdt = False
-
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
 #    * obs_path_sat: directory where the observations are stored
@@ -441,6 +441,19 @@ add_mdt = False
 
 
 
+kind_swot = "swot_simulator"
+obs_path_swot = '../../data_Example1/dc_obs/'
+obs_name_swot = "2020a_SSH_mapping_NATL60_karin_swot.nc" 
+name_obs_var_swot = ["ssh_model"]     
+name_obs_lon_swot = "lon"
+name_obs_lat_swot = "lat"
+name_obs_time_swot = "time"
+name_obs_xac_swot = "x_ac"
+sigma_noise_swot = 1e-2
+add_mdt_swot = False
+substract_mdt_swot = False
+nudging_params_stretching_swot = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)}
+nudging_params_relvort_swot = None
 
 
 
