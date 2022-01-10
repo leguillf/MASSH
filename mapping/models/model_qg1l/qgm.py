@@ -244,6 +244,7 @@ class Qgm:
                 h = hg + alpha*d 
                 
         h[self.mask==0] = np.nan
+        h[self.mask==1] = hg[self.mask==1]
         
         return h
     

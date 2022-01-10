@@ -351,7 +351,8 @@ class Qgm_adj(Qgm_tgl):
         adalpha = 0
         adbeta = 0
         adhg = np.zeros((self.ny,self.nx))
-        adhb = np.zeros((self.ny,self.nx))
+        adhg[self.mask==1] = adh[self.mask==1]
+        adh[self.mask==1] = 0
         adr = np.zeros((self.ny,self.nx))
         adrnew = np.zeros((self.ny,self.nx))
         add = np.zeros((self.ny,self.nx))
@@ -430,7 +431,8 @@ class Qgm_adj(Qgm_tgl):
         
         return adq,adhg
 
-        
+    
+    
     def step_adj(self,adh1,h0,addphidt=None,dphidt=None,way=1):
         
         azeros = +adh1*0

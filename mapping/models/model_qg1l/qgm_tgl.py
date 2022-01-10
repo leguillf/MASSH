@@ -240,10 +240,11 @@ class Qgm_tgl(Qgm):
                 dh = dhg + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
         
         dh[self.mask==0] = np.nan
+        dh[self.mask==1] = dhg[self.mask==1]
         
         return dh
     
-    
+        
     def step_tgl(self,dh0,h0,ddphidt=None,dphidt=None,way=1):
         
         if np.all(h0==0):
