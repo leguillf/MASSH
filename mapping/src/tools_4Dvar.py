@@ -441,7 +441,9 @@ class Variational_QG_wave:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-
+        
+        #State.plot()
+        
         return J
     
         
@@ -521,7 +523,8 @@ class Variational_QG_wave:
         
         g = adX + gb  # total gradient
         
-    
+        #adState.plot()
+        
         return g 
     
 

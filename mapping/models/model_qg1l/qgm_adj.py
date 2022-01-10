@@ -10,10 +10,10 @@ import numpy as np
 
 class Qgm_adj(Qgm_tgl):
     
-    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
+    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
                  g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
                  mdt=None,mdu=None,mdv=None):
-        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,qgiter_adj,diff,snu,mdt,mdu,mdv)
+        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,snu,mdt,mdu,mdv)
     
     def qrhs_adj(self,adrq,u,v,q,way):
 
@@ -89,17 +89,114 @@ class Qgm_adj(Qgm_tgl):
             adq[1:-3,2:-2] += self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
             adq[2:-2,2:-2] += -2*self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
             
-            # adq[2:-2,2:-2] = adq[2:-2,2:-2]+\
-            #     self.snu/(self.dx[2:-2,2:-2]**2)*\
-            #         (adrq[2:-2,3:-1]+adrq[2:-2,1:-3]-2*adrq[2:-2,2:-2]) +\
-            #     self.snu/(self.dy[2:-2,2:-2]**2)*\
-            #         (adrq[3:-1,2:-2]+adrq[1:-3,2:-2]-2*adrq[2:-2,2:-2]) 
-            
-        
         return adu, adv, adq
     
-    
     def _rq_adj(self,adrq,adq,uplus,vplus,uminus,vminus,q):
+        
+        """
+            main function for upwind schemes
+        """
+        
+        if self.upwind_adj==1:
+            return self._rq_adj1(adrq,adq,uplus,vplus,uminus,vminus,q)
+        elif self.upwind_adj==2:
+            return self._rq_adj2(adrq,adq,uplus,vplus,uminus,vminus,q)
+        elif self.upwind_adj==3:
+            return self._rq_adj3(adrq,adq,uplus,vplus,uminus,vminus,q)
+    
+    
+    def _rq_adj1(self,adrq,adq,uplus,vplus,uminus,vminus,q):
+        
+        """
+            1st-order upwind scheme
+        """
+        
+        aduplus= -adrq[2:-2,2:-2]*1/(self.dx[2:-2,2:-2])*\
+            (q[2:-2,2:-2]-q[2:-2,1:-3])
+        
+        aduminus= adrq[2:-2,2:-2]*1/(self.dx[2:-2,2:-2])*\
+            (q[2:-2,2:-2]-q[2:-2,3:-1])
+            
+        advplus = -adrq[2:-2,2:-2]*1/(self.dy[2:-2,2:-2])*\
+            (q[2:-2,2:-2]-q[1:-3,2:-2])
+            
+        advminus = adrq[2:-2,2:-2]*1/(self.dy[2:-2,2:-2])*\
+            (q[2:-2,2:-2]-q[3:-1,2:-2])
+            
+        adq[2:-2,2:-2] = adq[2:-2,2:-2] \
+            - uplus *1/(self.dx[2:-2,2:-2])* adrq[2:-2,2:-2] \
+            + uminus*1/(self.dx[2:-2,2:-2])* adrq[2:-2,2:-2] \
+            - vplus *1/(self.dy[2:-2,2:-2])* adrq[2:-2,2:-2] \
+            + vminus*1/(self.dy[2:-2,2:-2])* adrq[2:-2,2:-2]
+            
+        adq[2:-2,1:-3] = adq[2:-2,1:-3] \
+            + uplus *1/(self.dx[2:-2,2:-2])* adrq[2:-2,2:-2] 
+        adq[2:-2,3:-1] = adq[2:-2,3:-1] \
+            - uminus *1/(self.dx[2:-2,2:-2])* adrq[2:-2,2:-2] 
+        adq[1:-3,2:-2] = adq[1:-3,2:-2] \
+            + vplus *1/(self.dy[2:-2,2:-2])* adrq[2:-2,2:-2] 
+        adq[3:-1,2:-2] = adq[3:-1,2:-2] \
+            - vminus *1/(self.dy[2:-2,2:-2])* adrq[2:-2,2:-2] 
+            
+        return aduplus,advplus,aduminus,advminus,adq
+    
+    
+    def _rq_adj2(self,adrq,adq,uplus,vplus,uminus,vminus,q):
+        
+        """
+            2nd-order upwind scheme
+        """
+        
+        aduplus= -adrq[2:-2,2:-2]*1/(2*self.dx[2:-2,2:-2])*\
+        (3*q[2:-2,2:-2]-4*q[2:-2,1:-3]+q[2:-2,:-4])
+        
+        aduminus= adrq[2:-2,2:-2]*1/(2*self.dx[2:-2,2:-2])*\
+        (q[2:-2,4:]-4*q[2:-2,3:-1]+3*q[2:-2,2:-2])
+            
+        advplus = -adrq[2:-2,2:-2]*1/(2*self.dy[2:-2,2:-2])*\
+        (3*q[2:-2,2:-2]-4*q[1:-3,2:-2]+q[:-4,2:-2])
+            
+        advminus = adrq[2:-2,2:-2]*1/(2*self.dy[2:-2,2:-2])*\
+        (q[4:,2:-2]-4*q[3:-1,2:-2]+3*q[2:-2,2:-2])
+            
+        adq[2:-2,2:-2] = adq[2:-2,2:-2] \
+            - uplus *1/(2*self.dx[2:-2,2:-2])* 3*adrq[2:-2,2:-2] \
+            + uminus*1/(2*self.dx[2:-2,2:-2])* 3*adrq[2:-2,2:-2] \
+            - vplus *1/(2*self.dy[2:-2,2:-2])* 3*adrq[2:-2,2:-2] \
+            + vminus*1/(2*self.dy[2:-2,2:-2])* 3*adrq[2:-2,2:-2]
+            
+        adq[2:-2,1:-3] = adq[2:-2,1:-3] \
+            + uplus *1/(2*self.dx[2:-2,2:-2])* 4*adrq[2:-2,2:-2] 
+            
+        adq[2:-2,:-4] = adq[2:-2,:-4] \
+            - uplus *1/(2*self.dx[2:-2,2:-2])* adrq[2:-2,2:-2] 
+        
+        adq[2:-2,4:] = adq[2:-2,4:] \
+            + uminus *1/(2*self.dx[2:-2,2:-2])* adrq[2:-2,2:-2] 
+            
+        adq[2:-2,3:-1] = adq[2:-2,3:-1] \
+            - uminus *1/(2*self.dx[2:-2,2:-2])* 4*adrq[2:-2,2:-2] 
+        
+        adq[1:-3,2:-2] = adq[1:-3,2:-2] \
+            + vplus *1/(2*self.dy[2:-2,2:-2])* 4*adrq[2:-2,2:-2] 
+            
+        adq[:-4,2:-2] = adq[:-4,2:-2] \
+            - vplus *1/(2*self.dy[2:-2,2:-2])* adrq[2:-2,2:-2] 
+            
+        adq[4:,2:-2] = adq[4:,2:-2] \
+            + vminus *1/(2*self.dy[2:-2,2:-2])* adrq[2:-2,2:-2] 
+        
+        adq[3:-1,2:-2] = adq[3:-1,2:-2] \
+            - vminus *1/(2*self.dy[2:-2,2:-2])* 4*adrq[2:-2,2:-2] 
+    
+        return aduplus,advplus,aduminus,advminus,adq
+    
+    
+    def _rq_adj3(self,adrq,adq,uplus,vplus,uminus,vminus,q):
+        
+        """
+            3rd-order upwind scheme
+        """
         
         aduplus= -adrq[2:-2,2:-2]*1/(6*self.dx[2:-2,2:-2])*\
         (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]- \
@@ -154,7 +251,6 @@ class Qgm_adj(Qgm_tgl):
         adq[:-4,2:-2]=adq[:-4,2:-2] \
         - vplus*1/(6*self.dy[2:-2,2:-2])*(adrq[2:-2,2:-2])
             
-        
         return aduplus,advplus,aduminus,advminus,adq
     
     

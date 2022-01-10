@@ -8,7 +8,7 @@ class Qgm:
     ###########################################################################
     #                             Initialization                              #
     ###########################################################################
-    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
+    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
                  g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
                  mdt=None,mdu=None,mdv=None):
         
@@ -68,6 +68,13 @@ class Qgm:
                           if mask[itest,jtest]==2:
                               mask[itest,jtest] = 1
         self.mask = mask
+        
+        # Spatial scheme
+        self.upwind = upwind
+        if upwind_adj is None:
+            self.upwind_adj = upwind
+        else:
+            self.upwind_adj = upwind_adj
         
         # Diffusion 
         self.diff = diff
@@ -243,7 +250,7 @@ class Qgm:
     
     def qrhs(self,u,v,q,way):
 
-        """ Q increment
+        """ PV increment, upwind scheme
     
         Args:
             u (2D array): Zonal velocity
@@ -252,7 +259,7 @@ class Qgm:
             way: forward (+1) or backward (-1)
     
         Returns:
-            rq (2D array): Q increment  
+            rq (2D array): PV increment  
     
         """
         rq = np.zeros((self.ny,self.nx))
@@ -269,7 +276,7 @@ class Qgm:
             vminus[np.where((vminus>=0))] = 0
             
             rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,q)
-               
+            
             if self.mdt is not None:
                 
                 uplusbar = way*self.uplusbar
@@ -281,11 +288,10 @@ class Qgm:
                 vminusbar = way*self.vminusbar
                 vminusbar[np.where((vminusbar>0))] = 0
                 
-                
                 rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(
                     uplusbar,vplusbar,uminusbar,vminusbar,q)
                 rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,self.qbar)
-                    
+                
             rq[2:-2,2:-2] = rq[2:-2,2:-2] - way*\
                 (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
                     *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
@@ -303,23 +309,69 @@ class Qgm:
 
         return rq
     
-    
     def _rq(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            main function for upwind schemes
+        """
+        
+        if self.upwind==1:
+            return self._rq1(uplus,vplus,uminus,vminus,q)
+        elif self.upwind==2:
+            return self._rq2(uplus,vplus,uminus,vminus,q)
+        elif self.upwind==3:
+            return self._rq3(uplus,vplus,uminus,vminus,q)
+        
+    def _rq1(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            1st-order upwind scheme
+        """
+        
+        res = \
+            - uplus*1/(self.dx[2:-2,2:-2]) * (q[2:-2,2:-2]-q[2:-2,1:-3]) \
+            + uminus*1/(self.dx[2:-2,2:-2])* (q[2:-2,2:-2]-q[2:-2,3:-1]) \
+            - vplus*1/(self.dy[2:-2,2:-2]) * (q[2:-2,2:-2]-q[1:-3,2:-2]) \
+            + vminus*1/(self.dy[2:-2,2:-2])* (q[2:-2,2:-2]-q[3:-1,2:-2])
+        
+        return res
+    
+    def _rq2(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            2nd-order upwind scheme
+        """
+        
+        res = \
+            - uplus*1/(2*self.dx[2:-2,2:-2])*\
+                (3*q[2:-2,2:-2]-4*q[2:-2,1:-3]+q[2:-2,:-4]) \
+            + uminus*1/(2*self.dx[2:-2,2:-2])*\
+                (q[2:-2,4:]-4*q[2:-2,3:-1]+3*q[2:-2,2:-2])  \
+            - vplus*1/(2*self.dy[2:-2,2:-2])*\
+                (3*q[2:-2,2:-2]-4*q[1:-3,2:-2]+q[:-4,2:-2]) \
+            + vminus*1/(2*self.dy[2:-2,2:-2])*\
+                (q[4:,2:-2]-4*q[3:-1,2:-2]+3*q[2:-2,2:-2])
+        
+        return res
+    
+    def _rq3(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            3rd-order upwind scheme
+        """
         
         res = \
             - uplus*1/(6*self.dx[2:-2,2:-2])*\
-                (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4])\
+                (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4]) \
             + uminus*1/(6*self.dx[2:-2,2:-2])*\
-                (q[2:-2,4:]-6*q[2:-2,3:-1]+3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
+                (q[2:-2,4:]-6*q[2:-2,3:-1]+3*q[2:-2,2:-2]+2*q[2:-2,1:-3])  \
             - vplus*1/(6*self.dy[2:-2,2:-2])*\
-                (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2])  \
+                (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2]) \
             + vminus*1/(6*self.dy[2:-2,2:-2])*\
                 (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
         
         return res
             
-        
-
     
     def step(self,h0,q0=None,dphidt=None,way=1):
         
@@ -350,7 +402,6 @@ class Qgm:
 
         # 2/ h-->(u,v)
         u,v = self.h2uv(h0)
-        
         
         # 3/ (u,v,q)-->rq
         rq = self.qrhs(u,v,qb0,way)

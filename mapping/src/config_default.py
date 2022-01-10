@@ -171,6 +171,10 @@ dir_model =  None
 
 dtmodel = 300   
 
+upwind = 1 # Order of the upwind scheme for PV advection (either 1,2 or 3)
+
+upwind_adj = None
+
 Reynolds = False # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
 
 qgiter = 20

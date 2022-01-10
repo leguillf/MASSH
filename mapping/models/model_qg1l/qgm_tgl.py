@@ -11,10 +11,10 @@ import numpy as np
 
 class Qgm_tgl(Qgm):
     
-    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
+    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
                  g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
                  mdt=None,mdu=None,mdv=None):
-        super().__init__(dx,dy,dt,SSH,c,g,f,qgiter,qgiter_adj,diff,snu,mdt,mdu,mdv)
+        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,snu,mdt,mdu,mdv)
     
     
     def qrhs_tgl(self,du,dv,dq,u,v,q,way):
@@ -80,8 +80,73 @@ class Qgm_tgl(Qgm):
         
         return drq
     
+    
     def _rq_tgl(self,duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q):
         
+        """
+            main function for upwind schemes
+        """
+        
+        if self.upwind==1:
+            return self._rq1_tgl(duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q)
+        elif self.upwind==2:
+            return self._rq2_tgl(duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q)
+        elif self.upwind==3:
+            return self._rq3_tgl(duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q)
+        
+        
+    def _rq1_tgl(self,duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q):
+        
+        """
+            1st-order upwind scheme
+        """
+        
+        res = \
+            - uplus*1/(self.dx[2:-2,2:-2]) * (dq[2:-2,2:-2]-dq[2:-2,1:-3]) \
+            + uminus*1/(self.dx[2:-2,2:-2])* (dq[2:-2,2:-2]-dq[2:-2,3:-1]) \
+            - vplus*1/(self.dy[2:-2,2:-2]) * (dq[2:-2,2:-2]-dq[1:-3,2:-2]) \
+            + vminus*1/(self.dy[2:-2,2:-2])* (dq[2:-2,2:-2]-dq[3:-1,2:-2]) \
+    \
+            - duplus*1/(self.dx[2:-2,2:-2]) * (q[2:-2,2:-2]-q[2:-2,1:-3]) \
+            + duminus*1/(self.dx[2:-2,2:-2])* (q[2:-2,2:-2]-q[2:-2,3:-1]) \
+            - dvplus*1/(self.dy[2:-2,2:-2]) * (q[2:-2,2:-2]-q[1:-3,2:-2]) \
+            + dvminus*1/(self.dy[2:-2,2:-2])* (q[2:-2,2:-2]-q[3:-1,2:-2])
+            
+        return res
+    
+    def _rq2_tgl(self,duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q):
+        
+        """
+            2nd-order upwind scheme
+        """
+        
+        res = \
+            - uplus*1/(2*self.dx[2:-2,2:-2])*\
+                (3*dq[2:-2,2:-2]-4*dq[2:-2,1:-3]+dq[2:-2,:-4]) \
+            + uminus*1/(2*self.dx[2:-2,2:-2])*\
+                (dq[2:-2,4:]-4*dq[2:-2,3:-1]+3*dq[2:-2,2:-2])  \
+            - vplus*1/(2*self.dy[2:-2,2:-2])*\
+                (3*dq[2:-2,2:-2]-4*dq[1:-3,2:-2]+dq[:-4,2:-2]) \
+            + vminus*1/(2*self.dy[2:-2,2:-2])*\
+                (dq[4:,2:-2]-4*dq[3:-1,2:-2]+3*dq[2:-2,2:-2])  \
+    \
+            - duplus*1/(2*self.dx[2:-2,2:-2])*\
+                (3*q[2:-2,2:-2]-4*q[2:-2,1:-3]+q[2:-2,:-4]) \
+            + duminus*1/(2*self.dx[2:-2,2:-2])*\
+                (q[2:-2,4:]-4*q[2:-2,3:-1]+3*q[2:-2,2:-2])  \
+            - dvplus*1/(2*self.dy[2:-2,2:-2])*\
+                (3*q[2:-2,2:-2]-4*q[1:-3,2:-2]+q[:-4,2:-2]) \
+            + dvminus*1/(2*self.dy[2:-2,2:-2])*\
+                (q[4:,2:-2]-4*q[3:-1,2:-2]+3*q[2:-2,2:-2])
+            
+        return res
+    
+    
+    def _rq3_tgl(self,duplus,dvplus,duminus,dvminus,dq,uplus,vplus,uminus,vminus,q):
+        
+        """
+            3rd-order upwind scheme
+        """
         
         res = \
             - uplus*1/(6*self.dx[2:-2,2:-2])*\

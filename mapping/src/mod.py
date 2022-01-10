@@ -141,6 +141,8 @@ variable are SLAs!')
                          dt=self.dt,
                          SSH=State.getvar(ind=0),
                          c=self.c,
+                         upwind=config.upwind,
+                         upwind_adj=config.upwind_adj,
                          g=State.g,
                          f=State.f,
                          qgiter=config.qgiter,
