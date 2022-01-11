@@ -43,8 +43,8 @@ class Qgm:
         mask = np.zeros((ny,nx))+2
         mask[:2,:] = 1
         mask[:,:2] = 1
-        mask[-2:,:] = 1
-        mask[:,-2:] = 1
+        mask[-3:,:] = 1
+        mask[:,-3:] = 1
         
     
         if SSH is not None and mdt is not None:
@@ -68,6 +68,77 @@ class Qgm:
                           if mask[itest,jtest]==2:
                               mask[itest,jtest] = 1
         self.mask = mask
+        _np = np.shape(np.where(mask>=1))[1]
+        _np2 = np.shape(np.where(mask==2))[1]
+        _np1 = np.shape(np.where(mask==1))[1]
+        self.np = _np
+        self.np2 = _np2
+        self.mask1d=np.zeros((_np))
+        self.H=np.zeros((_np))
+        self.c1d=np.zeros((_np))
+        self.f01d=np.zeros((_np))
+        self.dx1d=np.zeros((_np))
+        self.dy1d=np.zeros((_np))
+        self.indi=np.zeros((_np), dtype=np.int)
+        self.indj=np.zeros((_np), dtype=np.int)
+        self.vp1=np.zeros((_np1), dtype=np.int)
+        self.vp2=np.zeros((_np2), dtype=np.int)
+        self.vp2=np.zeros((_np2), dtype=np.int)
+        self.vp2n=np.zeros((_np2), dtype=np.int)
+        self.vp2nn=np.zeros((_np2), dtype=np.int)
+        self.vp2s=np.zeros((_np2), dtype=np.int)
+        self.vp2ss=np.zeros((_np2), dtype=np.int)
+        self.vp2e=np.zeros((_np2), dtype=np.int)
+        self.vp2ee=np.zeros((_np2), dtype=np.int)
+        self.vp2w=np.zeros((_np2), dtype=np.int)
+        self.vp2ww=np.zeros((_np2), dtype=np.int)
+        self.vp2nw=np.zeros((_np2), dtype=np.int)
+        self.vp2ne=np.zeros((_np2), dtype=np.int)
+        self.vp2se=np.zeros((_np2), dtype=np.int)
+        self.vp2sw=np.zeros((_np2), dtype=np.int)
+        self.indp=np.zeros((ny,nx), dtype=np.int)
+        
+        p=-1
+        for i in range(ny):
+          for j in range(nx):
+            if (mask[i,j]>=1):
+              p=p+1
+              self.mask1d[p]=mask[i,j]
+              self.H[p]=SSH[i,j]
+              self.dx1d[p]=dx[i,j]
+              self.dy1d[p]=dy[i,j]
+              self.f01d[p]=self.f0[i,j]
+              self.c1d[p]=self.c[i,j]
+              self.indi[p]=i
+              self.indj[p]=j
+              self.indp[i,j]=p
+     
+     
+        p2=-1
+        p1=-1
+        for p in range(_np):
+          if (self.mask1d[p]==2):
+            p2=p2+1
+            i=self.indi[p]
+            j=self.indj[p]
+            self.vp2[p2]=p
+            self.vp2n[p2]=self.indp[i+1,j]
+            self.vp2nn[p2]=self.indp[i+2,j]
+            self.vp2s[p2]=self.indp[i-1,j]
+            self.vp2ss[p2]=self.indp[i-2,j]
+            self.vp2e[p2]=self.indp[i,j+1]
+            self.vp2ee[p2]=self.indp[i,j+2]
+            self.vp2w[p2]=self.indp[i,j-1]
+            self.vp2ww[p2]=self.indp[i,j-2]
+            self.vp2nw[p2]=self.indp[i+1,j-1]
+            self.vp2ne[p2]=self.indp[i+1,j+1]
+            self.vp2se[p2]=self.indp[i-1,j+1]
+            self.vp2sw[p2]=self.indp[i-1,j-1]
+          if (self.mask1d[p]==1):
+            p1=p1+1
+            i=self.indi[p]
+            j=self.indj[p]
+            self.vp1[p1]=p
         
         # Spatial scheme
         self.upwind = upwind
@@ -163,7 +234,7 @@ class Qgm:
         
         q[1:-1,1:-1] = self.g/self.f0[1:-1,1:-1]*\
             ((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2 +\
-             (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) -\
+              (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) -\
                 self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
         
         ind = np.where((self.mask==1))
@@ -171,6 +242,36 @@ class Qgm:
             
         ind = np.where((self.mask==0))
         q[ind] = 0
+    
+        return q
+    
+    def h2pv_2(self,h):
+        """ SSH to Q
+    
+        Args:
+            h (2D array): SSH field.
+            grd (Grid() object): check modgrid.py
+    
+        Returns:
+            q: Potential Vorticity field  
+        """
+        g=self.g
+        
+        q=- g*self.f0/(self.c**2) *h 
+    
+        q[1:-1,1:-1] = g/self.f0[1:-1,1:-1]*((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2 \
+                                          + (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) \
+                                          - g*self.f0[1:-1,1:-1]/(self.c[1:-1,1:-1]**2) *h[1:-1,1:-1]
+        
+        ind=np.where((self.mask==1))
+        
+        q[ind]=- g*self.f0[ind]/(self.c[ind]**2) *h[ind]
+    
+        qtemp=- g*self.f0/(self.c**2) *h
+        q[np.where((np.isnan(q)))]=qtemp[np.where((np.isnan(q)))]
+        ind=np.where((self.mask==0))
+        
+        q[ind]=0
     
         return q
     
@@ -193,15 +294,130 @@ class Qgm:
         q[ind] = 0
     
         return q
+    
+    def h2pv_1d(self,h1d,a,b):
+        """ SSH to Q
+    
+        Args:
+            h (2D array): SSH field.
+            c (2D array): Phase speed of first baroclinic radius 
+    
+        Returns:
+            q: Potential Vorticity field  
+        """
+    
+            
+        q1d = np.empty(self.np,) 
+        
+        q1d[self.vp2] = a[self.vp2]*\
+            ((h1d[self.vp2e]+h1d[self.vp2w]-2*h1d[self.vp2])/self.dx1d[self.vp2]**2 +\
+             (h1d[self.vp2n]+h1d[self.vp2s]-2*h1d[self.vp2])/self.dy1d[self.vp2]**2) +\
+                b[self.vp2] * h1d[self.vp2]
+        q1d[self.vp1] = +h1d[self.vp1]
+    
+        return q1d
+    
         
     def norm(self,r):
         return np.linalg.norm(r)
     
-    def alpha(self,r,d):
-        return self.norm(r)**2/(d.ravel().dot(self.h2pv(d).ravel()))
+    def alpha(self,r,d,a,b):
+        return self.norm(r)**2./(d.dot(self.h2pv_1d(d,a,b)))
+        #return self.norm(r)**2./(d.dot(self.h2pv_1d(d,a,b)))
     
     def beta(self,r,rnew):
         return self.norm(rnew)**2 / self.norm(r)**2
+    
+    
+    def pv2h_2(self,q,hg):
+        """ Q to SSH
+        
+        This code solve a linear system of equations using Conjugate Gradient method
+    
+        Args:
+            q (2D array): Potential Vorticity field
+            hg (2D array): SSH guess
+            grd (Grid() object): check modgrid.py
+    
+        Returns:
+            h (2D array): SSH field. 
+        """
+        ny,nx,=np.shape(hg)
+        g=self.g
+    
+    
+        x=hg[self.indi,self.indj]
+        q1d=q[self.indi,self.indj]
+    
+        #aaa=g/grd.f01d
+        #bbb=-g*grd.f01d/grd.c1d**2
+        #ccc=q1d-grd.f01d
+        aaa=g/self.f01d
+
+        bbb = - g*self.f01d / self.c1d**2
+        ccc=+q1d
+        #ccc=+q1d-grd.f01d  
+    
+        aaa[self.vp1]=0
+        bbb[self.vp1]=1
+        ccc[self.vp1]=x[self.vp1]  ##boundary condition
+    
+        vec=+x
+    
+        avec=self.compute_avec(vec,aaa,bbb)
+        gg=avec-ccc
+        p=-gg
+        #print 'test1', numpy.var(gg)
+    
+        for itr in range(self.qgiter-1): 
+            vec=+p
+            avec=self.compute_avec(vec,aaa,bbb)
+            tmp=np.dot(p,avec)
+            
+            if tmp!=0. : s=-np.dot(p,gg)/tmp
+            else: s=1.
+            
+            a1=np.dot(gg,gg)
+            x=x+s*p
+            vec=+x
+            avec=self.compute_avec(vec,aaa,bbb)
+            gg=avec-ccc
+            #print 'test', numpy.var(gg)
+            a2=np.dot(gg,gg)
+            
+            if a1!=0: beta=a2/a1
+            else: beta=1.
+            
+            p=-gg+beta*p
+        
+        vec=+p
+        avec=self.compute_avec(vec,aaa,bbb)
+        val1=-np.dot(p,gg)
+        val2=np.dot(p,avec)
+        if (val2==0.): 
+            s=1.
+        else: 
+            s=val1/val2
+        
+        #pdb.set_trace()
+        a1=np.dot(gg,gg)
+        x=x+s*p
+    
+        # back to 2D
+        h=np.empty((ny,nx))
+        h[:,:]=np.NAN
+        h[self.indi,self.indj]=x[:]
+    
+        return h
+    
+    def compute_avec(self,vec,aaa,bbb):
+    
+        avec=np.empty(self.np,) 
+        avec[self.vp2]=aaa[self.vp2]*((vec[self.vp2e]+vec[self.vp2w]-2*vec[self.vp2])/(self.dx1d[self.vp2]**2)+(vec[self.vp2n]+vec[self.vp2s]-2*vec[self.vp2])/(self.dy1d[self.vp2]**2)) + bbb[self.vp2]*vec[self.vp2]
+        avec[self.vp1]=vec[self.vp1]
+     
+        return avec
+
     
     def pv2h(self,q,hg):
         
@@ -219,34 +435,43 @@ class Qgm:
         if np.all(q==0):
             return hg
         
-        q_tmp = +q
+        q1d = +q[self.indi,self.indj]
+        hg1d = +hg[self.indi,self.indj]
         
-        q_tmp[self.mask==0] = 0
-        hg[self.mask==0] = 0
+        a = self.g/self.f01d
+        b = -self.g*self.f01d/(self.c1d)**2
+        a[self.vp1] = 0
+        b[self.vp1] = 1
         
-        r = +q_tmp - self.h2pv(hg)
+        q1d[self.vp1] = hg1d[self.vp1] # Boundary conditions
+        
+        r = +q1d - self.h2pv_1d(hg1d,a,b)
         d = +r
-        alpha = self.alpha(r,d)
-        h = hg + alpha*d
+        alpha = self.alpha(r,d,a,b)
+        h1d = hg1d + alpha*d
         if self.qgiter>1:
             for itr in range(self.qgiter): 
                 # Update guess value
-                hg = +h
+                hg1d = +h1d
                 # Compute beta
-                rnew = r - alpha * self.h2pv(d)
+                rnew = r - alpha * self.h2pv_1d(d,a,b)
                 beta = self.beta(r,rnew)
                 r = +rnew
                 # Compute new direction
                 dnew = r + beta * d
-                alpha = self.alpha(r,dnew)
+                alpha = self.alpha(r,dnew,a,b)
                 d = +dnew
                 # Update SSH
-                h = hg + alpha*d 
-                
-        h[self.mask==0] = np.nan
-        h[self.mask==1] = hg[self.mask==1]
+                h1d = hg1d + alpha*d 
+        
+        # back to 2D
+        h = np.empty((self.ny,self.nx))
+        h[:,:] = np.NAN
+        h[self.indi,self.indj] = h1d[:]
         
         return h
+    
+    
     
     
     def qrhs(self,u,v,q,way):

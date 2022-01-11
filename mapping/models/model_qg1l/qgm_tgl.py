@@ -169,37 +169,39 @@ class Qgm_tgl(Qgm):
             
         return res
         
-    def alpha_tgl(self,dr,dd,r,d):
+    def alpha_tgl(self,dr,dd,r,d,a,b):
         norm_r = self.norm(r)
-        dAd = d.ravel().dot(self.h2pv(d).ravel())
+        dAd = d.dot(self.h2pv_1d(d,a,b))
 
-        dalpha = 2*np.inner(dr.ravel(),r.ravel()) / dAd - (norm_r/dAd)**2*\
-            (d.ravel().dot(self.h2pv(dd).ravel())+\
-             dd.ravel().dot(self.h2pv(d).ravel())) 
+        dalpha = 2*np.inner(dr,r) / dAd - (norm_r/dAd)**2*\
+            (d.dot(self.h2pv_1d(dd,a,b))+\
+             dd.dot(self.h2pv_1d(d,a,b))) 
 
         return dalpha
     
     def beta_tgl(self,dr,drnew,r,rnew):
-        dbeta = (2*np.inner(drnew.ravel(),rnew.ravel())*self.norm(r)**2-\
-                2*np.inner(dr.ravel(),r.ravel())*self.norm(rnew)**2)/\
+        dbeta = (2*np.inner(drnew,rnew)*self.norm(r)**2-\
+                2*np.inner(dr,r)*self.norm(rnew)**2)/\
                 self.norm(r)**4
             
         return dbeta
     
     def pv2h_tgl(self,dq,dhg,q,hg):
         
-        q_tmp = +q
-        dq_tmp = +dq
-        
-        q_tmp[self.mask==0] = 0
-        hg[self.mask==0] = 0
-        dq_tmp[self.mask==0] = 0
-        dhg[self.mask==0] = 0
-        
+        #####################
         # Current trajectory
-        r = +q_tmp - self.h2pv(hg)
+        #####################
+        
+        q1d = +q[self.indi,self.indj]
+        hg1d = +hg[self.indi,self.indj]
+        a = self.g/self.f01d
+        b = -self.g*self.f01d/(self.c1d)**2
+        a[self.vp1] = 0
+        b[self.vp1] = 1
+        q1d[self.vp1] = hg1d[self.vp1] # Boundary conditions
+        r = +q1d - self.h2pv_1d(hg1d,a,b)
         d = +r
-        alpha = self.alpha(r,d)
+        alpha = self.alpha(r,d,a,b)
         alpha_list = [alpha]
         beta_list = []
         r_list = [r]
@@ -208,43 +210,55 @@ class Qgm_tgl(Qgm):
             # Loop
             for itr in range(self.qgiter):
                 # Update direction
-                rnew = r - alpha * self.h2pv(d)
+                rnew = r - alpha * self.h2pv_1d(d,a,b)
                 beta = self.beta(r,rnew)
                 r = +rnew
                 d = r + beta * d
-                alpha = self.alpha(r,d)
+                alpha = self.alpha(r,d,a,b)
                 # Append to lists
                 alpha_list.append(alpha)
                 r_list.append(r)
                 d_list.append(d)
                 beta_list.append(beta)
+                
+        #####################      
+        # Tangent computation 
+        #####################
         
-        dr = +dq_tmp - self.h2pv(dhg)
+        dq1d = +dq[self.indi,self.indj]
+        dhg1d = +dhg[self.indi,self.indj]
+        
+        dq1d[self.vp1] = dhg1d[self.vp1] # Boundary conditions
+        
+        dr = +dq1d - self.h2pv_1d(dhg1d,a,b)
         dd = +dr        
-        dalpha = self.alpha_tgl(dr,dd,r_list[0],d_list[0])
-        dh = dhg + dalpha*d_list[0] + alpha_list[0]*dd
+        dalpha = self.alpha_tgl(dr,dd,r_list[0],d_list[0],a,b)
+        dh1d = dhg1d + dalpha*d_list[0] + alpha_list[0]*dd
         if self.qgiter>1:
             for itr in range(self.qgiter):
                 # Update guess value
-                dhg = +dh    
+                dhg1d = +dh1d    
                 # Compute beta
-                drnew = dr - (dalpha*self.h2pv(d_list[itr]) +
-                              alpha_list[itr]*self.h2pv(dd))
+                drnew = dr - (dalpha*self.h2pv_1d(d_list[itr],a,b) +
+                              alpha_list[itr]*self.h2pv_1d(dd,a,b))
                 dbeta = self.beta_tgl(dr,drnew,r_list[itr],r_list[itr+1])
                 dr = +drnew
                 # Compute new direction
                 ddnew = dr + dbeta * d_list[itr] + beta_list[itr] * dd
-                dalpha = self.alpha_tgl(dr,ddnew,r_list[itr+1],d_list[itr+1])
+                dalpha = self.alpha_tgl(dr,ddnew,r_list[itr+1],d_list[itr+1],a,b)
                 dd = +ddnew
                 # Update SSH
-                dh = dhg + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
+                dh1d = dhg1d + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
         
-        dh[self.mask==0] = np.nan
-        dh[self.mask==1] = dhg[self.mask==1]
+        # back to 2D
+        dh = np.empty((self.ny,self.nx))
+        dh[:,:] = np.NAN
+        dh[self.indi,self.indj] = dh1d[:]
         
         return dh
     
         
+    
     def step_tgl(self,dh0,h0,ddphidt=None,dphidt=None,way=1):
         
         if np.all(h0==0):
