@@ -215,37 +215,8 @@ class Qgm:
     
         return u,v
 
-
-    def h2pv(self,h,c=None):
-        """ SSH to Q
     
-        Args:
-            h (2D array): SSH field.
-            c (2D array): Phase speed of first baroclinic radius 
-    
-        Returns:
-            q: Potential Vorticity field  
-        """
-        
-        if c is None:
-            c = self.c
-            
-        q = np.zeros((self.ny,self.nx))
-        
-        q[1:-1,1:-1] = self.g/self.f0[1:-1,1:-1]*\
-            ((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2 +\
-              (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) -\
-                self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
-        
-        ind = np.where((self.mask==1))
-        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
-            
-        ind = np.where((self.mask==0))
-        q[ind] = 0
-    
-        return q
-    
-    def h2pv_2(self,h):
+    def h2pv(self,h):
         """ SSH to Q
     
         Args:
@@ -294,30 +265,7 @@ class Qgm:
         q[ind] = 0
     
         return q
-    
-    def h2pv_1d(self,h1d,a,b):
-        """ SSH to Q
-    
-        Args:
-            h (2D array): SSH field.
-            c (2D array): Phase speed of first baroclinic radius 
-    
-        Returns:
-            q: Potential Vorticity field  
-        """
-    
-            
-        q1d = np.empty(self.np,) 
-        
-        q1d[self.vp2] = a[self.vp2]*\
-            ((h1d[self.vp2e]+h1d[self.vp2w]-2*h1d[self.vp2])/self.dx1d[self.vp2]**2 +\
-             (h1d[self.vp2n]+h1d[self.vp2s]-2*h1d[self.vp2])/self.dy1d[self.vp2]**2) +\
-                b[self.vp2] * h1d[self.vp2]
-        q1d[self.vp1] = +h1d[self.vp1]
-    
-        return q1d
-    
-        
+
     def norm(self,r):
         return np.linalg.norm(r)
     
@@ -329,7 +277,7 @@ class Qgm:
         return self.norm(rnew)**2 / self.norm(r)**2
     
     
-    def pv2h_2(self,q,hg):
+    def pv2h(self,q,hg):
         """ Q to SSH
         
         This code solve a linear system of equations using Conjugate Gradient method
@@ -352,10 +300,10 @@ class Qgm:
         #aaa=g/grd.f01d
         #bbb=-g*grd.f01d/grd.c1d**2
         #ccc=q1d-grd.f01d
-        aaa=g/self.f01d
+        aaa = g/self.f01d
 
         bbb = - g*self.f01d / self.c1d**2
-        ccc=+q1d
+        ccc = +q1d
         #ccc=+q1d-grd.f01d  
     
         aaa[self.vp1]=0
@@ -418,61 +366,6 @@ class Qgm:
      
         return avec
 
-    
-    def pv2h(self,q,hg):
-        
-        """ compute SSH from PV
-    
-        Args:
-            q (2D array): PV
-            hg (2D array): background SSH
-
-    
-        Returns:
-            h (2D array): SSH
-    
-        """
-        if np.all(q==0):
-            return hg
-        
-        q1d = +q[self.indi,self.indj]
-        hg1d = +hg[self.indi,self.indj]
-        
-        a = self.g/self.f01d
-        b = -self.g*self.f01d/(self.c1d)**2
-        a[self.vp1] = 0
-        b[self.vp1] = 1
-        
-        q1d[self.vp1] = hg1d[self.vp1] # Boundary conditions
-        
-        r = +q1d - self.h2pv_1d(hg1d,a,b)
-        d = +r
-        alpha = self.alpha(r,d,a,b)
-        h1d = hg1d + alpha*d
-        if self.qgiter>1:
-            for itr in range(self.qgiter): 
-                # Update guess value
-                hg1d = +h1d
-                # Compute beta
-                rnew = r - alpha * self.h2pv_1d(d,a,b)
-                beta = self.beta(r,rnew)
-                r = +rnew
-                # Compute new direction
-                dnew = r + beta * d
-                alpha = self.alpha(r,dnew,a,b)
-                d = +dnew
-                # Update SSH
-                h1d = hg1d + alpha*d 
-        
-        # back to 2D
-        h = np.empty((self.ny,self.nx))
-        h[:,:] = np.NAN
-        h[self.indi,self.indj] = h1d[:]
-        
-        return h
-    
-    
-    
     
     def qrhs(self,u,v,q,way):
 

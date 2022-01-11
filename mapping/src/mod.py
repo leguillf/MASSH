@@ -172,10 +172,12 @@ variable are SLAs!')
     def step(self,State,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
-        SSH0 = State.getvar(ind=ind)
+        SSH0 = State.getvar(ind=0)
+        PV0 = State.getvar(ind=1)
         
         # init
         SSH1 = +SSH0
+        PV1 = +PV0
         
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
@@ -184,10 +186,11 @@ variable are SLAs!')
         
         # Time propagation
         for i in range(nstep):
-            SSH1 = self.qgm.step(SSH1,dphidt=dphidt,way=1)
+            SSH1,PV1 = self.qgm.step(h0=SSH1,q0=PV1,dphidt=dphidt,way=1)
 
         # Update state
-        State.setvar(SSH1,ind=ind)
+        State.setvar(SSH1,ind=0)
+        State.setvar(PV1,ind=1)
     
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
@@ -253,12 +256,16 @@ variable are SLAs!')
     def step_tgl(self,dState,State,ddphidt=None,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
-        dSSH0 = dState.getvar(ind=ind)
-        SSH0 = State.getvar(ind=ind)
+        dSSH0 = dState.getvar(ind=0)
+        dPV0 = dState.getvar(ind=1)
+        SSH0 = State.getvar(ind=0)
+        PV0 = State.getvar(ind=1)
         
         # init
         dSSH1 = +dSSH0
+        dPV1 = +dPV0
         SSH1 = +SSH0
+        PV1 = +PV0
         
         # Boundary conditions
         if Wbc is None:
@@ -270,21 +277,28 @@ variable are SLAs!')
         # Time propagation
         for i in range(nstep):
             
-            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1,ddphidt=ddphidt,dphidt=dphidt)
-            SSH1 = self.qgm.step(h0=SSH1,dphidt=dphidt)
+            dSSH1,dPV1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1,dq0=dPV1,q0=PV1,
+                                      ddphidt=ddphidt,dphidt=dphidt)
+            SSH1,PV1 = self.qgm.step(h0=SSH1,q0=PV1,dphidt=dphidt)
         
         # Update state
-        dState.setvar(dSSH1,ind=ind)
+        dState.setvar(dSSH1,ind=0)
+        dState.setvar(dPV1,ind=1)
+        
         
     def step_adj(self,adState,State,addphidt=None,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
-        # Get state variable
-        adSSH0 = adState.getvar(ind=ind)
-        SSH0 = State.getvar(ind=ind)
+        # Get state variables       
+        adSSH0 = adState.getvar(ind=0)
+        adPV0 = adState.getvar(ind=1)
+        SSH0 = State.getvar(ind=0)
+        PV0 = State.getvar(ind=1)
         
         # Init
         adSSH1 = +adSSH0
+        adPV1 = +adPV0
         SSH1 = +SSH0
+        PV1 = +PV0
         
         # Boundary conditions
         if Wbc is None:
@@ -293,17 +307,16 @@ variable are SLAs!')
             SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
 
         # Current trajectory
-        traj = [SSH1]
+        traj = [(SSH1,PV1)]
         if nstep>1:
             for i in range(nstep):
-                SSH1 = self.qgm.step(SSH1,dphidt=dphidt)
-                traj.append(SSH1)
+                SSH1,PV1 = self.qgm.step(SSH1,q0=PV1,dphidt=dphidt)
+                traj.append((SSH1,PV1))
         
         # Time propagation
         for i in reversed(range(nstep)):
-            SSH1 = traj[i]
-        
-            adSSH1 = self.qgm.step_adj(adSSH1,SSH1,addphidt=addphidt,dphidt=dphidt)
+            SSH1,PV1 = traj[i]
+            adSSH1,adPV1 = self.qgm.step_adj(adh1=adSSH1,h0=SSH1,adq1=adPV1,q0=PV1,addphidt=addphidt,dphidt=dphidt)
         
         # Boundary conditions
         if Wbc is None:
@@ -313,7 +326,8 @@ variable are SLAs!')
         
         # Update state  and parameters
         adSSH1[np.isnan(adSSH1)] = 0
-        adState.setvar(adSSH1,ind=ind)
+        adState.setvar(adSSH1,ind=0)
+        adState.setvar(adPV1,ind=1)
         
         return addphidt
     

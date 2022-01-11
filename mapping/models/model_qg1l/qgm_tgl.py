@@ -168,128 +168,52 @@ class Qgm_tgl(Qgm):
                 (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
             
         return res
-        
-    def alpha_tgl(self,dr,dd,r,d,a,b):
-        norm_r = self.norm(r)
-        dAd = d.dot(self.h2pv_1d(d,a,b))
-
-        dalpha = 2*np.inner(dr,r) / dAd - (norm_r/dAd)**2*\
-            (d.dot(self.h2pv_1d(dd,a,b))+\
-             dd.dot(self.h2pv_1d(d,a,b))) 
-
-        return dalpha
     
-    def beta_tgl(self,dr,drnew,r,rnew):
-        dbeta = (2*np.inner(drnew,rnew)*self.norm(r)**2-\
-                2*np.inner(dr,r)*self.norm(rnew)**2)/\
-                self.norm(r)**4
-            
-        return dbeta
-    
-    def pv2h_tgl(self,dq,dhg,q,hg):
-        
-        #####################
-        # Current trajectory
-        #####################
-        
-        q1d = +q[self.indi,self.indj]
-        hg1d = +hg[self.indi,self.indj]
-        a = self.g/self.f01d
-        b = -self.g*self.f01d/(self.c1d)**2
-        a[self.vp1] = 0
-        b[self.vp1] = 1
-        q1d[self.vp1] = hg1d[self.vp1] # Boundary conditions
-        r = +q1d - self.h2pv_1d(hg1d,a,b)
-        d = +r
-        alpha = self.alpha(r,d,a,b)
-        alpha_list = [alpha]
-        beta_list = []
-        r_list = [r]
-        d_list = [d]
-        if self.qgiter>1:
-            # Loop
-            for itr in range(self.qgiter):
-                # Update direction
-                rnew = r - alpha * self.h2pv_1d(d,a,b)
-                beta = self.beta(r,rnew)
-                r = +rnew
-                d = r + beta * d
-                alpha = self.alpha(r,d,a,b)
-                # Append to lists
-                alpha_list.append(alpha)
-                r_list.append(r)
-                d_list.append(d)
-                beta_list.append(beta)
-                
-        #####################      
-        # Tangent computation 
-        #####################
-        
-        dq1d = +dq[self.indi,self.indj]
-        dhg1d = +dhg[self.indi,self.indj]
-        
-        dq1d[self.vp1] = dhg1d[self.vp1] # Boundary conditions
-        
-        dr = +dq1d - self.h2pv_1d(dhg1d,a,b)
-        dd = +dr        
-        dalpha = self.alpha_tgl(dr,dd,r_list[0],d_list[0],a,b)
-        dh1d = dhg1d + dalpha*d_list[0] + alpha_list[0]*dd
-        if self.qgiter>1:
-            for itr in range(self.qgiter):
-                # Update guess value
-                dhg1d = +dh1d    
-                # Compute beta
-                drnew = dr - (dalpha*self.h2pv_1d(d_list[itr],a,b) +
-                              alpha_list[itr]*self.h2pv_1d(dd,a,b))
-                dbeta = self.beta_tgl(dr,drnew,r_list[itr],r_list[itr+1])
-                dr = +drnew
-                # Compute new direction
-                ddnew = dr + dbeta * d_list[itr] + beta_list[itr] * dd
-                dalpha = self.alpha_tgl(dr,ddnew,r_list[itr+1],d_list[itr+1],a,b)
-                dd = +ddnew
-                # Update SSH
-                dh1d = dhg1d + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
-        
-        # back to 2D
-        dh = np.empty((self.ny,self.nx))
-        dh[:,:] = np.NAN
-        dh[self.indi,self.indj] = dh1d[:]
-        
-        return dh
     
         
     
-    def step_tgl(self,dh0,h0,ddphidt=None,dphidt=None,way=1):
+    def step_tgl(self,dh0,h0,dq0=None,q0=None,
+                 ddphidt=None,dphidt=None,way=1):
         
         if np.all(h0==0):
             return dh0
         
         # Tangent trajectory
-        qb0 = self.h2pv(h0)
+        if q0 is None:
+            qb0 = self.h2pv(h0)
+        else:
+            qb0 = +q0
         u,v = self.h2uv(h0)
         rq = self.qrhs(u,v,qb0,way)
         q1 = qb0 + self.dt*rq
         if dphidt is not None:
             q1 += self.dt*dphidt
         # 1/ h-->q
-        dq0 = self.h2pv(dh0)
+        if q0 is None:
+            dqb0 = self.h2pv(dh0)
+        else:
+            dqb0 = +dq0
 
         # 2/ h-->(u,v)
         du,dv = self.h2uv(dh0)
         
         # 3/ (u,v,q)-->rq
-        drq = self.qrhs_tgl(du,dv,dq0,u,v,qb0,way)
+        drq = self.qrhs_tgl(du,dv,dqb0,u,v,qb0,way)
         
         # 4/ Time increment
-        dq1 = +dq0
+        dq1 = +dqb0
         dq1 += self.dt * drq
         if ddphidt is not None:
             dq1 += self.dt*ddphidt
         
         # 5/ q-->h
-        dh1 = self.pv2h_tgl(dq1,dh0,q1,h0)
+        dh1 = self.pv2h(dq1,dh0)
         
-        return dh1
+        if dq0 is None:
+            return dh1
+        else:
+            return dh1,dq1
+        
 
         
         
