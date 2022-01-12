@@ -32,6 +32,8 @@ def Model(config,State):
     print('Model:',config.name_model)
     if config.name_model is None:
         return
+    elif config.name_model=='Diffusion':
+        return Model_diffusion(config,State)
     elif config.name_model=='QG1L':
         return Model_qg1l(config,State)
     elif config.name_model=='SW1L':
@@ -44,7 +46,92 @@ def Model(config,State):
         sys.exit(config.name_analysis + ' not implemented yet')
         
 
+
+class Model_diffusion:
     
+    
+    def __init__(self,config,State):
+        # Time parameters
+        self.dt = config.dtmodel
+        self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
+        self.T = np.arange(self.nt) * self.dt
+        self.timestamps = [] 
+        t = config.init_date
+        while t<=config.final_date:
+            self.timestamps.append(t)
+            t += timedelta(seconds=self.dt)
+        
+        self.snu = config.snu
+        self.dx = State.DX
+        self.dy = State.DY
+        
+        self.adjoint_test(State,nstep=1)
+        
+    def step(self,State,nstep=1,ind=0):
+        # Get state variable
+        SSH0 = State.getvar(ind=ind)
+        
+        # init
+        SSH1 = +SSH0
+        
+        for step in range(nstep):
+            SSH1[1:-1,1:-1] += self.dt*self.snu*(\
+                (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+        
+        # Update state
+        State.setvar(SSH1,ind=ind)
+        
+    
+    def step_adj(self,adState,State,nstep=1,ind=0):
+        # Get state variable
+        adSSH0 = adState.getvar(ind=ind)
+        
+        # init
+        adSSH1 = +adSSH0
+        
+        for step in range(nstep):
+            
+            adSSH1[1:-1,2:] += self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,:-2] += self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,1:-1] += -2*self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            
+            adSSH1[2:,1:-1] += self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[:-2,1:-1] += self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,1:-1] += -2*self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            
+            adSSH0 = +adSSH1
+            
+        # Update state
+        adState.setvar(adSSH1,ind=ind)
+        
+    
+    def adjoint_test(self,State,nstep):
+        
+        # Current trajectory
+        State0 = State.random()
+        X = State0.getvar(0).ravel()
+        
+        # Adjoint
+        adState0 = State.random()
+        adY = adState0.getvar(0).ravel()
+        
+        # Run TLM
+        self.step(State0,nstep=nstep)
+        Y = State0.getvar(0).ravel()
+        
+        # Run ADJ
+        self.step_adj(adState0,State0,nstep=nstep)
+        adX = adState0.getvar(0).ravel()
+        
+        ps1 = np.inner(X,adX)
+        ps2 = np.inner(Y,adY)
+        
+        print('Adjoint test:',ps1/ps2)
+
+    
+    
+        
 class Model_qg1l:
     
     

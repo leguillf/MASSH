@@ -38,9 +38,9 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     elif config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
     
-    elif config.name_analysis=='4Dvar' and config.name_model=='QG1L':
+    elif config.name_analysis=='4Dvar' and config.name_model in ['QG1L','Diffusion']:
         if config.reduced_basis==True:
-            return ana_4Dvar_QG_wave(config,State,Model,dict_obs)
+            return ana_4Dvar_flux(config,State,Model,dict_obs)
         else:
             return ana_4Dvar_QG_init(config,State,Model,dict_obs)
         
@@ -68,6 +68,7 @@ def ana_forward(config,State,Model):
         print(present_date)
         # Propagation
         Model.step(State,nstep)
+        State.plot()
         # Time increment
         present_date += timedelta(seconds=nstep*Model.dt)
         # Save
@@ -423,20 +424,20 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
     return
 
-def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
+def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
-    from .tools_4Dvar import Obsopt, Cov, Variational_QG_wave
-    from .tools_reduced_basis import RedBasis_QG#,RedBasis_ls
+    from .tools_4Dvar import Obsopt, Cov, Variational_flux
+    from .tools_reduced_basis import RedBasis_BM
 
     
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    comp_qg = RedBasis_QG(config,State)
-    qinv_qg = comp_qg.set_basis(return_qinv=True)
+    comp = RedBasis_BM(config,State)
+    qinv = comp.set_basis(return_qinv=True)
    
     print('\n*** Variational ***\n')
     # Covariance matrix
@@ -445,13 +446,13 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         B = Cov(config.sigma_B)
         R = Cov(config.sigma_R)
     else:
-        B = Cov(1/np.sqrt(qinv_qg))
+        B = Cov(1/np.sqrt(qinv))
         R = Cov(config.sigma_R)
     # backgroud state 
-    Xb = np.zeros((comp_qg.nwave,))
+    Xb = np.zeros((comp.nwave,))
     # Cost and Grad functions
-    var = Variational_QG_wave(
-        M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
+    var = Variational_flux(
+        M=Model, H=H, State=State, B=B, R=R, comp=comp, Xb=Xb,
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
         prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
         save_wave_basis=config.save_wave_basis)
@@ -523,21 +524,23 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     for i in range(len(var.checkpoint)-1):
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         
-        # Flux 
-        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
-        dphidt = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xa,mode='flux',
-                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-        dphidt *= -State.g*State.f/(Model.c**2)/(3600*24) # Scale ssh -> pv      
-        
         # Forward
         for j in range(nstep):
-            Model.step(State0,dphidt=dphidt)
+            Model.step(State0)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date,mdt=Model.mdt)
+        
+        # Flux 
+        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                           compute_geta=True,eta=Xa,mode='flux',
+                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+        State.setvar(State.getvar(ind=State.get_indobs()) + nstep*Model.dt*F/(3600*24),
+                     ind=State.get_indobs())
+        
                 
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()

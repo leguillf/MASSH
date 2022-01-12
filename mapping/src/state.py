@@ -74,7 +74,7 @@ class State:
         
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
-        if config.name_model is None or config.name_model=='QG1L':
+        if config.name_model is None or config.name_model in ['QG1L','Diffusion']:
             self.ini_var_qg1l(config)
         elif config.name_model=='SW1L':
             self.ini_var_sw1l(config)
@@ -556,6 +556,9 @@ class State:
             
     def plot(self,title=None,cmap='RdBu_r',ind=None):
         
+        if self.config.flag_plot++0:
+            return
+        
         if ind is not None:
             indvar = ind
         else:
@@ -584,7 +587,7 @@ class State:
         '''
         Return the indice of the observed variable, SSH
         '''
-        if self.config['name_model']=='QG1L' :
+        if self.config['name_model'] in ['QG1L','Diffusion']  :
             return 0
         elif self.config['name_model']=='SW1L' :
             return 2
@@ -599,7 +602,7 @@ class State:
         '''
         Return the indice of the variable to save, SSH
         '''
-        if self.config['name_model'] is None or self.config['name_model']=='QG1L' :
+        if self.config['name_model'] is None or self.config['name_model'] in ['QG1L','Diffusion'] :
             return 0
         elif self.config['name_model']=='SW1L' :
             return 2

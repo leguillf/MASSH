@@ -19,7 +19,7 @@ import matplotlib.pylab as plt
   
 
 
-class RedBasis_QG:
+class RedBasis_BM:
    
     def __init__(self,config,State):
 

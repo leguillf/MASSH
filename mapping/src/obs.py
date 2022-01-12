@@ -36,6 +36,8 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
+    if config.satellite is None or len(config.satellite) == 0:
+        return {}
     
     date1 = config.init_date.strftime('%Y%m%d')
     date2 = config.final_date.strftime('%Y%m%d')

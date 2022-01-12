@@ -36,7 +36,7 @@ class Obsopt:
         self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)
         
-        if State.config['name_model'] in ['SW1L','SW1LM','QG1L','QG1L_SW1L'] :
+        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1L_SW1L'] :
             for t in Model.timestamps:
                 if self.isobserved(t):
                     delta_t = [(t - tobs).total_seconds() 
@@ -71,7 +71,7 @@ class Obsopt:
                 np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
                 )
             self.coords_car_bc = grid.geo2cart(coords_geo_bc)
-        elif State.config['name_model']=='QG1L':
+        elif State.config['name_model']==['QG1L']:
             coords_geo_bc = State.lon[Model.qgm.mask<=1].ravel(),State.lat[Model.qgm.mask<=1].ravel()
             self.coords_car_bc = grid.geo2cart(coords_geo_bc)
         
@@ -314,7 +314,7 @@ class Cov :
     def sqr(self,X):
         return self.sigma**0.5 * X
     
-class Variational_QG_wave:
+class Variational_flux:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
@@ -419,16 +419,18 @@ class Variational_QG_wave:
                 misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
-            # 2. Compute Flux
+            # 2. Run forward model
+            self.M.step(State,nstep=nstep)
+            
+            # 3. Compute Flux
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
-            dphidt = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+            F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                                 compute_geta=True,eta=X,mode='flux',
                                 save_wave_basis=self.save_wave_basis).reshape(
-                                    (State.ny,State.nx))  
-            dphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv        
-            
-            # 3. Run forward model
-            self.M.step(State,nstep=nstep,dphidt=dphidt)
+                                    (State.ny,State.nx))
+            var = State.getvar(ind=State.get_indobs())
+            State.setvar(var + nstep*self.M.dt*F/(3600*24),
+                         ind=State.get_indobs())
             
             # 4. Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
@@ -442,7 +444,7 @@ class Variational_QG_wave:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        # State.plot()
+        State.plot()
         
         return J
     
@@ -465,7 +467,6 @@ class Variational_QG_wave:
         # Ajoint initialization   
         adState = self.State.free()
         adX = np.zeros_like(X)
-        addphidt = np.zeros((self.State.ny,self.State.nx))
         
         # Current trajectory
         State = self.State.free()
@@ -486,24 +487,20 @@ class Variational_QG_wave:
             # 4. Read model state
             State.load(os.path.join(self.tmp_DA_path,
                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
+            
+            
+            # 3. Compute flux
+            advar = adState.getvar(ind=State.get_indobs()).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
-            dphidt = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,mode='flux',
-                                save_wave_basis=self.save_wave_basis).reshape(
-                                    (State.ny,State.nx))  
-            dphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv        
-            
-            # 3. Run adjoint model
-            addphidt = self.M.step_adj(adState, State, 
-                                       addphidt=addphidt, dphidt=dphidt, 
-                                       nstep=nstep) # i+1 --> i
-            addphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv        
-            
-            # 2. Compute Flux
             adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                   compute_geta=True,transpose=True,mode='flux',
-                                   save_wave_basis=self.save_wave_basis,
-                                   eta=addphidt.ravel()[np.newaxis,:])
+                                     compute_geta=True,transpose=True,mode='flux',
+                                     save_wave_basis=self.save_wave_basis,
+                                     eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
+            
+            
+            # 2. Run adjoint model 
+            self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
+            
             
             # 1. Misfit 
             if self.isobs[i]:
@@ -523,7 +520,7 @@ class Variational_QG_wave:
         
         g = adX + gb  # total gradient
         
-        # adState.plot()
+        adState.plot()
         
         return g 
     
