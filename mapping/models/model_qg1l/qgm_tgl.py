@@ -228,7 +228,7 @@ if __name__ == "__main__":
     SSH = np.zeros((ny,nx))
     c = 2.5
     
-    qgm = Qgm_tgl(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=10)
+    qgm = Qgm_tgl(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=2)
     
     # Tangent test    
     SSH0 = np.random.random((ny,nx))*0

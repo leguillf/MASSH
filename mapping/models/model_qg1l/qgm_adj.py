@@ -297,20 +297,17 @@ class Qgm_adj(Qgm_tgl):
             q1 += self.dt*dphidt
             
         # 5/ q-->h
-        fguess = -self.c**2./(self.g*self.f0)*adh1 
-        if adq1 is not None:
-            adqguess = 2*adq1 - fguess
-            adqguess[self.mask==1] = fguess[self.mask==1]
-        else:
-            adqguess = fguess
-        adq1_tmp = self.pv2h(adh1,adqguess)
-        if adq1 is None:
-            adq1b = adq1_tmp
-        else:
-            adq1b = adq1 + adq1_tmp
-        adh1 = +azeros
+        # adqguess = -self.c**2./(self.g*self.f0)*adh1 
+
+        # adq1_tmp = self.pv2h(adh1,adqguess)
+        # if adq1 is None:
+        #     adq1b = adq1_tmp
+        # else:
+        #     adq1b = adq1 + adq1_tmp
+        # adh1 = +azeros
         
         # 4/ Time increment
+        adq1b = +adq1
         adq0 = +adq1b
         adrq = self.dt * adq1b
         if addphidt is not None:
@@ -329,7 +326,7 @@ class Qgm_adj(Qgm_tgl):
         adv0 = +azeros
             
         # 1/ h-->q
-        #adh0 += self.h2pv_adj(adq0)
+        adh0 = self.h2pv(adq0)
         
         if adq1 is None:
             return adh0
@@ -348,45 +345,59 @@ if __name__ == "__main__":
     SSH = np.zeros((ny,nx))
     c = 2.5
     
-    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=100)
+    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=30)
     
-    qgm.adjtest_pv2h()
-    qgm.adjtest_pv2h_2()
-    qgm.adjtest_h2pv_1d()
-    qgm.adjtest_alpha()
+    #qgm.adjtest_pv2h()
+    #qgm.adjtest_pv2h_2()
+    #qgm.adjtest_h2pv_1d()
+    #qgm.adjtest_alpha()
     # Current trajectory
     SSH0 = 1e-2*np.random.random((ny,nx))
+    PV0 = 1e-2*np.random.random((ny,nx))
 
     # Perturbation
     dSSH0 = 1e-2*np.random.random((ny,nx))
+    dPV0 = 1e-2*np.random.random((ny,nx))
 
     # Adjoint
     adSSH0 = 1e-2*np.random.random((ny,nx))
+    adPV0 = 1e-2*np.random.random((ny,nx))
     
-    nstep = 1
+    nstep = 10
     
     SSH1 = +SSH0
-    traj = [SSH1]
+    PV1 = +PV0
+    traj = [(SSH1,PV1)]
     if nstep>1:
         for i in range(nstep):
-            SSH1 = qgm.step(SSH1)
-            traj.append(SSH1)
+            SSH1,PV1 = qgm.step(SSH1*0,PV1)
+            traj.append((SSH1*0,PV1))
             
     # Run TLM
     print('tlm')
     dSSH1 = +dSSH0
+    dPV1 = +dPV0
     for i in range(nstep):
-        dSSH1 = qgm.step_tgl(dSSH1,traj[i])
+        dSSH1,dPV1 = qgm.step_tgl(dSSH1,dPV1,traj[i][0],traj[i][1])
 
     # Run ADJ
     print('\nadj')
     adSSH1 = +adSSH0 
+    adPV1 = +adPV0 
     for i in reversed(range(nstep)):
-        adSSH1 = qgm.step_adj(adSSH1,traj[i])
+        adSSH1,aPV1 = qgm.step_adj(adSSH1,adPV1,traj[i][0],traj[i][1])
     
     
-    ps1 = np.inner(dSSH1.ravel(),adSSH0.ravel())
-    ps2 = np.inner(dSSH0.ravel(),adSSH1.ravel())
+    ps1 = np.inner(np.concatenate((dSSH1.ravel(),dPV1.ravel())),
+                   np.concatenate((adSSH0.ravel(),adPV0.ravel())))
+    ps2 = np.inner(np.concatenate((dSSH0.ravel(),dPV0.ravel())),
+                   np.concatenate((adSSH1.ravel(),adPV1.ravel())))
+        
+    print('\ntest:',ps1/ps2)
+    
+    ps1 = np.inner(dPV1.ravel(),adPV0.ravel())
+
+    ps1 = np.inner(dPV0.ravel(),adPV1.ravel())
         
     print('\ntest:',ps1/ps2)
 
