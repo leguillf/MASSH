@@ -169,15 +169,15 @@ class Qgm_tgl(Qgm):
             
         return res
         
-    def alpha_tgl(self,dr,dd,r,d,a,b):
-        norm_r = self.norm(r)
-        dAd = d.dot(self.h2pv_1d(d,a,b))
+    # def alpha_tgl(self,dr,dd,r,d,a,b):
+    #     norm_r = self.norm(r)
+    #     dAd = d.dot(self.h2pv_1d(d,a,b))
 
-        dalpha = 2*np.inner(dr,r) / dAd - (norm_r/dAd)**2*\
-            (d.dot(self.h2pv_1d(dd,a,b))+\
-             dd.dot(self.h2pv_1d(d,a,b))) 
+    #     dalpha = 2*np.inner(dr,r) / dAd - (norm_r/dAd)**2*\
+    #         (d.dot(self.h2pv_1d(dd,a,b))+\
+    #          dd.dot(self.h2pv_1d(d,a,b))) 
 
-        return dalpha
+    #     return dalpha
     
     def beta_tgl(self,dr,drnew,r,rnew):
         dbeta = (2*np.inner(drnew,rnew)*self.norm(r)**2-\
@@ -186,7 +186,7 @@ class Qgm_tgl(Qgm):
             
         return dbeta
     
-    def pv2h_tgl(self,dq,dhg,q,hg):
+    def pv2h_tgl_2(self,dq,dhg,q,hg):
         
         #####################
         # Current trajectory
@@ -210,6 +210,7 @@ class Qgm_tgl(Qgm):
             # Loop
             for itr in range(self.qgiter):
                 # Update direction
+                #r[self.vp1] = hg1d[self.vp1] # Boundary conditions
                 rnew = r - alpha * self.h2pv_1d(d,a,b)
                 beta = self.beta(r,rnew)
                 r = +rnew
@@ -239,6 +240,7 @@ class Qgm_tgl(Qgm):
                 # Update guess value
                 dhg1d = +dh1d    
                 # Compute beta
+                dr[self.vp1] = dhg1d[self.vp1] # Boundary conditions
                 drnew = dr - (dalpha*self.h2pv_1d(d_list[itr],a,b) +
                               alpha_list[itr]*self.h2pv_1d(dd,a,b))
                 dbeta = self.beta_tgl(dr,drnew,r_list[itr],r_list[itr+1])
@@ -257,7 +259,121 @@ class Qgm_tgl(Qgm):
         
         return dh
     
+    def alpha_tgl(self,dp,dgg,p,gg,aaa,bbb):
         
+        tmp = np.dot(p,self.h2pv_1d(p,aaa,bbb))
+        dtmp = np.dot(dp,self.h2pv_1d(p,aaa,bbb)) + np.dot(p,self.h2pv_1d(dp,aaa,bbb))
+        
+        if tmp!=0. : 
+            return -((np.dot(dp,gg)+np.dot(p,dgg))*tmp - dtmp*np.dot(p,gg))/tmp**2
+        else: 
+            return 0.
+    
+    
+    def pv2h_tgl(self,dq,dhg,q,hg):
+        """ Q to SSH
+        
+        This code solve a linear system of equations using Conjugate Gradient method
+    
+        Args:
+            q (2D array): Potential Vorticity field
+            hg (2D array): SSH guess
+            grd (Grid() object): check modgrid.py
+    
+        Returns:
+            h (2D array): SSH field. 
+        """
+        ######################
+        # Forward iterations
+        ######################
+        x = +hg[self.indi,self.indj]
+        q1d = q[self.indi,self.indj]
+        
+        aaa = self.g/self.f01d
+        bbb = - self.g*self.f01d / self.c1d**2
+        ccc = +q1d
+        aaa[self.vp1] = 0
+        bbb[self.vp1] = 1
+        ccc[self.vp1] = x[self.vp1]  ##boundary condition
+        
+        gg = self.h2pv_1d(x,aaa,bbb) - ccc
+        p = -gg
+        
+        gg_list = [gg]
+        p_list = [p]
+        alpha_list = []
+        a1_list = []
+        a2_list = []
+        beta_list = []
+        for itr in range(self.qgiter-1): 
+            a1 = np.dot(gg,gg)
+            alpha = self.alpha(p,gg,aaa,bbb)
+            x = x + alpha*p
+            gg = self.h2pv_1d(x,aaa,bbb) - ccc
+            a2 = np.dot(gg,gg)
+            if a1!=0:
+                beta = a2/a1
+            else: 
+                beta = 1.
+            p = -gg + beta*p
+            
+            alpha_list.append(alpha)
+            gg_list.append(gg)
+            p_list.append(p)
+            a1_list.append(a1)
+            a2_list.append(a2)
+            beta_list.append(beta)
+        val1 = -np.dot(p,gg)
+        val2 = np.dot(p,self.h2pv_1d(p,aaa,bbb))
+        if (val2==0.): 
+            s=1.
+        else: 
+            s=val1/val2
+            
+        ######################
+        # Tangent iterations
+        ######################
+        dx = +dhg[self.indi,self.indj]
+        dq1d = +dq[self.indi,self.indj]
+        dccc = +dq1d
+    
+        dccc[self.vp1] = dx[self.vp1]  ## boundary condition        
+        dgg = self.h2pv_1d(dx,aaa,bbb) - dccc
+        dp = -dgg
+        
+        for itr in range(self.qgiter-1): 
+            da1 = 2.*np.dot(dgg,gg_list[itr]) 
+            dalpha = self.alpha_tgl(dp,dgg,p_list[itr],gg_list[itr],aaa,bbb)
+            dxnew = dx + dalpha*p_list[itr] + alpha_list[itr]*dp
+            dggnew = self.h2pv_1d(dxnew,aaa,bbb) - dccc
+            da2 = 2.*np.dot(dggnew,gg_list[itr+1])
+            if a1_list[itr]!=0:
+                dbeta = (da2*a1_list[itr]-a2_list[itr]*da1)/a1_list[itr]**2.
+            else: 
+                dbeta = 0.                
+            dpnew = -dggnew + dbeta*p_list[itr] + beta_list[itr]*dp
+            
+            dgg = +dggnew
+            dp = +dpnew
+            dx = +dxnew 
+            
+
+        dval1 = -np.dot(dp,gg)-np.dot(p,dgg)
+        dval2 = np.dot(dp,self.h2pv_1d(p,aaa,bbb)) + np.dot(p,self.h2pv_1d(dp,aaa,bbb))
+        if (val2==0.): 
+            ds = 0.
+        else: 
+            ds = (dval1*val2 - val1*dval2)/val2**2.
+            
+        dx1 = dx + s*dp + ds*p 
+    
+        # back to 2D
+        dh = np.empty((self.ny,self.nx))
+        dh[:,:] = np.NAN
+        dh[self.indi,self.indj] = +dx1[:]
+    
+        return dh
+    
     
     def step_tgl(self,dh0,h0,ddphidt=None,dphidt=None,way=1):
         
@@ -304,10 +420,10 @@ if __name__ == "__main__":
     SSH = np.zeros((ny,nx))
     c = 2.5
     
-    qgm = Qgm_tgl(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=10)
+    qgm = Qgm_tgl(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=3)
     
     # Tangent test    
-    SSH0 = np.random.random((ny,nx))*0
+    SSH0 = np.random.random((ny,nx))
     dSSH = np.random.random((ny,nx))
     
     SSH2 = qgm.step(SSH0)

@@ -307,7 +307,7 @@ class Qgm:
         """
     
             
-        q1d = np.empty(self.np,) 
+        q1d = np.zeros(self.np,) 
         
         q1d[self.vp2] = a[self.vp2]*\
             ((h1d[self.vp2e]+h1d[self.vp2w]-2*h1d[self.vp2])/self.dx1d[self.vp2]**2 +\
@@ -321,15 +321,27 @@ class Qgm:
     def norm(self,r):
         return np.linalg.norm(r)
     
-    def alpha(self,r,d,a,b):
-        return self.norm(r)**2./(d.dot(self.h2pv_1d(d,a,b)))
-        #return self.norm(r)**2./(d.dot(self.h2pv_1d(d,a,b)))
+    # def alpha(self,r,d,a,b):
+    #     return np.dot(d,r)/(d.dot(self.h2pv_1d(d,a,b)))
+    #     #return self.norm(r)**2./(d.dot(self.h2pv_1d(d,a,b)))
+    
+    # def beta(self,r,rnew):
+    #     return self.norm(rnew)**2 / self.norm(r)**2
+    
+    # def alpha(self,r,d,a,b):
+    #     return -np.dot(d,r)/(d.dot(self.h2pv_1d(d,a,b)))
+    
+    def alpha(self,p,gg,aaa,bbb):
+        tmp = np.dot(p,self.h2pv_1d(p,aaa,bbb))
+        if tmp!=0. : 
+            return -np.dot(p,gg)/tmp
+        else: 
+            return 1.
     
     def beta(self,r,rnew):
         return self.norm(rnew)**2 / self.norm(r)**2
     
-    
-    def pv2h_2(self,q,hg):
+    def pv2h(self,q,hg):
         """ Q to SSH
         
         This code solve a linear system of equations using Conjugate Gradient method
@@ -341,72 +353,56 @@ class Qgm:
     
         Returns:
             h (2D array): SSH field. 
-        """
-        ny,nx,=np.shape(hg)
-        g=self.g
-    
-    
-        x=hg[self.indi,self.indj]
-        q1d=q[self.indi,self.indj]
-    
-        #aaa=g/grd.f01d
-        #bbb=-g*grd.f01d/grd.c1d**2
-        #ccc=q1d-grd.f01d
-        aaa=g/self.f01d
+        """    
 
-        bbb = - g*self.f01d / self.c1d**2
-        ccc=+q1d
-        #ccc=+q1d-grd.f01d  
+        x = +hg[self.indi,self.indj]
+        q1d = q[self.indi,self.indj]
     
-        aaa[self.vp1]=0
-        bbb[self.vp1]=1
-        ccc[self.vp1]=x[self.vp1]  ##boundary condition
+        aaa = self.g/self.f01d
+        bbb = - self.g*self.f01d / self.c1d**2
+        ccc = +q1d
     
-        vec=+x
+        aaa[self.vp1] = 0
+        bbb[self.vp1] = 1
+        ccc[self.vp1] = x[self.vp1]  ##boundary condition
     
-        avec=self.compute_avec(vec,aaa,bbb)
-        gg=avec-ccc
-        p=-gg
-        #print 'test1', numpy.var(gg)
+    
+        gg = self.h2pv_1d(x,aaa,bbb) - ccc
+        p = -gg
     
         for itr in range(self.qgiter-1): 
-            vec=+p
-            avec=self.compute_avec(vec,aaa,bbb)
-            tmp=np.dot(p,avec)
-            
-            if tmp!=0. : s=-np.dot(p,gg)/tmp
-            else: s=1.
-            
-            a1=np.dot(gg,gg)
-            x=x+s*p
-            vec=+x
-            avec=self.compute_avec(vec,aaa,bbb)
-            gg=avec-ccc
-            #print 'test', numpy.var(gg)
-            a2=np.dot(gg,gg)
-            
-            if a1!=0: beta=a2/a1
-            else: beta=1.
-            
-            p=-gg+beta*p
         
-        vec=+p
-        avec=self.compute_avec(vec,aaa,bbb)
-        val1=-np.dot(p,gg)
-        val2=np.dot(p,avec)
+            a1 = np.dot(gg,gg)
+            alpha = self.alpha(p,gg,aaa,bbb)
+            
+            xnew = x + alpha*p
+    
+            ggnew = self.h2pv_1d(xnew,aaa,bbb) - ccc
+            
+            a2 = np.dot(ggnew,ggnew)
+            if a1!=0:
+                beta = a2/a1
+            else: 
+                beta = 1.
+            
+            pnew = -ggnew + beta*p
+            
+            gg = +ggnew
+            p = +pnew
+            x = +xnew
+            
+        val1 = -np.dot(p,gg)
+        val2 = np.dot(p,self.h2pv_1d(p,aaa,bbb))
         if (val2==0.): 
             s=1.
         else: 
             s=val1/val2
-        
-        #pdb.set_trace()
-        a1=np.dot(gg,gg)
-        x=x+s*p
+        x = x + s*p
     
         # back to 2D
-        h=np.empty((ny,nx))
-        h[:,:]=np.NAN
-        h[self.indi,self.indj]=x[:]
+        h = np.empty((self.ny,self.nx))
+        h[:,:] = np.NAN
+        h[self.indi,self.indj] = x[:]
     
         return h
     
@@ -419,7 +415,7 @@ class Qgm:
         return avec
 
     
-    def pv2h(self,q,hg):
+    def pv2h_2(self,q,hg):
         
         """ compute SSH from PV
     
@@ -443,9 +439,10 @@ class Qgm:
         a[self.vp1] = 0
         b[self.vp1] = 1
         
-        q1d[self.vp1] = hg1d[self.vp1] # Boundary conditions
+        ccc = +q1d
+        ccc[self.vp1] = hg1d[self.vp1] # Boundary conditions
         
-        r = +q1d - self.h2pv_1d(hg1d,a,b)
+        r = +ccc - self.h2pv_1d(hg1d,a,b)
         d = +r
         alpha = self.alpha(r,d,a,b)
         h1d = hg1d + alpha*d
@@ -454,7 +451,7 @@ class Qgm:
                 # Update guess value
                 hg1d = +h1d
                 # Compute beta
-                rnew = r - alpha * self.h2pv_1d(d,a,b)
+                rnew = ccc - alpha * self.h2pv_1d(d,a,b)
                 beta = self.beta(r,rnew)
                 r = +rnew
                 # Compute new direction

@@ -393,9 +393,9 @@ variable are SLAs!')
                                 nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         adX = np.concatenate((adState.getvar(vect=True),addphidt.ravel()))
            
-        mask = np.isnan(dX + adX + dY + adY)
-        ps1 = np.inner(dX[~mask],adX[~mask])
-        ps2 = np.inner(dY[~mask],adY[~mask])
+        #mask = np.isnan(dX + adX + dY + adY)
+        ps1 = np.inner(dX,adX)
+        ps2 = np.inner(dY,adY)
         
         print(ps1/ps2)
 
