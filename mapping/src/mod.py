@@ -40,8 +40,8 @@ def Model(config,State):
         return Model_sw1l(config,State)
     elif config.name_model=='SW1LM':
         return Model_sw1lm(config,State)
-    elif config.name_model=='QG1L_SW1L':
-        return Model_qg1l_sw1l(config,State)
+    elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        return Model_BM_IT(config,State)
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
@@ -64,6 +64,8 @@ class Model_diffusion:
         self.snu = config.snu
         self.dx = State.DX
         self.dy = State.DY
+        
+        self.mdt = None
         
         self.adjoint_test(State,nstep=1)
         
@@ -1346,23 +1348,31 @@ class Model_sw1lm:
         print(ps1/ps2)
         
             
-class Model_qg1l_sw1l:
+class Model_BM_IT:
     
     def __init__(self,config,State):
-        print('\n* QG Model')
-        self.Model_QG = Model_qg1l(config,State)
-        print('\n* SW Model')
-        self.Model_SW = Model_sw1l(config,State)
+        print('\n* BM Model')
+        if config.name_model=='Diffusion':
+            self.Model_BM = Model_diffusion(config,State)
+        elif config.name_model=='QG1L':
+            self.Model_BM = Model_qg1l(config,State)
+            
+        print('\n* IT Model')
+        if config.name_model=='SW1L':
+            self.Model_SW = Model_sw1l(config,State)
+        elif config.name_model=='SW1LM':
+            self.Model_BM = Model_sw1lm(config,State)
         
-        self.nt = self.Model_SW.nt
-        self.dt = self.Model_SW.dt
-        self.T = self.Model_SW.T.copy()
-        self.timestamps = self.Model_SW.timestamps.copy()
-        self.nParams = self.Model_SW.nParams
-        self.sliceHe = self.Model_SW.sliceHe
-        self.slicehbcx = self.Model_SW.slicehbcx
-        self.slicehbcy = self.Model_SW.slicehbcy
-        self.mdt = self.Model_QG.mdt
+            
+        self.nt = self.Model_IT.nt
+        self.dt = self.Model_IT.dt
+        self.T = self.Model_IT.T.copy()
+        self.timestamps = self.Model_IT.timestamps.copy()
+        self.nParams = self.Model_IT.nParams
+        self.sliceHe = self.Model_IT.sliceHe
+        self.slicehbcx = self.Model_IT.slicehbcx
+        self.slicehbcy = self.Model_IT.slicehbcy
+        self.mdt = self.Model_BM.mdt
         
         if config.compute_test:
             print('tangent test:')
