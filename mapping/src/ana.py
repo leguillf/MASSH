@@ -47,14 +47,16 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
         return ana_4Dvar_SW(config,State,Model,dict_obs)
     
-    elif config.name_analysis=='4Dvar' and config.name_model=='QG1L_SW1L':
-        return ana_4Dvar_QG_SW(config,State,Model,dict_obs)
+    elif config.name_analysis=='4Dvar' and  hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        return ana_4Dvar_BM_IT(config,State,Model,dict_obs)
     
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
     
     elif config.name_analysis=='HARM':
         return ana_harm(config,State,dict_obs)
+    
+    
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
@@ -547,19 +549,19 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     print()
     
     
-def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
+def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
-    from .tools_4Dvar import Obsopt, Cov, Variational_QG_SW
-    from .tools_reduced_basis import RedBasis_QG
+    from .tools_4Dvar import Obsopt, Cov, Variational_BM_IT
+    from .tools_reduced_basis import RedBasis_BM
 
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    comp_qg = RedBasis_QG(config,State)
-    qinv_qg = comp_qg.set_basis(return_qinv=True)
+    comp_bm = RedBasis_BM(config,State)
+    qinv_bm = comp_bm.set_basis(return_qinv=True)
     
     ###################
     # Variational    #
@@ -588,14 +590,14 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     else:
         _sigma_B[Model.slicehbcx] = config.sigma_B_bc
         _sigma_B[Model.slicehbcy] = config.sigma_B_bc
-    B = Cov(np.concatenate((1/np.sqrt(qinv_qg),_sigma_B)))
+    B = Cov(np.concatenate((1/np.sqrt(qinv_bm),_sigma_B)))
     
     # backgroud state 
-    Xb = np.zeros((comp_qg.nwave+Model.nParams,))
+    Xb = np.zeros((comp_bm.nwave+Model.nParams,))
     
     # Cost and Grad functions
-    var = Variational_QG_SW(
-        M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
+    var = Variational_BM_IT(
+        M=Model, H=H, State=State, B=B, R=R, comp=comp_bm, Xb=Xb,
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
         prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
         save_wave_basis=config.save_wave_basis)
@@ -649,8 +651,8 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     else:
         Xa = var.Xb + res.x
     
-    Xqg = Xa[:var.comp.nwave]
-    Xsw = Xa[var.comp.nwave:]
+    Xbm = Xa[:var.comp.nwave]
+    Xit = Xa[var.comp.nwave:]
         
     # Save minimum for next experiments
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
@@ -662,7 +664,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     # 1st timestep
     coords = [var.coords[0],var.coords[1],var.coords[2][0]]
     var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                              compute_geta=True,eta=Xqg,
+                              compute_geta=True,eta=Xbm,
                               save_wave_basis=config.save_wave_basis) 
     State0.setvar(var_init.reshape((State.ny,State.nx)),
                   ind=0)
@@ -673,7 +675,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         # Forward
         for j in range(nstep):
-            Model.step(t+j*Model.dt,State0,Xsw,nstep=1)
+            Model.step(t+j*Model.dt,State0,Xit,nstep=1)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
@@ -682,7 +684,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xqg,mode='flux',
+                           compute_geta=True,eta=Xbm,mode='flux',
                            save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=0)

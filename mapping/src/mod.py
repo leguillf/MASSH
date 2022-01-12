@@ -84,6 +84,21 @@ class Model_diffusion:
         # Update state
         State.setvar(SSH1,ind=ind)
         
+    def step_tgl(self,dState,State,nstep=1,ind=0):
+        # Get state variable
+        SSH0 = dState.getvar(ind=ind)
+        
+        # init
+        SSH1 = +SSH0
+        
+        for step in range(nstep):
+            SSH1[1:-1,1:-1] += self.dt*self.snu*(\
+                (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+        
+        # Update state
+        dState.setvar(SSH1,ind=ind)
+        
     
     def step_adj(self,adState,State,nstep=1,ind=0):
         # Get state variable
@@ -1352,16 +1367,16 @@ class Model_BM_IT:
     
     def __init__(self,config,State):
         print('\n* BM Model')
-        if config.name_model=='Diffusion':
+        if config.name_model[0]=='Diffusion':
             self.Model_BM = Model_diffusion(config,State)
-        elif config.name_model=='QG1L':
+        elif config.name_model[0]=='QG1L':
             self.Model_BM = Model_qg1l(config,State)
             
         print('\n* IT Model')
-        if config.name_model=='SW1L':
-            self.Model_SW = Model_sw1l(config,State)
-        elif config.name_model=='SW1LM':
-            self.Model_BM = Model_sw1lm(config,State)
+        if config.name_model[1]=='SW1L':
+            self.Model_IT = Model_sw1l(config,State)
+        elif config.name_model[1]=='SW1LM':
+            self.Model_IT = Model_sw1lm(config,State)
         
             
         self.nt = self.Model_IT.nt
@@ -1385,10 +1400,10 @@ class Model_BM_IT:
         
         h = 0
         
-        self.Model_QG.step(State,nstep=nstep,ind=0)
+        self.Model_BM.step(State,nstep=nstep,ind=0)
         h += State.getvar(ind=0)
         
-        self.Model_SW.step(t,State,params,nstep=nstep,t0=t0,ind=[1,2,3])
+        self.Model_IT.step(t,State,params,nstep=nstep,t0=t0,ind=[1,2,3])
         h += State.getvar(ind=3)
         
         State.setvar(h,ind=4)
@@ -1398,10 +1413,10 @@ class Model_BM_IT:
         
         dh = 0
         
-        self.Model_QG.step_tgl(dState,State,nstep=nstep,ind=0)
+        self.Model_BM.step_tgl(dState,State,nstep=nstep,ind=0)
         dh += dState.getvar(ind=0)
         
-        self.Model_SW.step_tgl(t,dState,State,dparams,params,nstep=nstep,t0=t0,ind=[1,2,3])
+        self.Model_IT.step_tgl(t,dState,State,dparams,params,nstep=nstep,t0=t0,ind=[1,2,3])
         dh += dState.getvar(ind=3)
 
         dState.setvar(dh,ind=4)
@@ -1412,11 +1427,11 @@ class Model_BM_IT:
         
         _adh = adState.getvar(ind=0) 
         adState.setvar(adh+_adh,ind=0)
-        self.Model_QG.step_adj(adState,State,nstep=nstep,ind=0)
+        self.Model_BM.step_adj(adState,State,nstep=nstep,ind=0)
     
         _adh = adState.getvar(ind=3) 
         adState.setvar(adh+_adh,ind=3)
-        adparams = self.Model_SW.step_adj(t,adState,State,adparams,params,nstep=nstep,t0=t0,ind=[1,2,3])
+        adparams = self.Model_IT.step_adj(t,adState,State,adparams,params,nstep=nstep,t0=t0,ind=[1,2,3])
         adh += adState.getvar(ind=3)
 
         adState.setvar(0*adh,ind=4)

@@ -36,7 +36,8 @@ class Obsopt:
         self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)
         
-        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1L_SW1L'] :
+        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1L_SW1L'] or \
+             hasattr(config.name_model,'__len__') and len(config.name_model)==2:
             for t in Model.timestamps:
                 if self.isobserved(t):
                     delta_t = [(t - tobs).total_seconds() 
@@ -525,7 +526,7 @@ class Variational_flux:
         return g 
     
 
-class Variational_QG_SW:
+class Variational_BM_IT:
     
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
@@ -658,7 +659,7 @@ class Variational_QG_SW:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        State.plot()
+        State.plot(ind=[0,3,4])
         
         return J
     
@@ -740,7 +741,7 @@ class Variational_QG_SW:
         
         g = adX + gb  # total gradient
         
-        adState.plot()
+        adState.plot(ind=[0,3,4])
         
         return g 
     
