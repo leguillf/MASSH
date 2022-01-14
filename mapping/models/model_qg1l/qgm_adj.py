@@ -298,7 +298,7 @@ class Qgm_adj(Qgm_tgl):
                 
         return adh
     
-    def h2pv_1d_adj(self,adq1d,a,b):
+    def h2pv_1d_adj(self,adq1d):
             
         adh1d = np.zeros((self.np,))
         adq1d_tmp = +adq1d
@@ -306,22 +306,22 @@ class Qgm_adj(Qgm_tgl):
         adh1d[self.vp1] += adq1d_tmp[self.vp1]
         adq1d_tmp[self.vp1] = 0
         
-        adh1d[self.vp2e] += a[self.vp2]/self.dx1d[self.vp2]**2 * adq1d_tmp[self.vp2]
-        adh1d[self.vp2w] += a[self.vp2]/self.dx1d[self.vp2]**2 * adq1d_tmp[self.vp2]
-        adh1d[self.vp2] += -2*a[self.vp2]/self.dx1d[self.vp2]**2 * adq1d_tmp[self.vp2]
-        adh1d[self.vp2n] += a[self.vp2]/self.dy1d[self.vp2]**2 * adq1d_tmp[self.vp2]
-        adh1d[self.vp2s] += a[self.vp2]/self.dy1d[self.vp2]**2 * adq1d_tmp[self.vp2]
-        adh1d[self.vp2] += -2*a[self.vp2]/self.dy1d[self.vp2]**2 * adq1d_tmp[self.vp2]
-        adh1d[self.vp2] += b[self.vp2] * adq1d_tmp[self.vp2]
+        adh1d[self.vp2e] += self.aaa[self.vp2]/self.dx1d[self.vp2]**2 * adq1d_tmp[self.vp2]
+        adh1d[self.vp2w] += self.aaa[self.vp2]/self.dx1d[self.vp2]**2 * adq1d_tmp[self.vp2]
+        adh1d[self.vp2] += -2*self.aaa[self.vp2]/self.dx1d[self.vp2]**2 * adq1d_tmp[self.vp2]
+        adh1d[self.vp2n] += self.aaa[self.vp2]/self.dy1d[self.vp2]**2 * adq1d_tmp[self.vp2]
+        adh1d[self.vp2s] += self.aaa[self.vp2]/self.dy1d[self.vp2]**2 * adq1d_tmp[self.vp2]
+        adh1d[self.vp2] += -2*self.aaa[self.vp2]/self.dy1d[self.vp2]**2 * adq1d_tmp[self.vp2]
+        adh1d[self.vp2] += self.bbb[self.vp2] * adq1d_tmp[self.vp2]
         
         adq1d_tmp[self.vp2] = 0
     
         return adh1d
     
     
-    def alpha_adj(self,adalpha,p,gg,aaa,bbb):
+    def alpha_adj(self,adalpha,p,gg):
         
-        tmp = np.dot(p,self.h2pv_1d(p,aaa,bbb))
+        tmp = np.dot(p,self.h2pv_1d(p))
         
         if tmp!=0. : 
             # dalpha = -((np.dot(dp,gg)+np.dot(p,dgg))*tmp - dtmp*np.dot(p,gg))/tmp**2
@@ -333,8 +333,8 @@ class Qgm_adj(Qgm_tgl):
             adtmp = 0.
         
         # dtmp = np.dot(dp,self.h2pv_1d(p,aaa,bbb)) + np.dot(p,self.h2pv_1d(dp,aaa,bbb))
-        adp += self.h2pv_1d(p,aaa,bbb) * adtmp
-        adp += self.h2pv_1d_adj(adtmp*p,aaa,bbb)
+        adp += self.h2pv_1d(p) * adtmp
+        adp += self.h2pv_1d_adj(adtmp*p)
         
         return adp,adgg
             
@@ -346,47 +346,51 @@ class Qgm_adj(Qgm_tgl):
         ######################
         x = +hg[self.indi,self.indj]
         q1d = q[self.indi,self.indj]
-        
-        aaa = self.g/self.f01d
-        bbb = - self.g*self.f01d / self.c1d**2
+
         ccc = +q1d
-        aaa[self.vp1] = 0
-        bbb[self.vp1] = 1
         ccc[self.vp1] = x[self.vp1]  ##boundary condition
         
-        gg = self.h2pv_1d(x,aaa,bbb) - ccc
-        p = -gg
+        r = self.h2pv_1d(x) - ccc
+        d = -r
+        alpha = self.alpha(d,r)
+        xnew = x + alpha*d
         
-        gg_list = [gg]
-        p_list = [p]
-        alpha_list = []
+        alpha_list = [alpha]
         a1_list = []
         a2_list = []
         beta_list = []
-        for itr in range(self.qgiter-1): 
-            a1 = np.dot(gg,gg)
-            alpha = self.alpha(p,gg,aaa,bbb)
-            x = x + alpha*p
-            gg = self.h2pv_1d(x,aaa,bbb) - ccc
-            a2 = np.dot(gg,gg)
-            if a1!=0:
-                beta = a2/a1
-            else: 
-                beta = 1.
-            p = -gg + beta*p
-            
-            alpha_list.append(alpha)
-            gg_list.append(gg)
-            p_list.append(p)
-            a1_list.append(a1)
-            a2_list.append(a2)
-            beta_list.append(beta)
-        val1 = -np.dot(p,gg)
-        val2 = np.dot(p,self.h2pv_1d(p,aaa,bbb))
-        if (val2==0.): 
-            s=1.
-        else: 
-            s=val1/val2
+        r_list = [r]
+        d_list = [d]
+        if self.qgiter>1:
+            for itr in range(self.qgiter): 
+                # Update guess value
+                x = +xnew
+                
+                # Compute beta
+                rnew = self.h2pv_1d(xnew) - ccc
+                a1 = np.dot(r,r)
+                a2 = np.dot(rnew,rnew)
+                if a1!=0:
+                    beta = a2/a1
+                else: 
+                    beta = 1.
+                r = +rnew
+                
+                # Compute new direction
+                dnew = -rnew + beta*d
+                d = +dnew
+                
+                # Update state
+                alpha = self.alpha(d,r)
+                xnew = x + alpha*d
+                
+                alpha_list.append(alpha)
+                r_list.append(r)
+                d_list.append(d)
+                beta_list.append(beta)
+                a1_list.append(a1)
+                a2_list.append(a2)
+                    
             
         ######################
         # Adjoint iterations
@@ -394,117 +398,111 @@ class Qgm_adj(Qgm_tgl):
         # Initialize adjoint variable
         adq = np.zeros((self.ny,self.nx))
         adhg = np.zeros((self.ny,self.nx))
+        adalpha = 0
+        adbeta = 0
+        ada1 = 0
+        ada2 = 0
+        adx = np.zeros((self.np,))
+        adxnew = np.zeros((self.np,))
+        adr = np.zeros((self.np,))
+        adrnew = np.zeros((self.np,))
+        add = np.zeros((self.np,))
+        addnew = np.zeros((self.np,))
+        adccc = np.zeros((self.np,))
+        adq1d = np.zeros((self.np,))
         
-        adh_tmp = +adh
-        
+
         # back to 2D
-        #dh[self.indi,self.indj] = dx1[:]
-        adx1 = +adh_tmp[self.indi,self.indj]
-        adh_tmp[self.indi,self.indj] = 0.
+        #dh[self.indi,self.indj] = +dxnew[:]
+        adxnew += +adh[self.indi,self.indj]
         
-        # dx1 = dx + ds*p + s*dp
-        adx = +adx1
-        ads = p*adx1
-        adp = s*adx1
-        adx1 *= 0.
+        if self.qgiter>1:        
+            for itr in reversed(range(self.qgiter)): 
+                # 4. Update state
+                # dxnew = dx + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
+                adalpha += np.sum(d_list[itr+1] * adxnew)
+                add += alpha_list[itr+1] * adxnew
+                adx += adxnew
+                adxnew *= 0
+                # dalpha = self.alpha_tgl(dd,dr,d_list[itr+1],r_list[itr+1])
+                add_tmp,adr_tmp = self.alpha_adj(adalpha,d_list[itr+1],r_list[itr+1])
+                adr += adr_tmp
+                add += add_tmp
+                adalpha *= 0
+                
+                # 3. Compute new direction
+                # dd = +ddnew
+                addnew += add
+                add *= 0
+                # ddnew = -drnew + dbeta*d_list[itr] + beta_list[itr]*dd
+                adrnew += -addnew
+                adbeta += np.sum(d_list[itr]*addnew)
+                add += beta_list[itr]*addnew
+                addnew *= 0
+                
+                # 2. Compute beta
+                # dr = +drnew
+                adrnew += adr
+                adr *= 0
+                if a1_list[itr]!=0:
+                    # dbeta = (da2*a1_list[itr]-a2_list[itr]*da1)/a1_list[itr]**2.
+                    ada2 += a1_list[itr]/a1_list[itr]**2. * adbeta
+                    ada1 += -a2_list[itr]/a1_list[itr]**2. * adbeta
+                adbeta = 0.
+                # da2 = 2.*np.dot(drnew,r_list[itr+1])
+                adrnew += 2.*r_list[itr+1] * ada2 
+                ada2 = 0.
+                # da1 = 2.*np.dot(dr,r_list[itr]) 
+                adr += 2.*r_list[itr] * ada1
+                ada1 = 0
+                # drnew[self.vp1] = 0 ## boundary condition     
+                adrnew[self.vp1] = 0
+                # drnew = self.h2pv_1d(dxnew) - dccc
+                adxnew += self.h2pv_1d_adj(+adrnew)
+                adccc += -adrnew
+                adrnew *= 0.
+                
+                # 1. Update guess value
+                # dx = +dxnew
+                adxnew += adx
+                adx *= 0
+                
+        # dxnew = dx + dalpha*d_list[0] + alpha_list[0]*dd
+        adalpha += np.sum(d_list[0] * adxnew)
+        add += alpha_list[0] * adxnew
+        adx += adxnew
+        adxnew *= 0
         
-        if (val2==0.): 
-            # ds = 0.
-            ads = 0.
-            adval2 = adval1 = 0
-        else: 
-            #ds = (dval1*val2 - val1*dval2)/val2**2.
-            adval1 = np.sum(val2/val2**2. * ads)
-            adval2 = np.sum(-(val1/val2**2.) * ads)
-            ads = 0.
+        # dalpha = self.alpha_tgl(dd,dr,d_list[0],r_list[0])
+        add_tmp,adr_tmp = self.alpha_adj(adalpha,d_list[0],r_list[0])
+        adr += adr_tmp
+        add += add_tmp
+        adalpha *= 0
         
-        # dval2 = np.dot(dp,self.h2pv_1d(p,aaa,bbb)) + np.dot(p,self.h2pv_1d(dp,aaa,bbb))
-        adp += adval2 * self.h2pv_1d(p,aaa,bbb)
-        adp += adval2 * self.h2pv_1d_adj(p,aaa,bbb)
-        adval2 = 0.
+        # dd = -dr
+        adr += -add
+        add *= 0
         
-        # dval1 = -np.dot(dp,gg)-np.dot(p,dgg)
-        adp += -gg*adval1
-        adgg = -p*adval1
-        adval1 = 0.
+        # dr[self.vp1] = 0 ## boundary condition     
+        adr[self.vp1] = 0
         
-        adbeta = 0.
-        ada1 = 0.
-        ada2 = 0.
-        adccc = 0.
-        adalpha = 0.
-        for itr in reversed(range(self.qgiter-1)): 
-            # dgg = +dggnew
-            adggnew = +adgg
-            adgg *= 0.
-            #dp = +dpnew
-            adpnew = +adp
-            adp *= 0
-            #dx = +dxnew 
-            adxnew = +adx
-            adx *= 0
-            
-            # dpnew = -dggnew + dbeta*p_list[itr] + beta_list[itr]*dp
-            adggnew += -adpnew
-            adbeta += np.sum(p_list[itr]*adpnew)
-            adp += beta_list[itr]*adpnew
-            adpnew *= 0
-            
-            if a1_list[itr]!=0:
-                # dbeta = (da2*a1_list[itr]-a2_list[itr]*da1)/a1_list[itr]**2
-                ada2 += a1_list[itr]/a1_list[itr]**2. * adbeta
-                ada1 += -a2_list[itr]/a1_list[itr]**2. * adbeta
-            adbeta = 0.
-            
-            # da2 = 2*np.dot(dggnew,gg_list[itr+1])
-            adggnew += 2.*gg_list[itr+1] * ada2 
-            ada2 = 0.
-            
-            # dggnew = self.h2pv_1d(dxnew,aaa,bbb) - dccc
-            adxnew += self.h2pv_1d_adj(adggnew,aaa,bbb)
-            adccc += -adggnew
-            adggnew *= 0.
-            
-            # dxnew = dx + dalpha*p_list[itr] + alpha_list[itr]*dp
-            adalpha += np.sum(p_list[itr] * adxnew)
-            adp += alpha_list[itr] * adxnew
-            adx += adxnew
-            adxnew *= 0
-            
-            # dalpha = self.alpha_tgl(dp,dgg,p_list[itr],gg_list[itr],aaa,bbb)
-            adp_tmp,adgg_tmp = self.alpha_adj(adalpha,p_list[itr],gg_list[itr],aaa,bbb)
-            adp += adp_tmp
-            adgg += adgg_tmp
-            adalpha = 0.
-            
-            # da1 = 2*np.dot(dgg,gg_list[itr]) 
-            adgg += 2.*gg_list[itr] * ada1
-            ada1 = 0
+        # dr = self.h2pv_1d(dx) - dccc
+        adx += self.h2pv_1d_adj(+adr)
+        adccc += -adr
+        adr *= 0.
         
-        # dp = -dgg
-        adgg += -adp
-        adp *= 0.
-        
-        # dgg = self.h2pv_1d(dx,aaa,bbb) - dccc
-        adx += self.h2pv_1d_adj(adgg,aaa,bbb)
-        adccc += -adgg
-        adgg *= 0.
-        
-        # dccc[self.vp1] = dx[self.vp1]  ## boundary condition  
-        adx[self.vp1] += adccc[self.vp1]
-        adccc[self.vp1] *= 0.
-        
-        # dccc = +dq1d
-        adq1d = +adccc
+        # dccc[self.vp2] = +dq1d[self.vp2]
+        adq1d[self.vp2] += +adccc[self.vp2]
+        adccc[self.vp2] *= 0
         
         # dq1d = dq[self.indi,self.indj]
-        adq[self.indi,self.indj] = +adq1d
+        adq[self.indi,self.indj] += +adq1d
         adq1d *= 0.
         
         # dx = +dhg[self.indi,self.indj]
-        adhg[self.indi,self.indj] = +adx
+        adhg[self.indi,self.indj] += +adx
         adx *= 0.
-        
+    
         return adq,adhg
     
     
@@ -563,7 +561,7 @@ if __name__ == "__main__":
     SSH = np.zeros((ny,nx))
     c = 2.5
     
-    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=10)
+    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=100)
 
     # Current trajectory
     SSH0 = 1e-2*np.random.random((ny,nx))

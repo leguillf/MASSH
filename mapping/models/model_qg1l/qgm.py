@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pylab as plt 
+from scipy.optimize import minimize
 
 
 
@@ -113,7 +114,8 @@ class Qgm:
               self.indj[p]=j
               self.indp[i,j]=p
      
-     
+        
+        
         p2=-1
         p1=-1
         for p in range(_np):
@@ -139,6 +141,12 @@ class Qgm:
             i=self.indi[p]
             j=self.indj[p]
             self.vp1[p1]=p
+        
+        self.aaa = self.g/self.f01d
+        self.bbb = - self.g*self.f01d / self.c1d**2
+        self.aaa[self.vp1] = 0
+        self.bbb[self.vp1] = 1
+        
         
         # Spatial scheme
         self.upwind = upwind
@@ -295,7 +303,7 @@ class Qgm:
     
         return q
     
-    def h2pv_1d(self,h1d,a,b):
+    def h2pv_1d(self,h1d):
         """ SSH to Q
     
         Args:
@@ -309,18 +317,18 @@ class Qgm:
             
         q1d = np.zeros(self.np,) 
         
-        q1d[self.vp2] = a[self.vp2]*\
+        q1d[self.vp2] = self.aaa[self.vp2]*\
             ((h1d[self.vp2e]+h1d[self.vp2w]-2*h1d[self.vp2])/self.dx1d[self.vp2]**2 +\
              (h1d[self.vp2n]+h1d[self.vp2s]-2*h1d[self.vp2])/self.dy1d[self.vp2]**2) +\
-                b[self.vp2] * h1d[self.vp2]
+                self.bbb[self.vp2] * h1d[self.vp2]
         q1d[self.vp1] = +h1d[self.vp1]
     
         return q1d
 
-    def alpha(self,p,gg,aaa,bbb):
-        tmp = np.dot(p,self.h2pv_1d(p,aaa,bbb))
+    def alpha(self,d,r):
+        tmp = np.dot(d,self.h2pv_1d(d))
         if tmp!=0. : 
-            return -np.dot(p,gg)/tmp
+            return -np.dot(d,r)/tmp
         else: 
             return 1.
     
@@ -342,51 +350,46 @@ class Qgm:
         x = +hg[self.indi,self.indj]
         q1d = q[self.indi,self.indj]
     
-        aaa = self.g/self.f01d
-        bbb = - self.g*self.f01d / self.c1d**2
         ccc = +q1d
     
-        aaa[self.vp1] = 0
-        bbb[self.vp1] = 1
-        ccc[self.vp1] = x[self.vp1]  ##boundary condition
-    
-    
-        gg = self.h2pv_1d(x,aaa,bbb) - ccc
-        p = -gg
-    
-        for itr in range(self.qgiter-1): 
+        r = self.h2pv_1d(x) - ccc
+        r[self.vp1] = 0 ## boundary condition     
         
-            a1 = np.dot(gg,gg)
-            alpha = self.alpha(p,gg,aaa,bbb)
-            
-            xnew = x + alpha*p
-    
-            ggnew = self.h2pv_1d(xnew,aaa,bbb) - ccc
-            
-            a2 = np.dot(ggnew,ggnew)
-            if a1!=0:
-                beta = a2/a1
-            else: 
-                beta = 1.
-            
-            pnew = -ggnew + beta*p
-            
-            gg = +ggnew
-            p = +pnew
-            x = +xnew
-            
-        val1 = -np.dot(p,gg)
-        val2 = np.dot(p,self.h2pv_1d(p,aaa,bbb))
-        if (val2==0.): 
-            s=1.
-        else: 
-            s=val1/val2
-        x = x + s*p
+        d = -r
+        
+        alpha = self.alpha(d,r)
+        xnew = x + alpha*d
+        
+        if self.qgiter>1:
+            for itr in range(self.qgiter): 
+                
+                # Update guess value
+                x = +xnew
+                
+                # Compute beta
+                rnew = self.h2pv_1d(xnew) - ccc
+                rnew[self.vp1] = 0 ## boundary condition     
+                a1 = np.dot(r,r)
+                a2 = np.dot(rnew,rnew)
+                if a1!=0:
+                    beta = a2/a1
+                else: 
+                    beta = 1.
+                r = +rnew
+                
+                # Compute new direction
+                dnew = -rnew + beta*d
+                d = +dnew
+                
+                # Update state
+                alpha = self.alpha(d,r)
+                xnew = x + alpha*d
+        
     
         # back to 2D
         h = np.empty((self.ny,self.nx))
         h[:,:] = np.NAN
-        h[self.indi,self.indj] = x[:]
+        h[self.indi,self.indj] = xnew[:]
     
         return h
 
@@ -556,6 +559,13 @@ class Qgm:
         
         # 5/ q-->h
         h1 = self.pv2h(q1,+h0)
+        # def f(x):
+        #     Ax = self.h2pv_1d(x)
+        #     b = +q1.ravel()
+        #     return np.inner(Ax-b,Ax-b)
+        
+        # res = minimize(f,h0.ravel(),method='BFGS',options={'maxiter':1})
+        # h1 = res.x.reshape((self.ny,self.nx))
         
         if q0 is None:
             return h1

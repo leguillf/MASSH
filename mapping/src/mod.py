@@ -323,8 +323,10 @@ variable are SLAs!')
         State0 = State.random(1e-2)
         dState = State.random(1e-2)
         
-        dphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
-        ddphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
+        dphidt = 1e-2*np.random.random((State.ny,State.nx))
+        dphidt *= State.g*State.f/(self.c**2)/(3600*24)
+        ddphidt = 1e-2*np.random.random((State.ny,State.nx))
+        ddphidt *=  State.g*State.f/(self.c**2)/(3600*24)
         
         if bc:
             Hbc = np.random.random((State.ny,State.nx))
@@ -363,16 +365,19 @@ variable are SLAs!')
         
         # Current trajectory
         State0 = State.random(1e-2)
-        dphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
+        dphidt = 1e-2*np.random.random((State.ny,State.nx))
+        dphidt *= State.g*State.f/(self.c**2)/(3600*24)
         
         # Perturbation
         dState = State.random()
-        ddphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
+        ddphidt = 1e-2*np.random.random((State.ny,State.nx))
+        ddphidt *= State.g*State.f/(self.c**2)/(3600*24)
         dX = np.concatenate((dState.getvar(vect=True),ddphidt.ravel()))
         
         # Adjoint
         adState = State.random()
-        addphidt = self.qgm.h2pv(1e-2*np.random.random((State.ny,State.nx)))
+        addphidt = 1e-2*np.random.random((State.ny,State.nx))
+        addphidt *= State.g*State.f/(self.c**2)/(3600*24)
         adY = np.concatenate((adState.getvar(vect=True),addphidt.ravel()))
         
         if bc:
