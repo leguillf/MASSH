@@ -316,21 +316,7 @@ class Qgm:
         q1d[self.vp1] = +h1d[self.vp1]
     
         return q1d
-    
-        
-    def norm(self,r):
-        return np.linalg.norm(r)
-    
-    # def alpha(self,r,d,a,b):
-    #     return np.dot(d,r)/(d.dot(self.h2pv_1d(d,a,b)))
-    #     #return self.norm(r)**2./(d.dot(self.h2pv_1d(d,a,b)))
-    
-    # def beta(self,r,rnew):
-    #     return self.norm(rnew)**2 / self.norm(r)**2
-    
-    # def alpha(self,r,d,a,b):
-    #     return -np.dot(d,r)/(d.dot(self.h2pv_1d(d,a,b)))
-    
+
     def alpha(self,p,gg,aaa,bbb):
         tmp = np.dot(p,self.h2pv_1d(p,aaa,bbb))
         if tmp!=0. : 
@@ -338,9 +324,7 @@ class Qgm:
         else: 
             return 1.
     
-    def beta(self,r,rnew):
-        return self.norm(rnew)**2 / self.norm(r)**2
-    
+
     def pv2h(self,q,hg):
         """ Q to SSH
         
@@ -405,71 +389,7 @@ class Qgm:
         h[self.indi,self.indj] = x[:]
     
         return h
-    
-    def compute_avec(self,vec,aaa,bbb):
-    
-        avec=np.empty(self.np,) 
-        avec[self.vp2]=aaa[self.vp2]*((vec[self.vp2e]+vec[self.vp2w]-2*vec[self.vp2])/(self.dx1d[self.vp2]**2)+(vec[self.vp2n]+vec[self.vp2s]-2*vec[self.vp2])/(self.dy1d[self.vp2]**2)) + bbb[self.vp2]*vec[self.vp2]
-        avec[self.vp1]=vec[self.vp1]
-     
-        return avec
 
-    
-    def pv2h_2(self,q,hg):
-        
-        """ compute SSH from PV
-    
-        Args:
-            q (2D array): PV
-            hg (2D array): background SSH
-
-    
-        Returns:
-            h (2D array): SSH
-    
-        """
-        if np.all(q==0):
-            return hg
-        
-        q1d = +q[self.indi,self.indj]
-        hg1d = +hg[self.indi,self.indj]
-        
-        a = self.g/self.f01d
-        b = -self.g*self.f01d/(self.c1d)**2
-        a[self.vp1] = 0
-        b[self.vp1] = 1
-        
-        ccc = +q1d
-        ccc[self.vp1] = hg1d[self.vp1] # Boundary conditions
-        
-        r = +ccc - self.h2pv_1d(hg1d,a,b)
-        d = +r
-        alpha = self.alpha(r,d,a,b)
-        h1d = hg1d + alpha*d
-        if self.qgiter>1:
-            for itr in range(self.qgiter): 
-                # Update guess value
-                hg1d = +h1d
-                # Compute beta
-                rnew = ccc - alpha * self.h2pv_1d(d,a,b)
-                beta = self.beta(r,rnew)
-                r = +rnew
-                # Compute new direction
-                dnew = r + beta * d
-                alpha = self.alpha(r,dnew,a,b)
-                d = +dnew
-                # Update SSH
-                h1d = hg1d + alpha*d 
-        
-        # back to 2D
-        h = np.empty((self.ny,self.nx))
-        h[:,:] = np.NAN
-        h[self.indi,self.indj] = h1d[:]
-        
-        return h
-    
-    
-    
     
     def qrhs(self,u,v,q,way):
 
