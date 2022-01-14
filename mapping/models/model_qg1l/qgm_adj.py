@@ -361,7 +361,7 @@ class Qgm_adj(Qgm_tgl):
         beta_list = []
         r_list = [r]
         d_list = [d]
-        if self.qgiter>1:
+        if self.qgiter_adj>1:
             for itr in range(self.qgiter): 
                 # Update guess value
                 x = +xnew
@@ -416,8 +416,8 @@ class Qgm_adj(Qgm_tgl):
         #dh[self.indi,self.indj] = +dxnew[:]
         adxnew += +adh[self.indi,self.indj]
         
-        if self.qgiter>1:        
-            for itr in reversed(range(self.qgiter)): 
+        if self.qgiter_adj>1:        
+            for itr in reversed(range(self.qgiter_adj)): 
                 # 4. Update state
                 # dxnew = dx + dalpha*d_list[itr+1] + alpha_list[itr+1]*dd
                 adalpha += np.sum(d_list[itr+1] * adxnew)
@@ -511,7 +511,7 @@ class Qgm_adj(Qgm_tgl):
         
         azeros = +adh1*0
         
-        if np.all(h0[self.mask>=1]==0):
+        if addphidt is None and np.all(h0[self.mask>=1]==0):
             return adh1
         
         # Tangent trajectory

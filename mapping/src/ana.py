@@ -524,21 +524,29 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         
         # Flux 
-        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
-        dphidt = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xa,mode='flux',
-                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-        dphidt *= -State.g*State.f/(Model.c**2)/(3600*24) # Scale ssh -> pv      
+        # coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        # dphidt = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+        #                    compute_geta=True,eta=Xa,mode='flux',
+        #                    save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+        #dphidt *= -State.g*State.f/(Model.c**2)/(3600*24) # Scale ssh -> pv      
         
         # Forward
         for j in range(nstep):
-            Model.step(State0,dphidt=dphidt)
+            Model.step(State0)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date,mdt=Model.mdt)
-                
+        
+        # Add Flux
+        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xa,mode='flux',
+                            save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+        var = State.getvar(ind=State.get_indobs())
+        State.setvar(var + nstep*Model.dt*F/(3600*24),
+                         ind=State.get_indobs())
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
     print()

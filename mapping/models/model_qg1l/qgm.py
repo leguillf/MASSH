@@ -534,7 +534,7 @@ class Qgm:
     
         """
         
-        if np.all(h0==0):
+        if dphidt is None and np.all(h0==0):
             if q0 is None:
                 return h0
             else:
@@ -554,6 +554,7 @@ class Qgm:
         
         # 4/ increment integration 
         q1 = qb0 + self.dt*rq
+
         if dphidt is not None:
             q1 += self.dt*dphidt
         

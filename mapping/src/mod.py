@@ -164,10 +164,10 @@ variable are SLAs!')
 
         if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='QG1L':
             print('Tangent test:')
-            self.tangent_test(State,10,config.flag_use_boundary_conditions)
+            #self.tangent_test(State,10,config.flag_use_boundary_conditions)
 
             print('Adjoint test:')
-            self.adjoint_test(State,10,config.flag_use_boundary_conditions)
+            #self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
     def step(self,State,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
@@ -304,6 +304,7 @@ variable are SLAs!')
             SSH1 = traj[i]
         
             adSSH1 = self.qgm.step_adj(adSSH1,SSH1,addphidt=addphidt,dphidt=dphidt)
+            
         
         # Boundary conditions
         if Wbc is None:
