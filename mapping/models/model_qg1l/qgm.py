@@ -560,13 +560,6 @@ class Qgm:
         
         # 5/ q-->h
         h1 = self.pv2h(q1,+h0)
-        # def f(x):
-        #     Ax = self.h2pv_1d(x)
-        #     b = +q1.ravel()
-        #     return np.inner(Ax-b,Ax-b)
-        
-        # res = minimize(f,h0.ravel(),method='BFGS',options={'maxiter':1})
-        # h1 = res.x.reshape((self.ny,self.nx))
         
         if q0 is None:
             return h1
