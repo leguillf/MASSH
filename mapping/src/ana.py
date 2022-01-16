@@ -544,8 +544,8 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
                             compute_geta=True,eta=Xa,mode='flux',
                             save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-        state = State.getvar(ind=State.get_indobs())
-        State.setvar(state + nstep*Model.dt*F/(3600*24),
+        state = State0.getvar(ind=State.get_indobs())
+        State0.setvar(state + nstep*Model.dt*F/(3600*24),
                          ind=State.get_indobs())
         
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
