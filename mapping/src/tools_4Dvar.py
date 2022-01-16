@@ -72,8 +72,9 @@ class Obsopt:
                 )
             self.coords_car_bc = grid.geo2cart(coords_geo_bc)
         elif State.config['name_model']=='QG1L':
-            coords_geo_bc = State.lon[Model.qgm.mask<=1].ravel(),State.lat[Model.qgm.mask<=1].ravel()
-            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
+            coords_geo_bc = State.lon[Model.qgm.mask==0].ravel(),State.lat[Model.qgm.mask==0].ravel()
+            if coords_geo_bc[0].size>0 and coords_geo_bc[1].size>0:
+                self.coords_car_bc = grid.geo2cart(coords_geo_bc)
         
         # Mask coast pixels
         self.dist_coast = config.dist_coast
@@ -313,7 +314,8 @@ class Cov :
     
     def sqr(self,X):
         return self.sigma**0.5 * X
-"""    
+    
+"""
 class Variational_QG_wave:
     
     def __init__(self, 
@@ -426,7 +428,7 @@ class Variational_QG_wave:
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))  
             dphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv   
-            
+            #dphidt /= (3600*24)
             
             # 3. Run forward model
             self.M.step(State,nstep=nstep,dphidt=dphidt)
@@ -493,13 +495,16 @@ class Variational_QG_wave:
                                 compute_geta=True,eta=X,mode='flux',
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))  
+            
             dphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv        
+            #dphidt /= (3600*24)
             
             # 3. Run adjoint model
             addphidt = self.M.step_adj(adState, State, 
                                        addphidt=addphidt, dphidt=dphidt, 
                                        nstep=nstep) # i+1 --> i
             addphidt *= -State.g*State.f/(self.M.c**2)/(3600*24) # Scale ssh -> pv  
+            #addphidt /= (3600*24)
             
             # 2. Compute Flux
             adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
@@ -646,6 +651,7 @@ class Variational_QG_wave:
                                 compute_geta=True,eta=X,mode='flux',
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))
+                    
             var = State.getvar(ind=State.get_indobs())
             State.setvar(var + nstep*self.M.dt*F/(3600*24),
                          ind=State.get_indobs())
@@ -742,7 +748,8 @@ class Variational_QG_wave:
         
         return g 
     
-    
+
+
 class Variational_QG_SW:
     
     def __init__(self, 

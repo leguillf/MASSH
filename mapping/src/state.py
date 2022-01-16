@@ -556,6 +556,9 @@ class State:
             
     def plot(self,title=None,cmap='RdBu_r',ind=None):
         
+        if self.config.flag_plot==0:
+            return
+        
         if ind is not None:
             indvar = ind
         else:
