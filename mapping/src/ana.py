@@ -512,23 +512,17 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     State0 = State.free()
     date = config.init_date
     # 1st timestep
-    # coords = [var.coords[0],var.coords[1],var.coords[2][0]]
-    # var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-    #                         compute_geta=True,eta=Xa,
-    #                         save_wave_basis=config.save_wave_basis) 
-    # State0.setvar(var_init.reshape((State.ny,State.nx)),
-    #               ind=0)
+    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
+    state_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xa,
+                            save_wave_basis=config.save_wave_basis) 
+    State0.setvar(state_init.reshape((State.ny,State.nx)),
+                  ind=0)
     State0.save_output(date)
+    
     # Forward propagation
     for i in range(len(var.checkpoint)-1):
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
-        
-        # # Flux 
-        # coords = [var.coords[0],var.coords[1],var.coords[2][i]]
-        # dphidt = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-        #                     compute_geta=True,eta=Xa,mode='flux',
-        #                     save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-        # dphidt *= -State.g*State.f/(Model.c**2)/(3600*24) # Scale ssh -> pv      
         
         # Forward
         for j in range(nstep):
