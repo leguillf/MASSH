@@ -215,6 +215,10 @@ T_bc = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition
 
 He_data = None # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
 
+# - parameter specific to diffusion model
+
+snu = 100
+
 #################################################################################################################################
 # Analysis parameters
 #################################################################################################################################
@@ -319,6 +323,8 @@ sigma_R = 1e-2 # Observational standard deviation
 sigma_B_He = 0.2 # Background variance for He
 
 sigma_B_bc = 1e-2 # Background variance for bc
+
+facB_bc_coast = 0.1 # Factor for bc located at coast. Useful only if mask is provided
 
 sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
 

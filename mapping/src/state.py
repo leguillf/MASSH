@@ -80,8 +80,8 @@ class State:
             self.ini_var_sw1l(config)
         elif config.name_model=='SW1LM':
             self.ini_var_sw1lm(config)
-        elif config.name_model=='QG1L_SW1L':
-            self.ini_var_qg1l_sw1l(config)
+        elif hasattr(config.name_model,'__len__') and len(config.name_model)==2 :
+            self.ini_var_bm_it(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
         # Read output variable from previous run 
@@ -274,10 +274,10 @@ class State:
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
         
-    def ini_var_qg1l_sw1l(self,config):
+    def ini_var_bm_it(self,config):
         if len(self.name_var) != 5:
             if self.first:
-                print('Warning: For QG1L_SW1L: wrong number variable names')
+                print('Warning: For BM & IT: wrong number variable names')
             self.name_var = ["h_bm","u_it","v_it","h_it","h"]             
         if self.first:
             print(self.name_var)
@@ -370,7 +370,7 @@ class State:
             self.mask = mask_interp.copy()
                             
         # Apply to state variable (SSH only)
-        if config.name_model in ['QG1L','QG1L_SW1L']:
+        if config.name_model=='QG1L' or (hasattr(config.name_model,'__len__') and len(config.name_model)==2):
             self.var[0][self.mask] = np.nan
             
 
@@ -419,11 +419,9 @@ class State:
             
             var[name_var] = (dims,var_to_save)
         
-            # If MDT provided, compute SSH from state variable (which is supposed to be SLA)
-            if mdt is not None:
-                if self.config['name_model']!='QG1L_SW1L' or (self.config['name_model']=='QG1L_SW1L' and i!=1): # Avoid IT ssh (we could do better...)
-                    name_var += '_mdt'
-                    var[name_var] = (dims,var_to_save + mdt[np.newaxis,:,:])
+        
+        if mdt is not None:
+            var['mdt'] = (dims,mdt)
             
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
@@ -564,7 +562,7 @@ class State:
             indvar = np.arange(0,len(self.name_var))
         nvar = len(indvar)
  
-        fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
+        fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5))
         
         if title is not None:
             fig.suptitle(title)
@@ -574,7 +572,7 @@ class State:
             
         for ax,i in zip(axs,indvar):
             ax.set_title(self.name_var[i])
-            im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],cmap=cmap,\
+            im = ax.pcolormesh(self.var.values[i],cmap=cmap,\
                                shading='auto')
             plt.colorbar(im,ax=ax)
         
@@ -592,7 +590,7 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return 2 + (self.config.Nmodes)*3
-        elif self.config['name_model']=='QG1L_SW1L' :
+        elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
             return 4
         else :
             return 0
@@ -607,7 +605,7 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]
-        elif self.config['name_model']=='QG1L_SW1L' :
+        elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
             return 0,3,4
         else :
             return 0

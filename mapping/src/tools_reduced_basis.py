@@ -19,7 +19,7 @@ import matplotlib.pylab as plt
   
 
 
-class RedBasis_QG:
+class RedBasis_BM:
    
     def __init__(self,config,State):
 
@@ -263,7 +263,6 @@ class RedBasis_QG:
         depth = -self.finterpDEPTH((lon,lat))
         depth[np.isnan(depth)] = 0.
         
-        
         if hasattr(time,'__len__'):
             nt = len(time)
         else:
@@ -314,7 +313,7 @@ class RedBasis_QG:
             facGeta = {}
             indt = {}
             indx = {}
-            #iwave = 0
+            
             for iff in range(self.nf):
                 for P in range(self.NP[iff]):
                         if self.wavetest[iff][P]:
@@ -333,6 +332,7 @@ class RedBasis_QG:
                             facd = (depth[iobs]-self.depth1)/(self.depth2-self.depth1)
                             facd[facd>1] = 1.
                             facd[facd<0] = 0.
+                            
                             facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
                             
                             indx[(iff,P)] = iobs
@@ -373,8 +373,8 @@ class RedBasis_QG:
                                             ky = self.k[iff] * np.sin(self.theta[itheta])
                                             facGeta[(iff,P)][it][itheta][0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
                                             facGeta[(iff,P)][it][itheta][1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
-
-
+                
+                    
             if save_wave_basis:
                 if not os.path.exists(name_facGeta):
                     with open(name_facGeta, 'wb') as f:

@@ -38,23 +38,24 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     elif config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
     
-    elif config.name_analysis=='4Dvar' and config.name_model=='QG1L':
+    elif config.name_analysis=='4Dvar' and config.name_model in ['QG1L','Diffusion']:
         if config.reduced_basis==True:
-            return ana_4Dvar_QG_wave(config,State,Model,dict_obs)
+            return ana_4Dvar_flux(config,State,Model,dict_obs)
         else:
             return ana_4Dvar_QG_init(config,State,Model,dict_obs)
         
     elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
         return ana_4Dvar_SW(config,State,Model,dict_obs)
     
-    elif config.name_analysis=='4Dvar' and config.name_model=='QG1L_SW1L':
-        return ana_4Dvar_QG_SW(config,State,Model,dict_obs)
+    elif config.name_analysis=='4Dvar' and  hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        return ana_4Dvar_BM_IT(config,State,Model,dict_obs)
     
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
     
     elif config.name_analysis=='HARM':
         return ana_harm(config,State,dict_obs)
+    
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
@@ -423,19 +424,19 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
     return
 
-def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
+def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
-    from .tools_4Dvar import Obsopt, Cov, Variational_QG_wave
-    from .tools_reduced_basis import RedBasis_QG#,RedBasis_ls
+    from .tools_4Dvar import Obsopt, Cov, Variational_flux
+    from .tools_reduced_basis import RedBasis_BM
 
     
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    comp_qg = RedBasis_QG(config,State)
+    comp_qg = RedBasis_BM(config,State)
     qinv_qg = comp_qg.set_basis(return_qinv=True)
    
     print('\n*** Variational ***\n')
@@ -450,7 +451,7 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     # backgroud state 
     Xb = np.zeros((comp_qg.nwave,))
     # Cost and Grad functions
-    var = Variational_QG_wave(
+    var = Variational_flux(
         M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
         prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
@@ -547,19 +548,19 @@ def ana_4Dvar_QG_wave(config,State,Model,dict_obs=None) :
     print()
     
     
-def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
+def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
-    from .tools_4Dvar import Obsopt, Cov, Variational_QG_SW
-    from .tools_reduced_basis import RedBasis_QG
+    from .tools_4Dvar import Obsopt, Cov, Variational_BM_IT
+    from .tools_reduced_basis import RedBasis_BM
 
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    comp_qg = RedBasis_QG(config,State)
-    qinv_qg = comp_qg.set_basis(return_qinv=True)
+    comp_bm = RedBasis_BM(config,State)
+    qinv_bm = comp_bm.set_basis(return_qinv=True)
     
     ###################
     # Variational    #
@@ -573,7 +574,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     _sigma_B[Model.sliceHe] = config.sigma_B_He 
     # error on OBCs
     if hasattr(config.sigma_B_bc, '__len__'):
-        # Specific value for each tidal cxomponent
+        # Specific value for each tidal component
         if len(config.sigma_B_bc) == len(config.w_igws):
             N_one_component_x = Model.nbcx//len(config.w_igws)
             N_one_component_y = Model.nbcy//len(config.w_igws)
@@ -588,14 +589,53 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     else:
         _sigma_B[Model.slicehbcx] = config.sigma_B_bc
         _sigma_B[Model.slicehbcy] = config.sigma_B_bc
-    B = Cov(np.concatenate((1/np.sqrt(qinv_qg),_sigma_B)))
+        
+    if np.any(State.mask):
+        
+        # Reduced apriori for land pixels
+        land_coeff_bcx = np.ones(Model.shapehbcx)
+        land_coeff_bcy = np.ones(Model.shapehbcy)
+        # Loop over OBC coordinates 
+        for j,x in enumerate(Model.bcx): # South/North
+            # look for the closest grid pixel 
+            jS = np.argmin(np.abs(State.X[0,:]-x)) # South
+            jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
+            if State.mask[0,jS]:
+                land_coeff_bcx[:,0,:,:,:,j] = config.facB_bc_coast
+            if State.mask[-1,jN]:
+                land_coeff_bcx[:,1,:,:,:,j] = config.facB_bc_coast
+        for i,y in enumerate(Model.bcy): # West/East
+            # look for the closest grid pixel 
+            iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
+            iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
+            if State.mask[iW,0]:
+                land_coeff_bcy[:,0,:,:,:,i] = config.facB_bc_coast
+            if State.mask[iE,-1]:
+                land_coeff_bcy[:,1,:,:,:,i] = config.facB_bc_coast
+        
+        _sigma_B[Model.slicehbcx] *= land_coeff_bcx.ravel()
+        _sigma_B[Model.slicehbcy] *= land_coeff_bcy.ravel()
+        
+        # Loop over He coordinates 
+        land_coeff_He = np.ones(Model.shapeHe)
+        p = -1
+        for i,y in enumerate(Model.Hey):
+            for j,x in enumerate(Model.Hex):
+                p += 1
+                dist = np.sqrt((State.Y-y)**2+(State.X-x)**2)
+                i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
+                if State.mask[i0,j0]:
+                    land_coeff_He[:,p] = config.facB_He_coast
+        _sigma_B[Model.sliceHe] *= land_coeff_He.ravel()
+
+    B = Cov(np.concatenate((1/np.sqrt(qinv_bm),_sigma_B)))
     
     # backgroud state 
-    Xb = np.zeros((comp_qg.nwave+Model.nParams,))
+    Xb = np.zeros((comp_bm.nwave+Model.nParams,))
     
     # Cost and Grad functions
-    var = Variational_QG_SW(
-        M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
+    var = Variational_BM_IT(
+        M=Model, H=H, State=State, B=B, R=R, comp=comp_bm, Xb=Xb,
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
         prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
         save_wave_basis=config.save_wave_basis)
@@ -649,8 +689,8 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     else:
         Xa = var.Xb + res.x
     
-    Xqg = Xa[:var.comp.nwave]
-    Xsw = Xa[var.comp.nwave:]
+    Xbm = Xa[:var.comp.nwave]
+    Xit = Xa[var.comp.nwave:]
         
     # Save minimum for next experiments
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
@@ -662,7 +702,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
     # 1st timestep
     coords = [var.coords[0],var.coords[1],var.coords[2][0]]
     var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                              compute_geta=True,eta=Xqg,
+                              compute_geta=True,eta=Xbm,
                               save_wave_basis=config.save_wave_basis) 
     State0.setvar(var_init.reshape((State.ny,State.nx)),
                   ind=0)
@@ -673,7 +713,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         # Forward
         for j in range(nstep):
-            Model.step(t+j*Model.dt,State0,Xsw,nstep=1)
+            Model.step(t+j*Model.dt,State0,Xit,nstep=1)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
@@ -682,7 +722,7 @@ def ana_4Dvar_QG_SW(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xqg,mode='flux',
+                           compute_geta=True,eta=Xbm,mode='flux',
                            save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=0)
@@ -906,29 +946,40 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
             _sigma_B[Model.slicehbcx] = config.sigma_B_bc
             _sigma_B[Model.slicehbcy] = config.sigma_B_bc
         
-        # if np.any(State.mask):
-        #     # We divide the covariance by 10 for land pixels
-        #     land_coeff_x = np.ones(Model.shapehbcx)
-        #     land_coeff_y = np.ones(Model.shapehbcy)
-        #     # Loop over OBC coordinates 
-        #     for j,x in enumerate(Model.bcx): # South/North
-        #         # look for the closest grid pixel 
-        #         jS = np.argmin(np.abs(State.X[0,:]-x)) # South
-        #         jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
-        #         if State.mask[0,jS]:
-        #             land_coeff_x[:,0,:,:,:,j] = 0.1
-        #         if State.mask[-1,jN]:
-        #             land_coeff_x[:,1,:,:,:,j] = 0.1
-        #     for i,y in enumerate(Model.bcy): # West/East
-        #         # look for the closest grid pixel 
-        #         iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
-        #         iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
-        #         if State.mask[iW,0]:
-        #             land_coeff_y[:,0,:,:,:,i] = 0.1
-        #         if State.mask[iE,-1]:
-        #             land_coeff_y[:,1,:,:,:,i] = 0.1
-        #     _sigma_B[Model.slicehbcx] *= land_coeff_x.ravel()
-        #     _sigma_B[Model.slicehbcy] *= land_coeff_y.ravel()
+        if np.any(State.mask):
+            # We divide the covariance by 10 for land pixels
+            land_coeff_x = np.ones(Model.shapehbcx)
+            land_coeff_y = np.ones(Model.shapehbcy)
+            # Loop over OBC coordinates 
+            for j,x in enumerate(Model.bcx): # South/North
+                # look for the closest grid pixel 
+                jS = np.argmin(np.abs(State.X[0,:]-x)) # South
+                jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
+                if State.mask[0,jS]:
+                    land_coeff_x[:,0,:,:,:,j] = config.facB_bc_coast
+                if State.mask[-1,jN]:
+                    land_coeff_x[:,1,:,:,:,j] = config.facB_bc_coast
+            for i,y in enumerate(Model.bcy): # West/East
+                # look for the closest grid pixel 
+                iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
+                iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
+                if State.mask[iW,0]:
+                    land_coeff_y[:,0,:,:,:,i] = config.facB_bc_coast
+                if State.mask[iE,-1]:
+                    land_coeff_y[:,1,:,:,:,i] = config.facB_bc_coast
+            _sigma_B[Model.slicehbcx] *= land_coeff_x.ravel()
+            _sigma_B[Model.slicehbcy] *= land_coeff_y.ravel()
+            # Loop over He coordinates 
+            land_coeff_He = np.ones(Model.shapeHe)
+            p = -1
+            for i,y in enumerate(Model.Hey):
+                for j,x in enumerate(Model.Hex):
+                    p += 1
+                    dist = np.sqrt((State.Y-y)**2+(State.X-x)**2)
+                    i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
+                    if State.mask[i0,j0]:
+                        land_coeff_He[:,p] = config.facB_He_coast
+            _sigma_B[Model.sliceHe] *= land_coeff_He.ravel()
         
         # Generate Covariance matrixes
         B = Cov(_sigma_B)
