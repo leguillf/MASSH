@@ -253,7 +253,11 @@ variable are SLAs!')
                          mdu=self.mdu)
         self.State = State
         
-
+        print('qgiter:',self.qgm.qgiter)
+        print('qgiter_adj:',self.qgm.qgiter_adj)
+        print('upwind:',self.qgm.upwind)
+        print('upwind_adj:',self.qgm.upwind_adj)
+        
         # Construct timestamps
         self.timestamps = [] 
         t = config.init_date

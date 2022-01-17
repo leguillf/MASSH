@@ -189,6 +189,8 @@ class Qgm:
             self.uminusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
             self.vplusbar  = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+            
+        
 
         
     

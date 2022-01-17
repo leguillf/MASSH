@@ -171,7 +171,7 @@ dir_model =  None
 
 dtmodel = 300   
 
-upwind = 1 # Order of the upwind scheme for PV advection (either 1,2 or 3)
+upwind = 3 # Order of the upwind scheme for PV advection (either 1,2 or 3)
 
 upwind_adj = None
 
@@ -324,7 +324,9 @@ sigma_B_He = 0.2 # Background variance for He
 
 sigma_B_bc = 1e-2 # Background variance for bc
 
-facB_bc_coast = 0.1 # Factor for bc located at coast. Useful only if mask is provided
+facB_bc_coast = 1 # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+
+facB_He_coast = 1  # Factor for sigma_B_He located at coast. Useful only if mask is provided
 
 sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
 
