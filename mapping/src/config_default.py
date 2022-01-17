@@ -393,7 +393,7 @@ factdec= 15.
 
 tdecmin= 2.5
 
-tdecmax= 30.
+tdecmax= 40.
 
 tssr= 0.5
 
@@ -403,9 +403,9 @@ Romax= 150.
 
 facQ= 1
 
-depth1= 200.  
+depth1= 0.  
 
-depth2= 2000.   
+depth2= 30.   
 
 distortion_eq= 2.
 
