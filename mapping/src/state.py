@@ -319,7 +319,7 @@ class State:
             ds = xr.open_dataset(config.name_init_mask).squeeze()
             name_lon = config.name_var_mask['lon']
             name_lat = config.name_var_mask['lat']
-            name_var = config.name_var_mdt['var']
+            name_var = config.name_var_mask['var']
         elif config.path_mdt is not None and os.path.exists(config.path_mdt):
             ds = xr.open_dataset(config.path_mdt).squeeze()
             name_lon = config.name_var_mdt['lon']
@@ -372,7 +372,6 @@ class State:
         # Apply to state variable (SSH only)
         if config.name_model in ['QG1L','QG1L_SW1L']:
             self.var[0][self.mask] = np.nan
-        
             
 
     def save_output(self,date,mdt=None):
