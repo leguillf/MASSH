@@ -328,12 +328,13 @@ class RedBasis_BM:
                             xx = (np.mod(lon[iobs] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) /distortion
                             yy = (lat[iobs] - self.ENSLAT[iff][P]) / self.km2deg
                             # Spatial tapering shape of the wavelet 
-                            facd = np.ones((len(iobs)))
-                            facd = (depth[iobs]-self.depth1)/(self.depth2-self.depth1)
-                            facd[facd>1] = 1.
-                            facd[facd<0] = 0.
+                            # facd = np.ones((len(iobs)))
+                            # facd = (depth[iobs]-self.depth1)/(self.depth2-self.depth1)
+                            # facd[facd>1] = 1.
+                            # facd[facd<0] = 0.
                             
-                            facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
+                            # facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
+                            facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff])
                             
                             indx[(iff,P)] = iobs
         
