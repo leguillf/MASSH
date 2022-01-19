@@ -307,6 +307,10 @@ class Qgm_tgl(Qgm):
         # Tangent trajectory
         qb0 = self.h2pv(h0)
         u,v = self.h2uv(h0)
+        indNan_u = np.isnan(u)
+        indNan_v = np.isnan(v)
+        u[indNan_u] = 0
+        v[indNan_v] = 0
         rq = self.qrhs(u,v,qb0,way)
         q1 = qb0 + self.dt*rq
         if dphidt is not None:
@@ -316,6 +320,8 @@ class Qgm_tgl(Qgm):
 
         # 2/ h-->(u,v)
         du,dv = self.h2uv(dh0)
+        du[indNan_u] = 0
+        dv[indNan_v] = 0
         
         # 3/ (u,v,q)-->rq
         drq = self.qrhs_tgl(du,dv,dq0,u,v,qb0,way)

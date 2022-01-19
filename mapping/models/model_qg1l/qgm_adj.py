@@ -257,10 +257,7 @@ class Qgm_adj(Qgm_tgl):
     def h2uv_adj(self,adu,adv):
 
         adh = np.zeros((self.ny,self.nx))
-        
-        adu[self.mask<=1] = 0
-        adv[self.mask<=1] = 0
-    
+            
         adh[2:,:-1] += -self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]
         adh[2:,1:] += -self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]
         adh[:-2,1:] += +self.g/self.f0[1:-1,1:]/(4*self.dy[1:-1,1:]) * adu[1:-1,1:]
@@ -270,8 +267,11 @@ class Qgm_adj(Qgm_tgl):
         adh[:-1,2:] += self.g/self.f0[1:,1:-1]/(4*self.dx[1:,1:-1]) * adv[1:,1:-1]
         adh[:-1,:-2] += -self.g/self.f0[1:,1:-1]/(4*self.dx[1:,1:-1]) * adv[1:,1:-1]
         adh[1:,:-2] += -self.g/self.f0[1:,1:-1]/(4*self.dx[1:,1:-1]) * adv[1:,1:-1]
+
         
         return adh
+    
+    
     
     
     
@@ -338,8 +338,7 @@ class Qgm_adj(Qgm_tgl):
         
         return adp,adgg
             
-    
-    
+
     def pv2h_adj(self,adh,q,hg):
         ######################
         # Forward iterations
@@ -348,9 +347,9 @@ class Qgm_adj(Qgm_tgl):
         q1d = q[self.indi,self.indj]
 
         ccc = +q1d
-        ccc[self.vp1] = x[self.vp1]  ##boundary condition
         
         r = self.h2pv_1d(x) - ccc
+        r[self.vp1] = 0 ## boundary condition   
         d = -r
         alpha = self.alpha(d,r)
         xnew = x + alpha*d
@@ -368,6 +367,7 @@ class Qgm_adj(Qgm_tgl):
                 
                 # Compute beta
                 rnew = self.h2pv_1d(xnew) - ccc
+                rnew[self.vp1] = 0 ## boundary condition   
                 a1 = np.dot(r,r)
                 a2 = np.dot(rnew,rnew)
                 if a1!=0:
@@ -506,7 +506,77 @@ class Qgm_adj(Qgm_tgl):
         return adq,adhg
     
     
+    def testadj_h2uv(self):
+        dh = np.random.random((self.ny,self.nx))
+        adu = np.random.random((self.ny,self.nx))
+        adv = np.random.random((self.ny,self.nx))
+        
+        du,dv = self.h2uv(dh)
+        adh = self.h2uv_adj(adu,adv)
+        
+        ps1 = np.inner(dh.ravel(),adh.ravel())
+        ps2 = np.inner(np.concatenate((du.ravel(),dv.ravel())),
+                       np.concatenate((adu.ravel(),adv.ravel())))
+        print('testadj_h2uv:',ps1/ps2)
     
+    def testadj_h2pv(self):
+        dh = np.random.random((self.ny,self.nx))
+        adq = np.random.random((self.ny,self.nx))
+        
+        dq = self.h2pv(dh)
+        adh = self.h2pv_adj(adq)
+        
+        ps1 = np.inner(dh.ravel(),adh.ravel())
+        ps2 = np.inner(dq.ravel(),adq.ravel())
+        
+        print('testadj_h2pv:',ps1/ps2)
+        
+    def testadj_qrhs(self):
+        
+        u = np.random.random((self.ny,self.nx))
+        v = np.random.random((self.ny,self.nx))
+        q = np.random.random((self.ny,self.nx))
+        
+        du = np.random.random((self.ny,self.nx))
+        dv = np.random.random((self.ny,self.nx))
+        dq = np.random.random((self.ny,self.nx))
+        
+        adrq = np.random.random((self.ny,self.nx))
+        
+        drq = self.qrhs_tgl(du,dv,dq,u,v,q,1)
+        
+        adu,adv,adq = self.qrhs_adj(adrq,u,v,q,1)
+        
+
+        ps1 = np.inner(drq.ravel(),adrq.ravel())
+        ps2 = np.inner(np.concatenate((du.ravel(),dv.ravel(),dq.ravel())),
+                       np.concatenate((adu.ravel(),adv.ravel(),adq.ravel())))
+        print('testadj_qrhs:',ps1/ps2)
+        
+    def testadj_pv2h(self):
+        
+        q = np.random.random((self.ny,self.nx))
+        hg = np.random.random((self.ny,self.nx))
+        
+        
+        dq = np.random.random((self.ny,self.nx))
+        dhg = np.random.random((self.ny,self.nx))
+        
+        
+        adh = np.random.random((self.ny,self.nx))
+        
+        dh = self.pv2h_tgl(dq,dhg,q,hg)
+        
+        adq,adhg = self.pv2h_adj(adh,q,hg)
+        
+        
+        ps1 = np.inner(dh.ravel(),adh.ravel())
+        ps2 = np.inner(np.concatenate((dq[self.mask>0].ravel(),dhg[self.mask>0].ravel())),
+                       np.concatenate((adq[self.mask>0].ravel(),adhg[self.mask>0].ravel())))
+        print('testadj_pv2h:',ps1/ps2)
+        
+        
+        
     def step_adj(self,adh1,h0,addphidt=None,dphidt=None,way=1):
         
         azeros = +adh1*0
@@ -517,6 +587,11 @@ class Qgm_adj(Qgm_tgl):
         # Tangent trajectory
         qb0 = self.h2pv(h0)
         u,v = self.h2uv(h0)
+        indNan_u = np.isnan(u)
+        indNan_v = np.isnan(v)
+        u[indNan_u] = 0
+        v[indNan_v] = 0
+        
         rq = self.qrhs(u,v,qb0,way)
         q1 = qb0 + self.dt*rq
         if dphidt is not None:
@@ -539,6 +614,8 @@ class Qgm_adj(Qgm_tgl):
         adrq = +azeros
         
         # 2/ h-->(u,v)
+        adu0[indNan_u] = 0
+        adv0[indNan_v] = 0
         adh0 += self.h2uv_adj(adu0,adv0)
         adu0 = +azeros
         adv0 = +azeros
@@ -546,23 +623,38 @@ class Qgm_adj(Qgm_tgl):
         # 1/ h-->q
         adh0 += self.h2pv_adj(adq0)
         
+        
         return adh0
+    
+
         
     
         
 
 
 if __name__ == "__main__":    
+    import matplotlib.pylab as plt
     
     ny,nx = 100,150
     dx = 10e3 * np.ones((ny,nx))
     dy = 12e3 * np.ones((ny,nx))
     dt = 300
     SSH = np.zeros((ny,nx))
+    
+    SSH[:10,:10] = np.nan
+    
     c = 2.5
     
-    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=100)
-
+    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=10)
+    
+    plt.figure()
+    plt.pcolormesh(qgm.mask)
+    plt.colorbar()
+    plt.show()
+    
+    qgm.testadj_h2uv()
+    qgm.testadj_pv2h()
+    
     # Current trajectory
     SSH0 = 1e-2*np.random.random((ny,nx))
 
@@ -572,7 +664,7 @@ if __name__ == "__main__":
     # Adjoint
     adSSH0 = 1e-2*np.random.random((ny,nx))
     
-    nstep = 3
+    nstep = 100
     
     SSH1 = +SSH0
     traj = [SSH1]
@@ -592,10 +684,11 @@ if __name__ == "__main__":
     adSSH1 = +adSSH0 
     for i in reversed(range(nstep)):
         adSSH1 = qgm.step_adj(adSSH1,traj[i])
+
     
-    
-    ps1 = np.inner(dSSH1.ravel(),adSSH0.ravel())
-    ps2 = np.inner(dSSH0.ravel(),adSSH1.ravel())
+
+    ps1 = np.inner(dSSH1[qgm.mask>0].ravel(),adSSH0[qgm.mask>0].ravel())
+    ps2 = np.inner(dSSH0[qgm.mask>0].ravel(),adSSH1[qgm.mask>0].ravel())
         
     print('\ntest:',ps1/ps2)
 

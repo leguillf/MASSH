@@ -66,16 +66,16 @@ class Obsopt:
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
         self.coords_car_bc = []
-        if State.config['name_model'] in ['SW1L','SW1LM']:
-            coords_geo_bc = (
-                np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
-                np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
-                )
-            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
-        elif State.config['name_model']=='QG1L':
-            coords_geo_bc = State.lon[Model.qgm.mask==0].ravel(),State.lat[Model.qgm.mask==0].ravel()
-            if coords_geo_bc[0].size>0 and coords_geo_bc[1].size>0:
-                self.coords_car_bc = grid.geo2cart(coords_geo_bc)
+        # if State.config['name_model'] in ['SW1L','SW1LM']:
+        #     coords_geo_bc = (
+        #         np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
+        #         np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
+        #         )
+        #     self.coords_car_bc = grid.geo2cart(coords_geo_bc)
+        # elif State.config['name_model']=='QG1L':
+        #     coords_geo_bc = State.lon[Model.qgm.mask==0].ravel(),State.lat[Model.qgm.mask==0].ravel()
+        #     if coords_geo_bc[0].size>0 and coords_geo_bc[1].size>0:
+        #         self.coords_car_bc = grid.geo2cart(coords_geo_bc)
         
         # Mask coast pixels
         self.dist_coast = config.dist_coast
@@ -322,7 +322,8 @@ class Variational_flux:
     def __init__(self, 
                  M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
                  tmp_DA_path=None, init_date=None,checkpoint=1,
-                 prec=False,compute_test=False,save_wave_basis=False):
+                 prec=False,compute_test=False,save_wave_basis=False,
+                 Hbc=None,Wbc=None):
         
         # Objects
         self.M = M # model
@@ -375,6 +376,7 @@ class Variational_flux:
         self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
         self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
+        
                
         # Grad test
         if compute_test:

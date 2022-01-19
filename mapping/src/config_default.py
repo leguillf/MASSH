@@ -346,7 +346,7 @@ gtol = 1e-5 # Gradient norm must be less than gtol before successful termination
 
 maxiter = 20 # Maximal number of iterations for the minimization process
 
-mask_coast = True
+mask_coast = False
 
 dist_coast = 100 #km
 

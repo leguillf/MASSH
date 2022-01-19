@@ -191,6 +191,9 @@ class Qgm:
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
             
         
+        self.hbc = np.zeros((self.ny,self.nx))
+            
+        
 
         
     
@@ -217,12 +220,7 @@ class Qgm:
         if ubc is not None and vbc is not None:
             u[self.mask==1] = ubc[self.mask==1]
             v[self.mask==1] = vbc[self.mask==1]
-        else:
-            u[self.mask==1] = 0
-            v[self.mask==1] = 0
-        u[self.mask==0] = 0
-        v[self.mask==0] = 0
-    
+        
         return u,v
 
 
@@ -248,7 +246,7 @@ class Qgm:
                 self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
         
         ind = np.where((self.mask==1))
-        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
+        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]#self.hbc[ind]
             
         ind = np.where((self.mask==0))
         q[ind] = 0
@@ -302,7 +300,7 @@ class Qgm:
             
         ind = np.where((self.mask==0))
         q[ind] = 0
-    
+        
         return q
     
     def h2pv_1d(self,h1d):
@@ -550,6 +548,8 @@ class Qgm:
 
         # 2/ h-->(u,v)
         u,v = self.h2uv(h0)
+        u[np.isnan(u)] = 0
+        v[np.isnan(v)] = 0
         
         # 3/ (u,v,q)-->rq
         rq = self.qrhs(u,v,qb0,way)

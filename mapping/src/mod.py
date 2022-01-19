@@ -426,11 +426,7 @@ variable are SLAs!')
     
         State0 = State.random(1e-2)
         dState = State.random(1e-2)
-        
-        dphidt = 1e-2*np.random.random((State.ny,State.nx))
-        dphidt *= State.g*State.f/(self.c**2)/(3600*24)
-        ddphidt = 1e-2*np.random.random((State.ny,State.nx))
-        ddphidt *=  State.g*State.f/(self.c**2)/(3600*24)
+
         
         if bc:
             Hbc = np.random.random((State.ny,State.nx))
@@ -439,7 +435,7 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         State0_tmp = State0.copy()
-        self.step(State0_tmp,dphidt=dphidt,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        self.step(State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -449,13 +445,12 @@ variable are SLAs!')
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(State1,dphidt=dphidt+lambd*ddphidt,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+            self.step(State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
             self.step_tgl(dState1,State0,
-                          ddphidt=lambd*ddphidt,dphidt=dphidt,
                           nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             dX = dState1.getvar(vect=True)
             
@@ -468,21 +463,15 @@ variable are SLAs!')
     def adjoint_test(self,State,nstep,bc=False):
         
         # Current trajectory
-        State0 = State.random(1e-2)
-        dphidt = 1e-2*np.random.random((State.ny,State.nx))
-        dphidt *= State.g*State.f/(self.c**2)/(3600*24)
+        State0 = State.random()
         
         # Perturbation
         dState = State.random()
-        ddphidt = 1e-2*np.random.random((State.ny,State.nx))
-        ddphidt *= State.g*State.f/(self.c**2)/(3600*24)
-        dX = np.concatenate((dState.getvar(vect=True),ddphidt.ravel()))
+        dX = dState.getvar(vect=True)
         
         # Adjoint
         adState = State.random()
-        addphidt = 1e-2*np.random.random((State.ny,State.nx))
-        addphidt *= State.g*State.f/(self.c**2)/(3600*24)
-        adY = np.concatenate((adState.getvar(vect=True),addphidt.ravel()))
+        adY = adState.getvar(vect=True)
         
         if bc:
             Hbc = np.random.random((State.ny,State.nx))
@@ -492,15 +481,13 @@ variable are SLAs!')
         
         # Run TLM
         self.step_tgl(dState,State0,
-                      dphidt=dphidt,ddphidt=ddphidt,
                       nstep=nstep,Hbc=Hbc,Wbc=Wbc)
-        dY = np.concatenate((dState.getvar(vect=True),dphidt.ravel()))
+        dY = dState.getvar(vect=True)
         
         # Run ADJ
-        addphidt = self.step_adj(adState,State0,
-                                addphidt=addphidt,dphidt=dphidt,
-                                nstep=nstep,Hbc=Hbc,Wbc=Wbc)
-        adX = np.concatenate((adState.getvar(vect=True),addphidt.ravel()))
+        self.step_adj(adState,State0,
+                      nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        adX = adState.getvar(vect=True)
            
         mask = np.isnan(dX + adX + dY + adY)
         ps1 = np.inner(dX[~mask],adX[~mask])

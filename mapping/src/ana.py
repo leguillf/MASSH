@@ -17,7 +17,6 @@ import gc
 import pandas as pd
 import xarray as xr
 from importlib.machinery import SourceFileLoader 
-from scipy.sparse import csc_matrix, coo_matrix, csr_matrix
 
 from . import grid
 
@@ -438,7 +437,7 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     print('\n*** Wavelet reduced basis ***\n')
     comp_qg = RedBasis_BM(config,State)
     qinv_qg = comp_qg.set_basis(return_qinv=True)
-   
+       
     print('\n*** Variational ***\n')
     # Covariance matrix
     if config.sigma_B is not None:          
@@ -451,6 +450,7 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     # backgroud state 
     Xb = np.zeros((comp_qg.nwave,))
     # Cost and Grad functions
+    
     var = Variational_flux(
         M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
         tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
