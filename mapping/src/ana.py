@@ -437,7 +437,7 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     print('\n*** Wavelet reduced basis ***\n')
     comp_qg = RedBasis_BM(config,State)
     qinv_qg = comp_qg.set_basis(return_qinv=True)
-       
+    
     print('\n*** Variational ***\n')
     # Covariance matrix
     if config.sigma_B is not None:          
@@ -450,12 +450,9 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     # backgroud state 
     Xb = np.zeros((comp_qg.nwave,))
     # Cost and Grad functions
-    
     var = Variational_flux(
-        M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb,
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
-        save_wave_basis=config.save_wave_basis)
+        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb)
+    
     # Initial State 
     if config.path_init_4Dvar is None:
         Xopt = var.Xb*0
@@ -519,15 +516,15 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
                             save_wave_basis=config.save_wave_basis) 
     State0.setvar(state_init.reshape((State.ny,State.nx)),
                   ind=0)
-    State0.save_output(date)
+    State0.save_output(date,mdt=Model.mdt)
     
-    # Forward propagation
+    #  Time loop
     for i in range(len(var.checkpoint)-1):
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         
         # Forward
         for j in range(nstep):
-            Model.step(State0)
+            Model.step(State0, Hbc=var.bc_field[i],Wbc=var.bc_weight)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
@@ -635,10 +632,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     
     # Cost and Grad functions
     var = Variational_BM_IT(
-        M=Model, H=H, State=State, B=B, R=R, comp=comp_bm, Xb=Xb,
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec,compute_test=config.compute_test,init_date=config.init_date,
-        save_wave_basis=config.save_wave_basis)
+        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp_bm, Xb=Xb)
     
     # Initial State 
     if config.path_init_4Dvar is None:
@@ -706,14 +700,15 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
                               save_wave_basis=config.save_wave_basis) 
     State0.setvar(var_init.reshape((State.ny,State.nx)),
                   ind=0)
-    State0.save_output(date)
+    State0.save_output(date,mdt=Model.mdt)
     # Forward propagation
     for i in range(len(var.checkpoint)-1):
         t = Model.T[var.checkpoint[i]]
         nstep = var.checkpoint[i+1] - var.checkpoint[i]
         # Forward
         for j in range(nstep):
-            Model.step(t+j*Model.dt,State0,Xit,nstep=1)
+            Model.step(t+j*Model.dt,State0,Xit,nstep=1, 
+                       Hbc=var.bc_field[i],Wbc=var.bc_weight)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\

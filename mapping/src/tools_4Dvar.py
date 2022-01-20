@@ -320,10 +320,7 @@ class Cov :
 class Variational_flux:
     
     def __init__(self, 
-                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
-                 tmp_DA_path=None, init_date=None,checkpoint=1,
-                 prec=False,compute_test=False,save_wave_basis=False,
-                 Hbc=None,Wbc=None):
+                 config=None, M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None):
         
         # Objects
         self.M = M # model
@@ -338,7 +335,7 @@ class Variational_flux:
         self.Xb = Xb
         
         # Temporary path where to save model trajectories
-        self.tmp_DA_path = tmp_DA_path
+        self.tmp_DA_path = config.tmp_DA_path
         
         # Compute checkpoints
         self.checkpoint = [0]
@@ -349,7 +346,7 @@ class Variational_flux:
             self.isobs = [False]
         check = 0
         for i,t in enumerate(M.timestamps[:-1]):
-            if i>0 and (H.isobserved(t) or check==checkpoint):
+            if i>0 and (H.isobserved(t) or check==config.checkpoint):
                 self.checkpoint.append(i)
                 check = 0
                 if H.isobserved(t):
@@ -365,10 +362,10 @@ class Variational_flux:
         
     
         # preconditioning
-        self.prec = prec
+        self.prec = config.prec
         
         # Wavelet reduced basis
-        self.save_wave_basis = save_wave_basis
+        self.save_wave_basis = config.save_wave_basis
         self.comp = comp # Wavelet components
         self.coords = [None]*3
         self.coords[0] = State.lon.flatten()
@@ -377,9 +374,25 @@ class Variational_flux:
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
         self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
         
+        # Boundary conditions
+        if config.flag_use_boundary_conditions:
+            timestamps_bc = np.array(
+                [pd.Timestamp(M.timestamps[i]) for i in self.checkpoint])
+            self.bc_field, self.bc_weight = grid.boundary_conditions(
+                config.file_boundary_conditions,
+                config.lenght_bc,
+                config.name_var_bc,
+                timestamps_bc,
+                State.lon,
+                State.lat,
+                config.flag_plot,
+                mask=np.copy(State.mask))
+        else: 
+            self.bc_field = np.array([None,]*len(self.timestamps))
+            self.bc_weight = None
                
         # Grad test
-        if compute_test:
+        if config.compute_test:
             print('Gradient test:')
             X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
@@ -425,7 +438,7 @@ class Variational_flux:
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
             # 2. Run forward model
-            self.M.step(State,nstep=nstep)
+            self.M.step(State, nstep=nstep,Hbc=self.bc_field[i],Wbc=self.bc_weight)
             
             # 3. Compute Flux
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
@@ -505,9 +518,9 @@ class Variational_flux:
             
             
             # 2. Run adjoint model 
-            self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
-            
-            
+            self.M.step_adj(adState, State, nstep=nstep,
+                            Hbc=self.bc_field[i],Wbc=self.bc_weight) # i+1 --> i
+          
             # 1. Misfit 
             if self.isobs[i]:
                 timestamp = self.M.timestamps[self.checkpoint[i]]
@@ -535,9 +548,7 @@ class Variational_flux:
 class Variational_BM_IT:
     
     def __init__(self, 
-                 M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None,
-                 tmp_DA_path=None, init_date=None,checkpoint=1,
-                 prec=False,compute_test=False,save_wave_basis=False):
+                 config=None, M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None):
         
         # Objects
         self.M = M # model
@@ -552,7 +563,7 @@ class Variational_BM_IT:
         self.Xb = Xb
         
         # Temporary path where to save model trajectories
-        self.tmp_DA_path = tmp_DA_path
+        self.tmp_DA_path = config.tmp_DA_path
         
         # Compute checkpoints
         self.checkpoint = [0]
@@ -563,7 +574,7 @@ class Variational_BM_IT:
             self.isobs = [False]
         check = 0
         for i,t in enumerate(M.timestamps[:-1]):
-            if i>0 and (H.isobserved(t) or check==checkpoint):
+            if i>0 and (H.isobserved(t) or check==config.checkpoint):
                 self.checkpoint.append(i)
                 check = 0
                 if H.isobserved(t):
@@ -579,10 +590,10 @@ class Variational_BM_IT:
         
     
         # preconditioning
-        self.prec = prec
+        self.prec = config.prec
         
         # Wavelet reduced basis
-        self.save_wave_basis = save_wave_basis
+        self.save_wave_basis = config.save_wave_basis
         self.comp = comp # Wavelet components
         self.coords = [None]*3
         self.coords[0] = State.lon.flatten()
@@ -590,9 +601,26 @@ class Variational_BM_IT:
         self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
         self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
+        
+        # Boundary conditions
+        if config.flag_use_boundary_conditions:
+            timestamps_bc = np.array(
+                [pd.Timestamp(M.timestamps[i]) for i in self.checkpoint])
+            self.bc_field, self.bc_weight = grid.boundary_conditions(
+                config.file_boundary_conditions,
+                config.lenght_bc,
+                config.name_var_bc,
+                timestamps_bc,
+                State.lon,
+                State.lat,
+                config.flag_plot,
+                mask=np.copy(State.mask))
+        else: 
+            self.bc_field = np.array([None,]*len(self.timestamps))
+            self.bc_weight = None
                
         # Grad test
-        if compute_test:
+        if config.compute_test:
             print('Gradient test:')
             X = (np.random.random(self.comp.nwave+self.M.nParams)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
@@ -642,7 +670,7 @@ class Variational_BM_IT:
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Run forward model
-            self.M.step(t,State,Xsw,nstep=nstep)
+            self.M.step(t,State,Xsw,nstep=nstep,Hbc=self.bc_field[i],Wbc=self.bc_weight)
             
             # 3. Add flux from wavelet
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
@@ -724,7 +752,8 @@ class Variational_BM_IT:
                                    eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
             # 2. Run adjoint model
-            adXit = self.M.step_adj(t,adState, State, adXit, Xit, nstep=nstep) # i+1 --> i
+            adXit = self.M.step_adj(t,adState, State, adXit, Xit, nstep=nstep,
+                                    Hbc=self.bc_field[i],Wbc=self.bc_weight) # i+1 --> i
                 
             # 1. Misfit 
             if self.isobs[i]:

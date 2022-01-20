@@ -272,7 +272,7 @@ variable are SLAs!')
             print('Adjoint test:')
             self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
-    def step(self,State,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step(self,State,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         SSH0 = State.getvar(ind=ind)
@@ -280,6 +280,7 @@ variable are SLAs!')
         # init
         SSH1 = +SSH0
         
+        # Boundary condition
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
         if Hbc is not None:
@@ -287,7 +288,7 @@ variable are SLAs!')
         
         # Time propagation
         for i in range(nstep):
-            SSH1 = self.qgm.step(SSH1,dphidt=dphidt,way=1)
+            SSH1 = self.qgm.step(SSH1,way=1)
 
         # Update state
         State.setvar(SSH1,ind=ind)
@@ -353,7 +354,7 @@ variable are SLAs!')
         if flag_pv:
             State.setvar(pv_1,1)
         
-    def step_tgl(self,dState,State,ddphidt=None,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         dSSH0 = dState.getvar(ind=ind)
@@ -373,13 +374,13 @@ variable are SLAs!')
         # Time propagation
         for i in range(nstep):
             
-            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1,ddphidt=ddphidt,dphidt=dphidt)
-            SSH1 = self.qgm.step(h0=SSH1,dphidt=dphidt)
+            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1)
+            SSH1 = self.qgm.step(h0=SSH1)
         
         # Update state
         dState.setvar(dSSH1,ind=ind)
         
-    def step_adj(self,adState,State,addphidt=None,dphidt=None,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         adSSH0 = adState.getvar(ind=ind)
@@ -399,14 +400,14 @@ variable are SLAs!')
         traj = [SSH1]
         if nstep>1:
             for i in range(nstep):
-                SSH1 = self.qgm.step(SSH1,dphidt=dphidt)
+                SSH1 = self.qgm.step(SSH1)
                 traj.append(SSH1)
         
         # Time propagation
         for i in reversed(range(nstep)):
             SSH1 = traj[i]
         
-            adSSH1 = self.qgm.step_adj(adSSH1,SSH1,addphidt=addphidt,dphidt=dphidt)
+            adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
             
         
         # Boundary conditions
@@ -419,7 +420,6 @@ variable are SLAs!')
         adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)
         
-        return addphidt
     
         
     def tangent_test(self,State,nstep,bc=False):
@@ -1399,11 +1399,11 @@ class Model_BM_IT:
             self.adjoint_test(State,self.T[10],nstep=config.checkpoint)
         
         
-    def step(self,t,State,params,nstep=1,t0=0):
+    def step(self,t,State,params,Hbc=None,Wbc=None,nstep=1,t0=0):
         
         h = 0
         
-        self.Model_BM.step(State,nstep=nstep,ind=0)
+        self.Model_BM.step(State,nstep=nstep,Hbc=Hbc,Wbc=Wbc,ind=0)
         h += State.getvar(ind=0)
         
         self.Model_IT.step(t,State,params,nstep=nstep,t0=t0,ind=[1,2,3])
@@ -1412,25 +1412,26 @@ class Model_BM_IT:
         State.setvar(h,ind=4)
         
         
-    def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0):
+    def step_tgl(self,t,dState,State,dparams,params,Hbc=None,Wbc=None,nstep=1,t0=0):
         
         dh = 0
         
         self.Model_BM.step_tgl(dState,State,nstep=nstep,ind=0)
         dh += dState.getvar(ind=0)
         
-        self.Model_IT.step_tgl(t,dState,State,dparams,params,nstep=nstep,t0=t0,ind=[1,2,3])
+        self.Model_IT.step_tgl(t,dState,State,dparams,params,nstep=nstep,
+                               t0=t0,ind=[1,2,3])
         dh += dState.getvar(ind=3)
 
         dState.setvar(dh,ind=4)
     
-    def step_adj(self,t,adState,State,adparams,params,nstep=1,t0=0):
+    def step_adj(self,t,adState,State,adparams,params,Hbc=None,Wbc=None,nstep=1,t0=0):
         
         adh = adState.getvar(ind=4) 
         
         _adh = adState.getvar(ind=0) 
         adState.setvar(adh+_adh,ind=0)
-        self.Model_BM.step_adj(adState,State,nstep=nstep,ind=0)
+        self.Model_BM.step_adj(adState,State,nstep=nstep,ind=0,Hbc=Hbc,Wbc=Wbc)
     
         _adh = adState.getvar(ind=3) 
         adState.setvar(adh+_adh,ind=3)

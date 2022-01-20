@@ -56,7 +56,7 @@ class Qgm_adj(Qgm_tgl):
                 vminusbar[np.where((vminusbar>0))] = 0
                     
                 _aduplus,_advplus,_aduminus,_advminus,adq = self._rq_adj(adrq,adq,
-                         uplusbar,vplusbar,uminusbar,vminusbar,self.qbar)
+                          uplusbar,vplusbar,uminusbar,vminusbar,self.qbar)
                 aduplus += _aduplus
                 advplus += _advplus
                 aduminus += _aduminus
