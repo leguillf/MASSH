@@ -30,6 +30,8 @@ class Obsopt:
         
         self.save_obs_tmp = False
         
+        self.compute_H = config.compute_H
+        
         date1 = config.init_date.strftime('%Y%m%d')
         date2 = config.final_date.strftime('%Y%m%d')
         box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
@@ -66,17 +68,18 @@ class Obsopt:
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
         self.coords_car_bc = []
-        # if State.config['name_model'] in ['SW1L','SW1LM']:
-        #     coords_geo_bc = (
-        #         np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
-        #         np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
-        #         )
-        #     self.coords_car_bc = grid.geo2cart(coords_geo_bc)
-        # elif State.config['name_model']=='QG1L':
-        #     coords_geo_bc = State.lon[Model.qgm.mask==0].ravel(),State.lat[Model.qgm.mask==0].ravel()
-        #     if coords_geo_bc[0].size>0 and coords_geo_bc[1].size>0:
-        #         self.coords_car_bc = grid.geo2cart(coords_geo_bc)
-        
+        if State.config['name_model'] in ['SW1L','SW1LM']:
+            coords_geo_bc = (
+                np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
+                np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
+                )
+            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
+        elif State.config['name_model']=='QG1L' or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+            if State.config['name_model']=='QG1L': mask = Model.qgm.mask
+            else: mask = Model.Model_BM.qgm.mask
+            coords_geo_bc = State.lon[mask<2].ravel(),State.lat[mask<2].ravel()
+            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
+
         # Mask coast pixels
         self.dist_coast = config.dist_coast
         if config.mask_coast and self.dist_coast is not None and State.mask is not None and np.any(State.mask):
@@ -93,7 +96,7 @@ class Obsopt:
             
     def process_obs(self,t):
         
-        if self.read_H:
+        if self.read_H and not self.compute_H:
             file_H = os.path.join(
                 self.path_H,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
             if os.path.exists(file_H):
@@ -388,7 +391,7 @@ class Variational_flux:
                 config.flag_plot,
                 mask=np.copy(State.mask))
         else: 
-            self.bc_field = np.array([None,]*len(self.timestamps))
+            self.bc_field = np.array([None,]*len(M.timestamps))
             self.bc_weight = None
                
         # Grad test

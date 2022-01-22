@@ -47,7 +47,7 @@ def obs(config, State, *args, **kwargs):
         path_save_obs = config.tmp_DA_path
     else:
         path_save_obs = config.path_obs
-    if config.write_obs and os.path.exists(os.path.join(path_save_obs,name_dict_obs)):
+    if config.write_obs and os.path.exists(os.path.join(path_save_obs,name_dict_obs)) and not config.compute_obs:
         print(f'Reading {name_dict_obs} from previous run')
         with open(os.path.join(path_save_obs,name_dict_obs), 'rb') as f:
             dict_obs = pickle.load(f)
