@@ -368,6 +368,7 @@ class Variational_flux:
         self.prec = config.prec
         
         # Wavelet reduced basis
+        self.wavelet_mode = config.wavelet_mode
         self.save_wave_basis = config.save_wave_basis
         self.comp = comp # Wavelet components
         self.coords = [None]*3
@@ -446,7 +447,7 @@ class Variational_flux:
             # 3. Compute Flux
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,mode='flux',
+                                compute_geta=True,eta=X,mode=self.wavelet_mode,
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))
                     
@@ -515,7 +516,7 @@ class Variational_flux:
             advar = adState.getvar(ind=State.get_indobs()).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                     compute_geta=True,transpose=True,mode='flux',
+                                     compute_geta=True,transpose=True,mode=self.wavelet_mode,
                                      save_wave_basis=self.save_wave_basis,
                                      eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
@@ -596,6 +597,7 @@ class Variational_BM_IT:
         self.prec = config.prec
         
         # Wavelet reduced basis
+        self.wavelet_mode = config.wavelet_mode
         self.save_wave_basis = config.save_wave_basis
         self.comp = comp # Wavelet components
         self.coords = [None]*3
@@ -678,7 +680,7 @@ class Variational_BM_IT:
             # 3. Add flux from wavelet
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg',
-                                compute_geta=True,eta=Xqg,mode='flux',
+                                compute_geta=True,eta=Xqg,mode=self.wavelet_mode,
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))  
             var = State.getvar(ind=0)
@@ -750,7 +752,7 @@ class Variational_BM_IT:
             advar = adState.getvar(ind=0).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                   compute_geta=True,transpose=True,mode='flux',
+                                   compute_geta=True,transpose=True,mode=self.wavelet_mode,
                                    save_wave_basis=self.save_wave_basis,
                                    eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             

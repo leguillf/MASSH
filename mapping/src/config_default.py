@@ -310,6 +310,8 @@ path_init_4Dvar = None
 
 path_H = None 
 
+compute_H = False # Force computing H 
+
 Npix_H = 4 # Number of pixels to perform projection y=Hx
 
 checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
@@ -377,6 +379,8 @@ filec_aux = ''
 
 name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
 
+wavelet_mode = 'flux'
+
 facns= 1. #factor for wavelet spacing= space
 
 facnlt= 2.
@@ -426,6 +430,10 @@ gsize_max = 500000000
 # - detrend: (bool) apply a 2D detrending on observations
 
 satellite = []
+
+write_obs = False
+
+compute_obs = False
 
 path_obs = None
 

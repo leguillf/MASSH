@@ -534,7 +534,7 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         # Add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xa,mode='flux',
+                            compute_geta=True,eta=Xa,mode=config.wavelet_mode,
                             save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
         state = State0.getvar(ind=State.get_indobs())
         State0.setvar(state + nstep*Model.dt*F/(3600*24),
@@ -717,7 +717,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xbm,mode='flux',
+                           compute_geta=True,eta=Xbm,mode=config.wavelet_mode,
                            save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
     
         _var = State0.getvar(ind=0)
