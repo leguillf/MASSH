@@ -195,6 +195,8 @@ name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''}
 
 sw_time_scheme = 'lf' # Time scheme of the model (e.g. Euler,rk4,lf)
 
+sw_in = 0 # Length of the boundary band to ignore  
+
 bc_kind = '1d'
 
 w_igws = [2*pi/12/3600] # igw frequencies (in seconds)

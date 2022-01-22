@@ -44,8 +44,8 @@ class Qgm:
         mask = np.zeros((ny,nx))+2
         mask[:2,:] = 1
         mask[:,:2] = 1
-        mask[-3:,:] = 1
-        mask[:,-3:] = 1
+        mask[-2:,:] = 1
+        mask[:,-2:] = 1
         
     
         if SSH is not None and mdt is not None:

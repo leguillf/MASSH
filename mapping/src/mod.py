@@ -521,18 +521,29 @@ class Model_sw1l:
         
         swm_adj = SourceFileLoader("swm_adj", 
                                  dir_model + "/swm_adj.py").load_module() 
-                
         
+        
+        # Model grid 
+        self.sw_in = config.sw_in # Avoding boundary pixels
+        print('Length of the boundary band to ignore:',self.sw_in)
+        self.nyin,self.nxin = State.ny -2*self.sw_in, State.nx -2*self.sw_in
+        if self.sw_in>0:
+            self.Xin = State.X[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            self.Yin = State.Y[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            self.fin = State.f[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            self.Xin = +State.X
+            self.Yin = +State.Y
+            self.fin = +State.f
+            
         # State variable dimensions
-        self.shapeu = State.var[0].shape
-        self.shapev = State.var[1].shape
-        self.shapeh = State.var[2].shape 
+        self.shapeu = [State.var[0].shape[0]-2*self.sw_in,State.var[0].shape[1]-2*self.sw_in]
+        self.shapev = [State.var[1].shape[0]-2*self.sw_in,State.var[1].shape[1]-2*self.sw_in]
+        self.shapeh = [State.var[2].shape[0]-2*self.sw_in,State.var[2].shape[1]-2*self.sw_in]
         self.nu = np.prod(self.shapeu)
         self.nv = np.prod(self.shapev)
         self.nh = np.prod(self.shapeh)
 
-        
-            
         # Time parameters
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
@@ -546,7 +557,7 @@ class Model_sw1l:
         while t<=config.final_date:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
-            
+        
         #########################
         # He 
         #########################
@@ -563,7 +574,7 @@ class Model_sw1l:
             print('Heb:',self.Heb)
             
         # Gaussian components
-        self.shapeHe = [State.ny,State.nx] 
+        self.shapeHe = [self.nyin,self.nxin] 
         self.nHe = np.prod(self.shapeHe)
         self.He_gauss = 0
         if D_He is None:
@@ -577,17 +588,17 @@ class Model_sw1l:
             isub_He = int(D_He/State.dy)  
             jsub_He = int(D_He/State.dx) 
             self.Hey = np.arange(-2*isub_He*State.dy,
-                                 (State.ny+3*isub_He)*State.dy,
+                                 (self.nyin+3*isub_He)*State.dy,
                                  isub_He*State.dy)
             self.Hex = np.arange(-2*jsub_He*State.dx,
-                                 (State.ny+3*jsub_He)*State.dx,
+                                 (self.nxin+3*jsub_He)*State.dx,
                                  jsub_He*State.dx)
             for yi in self.Hey:
                 for xj in self.Hex:
                     mat = np.ones((self.shapeHe))
-                    for ii in range(State.ny):
-                        for jj in range(State.nx):
-                            dist = sqrt((State.Y[ii,jj]-yi)**2+(State.X[ii,jj]-xj)**2)
+                    for ii in range(self.nyin):
+                        for jj in range(self.nxin):
+                            dist = sqrt((self.Yin[ii,jj]-yi)**2+(self.Xin[ii,jj]-xj)**2)
                             mat[ii,jj] = tools.gaspari_cohn(dist,7*D_He/2)
                     He_xy_gauss.append(mat)
             self.He_xy_gauss = np.asarray(He_xy_gauss)
@@ -622,8 +633,8 @@ class Model_sw1l:
             self.bc_theta = np.array([0])
     
         # gaussian components
-        self.shapehbcx = [self.omegas.size,2,2,self.bc_theta.size,State.nx]
-        self.shapehbcy = [self.omegas.size,2,2,self.bc_theta.size,State.ny]
+        self.shapehbcx = [self.omegas.size,2,2,self.bc_theta.size,self.nxin]
+        self.shapehbcy = [self.omegas.size,2,2,self.bc_theta.size,self.nyin]
         self.bc_gauss = 0
         if D_bc is None:
             D_bc = config.D_bc
@@ -637,17 +648,17 @@ class Model_sw1l:
             isub_bc = int(D_bc//State.dy)  
             jsub_bc = int(D_bc//State.dx)  
             self.bcy = np.arange(-2*isub_bc*State.dy,
-                                 (State.ny+3*isub_bc)*State.dy,
+                                 (self.nyin+3*isub_bc)*State.dy,
                                  isub_bc*State.dy)
             self.bcx = np.arange(-2*jsub_bc*State.dx,
-                                 (State.nx+3*jsub_bc)*State.dx,
+                                 (self.nxin+3*jsub_bc)*State.dx,
                                  jsub_bc*State.dx)
             
             for xj in self.bcx:
-                bc_x_gauss.append(tools.gaspari_cohn(State.X[State.ny//2,:]-xj,
+                bc_x_gauss.append(tools.gaspari_cohn(self.Xin[self.nyin//2,:]-xj,
                                                      7*D_bc/2))
             for yi in self.bcy:
-                bc_y_gauss.append(tools.gaspari_cohn(State.Y[:,State.nx//2]-yi,
+                bc_y_gauss.append(tools.gaspari_cohn(self.Yin[:,self.nxin//2]-yi,
                                                      7*D_bc/2))   
             self.bc_x_gauss = np.asarray(bc_x_gauss)
             self.bc_y_gauss = np.asarray(bc_y_gauss)
@@ -668,6 +679,7 @@ class Model_sw1l:
         self.nbcy = np.prod(self.shapehbcy)
         self.nbc = self.nbcx + self.nbcy
         
+        
         print('BC:',self.bc_kind)
         print('Omegas:',self.omegas)
         print('Thetas:',self.bc_theta)
@@ -681,13 +693,13 @@ class Model_sw1l:
         self.slicehbcy = slice(self.nHe+self.nbcx,self.nParams)
         
         # Model initialization
-        self.swm = swm_adj.Swm_adj(X=State.X,
-                                   Y=State.Y,
+        self.swm = swm_adj.Swm_adj(X=self.Xin,
+                                   Y=self.Yin,
                                    dt=self.dt,
                                    bc=self.bc_kind,
                                    omegas=self.omegas,
                                    bc_theta=self.bc_theta,
-                                   f=State.f)
+                                   f=self.fin)
         
         if self.time_scheme=='Euler':
             self.swm_step = self.swm.step_euler
@@ -705,9 +717,9 @@ class Model_sw1l:
         # Tests
         if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='SW1L':
             print('tangent test:')
-            self.tangent_test(State,self.T[-2],nstep=config.checkpoint)
+            self.tangent_test(State,10*self.dt,nstep=config.checkpoint)
             print('adjoint test:')
-            self.adjoint_test(State,self.T[-2],nstep=config.checkpoint)
+            self.adjoint_test(State,10*self.dt,nstep=config.checkpoint)
        
 
             
@@ -862,9 +874,14 @@ class Model_sw1l:
         hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
         
         # init
-        u = +u0
-        v = +v0
-        h = +h0
+        if self.sw_in>0:
+            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            uin = +u0
+            vin = +v0
+            hin = +h0
         
         # Time propagation
         for i in range(nstep):
@@ -872,14 +889,24 @@ class Model_sw1l:
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            #first = False
-            
-            u,v,h = self.swm_step(
+            uin,vin,hin = self.swm_step(
                 t+i*self.dt,
-                u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
             
         # Update state
-        State.setvar([u,v,h],ind=ind)
+        if self.sw_in>0:
+            u1 = +u0
+            u1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = uin
+            v1 = +v0
+            v1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = vin
+            h1 = +h0
+            h1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = hin
+        else:
+            u1 = +uin
+            v1 = +vin
+            h1 = +hin
+            
+        State.setvar([u1,v1,h1],ind=ind)
         
     
     def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0,ind=[0,1,2]):
@@ -901,39 +928,59 @@ class Model_sw1l:
         dhbcx1d,dhbcy1d = self.get_hbc1d(tbc,dhbcx,dhbcy)
         
         # init
-        du = +du0
-        dv = +dv0
-        dh = +dh0
-        u = +u0
-        v = +v0
-        h = +h0
+        if self.sw_in>0:
+            duin = du0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            dvin = dv0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            dhin = dh0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            duin = +du0
+            dvin = +dv0
+            dhin = +dh0
+            uin = +u0
+            vin = +v0
+            hin = +h0
         
         # Time propagation
         # Current trajectory
-        traj = [(u,v,h)]
+        traj = [(uin,vin,hin)]
         if nstep>1:
             for i in range(nstep):
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                u,v,h = self.swm_step(
+                uin,vin,hin = self.swm_step(
                         t+i*self.dt,
-                        u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
-                traj.append((u,v,h))
+                        uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                traj.append((uin,vin,hin))
             
         for i in range(nstep):
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            u,v,h = traj[i]
+            uin,vin,hin = traj[i]
             
-            du,dv,dh = self.swm_step_tgl(
-                t+i*self.dt,du,dv,dh,u,v,h,
+            duin,dvin,dhin = self.swm_step_tgl(
+                t+i*self.dt,duin,dvin,dhin,uin,vin,hin,
                 dHe=dHe2d,He=He2d,
                 dhbcx=dhbcx1d,dhbcy=dhbcy1d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
       
         # Update state 
-        dState.setvar([du,dv,dh],ind=ind)
+        if self.sw_in>0:
+            du1 = +du0
+            du1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = duin
+            dv1 = +dv0
+            dv1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = dvin
+            dh1 = +dh0
+            dh1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = dhin
+        else:
+            du1 = +duin
+            dv1 = +dvin
+            dh1 = +dhin
+            
+        dState.setvar([du1,dv1,dh1],ind=ind)
         
     
     
@@ -953,37 +1000,46 @@ class Model_sw1l:
         hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
         
         # Init
-        adu = +adu0
-        adv = +adv0
-        adh = +adh0
+        if self.sw_in>0:
+            aduin = adu0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            advin = adv0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            adhin = adh0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            aduin = +adu0
+            advin = +adv0
+            adhin = +adh0
+            uin = +u0
+            vin = +v0
+            hin = +h0
+        
         adHe2d = 0
         adhbcx1d = 0
         adhbcy1d = 0
-        u = +u0
-        v = +v0
-        h = +h0
         
         # Time propagation
         # Current trajectory
-        traj = [(u,v,h)]
+        traj = [(uin,vin,hin)]
         if nstep>1:
             for i in range(nstep):
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                u,v,h = self.swm_step(
+                uin,vin,hin = self.swm_step(
                         t+i*self.dt,
-                        u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
-                traj.append((u,v,h))
+                        uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                traj.append((uin,vin,hin))
             
         for i in reversed(range(nstep)):
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            u,v,h = traj[i]
+            uin,vin,hin = traj[i]
         
-            adu,adv,adh,adHe2d_tmp,adhbcx1d_tmp,adhbcy1d_tmp =\
-                self.swm_step_adj(t+i*self.dt,adu,adv,adh,u,v,h,
+            aduin,advin,adhin,adHe2d_tmp,adhbcx1d_tmp,adhbcy1d_tmp =\
+                self.swm_step_adj(t+i*self.dt,aduin,advin,adhin,uin,vin,hin,
                                       He2d,hbcx1d,hbcy1d,first=first)
             adHe2d += adHe2d_tmp
             adhbcx1d += adhbcx1d_tmp
@@ -1000,7 +1056,18 @@ class Model_sw1l:
         adparams = self.vectorizeParams(adHe,adhbcx,adhbcy)
         
         # Update state
-        adState.setvar([adu,adv,adh],ind=ind)
+        if self.sw_in>0:
+            adu1 = +adu0
+            adu1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = aduin
+            adv1 = +adv0
+            adv1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = advin
+            adh1 = +adh0
+            adh1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = adhin
+        else:
+            adu1 = +aduin
+            adv1 = +advin
+            adh1 = +adhin
+        adState.setvar([adu1,adv1,adh1],ind=ind)
         return adparams
         
     def run(self,t0,tint,State,params,return_traj=False,nstep=1):

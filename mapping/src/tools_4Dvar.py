@@ -616,7 +616,7 @@ class Variational_BM_IT:
                 config.flag_plot,
                 mask=np.copy(State.mask))
         else: 
-            self.bc_field = np.array([None,]*len(self.timestamps))
+            self.bc_field = np.array([None,]*len(M.timestamps))
             self.bc_weight = None
                
         # Grad test
