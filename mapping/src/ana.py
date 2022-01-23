@@ -510,12 +510,6 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     State0 = State.free()
     date = config.init_date
     # 1st timestep
-    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
-    state_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xa,
-                            save_wave_basis=config.save_wave_basis) 
-    State0.setvar(state_init.reshape((State.ny,State.nx)),
-                  ind=0)
     State0.save_output(date,mdt=Model.mdt)
     
     #  Time loop
@@ -693,13 +687,6 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     # init
     State0 = State.free()
     date = config.init_date
-    # 1st timestep
-    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
-    var_init = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                              compute_geta=True,eta=Xbm,
-                              save_wave_basis=config.save_wave_basis) 
-    State0.setvar(var_init.reshape((State.ny,State.nx)),
-                  ind=0)
     State0.save_output(date,mdt=Model.mdt)
     # Forward propagation
     for i in range(len(var.checkpoint)-1):

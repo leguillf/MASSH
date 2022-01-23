@@ -420,14 +420,6 @@ class Variational_flux:
     
         # Observational cost function evaluation
         Jo = 0.
-        
-        # 1st timestamp
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
-        var_init = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,save_wave_basis=self.save_wave_basis) 
-        State.setvar(var_init.reshape((State.ny,State.nx)),
-                      ind=State.get_indobs())
-            
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
@@ -531,13 +523,6 @@ class Variational_flux:
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
         
-        # 1st timestamp
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
-        advar = adState.getvar(ind=State.get_indobs()).flatten()[np.newaxis,:]
-        adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=advar,transpose=True,
-                                save_wave_basis=self.save_wave_basis)
-            
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
@@ -655,11 +640,7 @@ class Variational_BM_IT:
         Xqg = X[:self.comp.nwave]
         Xsw = X[self.comp.nwave:]
         
-         # 1st timestamp
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
-        var_init = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=Xqg,save_wave_basis=self.save_wave_basis) 
-        State.setvar(var_init.reshape((State.ny,State.nx)),ind=0)
+
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
@@ -766,13 +747,6 @@ class Variational_BM_IT:
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
                 
-        # 1st timestamp
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
-        advar = adState.getvar(ind=0).flatten()[np.newaxis,:]
-        adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=advar,transpose=True,
-                                save_wave_basis=self.save_wave_basis)
-        
         adX[:self.comp.nwave] = adXbm
         adX[self.comp.nwave:] = adXit
         
