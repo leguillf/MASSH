@@ -355,11 +355,12 @@ class RedBasis_BM:
                                         tt2 = diff[iobs2]
                                         if mode=='flux':
                                             fact = mywindow_flux(tt2 / self.tdec[iff][P])
-                                            t = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
-                                            I =  np.sum(mywindow(t/self.tdec[iff][P]))*(t[1]-t[0])
-                                            fact /= I 
                                         else:
                                             fact = mywindow(tt2 / self.tdec[iff][P])
+                                        t = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
+                                        I =  np.sum(mywindow(t/self.tdec[iff][P]))*(t[1]-t[0])
+                                        fact /= I 
+                                            
                                     else:
                                         fact = None
                                     indt[iff,P][it] = (iobs2,iiobs,nobs)
