@@ -420,6 +420,15 @@ class Variational_flux:
     
         # Observational cost function evaluation
         Jo = 0.
+        
+        # Init
+        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        ssh0 = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=X,mode=None,
+                            save_wave_basis=self.save_wave_basis).reshape(
+                                (State.ny,State.nx))
+        State.setvar(ssh0,ind=0)
+        
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
@@ -439,7 +448,7 @@ class Variational_flux:
             # 3. Compute Flux
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,mode=self.wavelet_mode,
+                                compute_geta=True,eta=X,mode='flux',
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))
                     
@@ -508,7 +517,7 @@ class Variational_flux:
             advar = adState.getvar(ind=State.get_indobs()).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                     compute_geta=True,transpose=True,mode=self.wavelet_mode,
+                                     compute_geta=True,transpose=True,mode='flux',
                                      save_wave_basis=self.save_wave_basis,
                                      eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
@@ -522,6 +531,15 @@ class Variational_flux:
                 timestamp = self.M.timestamps[self.checkpoint[i]]
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
+        
+        # Init
+        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        adssh0 = adState.getvar(ind=0)
+        adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                            compute_geta=True,transpose=True,
+                            eta=adssh0.ravel()[np.newaxis,:],mode=None,
+                            save_wave_basis=self.save_wave_basis)
+        
         
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 

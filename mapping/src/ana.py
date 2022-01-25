@@ -509,7 +509,12 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     # Init
     State0 = State.free()
     date = config.init_date
-    # 1st timestep
+    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
+    ssh0 = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xa,mode=None,
+                            save_wave_basis=var.save_wave_basis).reshape(
+                                (State.ny,State.nx))
+    State0.setvar(ssh0,ind=0)
     State0.save_output(date,mdt=Model.mdt)
     
     #  Time loop
@@ -528,7 +533,7 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         # Add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xa,mode=config.wavelet_mode,
+                            compute_geta=True,eta=Xa,mode='flux',
                             save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
         state = State0.getvar(ind=State.get_indobs())
         State0.setvar(state + nstep*Model.dt*F/(3600*24),

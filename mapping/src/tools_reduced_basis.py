@@ -61,6 +61,7 @@ class RedBasis_BM:
         self.indx = {}
         self.indt = {}
         self.facGeta = {}
+        self.facGeta_flux = {}
 
         
      
@@ -302,9 +303,13 @@ class RedBasis_BM:
                 compute_basis = True
 
         
-        elif (time[0] in self.facGeta) and (time[0] in self.indt) and self.indx!={}:
+        elif ((mode!='flux' and time[0] in self.facGeta) or (mode=='flux' and time[0] in self.facGeta_flux))\
+            and (time[0] in self.indt) and self.indx!={}:
             # Inline
-            facGeta = self.facGeta[time[0]]
+            if mode=='flux':
+                facGeta = self.facGeta_flux[time[0]]
+            else:
+                facGeta = self.facGeta[time[0]]
             indt = self.indt[time[0]]
             indx = self.indx
         else: 
@@ -353,13 +358,13 @@ class RedBasis_BM:
                                     nobs = len(iiobs)
                                     if nobs > 0:
                                         tt2 = diff[iobs2]
+                                        
+                                        fact = mywindow(tt2 / self.tdec[iff][P])
+                                        
                                         if mode=='flux':
-                                            fact = mywindow_flux(tt2 / self.tdec[iff][P])
-                                        else:
-                                            fact = mywindow(tt2 / self.tdec[iff][P])
-                                        t = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
-                                        I =  np.sum(mywindow(t/self.tdec[iff][P]))*(t[1]-t[0])
-                                        fact /= I 
+                                            t = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
+                                            I =  np.sum(mywindow(t/self.tdec[iff][P]))*(t[1]-t[0])
+                                            fact /= I 
                                             
                                     else:
                                         fact = None
@@ -388,7 +393,10 @@ class RedBasis_BM:
                     with open(name_indx, 'wb') as f:
                         pickle.dump(indx,f)     
             else:
-                self.facGeta[time[0]] = facGeta
+                if mode=='flux':
+                    self.facGeta_flux[time[0]] = facGeta
+                else:
+                    self.facGeta[time[0]] = facGeta
                 self.indt[time[0]] = indt
                 self.indx = indx
                                         
