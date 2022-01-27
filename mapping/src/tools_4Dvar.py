@@ -655,10 +655,16 @@ class Variational_BM_IT:
         Jo = 0.
         
         # split control vector
-        Xqg = X[:self.comp.nwave]
-        Xsw = X[self.comp.nwave:]
+        Xbm = X[:self.comp.nwave]
+        Xit = X[self.comp.nwave:]
         
-
+        # Init
+        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        ssh0 = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xbm,mode=None,
+                            save_wave_basis=self.save_wave_basis).reshape(
+                                (State.ny,State.nx))
+        State.setvar(ssh0,ind=0)
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
@@ -674,12 +680,12 @@ class Variational_BM_IT:
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Run forward model
-            self.M.step(t,State,Xsw,nstep=nstep,Hbc=self.bc_field[i],Wbc=self.bc_weight)
+            self.M.step(t,State,Xit,nstep=nstep,Hbc=self.bc_field[i],Wbc=self.bc_weight)
             
             # 3. Add flux from wavelet
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg',
-                                compute_geta=True,eta=Xqg,mode=self.wavelet_mode,
+                                compute_geta=True,eta=Xbm,mode='flux',
                                 save_wave_basis=self.save_wave_basis).reshape(
                                     (State.ny,State.nx))  
             var = State.getvar(ind=0)
@@ -751,7 +757,7 @@ class Variational_BM_IT:
             advar = adState.getvar(ind=0).flatten()
             coords = [self.coords[0],self.coords[1],self.coords[2][i]]
             adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                   compute_geta=True,transpose=True,mode=self.wavelet_mode,
+                                   compute_geta=True,transpose=True,mode='flux',
                                    save_wave_basis=self.save_wave_basis,
                                    eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
             
@@ -764,6 +770,14 @@ class Variational_BM_IT:
                 timestamp = self.M.timestamps[self.checkpoint[i]]
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
+        
+        # Init
+        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        adssh0 = adState.getvar(ind=0)
+        adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                            compute_geta=True,transpose=True,
+                            eta=adssh0.ravel()[np.newaxis,:],mode=None,
+                            save_wave_basis=self.save_wave_basis)
                 
         adX[:self.comp.nwave] = adXbm
         adX[self.comp.nwave:] = adXit

@@ -1461,7 +1461,7 @@ class Model_BM_IT:
         
         if config.compute_test:
             print('tangent test:')
-            self.tangent_test(State,self.T[10],nstep=config.checkpoint)
+            #self.tangent_test(State,self.T[10],nstep=config.checkpoint)
             print('adjoint test:')
             self.adjoint_test(State,self.T[10],nstep=config.checkpoint)
         
@@ -1599,21 +1599,19 @@ class Model_BM_IT:
         adX = np.concatenate((adX,adparams))
         
         # Run TLM
-        self.step_tgl(t0,dState,State0,dparams,params,nstep=nstep)
+        self.run_tgl(t0,tint,dState,State0,dparams,params,nstep=nstep)
         TLM = dState.getvar(vect=True)
         
         TLM = np.concatenate((TLM,dparams))
         
         # Run ADJ
-        adparams = self.step_adj(
-            t0,adState,State0,adparams,params,nstep=nstep)
+        adparams = self.run_adj(
+            t0,tint,adState,State0,adparams,params,nstep=nstep)
         ADM = adState.getvar(vect=True)
         ADM = np.concatenate((ADM,adparams))
-        
-        mask = np.isnan(TLM + dX + adX + ADM)
 
-        ps1 = np.inner(TLM[~mask],adX[~mask])
-        ps2 = np.inner(dX[~mask],ADM[~mask])
+        ps1 = np.inner(TLM,adX)
+        ps2 = np.inner(dX,ADM)
         
         print(ps1/ps2)
         
