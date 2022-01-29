@@ -572,25 +572,25 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     if hasattr(config.sigma_B_bc, '__len__'):
         # Specific value for each tidal component
         if len(config.sigma_B_bc) == len(config.w_igws):
-            N_one_component_x = Model.nbcx//len(config.w_igws)
-            N_one_component_y = Model.nbcy//len(config.w_igws)
+            N_one_component_x = Model.Model_IT.nbcx//len(config.w_igws)
+            N_one_component_y = Model.Model_IT.nbcy//len(config.w_igws)
             for i,_sigma in enumerate(config.sigma_B_bc):
-                _sigma_B[Model.slicehbcx][
+                _sigma_B[Model.Model_IT.slicehbcx][
                     i*N_one_component_x:(i+1)*N_one_component_x] = _sigma
-                _sigma_B[Model.slicehbcy][
+                _sigma_B[Model.Model_IT.slicehbcy][
                     i*N_one_component_y:(i+1)*N_one_component_y] = _sigma
         else:
-            _sigma_B[Model.slicehbcx] = config.sigma_B_bc[0]
-            _sigma_B[Model.slicehbcy] = config.sigma_B_bc[0]
+            _sigma_B[Model.Model_IT.slicehbcx] = config.sigma_B_bc[0]
+            _sigma_B[Model.Model_IT.slicehbcy] = config.sigma_B_bc[0]
     else:
-        _sigma_B[Model.slicehbcx] = config.sigma_B_bc
-        _sigma_B[Model.slicehbcy] = config.sigma_B_bc
+        _sigma_B[Model.Model_IT.slicehbcx] = config.sigma_B_bc
+        _sigma_B[Model.Model_IT.slicehbcy] = config.sigma_B_bc
         
     if np.any(State.mask):
         
         # Reduced apriori for land pixels
-        land_coeff_bcx = np.ones(Model.shapehbcx)
-        land_coeff_bcy = np.ones(Model.shapehbcy)
+        land_coeff_bcx = np.ones(Model.Model_IT.shapehbcx)
+        land_coeff_bcy = np.ones(Model.Model_IT.shapehbcy)
         # Loop over OBC coordinates 
         for j,x in enumerate(Model.bcx): # South/North
             # look for the closest grid pixel 
@@ -609,11 +609,11 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
             if State.mask[iE,-1]:
                 land_coeff_bcy[:,1,:,:,:,i] = config.facB_bc_coast
         
-        _sigma_B[Model.slicehbcx] *= land_coeff_bcx.ravel()
-        _sigma_B[Model.slicehbcy] *= land_coeff_bcy.ravel()
+        _sigma_B[Model.Model_IT.slicehbcx] *= land_coeff_bcx.ravel()
+        _sigma_B[Model.Model_IT.slicehbcy] *= land_coeff_bcy.ravel()
         
         # Loop over He coordinates 
-        land_coeff_He = np.ones(Model.shapeHe)
+        land_coeff_He = np.ones(Model.Model_IT.shapeHe)
         p = -1
         for i,y in enumerate(Model.Hey):
             for j,x in enumerate(Model.Hex):
@@ -622,7 +622,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
                 i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
                 if State.mask[i0,j0]:
                     land_coeff_He[:,p] = config.facB_He_coast
-        _sigma_B[Model.sliceHe] *= land_coeff_He.ravel()
+        _sigma_B[Model.Model_IT.sliceHe] *= land_coeff_He.ravel()
 
     B = Cov(np.concatenate((1/np.sqrt(qinv_bm),_sigma_B)))
     

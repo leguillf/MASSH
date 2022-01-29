@@ -1426,7 +1426,7 @@ class Model_sw1lm:
         print(ps1/ps2)
         
             
-class Model_BM_IT:
+class Model_BM_IT():
     
     def __init__(self,config,State):
         print('\n* BM Model')
