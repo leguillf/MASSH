@@ -630,7 +630,7 @@ class Variational_BM_IT:
         # Grad test
         if config.compute_test:
             print('Gradient test:')
-            X = (np.random.random(self.comp.nwave+self.M.nParams)-0.5)*self.B.sigma 
+            X = (np.random.random(self.comp.nwave+self.M.Model_IT.nParams)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
         
         
@@ -703,7 +703,7 @@ class Variational_BM_IT:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        State.plot()
+        State.plot(ind=State.get_indsave())
         
         return J
     
@@ -787,7 +787,7 @@ class Variational_BM_IT:
         
         g = adX + gb  # total gradient
         
-        adState.plot()
+        adState.plot(ind=State.get_indsave())
         
         return g 
     

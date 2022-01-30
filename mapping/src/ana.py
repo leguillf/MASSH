@@ -565,10 +565,11 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     
     # Covariance matrix
     R = Cov(config.sigma_R)
-    _sigma_B = np.zeros((Model.nParams)) 
+    _sigma_B = np.zeros((Model.Model_IT.nParams)) 
     # error on He
-    _sigma_B[Model.sliceHe] = config.sigma_B_He 
+    _sigma_B[Model.Model_IT.sliceHe] = config.sigma_B_He 
     # error on OBCs
+    
     if hasattr(config.sigma_B_bc, '__len__'):
         # Specific value for each tidal component
         if len(config.sigma_B_bc) == len(config.w_igws):
@@ -585,8 +586,8 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     else:
         _sigma_B[Model.Model_IT.slicehbcx] = config.sigma_B_bc
         _sigma_B[Model.Model_IT.slicehbcy] = config.sigma_B_bc
-        
-    if np.any(State.mask):
+            
+    if np.any(State.mask) and config.Nmodes==1:
         
         # Reduced apriori for land pixels
         land_coeff_bcx = np.ones(Model.Model_IT.shapehbcx)
@@ -627,7 +628,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     B = Cov(np.concatenate((1/np.sqrt(qinv_bm),_sigma_B)))
     
     # backgroud state 
-    Xb = np.zeros((comp_bm.nwave+Model.nParams,))
+    Xb = np.zeros((comp_bm.nwave+Model.Model_IT.nParams,))
     
     # Cost and Grad functions
     var = Variational_BM_IT(
@@ -698,7 +699,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
                             save_wave_basis=var.save_wave_basis).reshape(
                                 (State.ny,State.nx))
     State0.setvar(ssh0,ind=0)
-    State0.save_output(date,mdt=Model.mdt)
+    State0.save_output(date,mdt=Model.Model_BM.mdt)
     # Forward propagation
     for i in range(len(var.checkpoint)-1):
         t = Model.T[var.checkpoint[i]]
@@ -711,7 +712,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
-                State0.save_output(date,mdt=Model.mdt)
+                State0.save_output(date,mdt=Model.Model_BM.mdt)
         # add Flux
         coords = [var.coords[0],var.coords[1],var.coords[2][i]]
         F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 

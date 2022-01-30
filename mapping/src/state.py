@@ -275,20 +275,28 @@ class State:
                 self.var[var] = np.zeros((self.ny,self.nx))
         
     def ini_var_bm_it(self,config):
-        if len(self.name_var) != 5:
+        if len(config.name_mod_var) != 1 + config.Nmodes*3 + 1:
             if self.first:
                 print('Warning: For BM & IT: wrong number variable names')
-            self.name_var = ["h_bm","u_it","v_it","h_it","h"]             
-        if self.first:
-            print(self.name_var)
+            self.name_var = ["h_bm"]
+            if config.Nmodes==1:
+                self.name_var += ["u_it","v_it","h_it","h"]
+            else:
+                for i in range(1,config.Nmodes+1):
+                    self.name_var += [f"u_it_{i}",f"v_it_{i}",f"h_it_{i}"]
+                self.name_var += ["u_it","v_it","h_it","h"]   
+        
+            if self.first:
+                print(self.name_var)
+                
         for i, var in enumerate(self.name_var):
-            if i in [0,3,4]:
+            if i%3==0 or i==len(self.name_var)-1:
                 # SSH
                 self.var[var] = np.zeros((self.ny,self.nx))
-            elif i==1:
+            elif i%3==1:
                 # U
                 self.var[var] = np.zeros((self.ny,self.nx-1))
-            elif i==2:
+            elif i%3==2:
                 # V
                 self.var[var] = np.zeros((self.ny-1,self.nx))
         
@@ -591,7 +599,7 @@ class State:
         elif self.config['name_model']=='SW1LM' :
             return 2 + (self.config.Nmodes)*3
         elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
-            return 4
+            return -1
         else :
             return 0
             
@@ -606,7 +614,9 @@ class State:
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]
         elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
-            return 0,3,4
+            ind = [i*3 for i in range(self.config.Nmodes+2)]
+            ind.append(-1)
+            return ind
         else :
             return 0
 
