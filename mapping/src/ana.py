@@ -593,7 +593,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
         land_coeff_bcx = np.ones(Model.Model_IT.shapehbcx)
         land_coeff_bcy = np.ones(Model.Model_IT.shapehbcy)
         # Loop over OBC coordinates 
-        for j,x in enumerate(Model.bcx): # South/North
+        for j,x in enumerate(Model.Model_IT.bcx): # South/North
             # look for the closest grid pixel 
             jS = np.argmin(np.abs(State.X[0,:]-x)) # South
             jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
@@ -601,7 +601,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
                 land_coeff_bcx[:,0,:,:,:,j] = config.facB_bc_coast
             if State.mask[-1,jN]:
                 land_coeff_bcx[:,1,:,:,:,j] = config.facB_bc_coast
-        for i,y in enumerate(Model.bcy): # West/East
+        for i,y in enumerate(Model.Model_IT.bcy): # West/East
             # look for the closest grid pixel 
             iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
             iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
@@ -616,8 +616,8 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
         # Loop over He coordinates 
         land_coeff_He = np.ones(Model.Model_IT.shapeHe)
         p = -1
-        for i,y in enumerate(Model.Hey):
-            for j,x in enumerate(Model.Hex):
+        for i,y in enumerate(Model.Model_IT.Hey):
+            for j,x in enumerate(Model.Model_IT.Hex):
                 p += 1
                 dist = np.sqrt((State.Y-y)**2+(State.X-x)**2)
                 i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
