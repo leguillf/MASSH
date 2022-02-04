@@ -16,6 +16,7 @@ import scipy.optimize as opt
 import gc
 import pandas as pd
 import xarray as xr
+import glob
 from importlib.machinery import SourceFileLoader 
 
 from . import grid
@@ -461,6 +462,16 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         with open(config.path_init_4Dvar, 'rb') as f:
             print('Read previous minimum:',config.path_init_4Dvar)
             Xopt = pickle.load(f)
+    
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
+        if len(tmp_files)>0:
+            with open(tmp_files[-1], 'rb') as f:
+                print('Restart at:',tmp_files[-1])
+                Xopt = pickle.load(f)
+        else:
+            Xopt = var.Xb*0
             
     ###################
     # Minimization    #
@@ -642,6 +653,16 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
         with open(config.path_init_4Dvar, 'rb') as f:
             print('Read previous minimum:',config.path_init_4Dvar)
             Xopt = pickle.load(f)
+    
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
+        if len(tmp_files)>0:
+            with open(tmp_files[-1], 'rb') as f:
+                print('Restart at:',tmp_files[-1])
+                Xopt = pickle.load(f)
+        else:
+            Xopt = var.Xb*0
             
     ###################
     # Minimization    #
@@ -750,7 +771,6 @@ def ana_4Dvar_QG_init(config,State,Model,dict_obs=None) :
     i = 0
     while date_ini<config.final_date :
         date_end = date_ini + window_length # date at end of the assimilation window
-        middle_date = date_ini + window_length/2
         print(f'\n*** window {i} from {date_ini} to {date_end} ***\n')
         if i==0 :
             first_assimilation = True
@@ -996,7 +1016,16 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
         with open(config.path_init_4Dvar, 'rb') as f:
             print('Read previous minimum:',config.path_init_4Dvar)
             Xopt = pickle.load(f)
-
+            
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
+        if len(tmp_files)>0:
+            with open(tmp_files[-1], 'rb') as f:
+                print('Restart at:',tmp_files[-1])
+                Xopt = pickle.load(f)
+        else:
+            Xopt = var.Xb*0
     
     ###################
     # 3. Minimization #

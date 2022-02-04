@@ -306,7 +306,9 @@ save_wave_basis = False
 
 compute_test = False # TLM,ADJ & GRAD tests
 
-path_init_4Dvar = None 
+path_init_4Dvar = None # To restart the minimization process from a specified control vector
+
+restart_4Dvar = False # To restart the minimization process from the last control vector
 
 path_H = None 
 
