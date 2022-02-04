@@ -499,7 +499,7 @@ class Qgm:
                 (q[4:,2:-2]-4*q[3:-1,2:-2]+3*q[2:-2,2:-2])
         
         return res
-    
+
     def _rq3(self,uplus,vplus,uminus,vminus,q):
         
         """

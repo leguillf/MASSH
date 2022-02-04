@@ -614,7 +614,7 @@ class State:
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]
         elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
-            ind = [i*3 for i in range(self.config.Nmodes+2)]
+            ind = [i*3 for i in range(self.config.Nmodes+1)]
             ind.append(-1)
             return ind
         else :
