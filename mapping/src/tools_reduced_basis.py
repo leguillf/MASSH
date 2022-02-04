@@ -157,8 +157,7 @@ class RedBasis_BM:
                 if PSDS<=PSDSR: tdec[-1][-1] = td1 * (PSDS/PSDSR)**self.tssr
                 else: tdec[-1][-1] = td1
                 if tdec[-1][-1]>self.tdecmax: tdec[-1][-1]=self.tdecmax
-                if tdec[-1][-1]<self.tdecmin: tdec[-1][-1]=self.tdecmin
-                
+            
                 cp=1./(2*2*np.pi/86164*np.sin(max(10,np.abs(ENSLAT[iff][P]))*np.pi/180.))/300000
                 tdecp=(1./ff[iff])*1000/cp/86400/4
                 if tdecp<tdec[-1][-1]: tdec[-1][-1]=tdecp
@@ -196,7 +195,7 @@ class RedBasis_BM:
                     Ro = C / np.abs(fc) /1000.  # Rossby radius (km)
                     if Ro>self.Romax: Ro = self.Romax
 
-                if np.isnan(tdec[iff][P]) or (1./ff[iff] < self.cutRo * Ro) or np.isnan(PSDLOC) or np.isnan(Cb1[iff][P]) or (Cb1[iff][P]==0):
+                if np.isnan(tdec[iff][P]) or (tdec[iff][P]<self.tdecmin) or (1./ff[iff] < self.cutRo * Ro) or np.isnan(PSDLOC) or np.isnan(Cb1[iff][P]) or (Cb1[iff][P]==0):
                     self.wavetest[iff][P]=False
                     
                 if self.wavetest[iff][P]==True:
