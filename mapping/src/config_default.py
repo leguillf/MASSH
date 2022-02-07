@@ -433,6 +433,10 @@ gsize_max = 500000000
 
 satellite = []
 
+time_obs_min = None
+
+time_obs_max = None
+
 write_obs = False
 
 compute_obs = False

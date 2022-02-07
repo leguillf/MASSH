@@ -36,9 +36,18 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
+    if config.time_obs_min is not None:
+        time_obs_min = config.time_obs_min
+    else:
+        time_obs_min = config.init_date
     
-    date1 = config.init_date.strftime('%Y%m%d')
-    date2 = config.final_date.strftime('%Y%m%d')
+    if config.time_obs_max is not None:
+        time_obs_max = config.time_obs_max
+    else:
+        time_obs_max = config.final_date
+        
+    date1 = time_obs_min.strftime('%Y%m%d')
+    date2 = time_obs_max.strftime('%Y%m%d')
     box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
     name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic'
     
@@ -71,8 +80,8 @@ def obs(config, State, *args, **kwargs):
         return dict_obs
     
     assim_dates = []
-    date = config.init_date
-    while date<=config.final_date:
+    date = time_obs_min
+    while date<=time_obs_max:
         assim_dates.append(date)
         date += config.assimilation_time_step
         

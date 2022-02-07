@@ -380,6 +380,8 @@ class RedBasis_BM:
                                             ky = self.k[iff] * np.sin(self.theta[itheta])
                                             facGeta[(iff,P)][it][itheta][0] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy))*facs)
                                             facGeta[(iff,P)][it][itheta][1] = np.sqrt(2)* np.outer(fact , np.cos(kx*(xx)+ky*(yy)-np.pi / 2)*facs)
+                                            
+
                 
                     
             if save_wave_basis:
@@ -423,7 +425,7 @@ class RedBasis_BM:
                                                     Geta[iwave] = np.sum(eta[iobs2[0]:iobs2[-1]+1,iobs] * facGeta[(iff,P)][it][itheta][iphase])
                                                 else:
                                                     Geta[iobs2[0]:iobs2[-1]+1,iobs] += eta[iwave] * facGeta[(iff,P)][it][itheta][iphase]
-    
+                                    
                                                 iwave += 1  
                                         
                             

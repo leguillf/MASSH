@@ -14,7 +14,6 @@ from src import grad_tool as grad_tool
 from src import grid as grid
 
 
-from scipy.sparse import csc_matrix
 
 import matplotlib.pylab as plt 
 
@@ -32,8 +31,19 @@ class Obsopt:
         
         self.compute_H = config.compute_H
         
-        date1 = config.init_date.strftime('%Y%m%d')
-        date2 = config.final_date.strftime('%Y%m%d')
+        if config.time_obs_min is not None:
+            time_obs_min = config.time_obs_min
+        else:
+            time_obs_min = config.init_date
+        
+        if config.time_obs_max is not None:
+            time_obs_max = config.time_obs_max
+        else:
+            time_obs_max = config.final_date
+            
+        date1 = time_obs_min.strftime('%Y%m%d')
+        date2 = time_obs_max.strftime('%Y%m%d')
+        
         box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
         self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)

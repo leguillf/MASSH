@@ -1330,17 +1330,17 @@ def ana_harm(config,State,dict_obs=None):
         obs.detrend_obs(dict_obs)
     
     time = []
-    ssh = []
+    ssh = np.array([])
     for date in dict_obs:
         time.append((date - config.init_date).total_seconds())
         path = dict_obs[date]['obs_name'][0]
         sat = dict_obs[date]['satellite'][0]
         ds = xr.open_dataset(path).squeeze()
-        ssh.append(ds[sat.name_obs_var[0]].values)
+        ssh = np.append(ssh,ds[sat.name_obs_var[0]].values)
         
     time = np.asarray(time)
     ssh = np.asarray(ssh)
-    
+
     # Harmonic analysis
     nt,ny,nx = ssh.shape
     G = np.empty((nt,2))
