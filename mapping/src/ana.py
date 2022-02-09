@@ -714,12 +714,6 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     # init
     State0 = State.free()
     date = config.init_date
-    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
-    ssh0 = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xbm,mode=None,
-                            save_wave_basis=var.save_wave_basis).reshape(
-                                (State.ny,State.nx))
-    State0.setvar(ssh0,ind=0)
     State0.save_output(date,mdt=Model.Model_BM.mdt)
     # Forward propagation
     for i in range(len(var.checkpoint)-1):

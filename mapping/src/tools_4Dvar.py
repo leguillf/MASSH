@@ -669,12 +669,6 @@ class Variational_BM_IT:
         Xit = X[self.comp.nwave:]
         
         # Init
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
-        ssh0 = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xbm,mode=None,
-                            save_wave_basis=self.save_wave_basis).reshape(
-                                (State.ny,State.nx))
-        State.setvar(ssh0,ind=0)
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
@@ -780,14 +774,7 @@ class Variational_BM_IT:
                 timestamp = self.M.timestamps[self.checkpoint[i]]
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-        
-        # Init
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
-        adssh0 = adState.getvar(ind=0)
-        adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                            compute_geta=True,transpose=True,
-                            eta=adssh0.ravel()[np.newaxis,:],mode=None,
-                            save_wave_basis=self.save_wave_basis)
+    
                 
         adX[:self.comp.nwave] = adXbm
         adX[self.comp.nwave:] = adXit
