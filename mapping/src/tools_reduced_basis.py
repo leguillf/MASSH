@@ -156,6 +156,9 @@ class RedBasis_BM:
                 else: PSDSR = np.nan
                 if PSDS<=PSDSR: tdec[-1][-1] = td1 * (PSDS/PSDSR)**self.tssr
                 else: tdec[-1][-1] = td1
+                
+                print(iff,P,DX[iff],tdec[-1][-1])
+                
                 if tdec[-1][-1]>self.tdecmax: tdec[-1][-1]=self.tdecmax
             
                 cp=1./(2*2*np.pi/86164*np.sin(max(10,np.abs(ENSLAT[iff][P]))*np.pi/180.))/300000

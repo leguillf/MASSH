@@ -14,7 +14,6 @@ import os
 from math import sqrt,pi
 from datetime import timedelta
 
-
 from . import tools, grid
 
 
@@ -212,12 +211,9 @@ variable are SLAs!')
                                    config.name_var_c,
                                    State.lon,
                                    State.lat)
-            self.c[self.c>3.5] = 3.5
-            self.c[self.c<2.2] = 2.2
         else:
             self.c = config.c0 * np.ones((State.ny,State.nx))
             
-        
         # Model initialization
         SourceFileLoader("qgm", 
                                  dir_model + "/qgm.py").load_module() 

@@ -429,7 +429,7 @@ class State:
         
         
         if mdt is not None:
-            var['mdt'] = (dims,mdt)
+            var['mdt'] = (dims[1:],mdt)
             
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
