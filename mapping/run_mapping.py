@@ -23,12 +23,13 @@ if __name__ == "__main__":
         exp_config_file = sys.argv[1]
     elif len(sys.argv)==1:
         os.chdir('examples')
-        exp_config_file = 'config_Example4_IT.py'
+        exp_config_file = 'config_Example_QG1Lflux.py'
     elif len(sys.argv)>2:
         sys.exit('Wrong number of argument')
         
     # Experiment config file
     print("* Experimental configuration file")
+    print(exp_config_file)
     config = exp.exp(exp_config_file)
     cmd = 'cp ' + exp_config_file + ' ' + config.tmp_DA_path + '/config.py'
     os.system(cmd)

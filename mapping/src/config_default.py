@@ -171,7 +171,15 @@ dir_model =  None
 
 dtmodel = 300   
 
+upwind = 3 # Order of the upwind scheme for PV advection (either 1,2 or 3)
+
+upwind_adj = None
+
+Reynolds = False # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
+
 qgiter = 20
+
+qgiter_adj = None
 
 c0 = 2.7
 
@@ -186,6 +194,8 @@ name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''}
 # - parameters specific to SW model
 
 sw_time_scheme = 'lf' # Time scheme of the model (e.g. Euler,rk4,lf)
+
+sw_in = 0 # Length of the boundary band to ignore  
 
 bc_kind = '1d'
 
@@ -206,6 +216,10 @@ D_bc = 200e3 # Space scale of gaussian decomposition for boundary conditions (in
 T_bc = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for boundary conditions (in m)
 
 He_data = None # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+
+# - parameter specific to diffusion model
+
+snu = 100
 
 #################################################################################################################################
 # Analysis parameters
@@ -232,7 +246,7 @@ He_data = None # He external data that will be used as apriori for the inversion
 
 name_analysis = 'BFN'
 
-flag_use_boundary_conditions = True
+flag_use_boundary_conditions = False
 
 lenght_bc = 50
 
@@ -264,6 +278,8 @@ file_boundary_conditions = None
 
 name_var_bc = {'time':'','lon':'','lat':'','var':''}
 
+add_mdt_bc = False
+
 scalenudg = None
 
 Knudg = None
@@ -284,11 +300,19 @@ Knudg = None
 # - eps_bc : Damping ratio of the R^{-1} matrix at border pixels
 #################################################################################################################################
 
-compute_test = False
+reduced_basis = False # whether to compute wavelet basis for 4DvarQG system
 
-path_init_4Dvar = None 
+save_wave_basis = False
 
-path_H = None
+compute_test = False # TLM,ADJ & GRAD tests
+
+path_init_4Dvar = None # To restart the minimization process from a specified control vector
+
+restart_4Dvar = False # To restart the minimization process from the last control vector
+
+path_H = None 
+
+compute_H = False # Force computing H 
 
 Npix_H = 4 # Number of pixels to perform projection y=Hx
 
@@ -305,6 +329,10 @@ sigma_R = 1e-2 # Observational standard deviation
 sigma_B_He = 0.2 # Background variance for He
 
 sigma_B_bc = 1e-2 # Background variance for bc
+
+facB_bc_coast = 1 # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+
+facB_He_coast = 1  # Factor for sigma_B_He located at coast. Useful only if mask is provided
 
 sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
 
@@ -324,7 +352,7 @@ gtol = 1e-5 # Gradient norm must be less than gtol before successful termination
 
 maxiter = 20 # Maximal number of iterations for the minimization process
 
-mask_coast = True
+mask_coast = False
 
 dist_coast = 100 #km
 
@@ -342,21 +370,68 @@ dir_miost = None
 
 obs_subsampling = 1
 
+
+#########################################
+### Wavelet basis specific parameters ### 
+#########################################
+
 file_aux = ''
 
 filec_aux = ''
 
 name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
 
-lmin = 80.
+wavelet_mode = 'flux'
 
-lmax = 970.
+facns= 1. #factor for wavelet spacing= space
 
-tdecmin = 2.5
+facnlt= 2.
 
-tdecmax = 40.
+npsp= 3.5 # Defines the wavelet shape
 
-facQ = 1.
+facpsp= 1.5 #1.5 # factor to fix df between wavelets
+
+lmin= 80 
+
+lmax= 970.
+
+cutRo= 1.6
+
+factdec= 15.
+
+tdecmin= 2.5
+
+tdecmax= 40.
+
+tssr= 0.5
+
+facRo= 8.
+
+Romax= 150.
+
+facQ= 1
+
+depth1= 0.  
+
+depth2= 30.   
+
+distortion_eq= 2.
+
+lat_distortion_eq= 5.
+
+distortion_eq_law= 2.
+
+gsize_max = 500000000
+
+sloptdec = -1.28
+
+Qmax = 100
+
+slopQ = -5
+
+lmeso = 300
+
+tmeso = 20
 
 #################################################################################################################################
 # Observation parameters
@@ -366,12 +441,21 @@ facQ = 1.
 # - path_obs: (string) if set to None, observations are saved in *tmp_DA_path*
 # - detrend: (bool) apply a 2D detrending on observations
 
-
 satellite = []
+
+time_obs_min = None
+
+time_obs_max = None
+
+write_obs = False
+
+compute_obs = False
 
 path_obs = None
 
 detrend = False
+
+substract_mdt = False
 
 # - For each *satellite*:
 #    * kind_sat: "swathSSH" for SWOT, "nadir" for nadirs  
@@ -395,6 +479,19 @@ detrend = False
 
 
 
+kind_swot = "swot_simulator"
+obs_path_swot = '../../data_Example1/dc_obs/'
+obs_name_swot = "2020a_SSH_mapping_NATL60_karin_swot.nc" 
+name_obs_var_swot = ["ssh_model"]     
+name_obs_lon_swot = "lon"
+name_obs_lat_swot = "lat"
+name_obs_time_swot = "time"
+name_obs_xac_swot = "x_ac"
+sigma_noise_swot = 1e-2
+add_mdt_swot = False
+substract_mdt_swot = False
+nudging_params_stretching_swot = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)}
+nudging_params_relvort_swot = None
 
 
 

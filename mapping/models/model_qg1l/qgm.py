@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pylab as plt 
+from scipy.optimize import minimize
 
 
 
@@ -8,8 +9,8 @@ class Qgm:
     ###########################################################################
     #                             Initialization                              #
     ###########################################################################
-    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,
-                 g=9.81,f=1e-4,qgiter=1,diff=False,snu=None,
+    def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
+                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
                  mdt=None,mdu=None,mdv=None):
         
         # Grid spacing
@@ -43,13 +44,22 @@ class Qgm:
         mask = np.zeros((ny,nx))+2
         mask[:2,:] = 1
         mask[:,:2] = 1
-        mask[-3:,:] = 1
-        mask[:,-3:] = 1
+        mask[-2:,:] = 1
+        mask[:,-2:] = 1
         
-        
-        if SSH is not None:
-            mask[np.isnan(SSH)] = 0
-            indNan = np.argwhere(np.isnan(SSH))
+    
+        if SSH is not None and mdt is not None:
+            isNAN = np.isnan(SSH) | np.isnan(mdt)
+        elif SSH is not None:
+            isNAN = np.isnan(SSH)
+        elif mdt is not None:
+            isNAN = np.isnan(mdt)
+        else:
+            isNAN = None
+            
+        if isNAN is not None: 
+            mask[isNAN] = 0
+            indNan = np.argwhere(isNAN)
             for i,j in indNan:
                 for p1 in [-1,0,1]:
                     for p2 in [-1,0,1]:
@@ -59,6 +69,91 @@ class Qgm:
                           if mask[itest,jtest]==2:
                               mask[itest,jtest] = 1
         self.mask = mask
+        _np = np.shape(np.where(mask>=1))[1]
+        _np2 = np.shape(np.where(mask==2))[1]
+        _np1 = np.shape(np.where(mask==1))[1]
+        self.np = _np
+        self.np2 = _np2
+        self.mask1d=np.zeros((_np))
+        self.H=np.zeros((_np))
+        self.c1d=np.zeros((_np))
+        self.f01d=np.zeros((_np))
+        self.dx1d=np.zeros((_np))
+        self.dy1d=np.zeros((_np))
+        self.indi=np.zeros((_np), dtype=np.int)
+        self.indj=np.zeros((_np), dtype=np.int)
+        self.vp1=np.zeros((_np1), dtype=np.int)
+        self.vp2=np.zeros((_np2), dtype=np.int)
+        self.vp2=np.zeros((_np2), dtype=np.int)
+        self.vp2n=np.zeros((_np2), dtype=np.int)
+        self.vp2nn=np.zeros((_np2), dtype=np.int)
+        self.vp2s=np.zeros((_np2), dtype=np.int)
+        self.vp2ss=np.zeros((_np2), dtype=np.int)
+        self.vp2e=np.zeros((_np2), dtype=np.int)
+        self.vp2ee=np.zeros((_np2), dtype=np.int)
+        self.vp2w=np.zeros((_np2), dtype=np.int)
+        self.vp2ww=np.zeros((_np2), dtype=np.int)
+        self.vp2nw=np.zeros((_np2), dtype=np.int)
+        self.vp2ne=np.zeros((_np2), dtype=np.int)
+        self.vp2se=np.zeros((_np2), dtype=np.int)
+        self.vp2sw=np.zeros((_np2), dtype=np.int)
+        self.indp=np.zeros((ny,nx), dtype=np.int)
+        
+        p=-1
+        for i in range(ny):
+          for j in range(nx):
+            if (mask[i,j]>=1):
+              p=p+1
+              self.mask1d[p]=mask[i,j]
+              self.H[p]=SSH[i,j]
+              self.dx1d[p]=dx[i,j]
+              self.dy1d[p]=dy[i,j]
+              self.f01d[p]=self.f0[i,j]
+              self.c1d[p]=self.c[i,j]
+              self.indi[p]=i
+              self.indj[p]=j
+              self.indp[i,j]=p
+     
+        
+        
+        p2=-1
+        p1=-1
+        for p in range(_np):
+          if (self.mask1d[p]==2):
+            p2=p2+1
+            i=self.indi[p]
+            j=self.indj[p]
+            self.vp2[p2]=p
+            self.vp2n[p2]=self.indp[i+1,j]
+            self.vp2nn[p2]=self.indp[i+2,j]
+            self.vp2s[p2]=self.indp[i-1,j]
+            self.vp2ss[p2]=self.indp[i-2,j]
+            self.vp2e[p2]=self.indp[i,j+1]
+            self.vp2ee[p2]=self.indp[i,j+2]
+            self.vp2w[p2]=self.indp[i,j-1]
+            self.vp2ww[p2]=self.indp[i,j-2]
+            self.vp2nw[p2]=self.indp[i+1,j-1]
+            self.vp2ne[p2]=self.indp[i+1,j+1]
+            self.vp2se[p2]=self.indp[i-1,j+1]
+            self.vp2sw[p2]=self.indp[i-1,j-1]
+          if (self.mask1d[p]==1):
+            p1=p1+1
+            i=self.indi[p]
+            j=self.indj[p]
+            self.vp1[p1]=p
+        
+        self.aaa = self.g/self.f01d
+        self.bbb = - self.g*self.f01d / self.c1d**2
+        self.aaa[self.vp1] = 0
+        self.bbb[self.vp1] = 1
+        
+        
+        # Spatial scheme
+        self.upwind = upwind
+        if upwind_adj is None:
+            self.upwind_adj = upwind
+        else:
+            self.upwind_adj = upwind_adj
         
         # Diffusion 
         self.diff = diff
@@ -68,6 +163,11 @@ class Qgm:
         
         # Nb of iterations for elliptical inversion
         self.qgiter = qgiter
+        if qgiter_adj is not None:
+            self.qgiter_adj = qgiter_adj
+        else:
+            self.qgiter_adj = qgiter
+        
         
         # MDT
         self.mdt = mdt
@@ -79,9 +179,25 @@ class Qgm:
                 self.ubar = mdu
                 self.vbar = mdv
                 self.qbar = self.huv2pv(mdt,mdu,mdv,c=np.nanmean(self.c)*np.ones_like(self.dx))
+                self.mdt = self.pv2h(self.qbar,+mdt)
+            #self.ubar,self.vbar = self.h2uv(self.mdt,ubc=mdu,vbc=mdv)
+            #self.qbar = self.h2pv(self.mdt)
+            #self.qbar = self.huv2pv(self.ubar,self.vbar,self.mdt,c=np.nanmean(self.c)*np.ones_like(self.dx))
+            #self.mdt = self.pv2h(self.qbar,+mdt)
+            # For qrhs
+            self.uplusbar  = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
+            self.uminusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
+            self.vplusbar  = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+            self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
+            
+        
+        self.hbc = np.zeros((self.ny,self.nx))
+            
+        
+
         
     
-    def h2uv(self,h):
+    def h2uv(self,h,ubc=None,vbc=None):
         """ SSH to U,V
     
         Args:
@@ -100,10 +216,11 @@ class Qgm:
              
         v[1:,1:-1] = + self.g/self.f0[1:,1:-1]*\
             (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx[1:,1:-1])
-    
-        u[self.mask<=1] = 0
-        v[self.mask<=1] = 0
-    
+        
+        if ubc is not None and vbc is not None:
+            u[self.mask==1] = ubc[self.mask==1]
+            v[self.mask==1] = vbc[self.mask==1]
+        
         return u,v
 
 
@@ -125,14 +242,44 @@ class Qgm:
         
         q[1:-1,1:-1] = self.g/self.f0[1:-1,1:-1]*\
             ((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2 +\
-             (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) -\
+              (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) -\
                 self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
         
         ind = np.where((self.mask==1))
-        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
+        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]#self.hbc[ind]
             
         ind = np.where((self.mask==0))
         q[ind] = 0
+    
+        return q
+    
+    def h2pv_2(self,h):
+        """ SSH to Q
+    
+        Args:
+            h (2D array): SSH field.
+            grd (Grid() object): check modgrid.py
+    
+        Returns:
+            q: Potential Vorticity field  
+        """
+        g=self.g
+        
+        q=- g*self.f0/(self.c**2) *h 
+    
+        q[1:-1,1:-1] = g/self.f0[1:-1,1:-1]*((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2 \
+                                          + (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) \
+                                          - g*self.f0[1:-1,1:-1]/(self.c[1:-1,1:-1]**2) *h[1:-1,1:-1]
+        
+        ind=np.where((self.mask==1))
+        
+        q[ind]=- g*self.f0[ind]/(self.c[ind]**2) *h[ind]
+    
+        qtemp=- g*self.f0/(self.c**2) *h
+        q[np.where((np.isnan(q)))]=qtemp[np.where((np.isnan(q)))]
+        ind=np.where((self.mask==0))
+        
+        q[ind]=0
     
         return q
     
@@ -153,66 +300,103 @@ class Qgm:
             
         ind = np.where((self.mask==0))
         q[ind] = 0
-    
+        
         return q
-        
-    def norm(self,r):
-        return np.linalg.norm(r)
     
-    def alpha(self,r,d):
-        return self.norm(r)**2/(d.ravel().dot(self.h2pv(d).ravel()))
-    
-    def beta(self,r,rnew):
-        return self.norm(rnew)**2 / self.norm(r)**2
-    
-    def pv2h(self,q,hg):
-        
-        """ compute SSH from PV
+    def h2pv_1d(self,h1d):
+        """ SSH to Q
     
         Args:
-            q (2D array): PV
-            hg (2D array): background SSH
-
+            h (2D array): SSH field.
+            c (2D array): Phase speed of first baroclinic radius 
     
         Returns:
-            h (2D array): SSH
-    
+            q: Potential Vorticity field  
         """
     
-        q_tmp = +q
+            
+        q1d = np.zeros(self.np,) 
         
-        q_tmp[self.mask==0] = 0
-        hg[self.mask==0] = 0
-        #hg[np.isnan(hg)] = 0
-        #q_tmp[np.isnan(q_tmp)] = 0
+        q1d[self.vp2] = self.aaa[self.vp2]*\
+            ((h1d[self.vp2e]+h1d[self.vp2w]-2*h1d[self.vp2])/self.dx1d[self.vp2]**2 +\
+             (h1d[self.vp2n]+h1d[self.vp2s]-2*h1d[self.vp2])/self.dy1d[self.vp2]**2) +\
+                self.bbb[self.vp2] * h1d[self.vp2]
+        q1d[self.vp1] = +h1d[self.vp1]
+    
+        return q1d
+
+    def alpha(self,d,r):
+        tmp = np.dot(d,self.h2pv_1d(d))
+        if tmp!=0. : 
+            return -np.dot(d,r)/tmp
+        else: 
+            return 1.
+    
+
+    def pv2h(self,q,hg):
+        """ Q to SSH
         
-        r = +q_tmp - self.h2pv(hg)
-        d = +r
-        alpha = self.alpha(r,d)
-        h = hg + alpha*d
+        This code solve a linear system of equations using Conjugate Gradient method
+    
+        Args:
+            q (2D array): Potential Vorticity field
+            hg (2D array): SSH guess
+            grd (Grid() object): check modgrid.py
+    
+        Returns:
+            h (2D array): SSH field. 
+        """    
+
+        x = +hg[self.indi,self.indj]
+        q1d = q[self.indi,self.indj]
+    
+        ccc = +q1d
+    
+        r = self.h2pv_1d(x) - ccc
+        r[self.vp1] = 0 ## boundary condition     
+        
+        d = -r
+        
+        alpha = self.alpha(d,r)
+        xnew = x + alpha*d
+        
         if self.qgiter>1:
             for itr in range(self.qgiter): 
-                # Update guess value
-                hg = +h
-                # Compute beta
-                rnew = r - alpha * self.h2pv(d)
-                beta = self.beta(r,rnew)
-                r = +rnew
-                # Compute new direction
-                dnew = r + beta * d
-                alpha = self.alpha(r,dnew)
-                d = +dnew
-                # Update SSH
-                h = hg + alpha*d 
                 
-        h[self.mask==0] = np.nan
+                # Update guess value
+                x = +xnew
+                
+                # Compute beta
+                rnew = self.h2pv_1d(xnew) - ccc
+                rnew[self.vp1] = 0 ## boundary condition     
+                a1 = np.dot(r,r)
+                a2 = np.dot(rnew,rnew)
+                if a1!=0:
+                    beta = a2/a1
+                else: 
+                    beta = 1.
+                r = +rnew
+                
+                # Compute new direction
+                dnew = -rnew + beta*d
+                d = +dnew
+                
+                # Update state
+                alpha = self.alpha(d,r)
+                xnew = x + alpha*d
         
-        return h
     
+        # back to 2D
+        h = np.empty((self.ny,self.nx))
+        h[:,:] = np.NAN
+        h[self.indi,self.indj] = xnew[:]
+    
+        return h
+
     
     def qrhs(self,u,v,q,way):
 
-        """ Q increment
+        """ PV increment, upwind scheme
     
         Args:
             u (2D array): Zonal velocity
@@ -221,62 +405,39 @@ class Qgm:
             way: forward (+1) or backward (-1)
     
         Returns:
-            rq (2D array): Q increment  
+            rq (2D array): PV increment  
     
         """
         rq = np.zeros((self.ny,self.nx))
           
         if not self.diff:
             uplus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-            uplus[np.where((uplus<0))] = 0
             uminus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
-            uminus[np.where((uminus>0))] = 0
             vplus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
-            vplus[np.where((vplus<0))] = 0
             vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
+            
+            uplus[np.where((uplus<0))] = 0
+            uminus[np.where((uminus>0))] = 0
+            vplus[np.where((vplus<0))] = 0
             vminus[np.where((vminus>=0))] = 0
             
-            rq[2:-2,2:-2] = rq[2:-2,2:-2]\
-                - uplus*1/(6*self.dx[2:-2,2:-2])*\
-                    (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4])\
-                + uminus*1/(6*self.dx[2:-2,2:-2])*\
-                    (q[2:-2,4:]-6*q[2:-2,3:-1]+3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
-                - vplus*1/(6*self.dy[2:-2,2:-2])*\
-                    (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2])  \
-                + vminus*1/(6*self.dy[2:-2,2:-2])*\
-                    (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
+            rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,q)
             
             if self.mdt is not None:
-                uplusbar = way*0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
-                uplusbar[np.where((uplusbar<0))] = 0
-                uminusbar = way*0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
-                uminusbar[np.where((uminusbar>0))] = 0
-                vplusbar = way*0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-                vplusbar[np.where((vplusbar<0))] = 0
-                vminusbar = way*0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-                vminusbar[np.where((vminusbar>=0))] = 0
                 
-                rq[2:-2,2:-2] = rq[2:-2,2:-2]\
-                    - uplusbar*1/(6*self.dx[2:-2,2:-2])*\
-                        (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]- 6*q[2:-2,1:-3]+q[2:-2,:-4]) \
-                    + uminusbar*1/(6*self.dx[2:-2,2:-2])*\
-                        (q[2:-2,4:]-6*q[2:-2,3:-1]+ 3*q[2:-2,2:-2]+2*q[2:-2,1:-3]) \
-                    - vplusbar*1/(6*self.dy[2:-2,2:-2])*\
-                        (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]- 6*q[1:-3,2:-2]+q[:-4,2:-2]) \
-                    + vminusbar*1/(6*self.dy[2:-2,2:-2])*\
-                        (q[4:,2:-2]-6*q[3:-1,2:-2]+ 3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
-
-                rq[2:-2,2:-2] = rq[2:-2,2:-2]\
-                    - uplus*1/(6*self.dx[2:-2,2:-2])*\
-                        (2*self.qbar[2:-2,3:-1]+3*self.qbar[2:-2,2:-2]- 6*self.qbar[2:-2,1:-3]+self.qbar[2:-2,:-4]) \
-                    + uminus*1/(6*self.dx[2:-2,2:-2])*\
-                        (self.qbar[2:-2,4:]-6*self.qbar[2:-2,3:-1]+ 3*self.qbar[2:-2,2:-2]+2*self.qbar[2:-2,1:-3]) \
-                    - vplus*1/(6*self.dy[2:-2,2:-2])*\
-                        (2*self.qbar[3:-1,2:-2]+3*self.qbar[2:-2,2:-2]- 6*self.qbar[1:-3,2:-2]+self.qbar[:-4,2:-2]) \
-                    + vminus*1/(6*self.dy[2:-2,2:-2])*\
-                        (self.qbar[4:,2:-2]-6*self.qbar[3:-1,2:-2]+ 3*self.qbar[2:-2,2:-2]+2*self.qbar[1:-3,2:-2])
-
-        
+                uplusbar = way*self.uplusbar
+                uplusbar[np.where((uplusbar<0))] = 0
+                vplusbar = way*self.vplusbar
+                vplusbar[np.where((vplusbar<0))] = 0
+                uminusbar = way*self.uminusbar
+                uminusbar[np.where((uminusbar>0))] = 0
+                vminusbar = way*self.vminusbar
+                vminusbar[np.where((vminusbar>0))] = 0
+                
+                rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(
+                    uplusbar,vplusbar,uminusbar,vminusbar,q)
+                rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(uplus,vplus,uminus,vminus,self.qbar)
+                
             rq[2:-2,2:-2] = rq[2:-2,2:-2] - way*\
                 (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
                     *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
@@ -290,13 +451,75 @@ class Qgm:
                     (q[3:-1,2:-2]+q[1:-3,2:-2]-2*q[2:-2,2:-2])
             
         rq[np.where((self.mask<=1))] = 0
-        #rq[np.isnan(rq)] = 0
+        rq[np.isnan(rq)] = 0
 
         return rq
-
-
     
-    def step(self,h0,q0=None,way=1):
+    def _rq(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            main function for upwind schemes
+        """
+        
+        if self.upwind==1:
+            return self._rq1(uplus,vplus,uminus,vminus,q)
+        elif self.upwind==2:
+            return self._rq2(uplus,vplus,uminus,vminus,q)
+        elif self.upwind==3:
+            return self._rq3(uplus,vplus,uminus,vminus,q)
+        
+    def _rq1(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            1st-order upwind scheme
+        """
+        
+        res = \
+            - uplus*1/(self.dx[2:-2,2:-2]) * (q[2:-2,2:-2]-q[2:-2,1:-3]) \
+            + uminus*1/(self.dx[2:-2,2:-2])* (q[2:-2,2:-2]-q[2:-2,3:-1]) \
+            - vplus*1/(self.dy[2:-2,2:-2]) * (q[2:-2,2:-2]-q[1:-3,2:-2]) \
+            + vminus*1/(self.dy[2:-2,2:-2])* (q[2:-2,2:-2]-q[3:-1,2:-2])
+        
+        return res
+    
+    def _rq2(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            2nd-order upwind scheme
+        """
+        
+        res = \
+            - uplus*1/(2*self.dx[2:-2,2:-2])*\
+                (3*q[2:-2,2:-2]-4*q[2:-2,1:-3]+q[2:-2,:-4]) \
+            + uminus*1/(2*self.dx[2:-2,2:-2])*\
+                (q[2:-2,4:]-4*q[2:-2,3:-1]+3*q[2:-2,2:-2])  \
+            - vplus*1/(2*self.dy[2:-2,2:-2])*\
+                (3*q[2:-2,2:-2]-4*q[1:-3,2:-2]+q[:-4,2:-2]) \
+            + vminus*1/(2*self.dy[2:-2,2:-2])*\
+                (q[4:,2:-2]-4*q[3:-1,2:-2]+3*q[2:-2,2:-2])
+        
+        return res
+
+    def _rq3(self,uplus,vplus,uminus,vminus,q):
+        
+        """
+            3rd-order upwind scheme
+        """
+        
+        res = \
+            - uplus*1/(6*self.dx[2:-2,2:-2])*\
+                (2*q[2:-2,3:-1]+3*q[2:-2,2:-2]-6*q[2:-2,1:-3]+q[2:-2,:-4]) \
+            + uminus*1/(6*self.dx[2:-2,2:-2])*\
+                (q[2:-2,4:]-6*q[2:-2,3:-1]+3*q[2:-2,2:-2]+2*q[2:-2,1:-3])  \
+            - vplus*1/(6*self.dy[2:-2,2:-2])*\
+                (2*q[3:-1,2:-2]+3*q[2:-2,2:-2]-6*q[1:-3,2:-2]+q[:-4,2:-2]) \
+            + vminus*1/(6*self.dy[2:-2,2:-2])*\
+                (q[4:,2:-2]-6*q[3:-1,2:-2]+3*q[2:-2,2:-2]+2*q[1:-3,2:-2])
+        
+        return res
+            
+    
+    def step(self,h0,q0=None,dphidt=None,way=1):
         
         """ Propagation 
     
@@ -311,7 +534,7 @@ class Qgm:
     
         """
         
-        if np.all(h0==0):
+        if dphidt is None and np.all(h0==0):
             if q0 is None:
                 return h0
             else:
@@ -325,16 +548,20 @@ class Qgm:
 
         # 2/ h-->(u,v)
         u,v = self.h2uv(h0)
-        
+        u[np.isnan(u)] = 0
+        v[np.isnan(v)] = 0
         
         # 3/ (u,v,q)-->rq
         rq = self.qrhs(u,v,qb0,way)
         
         # 4/ increment integration 
         q1 = qb0 + self.dt*rq
+
+        if dphidt is not None:
+            q1 += self.dt*dphidt
         
         # 5/ q-->h
-        h1 = self.pv2h(q1,h0)
+        h1 = self.pv2h(q1,+h0)
         
         if q0 is None:
             return h1

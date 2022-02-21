@@ -13,11 +13,10 @@ import numpy as np
 import os
 from math import sqrt,pi
 from datetime import timedelta
-from copy import deepcopy
-import matplotlib.pylab as plt
-from scipy.interpolate import griddata
 
 from . import tools, grid
+
+
 
 def Model(config,State):
     """
@@ -30,16 +29,118 @@ def Model(config,State):
     print('Model:',config.name_model)
     if config.name_model is None:
         return
+    elif config.name_model=='Diffusion':
+        return Model_diffusion(config,State)
     elif config.name_model=='QG1L':
         return Model_qg1l(config,State)
     elif config.name_model=='SW1L':
         return Model_sw1l(config,State)
     elif config.name_model=='SW1LM':
         return Model_sw1lm(config,State)
+    elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        return Model_BM_IT(config,State)
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
+class Model_diffusion:
+    
+    
+    def __init__(self,config,State):
+        # Time parameters
+        self.dt = config.dtmodel
+        self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
+        self.T = np.arange(self.nt) * self.dt
+        self.timestamps = [] 
+        t = config.init_date
+        while t<=config.final_date:
+            self.timestamps.append(t)
+            t += timedelta(seconds=self.dt)
         
+        self.snu = config.snu
+        self.dx = State.DX
+        self.dy = State.DY
+        
+        self.mdt = None
+        
+        self.adjoint_test(State,nstep=1)
+        
+    def step(self,State,nstep=1,ind=0):
+        # Get state variable
+        SSH0 = State.getvar(ind=ind)
+        
+        # init
+        SSH1 = +SSH0
+        
+        for step in range(nstep):
+            SSH1[1:-1,1:-1] += self.dt*self.snu*(\
+                (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+        
+        # Update state
+        State.setvar(SSH1,ind=ind)
+        
+    def step_tgl(self,dState,State,nstep=1,ind=0):
+        # Get state variable
+        SSH0 = dState.getvar(ind=ind)
+        
+        # init
+        SSH1 = +SSH0
+        
+        for step in range(nstep):
+            SSH1[1:-1,1:-1] += self.dt*self.snu*(\
+                (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+        
+        # Update state
+        dState.setvar(SSH1,ind=ind)
+        
+    
+    def step_adj(self,adState,State,nstep=1,ind=0):
+        # Get state variable
+        adSSH0 = adState.getvar(ind=ind)
+        
+        # init
+        adSSH1 = +adSSH0
+        
+        for step in range(nstep):
+            
+            adSSH1[1:-1,2:] += self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,:-2] += self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,1:-1] += -2*self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            
+            adSSH1[2:,1:-1] += self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[:-2,1:-1] += self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,1:-1] += -2*self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            
+            adSSH0 = +adSSH1
+            
+        # Update state
+        adState.setvar(adSSH1,ind=ind)
+        
+    
+    def adjoint_test(self,State,nstep):
+        
+        # Current trajectory
+        State0 = State.random()
+        X = State0.getvar(0).ravel()
+        
+        # Adjoint
+        adState0 = State.random()
+        adY = adState0.getvar(0).ravel()
+        
+        # Run TLM
+        self.step(State0,nstep=nstep)
+        Y = State0.getvar(0).ravel()
+        
+        # Run ADJ
+        self.step_adj(adState0,State0,nstep=nstep)
+        adX = adState0.getvar(0).ravel()
+        
+        ps1 = np.inner(X,adX)
+        ps2 = np.inner(Y,adY)
+        
+        print('Adjoint test:',ps1/ps2)
+    
 class Model_qg1l:
     
     
@@ -53,11 +154,13 @@ class Model_qg1l:
             dir_model = config.dir_model  
         SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
 
-        # Model timestep
+        # Time parameters
         self.dt = config.dtmodel
+        self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
+        self.T = np.arange(self.nt) * self.dt
         
         # Open MDT map if provided
-        if config.path_mdt is not None and os.path.exists(config.path_mdt):
+        if config.Reynolds and config.path_mdt is not None and os.path.exists(config.path_mdt):
             print('MDT is prescribed, thus the QGPV will be expressed thanks \
 to Reynolds decomposition. However, be sure that observed and boundary \
 variable are SLAs!')
@@ -95,9 +198,10 @@ variable are SLAs!')
                 
         else:
             self.mdt = self.mdu = self.mdv = None
+    
         
         # Open Rossby Radius if provided
-        if config.filec_aux is not None and os.path.exists(config.filec_aux):
+        if config.c0 is None and self.mdt is not None and config.filec_aux is not None and os.path.exists(config.filec_aux):
             
             print('Rossby Radius is prescribed, be sure to have provided MDT as well')
 
@@ -107,12 +211,9 @@ variable are SLAs!')
                                    config.name_var_c,
                                    State.lon,
                                    State.lat)
-            self.c[self.c>3.5] = 3.5
-            self.c[self.c<2.2] = 2.2
         else:
             self.c = config.c0 * np.ones((State.ny,State.nx))
-        
-        
+            
         # Model initialization
         SourceFileLoader("qgm", 
                                  dir_model + "/qgm.py").load_module() 
@@ -132,10 +233,13 @@ variable are SLAs!')
                          dy=State.DY,
                          dt=self.dt,
                          SSH=State.getvar(ind=0),
-                         c=config.c0,
+                         c=self.c,
+                         upwind=config.upwind,
+                         upwind_adj=config.upwind_adj,
                          g=State.g,
                          f=State.f,
                          qgiter=config.qgiter,
+                         qgiter_adj=config.qgiter_adj,
                          diff=config.only_diffusion,
                          snu=config.cdiffus,
                          mdt=self.mdt,
@@ -143,7 +247,11 @@ variable are SLAs!')
                          mdu=self.mdu)
         self.State = State
         
-
+        print('qgiter:',self.qgm.qgiter)
+        print('qgiter_adj:',self.qgm.qgiter_adj)
+        print('upwind:',self.qgm.upwind)
+        print('upwind_adj:',self.qgm.upwind_adj)
+        
         # Construct timestamps
         self.timestamps = [] 
         t = config.init_date
@@ -151,21 +259,22 @@ variable are SLAs!')
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
 
-        if config.name_analysis=='4Dvar' and config.compute_test:
+        if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='QG1L':
             print('Tangent test:')
-            self.tangent_test(State,1,config.flag_use_boundary_conditions)
+            self.tangent_test(State,10,config.flag_use_boundary_conditions)
 
             print('Adjoint test:')
-            self.adjoint_test(State,1,config.flag_use_boundary_conditions)
+            self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
-    def step(self,State,nstep=1,Hbc=None,Wbc=None):
+    def step(self,State,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
-        SSH0 = State.getvar(ind=0)
+        SSH0 = State.getvar(ind=ind)
         
         # init
         SSH1 = +SSH0
         
+        # Boundary condition
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
         if Hbc is not None:
@@ -174,9 +283,9 @@ variable are SLAs!')
         # Time propagation
         for i in range(nstep):
             SSH1 = self.qgm.step(SSH1,way=1)
-            
+
         # Update state
-        State.setvar(SSH1,ind=0)
+        State.setvar(SSH1,ind=ind)
     
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
@@ -239,11 +348,11 @@ variable are SLAs!')
         if flag_pv:
             State.setvar(pv_1,1)
         
-    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None):
+    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
-        dSSH0 = dState.getvar(ind=0)
-        SSH0 = State.getvar(ind=0)
+        dSSH0 = dState.getvar(ind=ind)
+        SSH0 = State.getvar(ind=ind)
         
         # init
         dSSH1 = +dSSH0
@@ -263,13 +372,13 @@ variable are SLAs!')
             SSH1 = self.qgm.step(h0=SSH1)
         
         # Update state
-        dState.setvar(dSSH1,ind=0)
+        dState.setvar(dSSH1,ind=ind)
         
-    def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None):
+    def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
-        adSSH0 = adState.getvar(ind=0)
-        SSH0 = State.getvar(ind=0)
+        adSSH0 = adState.getvar(ind=ind)
+        SSH0 = State.getvar(ind=ind)
         
         # Init
         adSSH1 = +adSSH0
@@ -293,6 +402,7 @@ variable are SLAs!')
             SSH1 = traj[i]
         
             adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
+            
         
         # Boundary conditions
         if Wbc is None:
@@ -301,12 +411,16 @@ variable are SLAs!')
             adSSH1 = (1-Wbc)*adSSH1
         
         # Update state  and parameters
-        adState.setvar(adSSH1,ind=0)
+        adSSH1[np.isnan(adSSH1)] = 0
+        adState.setvar(adSSH1,ind=ind)
+        
+    
         
     def tangent_test(self,State,nstep,bc=False):
     
         State0 = State.random(1e-2)
         dState = State.random(1e-2)
+
         
         if bc:
             Hbc = np.random.random((State.ny,State.nx))
@@ -315,7 +429,7 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         State0_tmp = State0.copy()
-        self.step(State0_tmp,nstep,Hbc,Wbc)
+        self.step(State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -325,12 +439,13 @@ variable are SLAs!')
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(State1,nstep,Hbc,Wbc)
+            self.step(State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(dState1,State0,nstep,Hbc,Wbc)
+            self.step_tgl(dState1,State0,
+                          nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             dX = dState1.getvar(vect=True)
             
             mask = np.isnan(X1+X2+dX)
@@ -342,7 +457,7 @@ variable are SLAs!')
     def adjoint_test(self,State,nstep,bc=False):
         
         # Current trajectory
-        State0 = State.random(1e-2)
+        State0 = State.random()
         
         # Perturbation
         dState = State.random()
@@ -359,11 +474,13 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         # Run TLM
-        self.step_tgl(dState,State0,nstep,Hbc,Wbc)
+        self.step_tgl(dState,State0,
+                      nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         dY = dState.getvar(vect=True)
         
         # Run ADJ
-        self.step_adj(adState,State0,nstep,Hbc,Wbc)
+        self.step_adj(adState,State0,
+                      nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         adX = adState.getvar(vect=True)
            
         mask = np.isnan(dX + adX + dY + adY)
@@ -371,265 +488,7 @@ variable are SLAs!')
         ps2 = np.inner(dY[~mask],adY[~mask])
         
         print(ps1/ps2)
-        
 
-
-class Model_sw1lm:
-    
-    def __init__(self,config,State):
-        #if config.Nmodes==1:
-        #    sys.exit('Error: *Nmodes has to be >1 for SW1LM model')
-        self.Nmodes = config.Nmodes
-        He_init = self.check_param(config,'He_init')
-        D_He = self.check_param(config,'D_He')
-        T_He = self.check_param(config,'T_He')
-        D_bc = self.check_param(config,'D_bc')
-        T_bc = self.check_param(config,'T_bc')
-        
-        self.Models = []
-        self.nParams = 0
-        self.sliceHe = np.array([],dtype=int)
-        self.slicehbcx = np.array([],dtype=int)
-        self.slicehbcy = np.array([],dtype=int)
-        print()
-        for i in range(self.Nmodes):
-            print(f'* Mode {i+1}')
-            M = Model_sw1l(config,State,He_init[i],D_He[i],T_He[i],D_bc[i],T_bc[i])
-            self.Models.append(M)
-            self.sliceHe = np.append(self.sliceHe,
-                                     self.nParams+\
-                                         np.arange(M.sliceHe.start,M.sliceHe.stop))
-            self.slicehbcx = np.append(self.slicehbcx,
-                                       self.nParams+\
-                                           np.arange(M.slicehbcx.start,M.slicehbcx.stop))
-            self.slicehbcy = np.append(self.slicehbcy,
-                                       self.nParams+\
-                                         np.arange(M.slicehbcy.start,M.slicehbcy.stop))
-            self.nParams += M.nParams
-            
-            if i==0:
-                self.nt = M.nt
-                self.dt = M.dt
-                self.T = M.T.copy()
-                self.timestamps = M.timestamps.copy()
-            print()
-        
-        
-        # params = np.zeros((self.nParams,))
-        # params[self.slicehbcx] = np.random.random((params[self.slicehbcx].size))
-        # for t in self.T[::6]:
-        #     self.step(t,State,params,nstep=6)
-        #     State.plot(ind=[2,5,8])
-            
-        # Tests
-        if config.compute_test:
-            print('tangent test:')
-            self.tangent_test(State,self.T[10],nstep=config.checkpoint)
-            print('adjoint test:')
-            self.adjoint_test(State,self.T[10],nstep=config.checkpoint)
-        
-    def restart(self):
-        for M in self.Models:
-            M.swm.restart()
-    
-    def check_param(self,config,name):
-        
-        if hasattr(config[name],'__len__'):
-            if len(config[name])!=self.Nmodes:
-                print(f'Warning: len({name}) != Nmodes \
-                      --> We take the first value for each mode')
-                param = [config[name][0] for _ in range(self.Nmodes)]
-            else:
-                param = config[name]
-        else:
-            print(f'Warning: {name} is not a list!')
-            param = [config[name] for _ in range(self.Nmodes)]
-        
-        return param
-    
-    def slice_param(self,imode):
-        
-        i0 = 0
-        if imode>0:
-            for i in range(imode):
-                i0 += self.Models[i].nParams
-        return slice(i0,i0+self.Models[imode].nParams)
-    
-
-    def step(self,t,State,params,nstep=1,t0=0):
-        u = 0
-        v = 0
-        h = 0
-        for i in range(self.Nmodes):
-            ind = np.arange(3*i,3*(i+1))
-            _params = params[self.slice_param(i)]
-            self.Models[i].step(t,State,_params,nstep,t0,ind=ind)
-            _u,_v,_h = State.getvar(ind=ind)
-            u += _u
-            v += _v 
-            h += _h
-        ind = np.arange(3*self.Nmodes,3*(self.Nmodes+1))
-        State.setvar([u,v,h],ind=ind)
-        
-        
-    
-    def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0):
-        du = 0
-        dv = 0
-        dh = 0
-        for i in range(self.Nmodes):
-            ind = np.arange(3*i,3*(i+1))
-            _params = params[self.slice_param(i)]
-            _dparams = dparams[self.slice_param(i)]
-            
-            self.Models[i].step_tgl(
-                t,dState,State,_dparams,_params,nstep,t0,ind=ind) 
-            
-            _du,_dv,_dh = dState.getvar(ind=ind)
-            du += _du
-            dv += _dv 
-            dh += _dh
-            
-        ind = np.arange(3*self.Nmodes,3*(self.Nmodes+1))
-        dState.setvar([du,dv,dh],ind=ind) 
-    
-    def step_adj(self,t,adState, State, adparams0, params, nstep=1, t0=0):
-
-        adparams = +adparams0*0
-        
-        ind = np.arange(3*self.Nmodes,3*(self.Nmodes+1))
-        adu,adv,adh = adState.getvar(ind=ind) 
-        
-        for i in range(self.Nmodes):
-            ind = np.arange(3*i,3*(i+1))
-            
-            _adu,_adv,_adh = adState.getvar(ind=ind) 
-            adState.setvar([_adu+adu,_adv+adv,_adh+adh],ind=ind) 
-            
-            _params = params[self.slice_param(i)]
-            _adparams0 = adparams0[self.slice_param(i)]
-            
-            _adparams = self.Models[i].step_adj(
-                t,adState,State,_adparams0,_params,nstep,t0,ind=ind)
-            
-            
-            
-            adparams[self.slice_param(i)] = _adparams
-            
-        ind = np.arange(3*self.Nmodes,3*(self.Nmodes+1))
-        adu,adv,adh = adState.getvar(ind=ind)
-        adState.setvar([0*adu,0*adv,0*adh],ind=ind) 
-        
-        return adparams
-    
-        
-    def run(self,t0,tint,State,params,return_traj=False,nstep=1):
-        if return_traj:
-            tt = [t0]
-            traj = [State.getvar()]
-        t = t0
-        while t <= t0+tint: 
-            _nstep = nstep
-            self.step(t,State,params,nstep=_nstep,t0=t0)
-            t += nstep*self.dt
-            if return_traj:
-                traj.append(State.getvar())
-                tt.append(t)
-        if return_traj:
-            return tt,traj
-
-    def run_tgl(self,t0,tint,dState,State,dparams,params,nstep=1):
-        State_tmp = State.copy()
-        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
-        for i,t in enumerate(tt[:-1]): 
-            State_tmp.setvar(traj[i])
-            _nstep = nstep
-            self.step_tgl(t,dState,State_tmp,dparams,params,nstep=_nstep,t0=t0)
-    
-    def run_adj(self,t0,tint,adState,State,adparams,params,nstep=1):
-        State_tmp = State.copy()
-        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
-        for i in reversed(range(len(tt[:-1]))):
-            t = tt[i]
-            State_tmp.setvar(traj[i])
-            _nstep = nstep
-            adparams = self.step_adj(
-                t,adState,State_tmp,adparams,params,nstep=_nstep,t0=t0)
-        return adparams
-    
-    def tangent_test(self,State,tint,t0=0,nstep=1):
-    
-        State0 = State.random()
-        dState = State.random()
-        
-        params = np.random.random(self.nParams)
-        dparams = np.random.random(self.nParams)
-        
-        State0_tmp = State0.copy()
-        self.run(t0,tint,State0_tmp,params,nstep=nstep)
-        #self.step(t0,State0_tmp,params,nstep=nstep)
-        X2 = State0_tmp.getvar(vect=True)
-
-        for p in range(10):
-            
-            lambd = 10**(-p)
-            
-            State1 = dState.copy()
-            State1.scalar(lambd)
-            State1.Sum(State0)
-            self.run(t0,tint,State1,params+lambd*dparams,nstep=nstep)
-            #self.step(t0,State1,params+lambd*dparams,nstep=nstep)
-            X1 = State1.getvar(vect=True)
-            
-            dState1 = dState.copy()
-            dState1.scalar(lambd)
-            self.run_tgl(t0,tint,dState1,State0,lambd*dparams,params,nstep=nstep)
-            #self.step_tgl(t0,dState1,State0,lambd*dparams,params,nstep=nstep)
-            dX = dState1.getvar(vect=True)
-            
-            ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
-
-            print('%.E' % lambd,'%.E' % ps)
-            
-    def adjoint_test(self,State,tint,t0=0,nstep=1):
-        
-        # Current trajectory
-        State0 = State.random()
-        params = np.random.random(self.nParams)
-        
-        # Perturbation
-        dState = State.random()
-        dX = dState.getvar(vect=True)
-        dparams = np.random.random(self.nParams)
-        dX = np.concatenate((dX,dparams))
-        
-        # Adjoint
-        adState = State.random()
-        adX = adState.getvar(vect=True)
-        adparams = np.random.random(self.nParams)
-        adX = np.concatenate((adX,adparams))
-        
-        # Run TLM
-        #self.run_tgl(t0,tint,dState,State0,dparams,params,nstep=nstep)
-        self.step_tgl(t0,dState,State0,dparams,params,nstep=nstep)
-        TLM = dState.getvar(vect=True)
-        
-        TLM = np.concatenate((TLM,dparams))
-        
-        # Run ADJ
-        #adparams = self.run_adj(
-        #    t0,tint,adState,State0,adparams,params,nstep=nstep)
-        adparams = self.step_adj(
-            t0,adState,State0,adparams,params,nstep=nstep)
-        ADM = adState.getvar(vect=True)
-        ADM = np.concatenate((ADM,adparams))
-        
-        ps1 = np.inner(TLM,adX)
-        ps2 = np.inner(dX,ADM)
-        
-        print(ps1/ps2)
-        
-    
         
 class Model_sw1l:
     def __init__(self,config,State,
@@ -656,18 +515,29 @@ class Model_sw1l:
         
         swm_adj = SourceFileLoader("swm_adj", 
                                  dir_model + "/swm_adj.py").load_module() 
-                
         
+        
+        # Model grid 
+        self.sw_in = config.sw_in # Avoding boundary pixels
+        print('Length of the boundary band to ignore:',self.sw_in)
+        self.nyin,self.nxin = State.ny -2*self.sw_in, State.nx -2*self.sw_in
+        if self.sw_in>0:
+            self.Xin = State.X[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            self.Yin = State.Y[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            self.fin = State.f[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            self.Xin = +State.X
+            self.Yin = +State.Y
+            self.fin = +State.f
+            
         # State variable dimensions
-        self.shapeu = State.var[0].shape
-        self.shapev = State.var[1].shape
-        self.shapeh = State.var[2].shape 
+        self.shapeu = [State.var[0].shape[0]-2*self.sw_in,State.var[0].shape[1]-2*self.sw_in]
+        self.shapev = [State.var[1].shape[0]-2*self.sw_in,State.var[1].shape[1]-2*self.sw_in]
+        self.shapeh = [State.var[2].shape[0]-2*self.sw_in,State.var[2].shape[1]-2*self.sw_in]
         self.nu = np.prod(self.shapeu)
         self.nv = np.prod(self.shapev)
         self.nh = np.prod(self.shapeh)
 
-        
-            
         # Time parameters
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
@@ -681,7 +551,7 @@ class Model_sw1l:
         while t<=config.final_date:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
-            
+        
         #########################
         # He 
         #########################
@@ -698,7 +568,7 @@ class Model_sw1l:
             print('Heb:',self.Heb)
             
         # Gaussian components
-        self.shapeHe = [State.ny,State.nx] 
+        self.shapeHe = [self.nyin,self.nxin] 
         self.nHe = np.prod(self.shapeHe)
         self.He_gauss = 0
         if D_He is None:
@@ -710,15 +580,19 @@ class Model_sw1l:
             self.He_gauss = 1
             He_xy_gauss = []
             isub_He = int(D_He/State.dy)  
-            jsub_He = int(D_He/State.dx)  
-            for i in range(-2*isub_He,State.ny+3*isub_He,isub_He):
-                y = i*State.dy
-                for j in range(-2*jsub_He,State.nx+3*jsub_He,jsub_He):
-                    x = j*State.dx
+            jsub_He = int(D_He/State.dx) 
+            self.Hey = np.arange(-2*isub_He*State.dy,
+                                 (self.nyin+3*isub_He)*State.dy,
+                                 isub_He*State.dy)
+            self.Hex = np.arange(-2*jsub_He*State.dx,
+                                 (self.nxin+3*jsub_He)*State.dx,
+                                 jsub_He*State.dx)
+            for yi in self.Hey:
+                for xj in self.Hex:
                     mat = np.ones((self.shapeHe))
-                    for ii in range(State.ny):
-                        for jj in range(State.nx):
-                            dist = sqrt((State.Y[ii,jj]-y)**2+(State.X[ii,jj]-x)**2)
+                    for ii in range(self.nyin):
+                        for jj in range(self.nxin):
+                            dist = sqrt((self.Yin[ii,jj]-yi)**2+(self.Xin[ii,jj]-xj)**2)
                             mat[ii,jj] = tools.gaspari_cohn(dist,7*D_He/2)
                     He_xy_gauss.append(mat)
             self.He_xy_gauss = np.asarray(He_xy_gauss)
@@ -753,8 +627,8 @@ class Model_sw1l:
             self.bc_theta = np.array([0])
     
         # gaussian components
-        self.shapehbcx = [self.omegas.size,2,2,self.bc_theta.size,State.nx]
-        self.shapehbcy = [self.omegas.size,2,2,self.bc_theta.size,State.ny]
+        self.shapehbcx = [self.omegas.size,2,2,self.bc_theta.size,self.nxin]
+        self.shapehbcy = [self.omegas.size,2,2,self.bc_theta.size,self.nyin]
         self.bc_gauss = 0
         if D_bc is None:
             D_bc = config.D_bc
@@ -768,17 +642,17 @@ class Model_sw1l:
             isub_bc = int(D_bc//State.dy)  
             jsub_bc = int(D_bc//State.dx)  
             self.bcy = np.arange(-2*isub_bc*State.dy,
-                                 (State.ny+3*isub_bc)*State.dy,
+                                 (self.nyin+3*isub_bc)*State.dy,
                                  isub_bc*State.dy)
             self.bcx = np.arange(-2*jsub_bc*State.dx,
-                                 (State.nx+3*jsub_bc)*State.dx,
+                                 (self.nxin+3*jsub_bc)*State.dx,
                                  jsub_bc*State.dx)
             
             for xj in self.bcx:
-                bc_x_gauss.append(tools.gaspari_cohn(State.X[State.ny//2,:]-xj,
+                bc_x_gauss.append(tools.gaspari_cohn(self.Xin[self.nyin//2,:]-xj,
                                                      7*D_bc/2))
             for yi in self.bcy:
-                bc_y_gauss.append(tools.gaspari_cohn(State.Y[:,State.nx//2]-yi,
+                bc_y_gauss.append(tools.gaspari_cohn(self.Yin[:,self.nxin//2]-yi,
                                                      7*D_bc/2))   
             self.bc_x_gauss = np.asarray(bc_x_gauss)
             self.bc_y_gauss = np.asarray(bc_y_gauss)
@@ -799,6 +673,7 @@ class Model_sw1l:
         self.nbcy = np.prod(self.shapehbcy)
         self.nbc = self.nbcx + self.nbcy
         
+        
         print('BC:',self.bc_kind)
         print('Omegas:',self.omegas)
         print('Thetas:',self.bc_theta)
@@ -812,13 +687,13 @@ class Model_sw1l:
         self.slicehbcy = slice(self.nHe+self.nbcx,self.nParams)
         
         # Model initialization
-        self.swm = swm_adj.Swm_adj(X=State.X,
-                                   Y=State.Y,
+        self.swm = swm_adj.Swm_adj(X=self.Xin,
+                                   Y=self.Yin,
                                    dt=self.dt,
                                    bc=self.bc_kind,
                                    omegas=self.omegas,
                                    bc_theta=self.bc_theta,
-                                   f=State.f)
+                                   f=self.fin)
         
         if self.time_scheme=='Euler':
             self.swm_step = self.swm.step_euler
@@ -834,10 +709,11 @@ class Model_sw1l:
             self.swm_step_adj = self.swm.step_rk4_adj
         
         # Tests
-        print('tangent test:')
-        #self.tangent_test(State,self.T[-2],nstep=config.checkpoint)
-        print('adjoint test:')
-        #self.adjoint_test(State,self.T[-2],nstep=config.checkpoint)
+        if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='SW1L':
+            print('tangent test:')
+            self.tangent_test(State,10*self.dt,nstep=config.checkpoint)
+            print('adjoint test:')
+            self.adjoint_test(State,10*self.dt,nstep=config.checkpoint)
        
 
             
@@ -978,7 +854,7 @@ class Model_sw1l:
         return adhbcx_incr,adhbcy_incr
     
         
-    def step(self,t,State,params,nstep=1,t0=0,ind=None):
+    def step(self,t,State,params,nstep=1,t0=0,ind=[0,1,2]):
         
         # Get state variables and model parameters
         u0,v0,h0 = State.getvar(ind=ind)
@@ -992,9 +868,14 @@ class Model_sw1l:
         hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
         
         # init
-        u = +u0
-        v = +v0
-        h = +h0
+        if self.sw_in>0:
+            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            uin = +u0
+            vin = +v0
+            hin = +h0
         
         # Time propagation
         for i in range(nstep):
@@ -1002,17 +883,27 @@ class Model_sw1l:
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            #first = False
-            
-            u,v,h = self.swm_step(
+            uin,vin,hin = self.swm_step(
                 t+i*self.dt,
-                u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
             
         # Update state
-        State.setvar([u,v,h],ind=ind)
+        if self.sw_in>0:
+            u1 = +u0
+            u1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = uin
+            v1 = +v0
+            v1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = vin
+            h1 = +h0
+            h1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = hin
+        else:
+            u1 = +uin
+            v1 = +vin
+            h1 = +hin
+            
+        State.setvar([u1,v1,h1],ind=ind)
         
     
-    def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0,ind=None):
+    def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0,ind=[0,1,2]):
         
         # Get state variables and model parameters
         du0,dv0,dh0 = dState.getvar(ind=ind)
@@ -1031,39 +922,59 @@ class Model_sw1l:
         dhbcx1d,dhbcy1d = self.get_hbc1d(tbc,dhbcx,dhbcy)
         
         # init
-        du = +du0
-        dv = +dv0
-        dh = +dh0
-        u = +u0
-        v = +v0
-        h = +h0
+        if self.sw_in>0:
+            duin = du0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            dvin = dv0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            dhin = dh0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            duin = +du0
+            dvin = +dv0
+            dhin = +dh0
+            uin = +u0
+            vin = +v0
+            hin = +h0
         
         # Time propagation
         # Current trajectory
-        traj = [(u,v,h)]
+        traj = [(uin,vin,hin)]
         if nstep>1:
             for i in range(nstep):
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                u,v,h = self.swm_step(
+                uin,vin,hin = self.swm_step(
                         t+i*self.dt,
-                        u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
-                traj.append((u,v,h))
+                        uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                traj.append((uin,vin,hin))
             
         for i in range(nstep):
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            u,v,h = traj[i]
+            uin,vin,hin = traj[i]
             
-            du,dv,dh = self.swm_step_tgl(
-                t+i*self.dt,du,dv,dh,u,v,h,
+            duin,dvin,dhin = self.swm_step_tgl(
+                t+i*self.dt,duin,dvin,dhin,uin,vin,hin,
                 dHe=dHe2d,He=He2d,
                 dhbcx=dhbcx1d,dhbcy=dhbcy1d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
       
         # Update state 
-        dState.setvar([du,dv,dh],ind=ind)
+        if self.sw_in>0:
+            du1 = +du0
+            du1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = duin
+            dv1 = +dv0
+            dv1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = dvin
+            dh1 = +dh0
+            dh1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = dhin
+        else:
+            du1 = +duin
+            dv1 = +dvin
+            dh1 = +dhin
+            
+        dState.setvar([du1,dv1,dh1],ind=ind)
         
     
     
@@ -1083,37 +994,46 @@ class Model_sw1l:
         hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
         
         # Init
-        adu = +adu0
-        adv = +adv0
-        adh = +adh0
+        if self.sw_in>0:
+            aduin = adu0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            advin = adv0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            adhin = adh0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
+        else:
+            aduin = +adu0
+            advin = +adv0
+            adhin = +adh0
+            uin = +u0
+            vin = +v0
+            hin = +h0
+        
         adHe2d = 0
         adhbcx1d = 0
         adhbcy1d = 0
-        u = +u0
-        v = +v0
-        h = +h0
         
         # Time propagation
         # Current trajectory
-        traj = [(u,v,h)]
+        traj = [(uin,vin,hin)]
         if nstep>1:
             for i in range(nstep):
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                u,v,h = self.swm_step(
+                uin,vin,hin = self.swm_step(
                         t+i*self.dt,
-                        u,v,h,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
-                traj.append((u,v,h))
+                        uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                traj.append((uin,vin,hin))
             
         for i in reversed(range(nstep)):
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            u,v,h = traj[i]
+            uin,vin,hin = traj[i]
         
-            adu,adv,adh,adHe2d_tmp,adhbcx1d_tmp,adhbcy1d_tmp =\
-                self.swm_step_adj(t+i*self.dt,adu,adv,adh,u,v,h,
+            aduin,advin,adhin,adHe2d_tmp,adhbcx1d_tmp,adhbcy1d_tmp =\
+                self.swm_step_adj(t+i*self.dt,aduin,advin,adhin,uin,vin,hin,
                                       He2d,hbcx1d,hbcy1d,first=first)
             adHe2d += adHe2d_tmp
             adhbcx1d += adhbcx1d_tmp
@@ -1130,7 +1050,18 @@ class Model_sw1l:
         adparams = self.vectorizeParams(adHe,adhbcx,adhbcy)
         
         # Update state
-        adState.setvar([adu,adv,adh],ind=ind)
+        if self.sw_in>0:
+            adu1 = +adu0
+            adu1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = aduin
+            adv1 = +adv0
+            adv1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = advin
+            adh1 = +adh0
+            adh1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = adhin
+        else:
+            adu1 = +aduin
+            adv1 = +advin
+            adh1 = +adhin
+        adState.setvar([adu1,adv1,adh1],ind=ind)
         return adparams
         
     def run(self,t0,tint,State,params,return_traj=False,nstep=1):
@@ -1242,5 +1173,458 @@ class Model_sw1l:
         
         print(ps1/ps2)
 
+
+class Model_sw1lm:
+    
+    def __init__(self,config,State):
+        #if config.Nmodes==1:
+        #    sys.exit('Error: *Nmodes has to be >1 for SW1LM model')
+        self.Nmodes = config.Nmodes
+        He_init = self.check_param(config,'He_init')
+        D_He = self.check_param(config,'D_He')
+        T_He = self.check_param(config,'T_He')
+        D_bc = self.check_param(config,'D_bc')
+        T_bc = self.check_param(config,'T_bc')
+        
+        self.Models = []
+        self.nParams = 0
+        self.sliceHe = np.array([],dtype=int)
+        self.slicehbcx = np.array([],dtype=int)
+        self.slicehbcy = np.array([],dtype=int)
+        print()
+        self.ind = []
+        for i in range(self.Nmodes):
+            print(f'* Mode {i+1}')
+            M = Model_sw1l(config,State,He_init[i],D_He[i],T_He[i],D_bc[i],T_bc[i])
+            self.Models.append(M)
+            self.sliceHe = np.append(self.sliceHe,
+                                     self.nParams+\
+                                         np.arange(M.sliceHe.start,M.sliceHe.stop))
+            self.slicehbcx = np.append(self.slicehbcx,
+                                       self.nParams+\
+                                           np.arange(M.slicehbcx.start,M.slicehbcx.stop))
+            self.slicehbcy = np.append(self.slicehbcy,
+                                       self.nParams+\
+                                         np.arange(M.slicehbcy.start,M.slicehbcy.stop))
+            self.nParams += M.nParams
+            
+            indi = np.arange(3*i,3*(i+1)) # Indexes for state variables relative to mode i 
+            if hasattr(config['name_model'],'__len__') and len(config['name_model'])==2:
+                # BM & IT separation : we exclude first variable which is for SSH BM  
+                self.ind.append(1+indi)
+            else:
+                self.ind.append(indi)
+            
+            if i==0:
+                self.nt = M.nt
+                self.dt = M.dt
+                self.T = M.T.copy()
+                self.timestamps = M.timestamps.copy()
+            print()
+            
+        inds = np.arange(3*self.Nmodes,3*(self.Nmodes+1)) # Indexes for state variables relative to the sum of all modes
+        if hasattr(config['name_model'],'__len__') and len(config['name_model'])==2:
+            # BM & IT separation : we exclude first variable which is for SSH BM  
+            self.ind.append(1+inds)
+        else:
+            self.ind.append(inds)
+        
+        # Tests
+        if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='SW1LM':
+            print('tangent test:')
+            self.tangent_test(State,self.T[10],nstep=config.checkpoint)
+            print('adjoint test:')
+            self.adjoint_test(State,self.T[10],nstep=config.checkpoint)
+        
+    def restart(self):
+        for M in self.Models:
+            M.swm.restart()
+    
+    def check_param(self,config,name):
+        
+        if hasattr(config[name],'__len__'):
+            if len(config[name])!=self.Nmodes:
+                print(f'Warning: len({name}) != Nmodes \
+                      --> We take the first value for each mode')
+                param = [config[name][0] for _ in range(self.Nmodes)]
+            else:
+                param = config[name]
+        else:
+            print(f'Warning: {name} is not a list!')
+            param = [config[name] for _ in range(self.Nmodes)]
+        
+        return param
+    
+    def slice_param(self,imode):
+        
+        i0 = 0
+        if imode>0:
+            for i in range(imode):
+                i0 += self.Models[i].nParams
+        return slice(i0,i0+self.Models[imode].nParams)
+    
+    def step(self,t,State,params,nstep=1,t0=0,ind=None):
+        u = 0
+        v = 0
+        h = 0
+        for i in range(self.Nmodes):
+            _params = params[self.slice_param(i)]
+            self.Models[i].step(t,State,_params,nstep,t0,self.ind[i])
+            _u,_v,_h = State.getvar(ind=self.ind[i])
+            u += _u
+            v += _v 
+            h += _h
+        State.setvar([u,v,h],ind=self.ind[-1])
+        
+    def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0,ind=None):
+        du = 0
+        dv = 0
+        dh = 0
+        for i in range(self.Nmodes):
+            _params = params[self.slice_param(i)]
+            _dparams = dparams[self.slice_param(i)]
+            
+            self.Models[i].step_tgl(
+                t,dState,State,_dparams,_params,nstep,t0,ind=self.ind[i]) 
+            
+            _du,_dv,_dh = dState.getvar(ind=self.ind[i])
+            du += _du
+            dv += _dv 
+            dh += _dh
+            
+        dState.setvar([du,dv,dh],ind=self.ind[-1]) 
+    
+    def step_adj(self,t,adState, State, adparams0, params, nstep=1, t0=0,ind=None):
+
+        adparams = +adparams0*0
+        
+        adu,adv,adh = adState.getvar(ind=self.ind[-1]) 
+        
+        for i in range(self.Nmodes):
+            
+            _adu,_adv,_adh = adState.getvar(ind=self.ind[i]) 
+            adState.setvar([_adu+adu,_adv+adv,_adh+adh],ind=self.ind[i]) 
+            
+            _params = params[self.slice_param(i)]
+            _adparams0 = adparams0[self.slice_param(i)]
+            
+            _adparams = self.Models[i].step_adj(
+                t,adState,State,_adparams0,_params,nstep,t0,ind=self.ind[i])
+            
+            
+            adparams[self.slice_param(i)] = _adparams
+            
+        adu,adv,adh = adState.getvar(ind=self.ind[-1])
+        adState.setvar([0*adu,0*adv,0*adh],ind=self.ind[-1]) 
+        
+        return adparams
+    
+        
+    def run(self,t0,tint,State,params,return_traj=False,nstep=1):
+        if return_traj:
+            tt = [t0]
+            traj = [State.getvar()]
+        t = t0
+        while t <= t0+tint: 
+            _nstep = nstep
+            self.step(t,State,params,nstep=_nstep,t0=t0)
+            t += nstep*self.dt
+            if return_traj:
+                traj.append(State.getvar())
+                tt.append(t)
+        if return_traj:
+            return tt,traj
+
+    def run_tgl(self,t0,tint,dState,State,dparams,params,nstep=1):
+        State_tmp = State.copy()
+        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
+        for i,t in enumerate(tt[:-1]): 
+            State_tmp.setvar(traj[i])
+            _nstep = nstep
+            self.step_tgl(t,dState,State_tmp,dparams,params,nstep=_nstep,t0=t0)
+    
+    def run_adj(self,t0,tint,adState,State,adparams,params,nstep=1):
+        State_tmp = State.copy()
+        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
+        for i in reversed(range(len(tt[:-1]))):
+            t = tt[i]
+            State_tmp.setvar(traj[i])
+            _nstep = nstep
+            adparams = self.step_adj(
+                t,adState,State_tmp,adparams,params,nstep=_nstep,t0=t0)
+        return adparams
+    
+    def tangent_test(self,State,tint,t0=0,nstep=1):
+    
+        State0 = State.random()
+        dState = State.random()
+        
+        params = np.random.random(self.nParams)
+        dparams = np.random.random(self.nParams)
+        
+        State0_tmp = State0.copy()
+        self.run(t0,tint,State0_tmp,params,nstep=nstep)
+        #self.step(t0,State0_tmp,params,nstep=nstep)
+        X2 = State0_tmp.getvar(vect=True)
+
+        for p in range(10):
+            
+            lambd = 10**(-p)
+            
+            State1 = dState.copy()
+            State1.scalar(lambd)
+            State1.Sum(State0)
+            self.run(t0,tint,State1,params+lambd*dparams,nstep=nstep)
+            #self.step(t0,State1,params+lambd*dparams,nstep=nstep)
+            X1 = State1.getvar(vect=True)
+            
+            dState1 = dState.copy()
+            dState1.scalar(lambd)
+            self.run_tgl(t0,tint,dState1,State0,lambd*dparams,params,nstep=nstep)
+            #self.step_tgl(t0,dState1,State0,lambd*dparams,params,nstep=nstep)
+            dX = dState1.getvar(vect=True)
+            
+            ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
+
+            print('%.E' % lambd,'%.E' % ps)
+            
+    def adjoint_test(self,State,tint,t0=0,nstep=1):
+        
+        # Current trajectory
+        State0 = State.random()
+        params = np.random.random(self.nParams)
+        
+        # Perturbation
+        dState = State.random()
+        dX = dState.getvar(vect=True)
+        dparams = np.random.random(self.nParams)
+        dX = np.concatenate((dX,dparams))
+        
+        # Adjoint
+        adState = State.random()
+        adX = adState.getvar(vect=True)
+        adparams = np.random.random(self.nParams)
+        adX = np.concatenate((adX,adparams))
+        
+        # Run TLM
+        #self.run_tgl(t0,tint,dState,State0,dparams,params,nstep=nstep)
+        self.step_tgl(t0,dState,State0,dparams,params,nstep=nstep)
+        TLM = dState.getvar(vect=True)
+        
+        TLM = np.concatenate((TLM,dparams))
+        
+        # Run ADJ
+        #adparams = self.run_adj(
+        #    t0,tint,adState,State0,adparams,params,nstep=nstep)
+        adparams = self.step_adj(
+            t0,adState,State0,adparams,params,nstep=nstep)
+        ADM = adState.getvar(vect=True)
+        ADM = np.concatenate((ADM,adparams))
+        
+        ps1 = np.inner(TLM,adX)
+        ps2 = np.inner(dX,ADM)
+        
+        print(ps1/ps2)
+        
+            
+class Model_BM_IT():
+    
+    def __init__(self,config,State):
+        print('\n* BM Model')
+        if config.name_model[0]=='Diffusion':
+            self.Model_BM = Model_diffusion(config,State)
+        elif config.name_model[0]=='QG1L':
+            self.Model_BM = Model_qg1l(config,State)
+            
+        print('\n* IT Model')
+        if config.name_model[1]=='SW1L':
+            self.Model_IT = Model_sw1l(config,State)
+        elif config.name_model[1]=='SW1LM':
+            self.Model_IT = Model_sw1lm(config,State)
+        
+        self.timestamps = self.Model_BM.timestamps
+        self.dt = self.Model_BM.dt
+        self.T = self.Model_BM.T
+    
+        if config.name_model[1]=='SW1L':
+            self.indit = [1,2,3]
+        elif config.name_model[1]=='SW1LM':
+            self.indit = None
+
+        if config.compute_test:
+            print('tangent test:')
+            self.tangent_test(State,self.Model_BM.T[10],nstep=config.checkpoint)
+            print('adjoint test:')
+            self.adjoint_test(State,self.Model_BM.T[10],nstep=config.checkpoint)
+        
+        
+    def step(self,t,State,params,Hbc=None,Wbc=None,nstep=1,t0=0):
+        
+        h = 0
+        
+        self.Model_BM.step(State,nstep=nstep,Hbc=Hbc,Wbc=Wbc,ind=0)
+        h += State.getvar(ind=0)
+        
+        self.Model_IT.step(t,State,params,nstep=nstep,t0=t0,ind=self.indit)
+        h += State.getvar(ind=-2)
+        
+        State.setvar(h,ind=-1)
+        
+        
+    def step_tgl(self,t,dState,State,dparams,params,Hbc=None,Wbc=None,nstep=1,t0=0):
+        
+        dh = 0
+        
+        self.Model_BM.step_tgl(dState,State,nstep=nstep,ind=0)
+        dh += dState.getvar(ind=0)
+        
+        self.Model_IT.step_tgl(t,dState,State,dparams,params,nstep=nstep,
+                               t0=t0,ind=self.indit)
+        dh += dState.getvar(ind=-2)
+
+        dState.setvar(dh,ind=-1)
+    
+    def step_adj(self,t,adState,State,adparams,params,Hbc=None,Wbc=None,nstep=1,t0=0):
+        
+        adh = adState.getvar(ind=-1) 
+        
+        _adh = adState.getvar(ind=0) 
+        adState.setvar(adh+_adh,ind=0)
+        self.Model_BM.step_adj(adState,State,nstep=nstep,ind=0,Hbc=Hbc,Wbc=Wbc)
+    
+        _adh = adState.getvar(ind=-2) 
+        adState.setvar(adh+_adh,ind=-2)
+        adparams = self.Model_IT.step_adj(t,adState,State,adparams,params,nstep=nstep,t0=t0,ind=self.indit)
+        adh += adState.getvar(ind=-2)
+
+        adState.setvar(0*adh,ind=-1)
+        
+        return adparams
+    
+    def run(self,t0,tint,State,params,return_traj=False,nstep=1):
+        if return_traj:
+            tt = [t0]
+            traj = [State.getvar()]
+        t = t0
+        while t <= t0+tint: 
+            _nstep = nstep
+            self.step(t,State,params,nstep=_nstep,t0=t0)
+            t += nstep*self.Model_BM.dt
+            if return_traj:
+                traj.append(State.getvar())
+                tt.append(t)
+        if return_traj:
+            return tt,traj
+
+    def run_tgl(self,t0,tint,dState,State,dparams,params,nstep=1):
+        State_tmp = State.copy()
+        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
+        for i,t in enumerate(tt[:-1]): 
+            State_tmp.setvar(traj[i])
+            _nstep = nstep
+            self.step_tgl(t,dState,State_tmp,dparams,params,nstep=_nstep,t0=t0)
+    
+    def run_adj(self,t0,tint,adState,State,adparams,params,nstep=1):
+        State_tmp = State.copy()
+        tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
+        for i in reversed(range(len(tt[:-1]))):
+            t = tt[i]
+            State_tmp.setvar(traj[i])
+            _nstep = nstep
+            adparams = self.step_adj(
+                t,adState,State_tmp,adparams,params,nstep=_nstep,t0=t0)
+        return adparams
+    
+    
+    def tangent_test(self,State,tint,t0=0,nstep=1):
+    
+        State0 = State.random()
+        dState = State.random()
+        
+        params = np.random.random(self.Model_IT.nParams)
+        dparams =  np.random.random(self.Model_IT.nParams)
+        
+        State0_tmp = State0.copy()
+        self.run(t0,tint,State0_tmp,params,nstep=nstep)
+        #self.step(t0,State0_tmp,params,nstep=nstep)
+        X2 = State0_tmp.getvar(vect=True)
+
+        for p in range(10):
+            
+            lambd = 10**(-p)
+            
+            State1 = dState.copy()
+            State1.scalar(lambd)
+            State1.Sum(State0)
+            self.run(t0,tint,State1,params+lambd*dparams,nstep=nstep)
+            #self.step(t0,State1,params+lambd*dparams,nstep=nstep)
+            X1 = State1.getvar(vect=True)
+            
+            dState1 = dState.copy()
+            dState1.scalar(lambd)
+            self.run_tgl(t0,tint,dState1,State0,lambd*dparams,params,nstep=nstep)
+            #self.step_tgl(t0,dState1,State0,lambd*dparams,params,nstep=nstep)
+            dX = dState1.getvar(vect=True)
+            
+            mask = np.isnan(X1+X2+dX)
+            ps = np.linalg.norm(X1[~mask]-X2[~mask]-dX[~mask])/np.linalg.norm(dX[~mask])
+
+            print('%.E' % lambd,'%.E' % ps)
+            
+            
+    def adjoint_test(self,State,tint,t0=0,nstep=1):
+        
+        # Current trajectory
+        State0 = State.random()
+        params = np.random.random(self.Model_IT.nParams)
+        
+        # Perturbation
+        dState = State.random()
+        dX = dState.getvar(vect=True)
+        dparams = np.random.random(self.Model_IT.nParams)
+        dX = np.concatenate((dX,dparams))
+        
+        # Adjoint
+        adState = State.random()
+        adX = adState.getvar(vect=True)
+        adparams = np.random.random(self.Model_IT.nParams)
+        adX = np.concatenate((adX,adparams))
+        
+        # Run TLM
+        self.run_tgl(t0,tint,dState,State0,dparams,params,nstep=nstep)
+        TLM = dState.getvar(vect=True)
+        
+        TLM = np.concatenate((TLM,dparams))
+        
+        # Run ADJ
+        adparams = self.run_adj(
+            t0,tint,adState,State0,adparams,params,nstep=nstep)
+        ADM = adState.getvar(vect=True)
+        ADM = np.concatenate((ADM,adparams))
+
+        ps1 = np.inner(TLM,adX)
+        ps2 = np.inner(dX,ADM)
+        
+        print(ps1/ps2)
+        
+    
+        
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     

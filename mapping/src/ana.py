@@ -16,6 +16,7 @@ import scipy.optimize as opt
 import gc
 import pandas as pd
 import xarray as xr
+import glob
 from importlib.machinery import SourceFileLoader 
 
 from . import grid
@@ -33,16 +34,28 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     
     if config.name_analysis is None: 
         return ana_forward(config,State,Model)
-    if config.name_analysis=='BFN':
+    
+    elif config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
-    elif config.name_analysis=='4Dvar' and config.name_model=='QG1L':
-        return ana_4Dvar_QG(config,State,Model,dict_obs)
+    
+    elif config.name_analysis=='4Dvar' and config.name_model in ['QG1L','Diffusion']:
+        if config.reduced_basis==True:
+            return ana_4Dvar_flux(config,State,Model,dict_obs)
+        else:
+            return ana_4Dvar_QG_init(config,State,Model,dict_obs)
+        
     elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
         return ana_4Dvar_SW(config,State,Model,dict_obs)
+    
+    elif config.name_analysis=='4Dvar' and  hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        return ana_4Dvar_BM_IT(config,State,Model,dict_obs)
+    
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
+    
     elif config.name_analysis=='HARM':
         return ana_harm(config,State,dict_obs)
+    
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
@@ -150,6 +163,13 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            config.flag_plot,
                                                            bfn_obj.sponge,
                                                            mask=+State.mask)
+            # Add mdt if provided 
+            if config.add_mdt_bc:
+                try: 
+                    mdt = +State.mdt[np.newaxis,:,:]
+                    mdt[np.isnan(mdt)] = 0
+                    bc_field += mdt
+                except : print('Warning : unable to add MDT to boundary field')
         else:
             bc_field = bc_weight = bc_field_t = None
 
@@ -404,10 +424,325 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
     return
 
+def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
+    '''
+    Run a 4Dvar analysis
+    '''
+    from .tools_4Dvar import Obsopt, Cov, Variational_flux
+    from .tools_reduced_basis import RedBasis_BM
 
+    
+    print('\n*** Observation operator ***\n')
+    H = Obsopt(config,State,dict_obs,Model)
+    
+    print('\n*** Wavelet reduced basis ***\n')
+    comp_qg = RedBasis_BM(config,State)
+    qinv_qg = comp_qg.set_basis(return_qinv=True)
+    
+    print('\n*** Variational ***\n')
+    # Covariance matrix
+    if config.sigma_B is not None:          
+        # Least squares
+        B = Cov(config.sigma_B)
+        R = Cov(config.sigma_R)
+    else:
+        B = Cov(1/np.sqrt(qinv_qg))
+        R = Cov(config.sigma_R)
+    # backgroud state 
+    Xb = np.zeros((comp_qg.nwave,))
+    # Cost and Grad functions
+    var = Variational_flux(
+        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb)
+    
+    # Initial State 
+    if config.path_init_4Dvar is None:
+        Xopt = var.Xb*0
+    else:
+        # Read previous minimum 
+        with open(config.path_init_4Dvar, 'rb') as f:
+            print('Read previous minimum:',config.path_init_4Dvar)
+            Xopt = pickle.load(f)
+    
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
+        if len(tmp_files)>0:
+            with open(tmp_files[-1], 'rb') as f:
+                print('Restart at:',tmp_files[-1])
+                Xopt = pickle.load(f)
+        else:
+            Xopt = var.Xb*0
+            
+    ###################
+    # Minimization    #
+    ###################
+    print('\n*** Minimization ***\n')
+    J0 = var.cost(Xopt)
+    g0 = var.grad(Xopt)
+    projg0 = np.max(np.abs(g0))
+    print('J0=',"{:e}".format(J0))
+    print('projg0=',"{:e}".format(projg0))
+    
+    
+    def callback(XX,projg0=projg0):
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d_%H%M%S")
+        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
+            pickle.dump(XX,f)
+    
+    options = {'disp': True, 'maxiter': config.maxiter}
+    if config.gtol is not None:
+        options['gtol'] = config.gtol*projg0
+        
+    res = opt.minimize(var.cost,Xopt,
+                    method='L-BFGS-B',
+                    jac=var.grad,
+                    options=options,
+                    callback=callback)
 
+    print ('\nIs the minimization successful? {}'.format(res.success))
+    print ('\nFinal cost function value: {}'.format(res.fun))
+    print ('\nNumber of iterations: {}'.format(res.nit))
 
-def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    
+    if config.prec:
+        Xa = var.Xb + B.sqr(res.x)
+    else:
+        Xa = var.Xb + res.x
+        
+    # Save minimum for next experiments
+    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
+        pickle.dump(Xa,f)
+    # Init
+    State0 = State.free()
+    date = config.init_date
+    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
+    ssh0 = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xa,mode=None,
+                            save_wave_basis=var.save_wave_basis).reshape(
+                                (State.ny,State.nx))
+    State0.setvar(ssh0,ind=0)
+    State0.save_output(date,mdt=Model.mdt)
+    
+    #  Time loop
+    for i in range(len(var.checkpoint)-1):
+        nstep = var.checkpoint[i+1] - var.checkpoint[i]
+        
+        # Forward
+        for j in range(nstep):
+            Model.step(State0, Hbc=var.bc_field[i],Wbc=var.bc_weight)
+            date += timedelta(seconds=config.dtmodel)
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                State0.save_output(date,mdt=Model.mdt)
+        
+        # Add Flux
+        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xa,mode='flux',
+                            save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+        state = State0.getvar(ind=State.get_indobs())
+        State0.setvar(state + nstep*Model.dt*F/(3600*24),
+                         ind=State.get_indobs())
+        
+    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
+    gc.collect()
+    print()
+    
+    
+def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
+    '''
+    Run a 4Dvar analysis
+    '''
+    from .tools_4Dvar import Obsopt, Cov, Variational_BM_IT
+    from .tools_reduced_basis import RedBasis_BM
+
+    print('\n*** Observation operator ***\n')
+    H = Obsopt(config,State,dict_obs,Model)
+    
+    print('\n*** Wavelet reduced basis ***\n')
+    comp_bm = RedBasis_BM(config,State)
+    qinv_bm = comp_bm.set_basis(return_qinv=True)
+    
+    ###################
+    # Variational    #
+    ###################
+    print('\n*** Variational ***\n')
+    
+    # Covariance matrix
+    R = Cov(config.sigma_R)
+    _sigma_B = np.zeros((Model.Model_IT.nParams)) 
+    # error on He
+    _sigma_B[Model.Model_IT.sliceHe] = config.sigma_B_He 
+    # error on OBCs
+    
+    if hasattr(config.sigma_B_bc, '__len__'):
+        # Specific value for each tidal component
+        if len(config.sigma_B_bc) == len(config.w_igws):
+            N_one_component_x = Model.Model_IT.nbcx//len(config.w_igws)
+            N_one_component_y = Model.Model_IT.nbcy//len(config.w_igws)
+            for i,_sigma in enumerate(config.sigma_B_bc):
+                _sigma_B[Model.Model_IT.slicehbcx][
+                    i*N_one_component_x:(i+1)*N_one_component_x] = _sigma
+                _sigma_B[Model.Model_IT.slicehbcy][
+                    i*N_one_component_y:(i+1)*N_one_component_y] = _sigma
+        else:
+            _sigma_B[Model.Model_IT.slicehbcx] = config.sigma_B_bc[0]
+            _sigma_B[Model.Model_IT.slicehbcy] = config.sigma_B_bc[0]
+    else:
+        _sigma_B[Model.Model_IT.slicehbcx] = config.sigma_B_bc
+        _sigma_B[Model.Model_IT.slicehbcy] = config.sigma_B_bc
+            
+    if np.any(State.mask) and config.Nmodes==1:
+        
+        # Reduced apriori for land pixels
+        land_coeff_bcx = np.ones(Model.Model_IT.shapehbcx)
+        land_coeff_bcy = np.ones(Model.Model_IT.shapehbcy)
+        # Loop over OBC coordinates 
+        for j,x in enumerate(Model.Model_IT.bcx): # South/North
+            # look for the closest grid pixel 
+            jS = np.argmin(np.abs(State.X[0,:]-x)) # South
+            jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
+            if State.mask[0,jS]:
+                land_coeff_bcx[:,0,:,:,:,j] = config.facB_bc_coast
+            if State.mask[-1,jN]:
+                land_coeff_bcx[:,1,:,:,:,j] = config.facB_bc_coast
+        for i,y in enumerate(Model.Model_IT.bcy): # West/East
+            # look for the closest grid pixel 
+            iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
+            iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
+            if State.mask[iW,0]:
+                land_coeff_bcy[:,0,:,:,:,i] = config.facB_bc_coast
+            if State.mask[iE,-1]:
+                land_coeff_bcy[:,1,:,:,:,i] = config.facB_bc_coast
+        
+        _sigma_B[Model.Model_IT.slicehbcx] *= land_coeff_bcx.ravel()
+        _sigma_B[Model.Model_IT.slicehbcy] *= land_coeff_bcy.ravel()
+        
+        # Loop over He coordinates 
+        land_coeff_He = np.ones(Model.Model_IT.shapeHe)
+        p = -1
+        for i,y in enumerate(Model.Model_IT.Hey):
+            for j,x in enumerate(Model.Model_IT.Hex):
+                p += 1
+                dist = np.sqrt((State.Y-y)**2+(State.X-x)**2)
+                i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
+                if State.mask[i0,j0]:
+                    land_coeff_He[:,p] = config.facB_He_coast
+        _sigma_B[Model.Model_IT.sliceHe] *= land_coeff_He.ravel()
+
+    B = Cov(np.concatenate((1/np.sqrt(qinv_bm),_sigma_B)))
+    
+    # backgroud state 
+    Xb = np.zeros((comp_bm.nwave+Model.Model_IT.nParams,))
+    
+    # Cost and Grad functions
+    var = Variational_BM_IT(
+        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp_bm, Xb=Xb)
+    
+    # Initial State 
+    if config.path_init_4Dvar is None:
+        Xopt = var.Xb*0
+    else:
+        # Read previous minimum 
+        with open(config.path_init_4Dvar, 'rb') as f:
+            print('Read previous minimum:',config.path_init_4Dvar)
+            Xopt = pickle.load(f)
+    
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
+        if len(tmp_files)>0:
+            with open(tmp_files[-1], 'rb') as f:
+                print('Restart at:',tmp_files[-1])
+                Xopt = pickle.load(f)
+        else:
+            Xopt = var.Xb*0
+            
+    ###################
+    # Minimization    #
+    ###################
+    print('\n*** Minimization ***\n')
+    J0 = var.cost(Xopt)
+    g0 = var.grad(Xopt)
+    projg0 = np.max(np.abs(g0))
+    print('J0=',"{:e}".format(J0))
+    print('projg0=',"{:e}".format(projg0))
+    
+    
+    def callback(XX,projg0=projg0):
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d_%H%M%S")
+        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
+            pickle.dump(XX,f)
+    
+    options = {'disp': True, 'maxiter': config.maxiter}
+    if config.gtol is not None:
+        options['gtol'] = config.gtol*projg0
+        
+    res = opt.minimize(var.cost,Xopt,
+                    method='L-BFGS-B',
+                    jac=var.grad,
+                    options=options,
+                    callback=callback)
+
+    print ('\nIs the minimization successful? {}'.format(res.success))
+    print ('\nFinal cost function value: {}'.format(res.fun))
+    print ('\nNumber of iterations: {}'.format(res.nit))
+
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    if config.prec:
+        Xa = var.Xb + B.sqr(res.x)
+    else:
+        Xa = var.Xb + res.x
+    
+    Xbm = Xa[:var.comp.nwave]
+    Xit = Xa[var.comp.nwave:]
+        
+    # Save minimum for next experiments
+    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
+        pickle.dump(Xa,f)
+        
+    # init
+    State0 = State.free()
+    date = config.init_date
+    State0.save_output(date,mdt=Model.Model_BM.mdt)
+    # Forward propagation
+    for i in range(len(var.checkpoint)-1):
+        t = Model.T[var.checkpoint[i]]
+        nstep = var.checkpoint[i+1] - var.checkpoint[i]
+        # Forward
+        for j in range(nstep):
+            Model.step(t+j*Model.dt,State0,Xit,nstep=1, 
+                       Hbc=var.bc_field[i],Wbc=var.bc_weight)
+            date += timedelta(seconds=config.dtmodel)
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                State0.save_output(date,mdt=Model.Model_BM.mdt)
+        # add Flux
+        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
+        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                           compute_geta=True,eta=Xbm,mode='flux',
+                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+    
+        _var = State0.getvar(ind=0)
+        State0.setvar(_var + nstep*Model.dt*F/(3600*24),ind=0)
+    
+    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
+    gc.collect()
+    print()
+        
+    
+def ana_4Dvar_QG_init(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
@@ -430,7 +765,6 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     i = 0
     while date_ini<config.final_date :
         date_end = date_ini + window_length # date at end of the assimilation window
-        middle_date = date_ini + window_length/2
         print(f'\n*** window {i} from {date_ini} to {date_end} ***\n')
         if i==0 :
             first_assimilation = True
@@ -514,15 +848,13 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         
         print('\n*** final analysed state ***\n')
         
-        
-
 
 def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :
     '''
     run one assimilation on the window considered which start at time date_ini
     '''
     from .tools_4Dvar import Obsopt, Cov
-    from .tools_4Dvar import Variational_QG as Variational
+    from .tools_4Dvar import Variational_QG_init as Variational
     
     # create obsopt if not filled out
     if H==None :
@@ -622,29 +954,40 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
             _sigma_B[Model.slicehbcx] = config.sigma_B_bc
             _sigma_B[Model.slicehbcy] = config.sigma_B_bc
         
-        # if np.any(State.mask):
-        #     # We divide the covariance by 10 for land pixels
-        #     land_coeff_x = np.ones(Model.shapehbcx)
-        #     land_coeff_y = np.ones(Model.shapehbcy)
-        #     # Loop over OBC coordinates 
-        #     for j,x in enumerate(Model.bcx): # South/North
-        #         # look for the closest grid pixel 
-        #         jS = np.argmin(np.abs(State.X[0,:]-x)) # South
-        #         jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
-        #         if State.mask[0,jS]:
-        #             land_coeff_x[:,0,:,:,:,j] = 0.1
-        #         if State.mask[-1,jN]:
-        #             land_coeff_x[:,1,:,:,:,j] = 0.1
-        #     for i,y in enumerate(Model.bcy): # West/East
-        #         # look for the closest grid pixel 
-        #         iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
-        #         iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
-        #         if State.mask[iW,0]:
-        #             land_coeff_y[:,0,:,:,:,i] = 0.1
-        #         if State.mask[iE,-1]:
-        #             land_coeff_y[:,1,:,:,:,i] = 0.1
-        #     _sigma_B[Model.slicehbcx] *= land_coeff_x.ravel()
-        #     _sigma_B[Model.slicehbcy] *= land_coeff_y.ravel()
+        if np.any(State.mask):
+            # We divide the covariance by 10 for land pixels
+            land_coeff_x = np.ones(Model.shapehbcx)
+            land_coeff_y = np.ones(Model.shapehbcy)
+            # Loop over OBC coordinates 
+            for j,x in enumerate(Model.bcx): # South/North
+                # look for the closest grid pixel 
+                jS = np.argmin(np.abs(State.X[0,:]-x)) # South
+                jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
+                if State.mask[0,jS]:
+                    land_coeff_x[:,0,:,:,:,j] = config.facB_bc_coast
+                if State.mask[-1,jN]:
+                    land_coeff_x[:,1,:,:,:,j] = config.facB_bc_coast
+            for i,y in enumerate(Model.bcy): # West/East
+                # look for the closest grid pixel 
+                iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
+                iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
+                if State.mask[iW,0]:
+                    land_coeff_y[:,0,:,:,:,i] = config.facB_bc_coast
+                if State.mask[iE,-1]:
+                    land_coeff_y[:,1,:,:,:,i] = config.facB_bc_coast
+            _sigma_B[Model.slicehbcx] *= land_coeff_x.ravel()
+            _sigma_B[Model.slicehbcy] *= land_coeff_y.ravel()
+            # Loop over He coordinates 
+            land_coeff_He = np.ones(Model.shapeHe)
+            p = -1
+            for i,y in enumerate(Model.Hey):
+                for j,x in enumerate(Model.Hex):
+                    p += 1
+                    dist = np.sqrt((State.Y-y)**2+(State.X-x)**2)
+                    i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
+                    if State.mask[i0,j0]:
+                        land_coeff_He[:,p] = config.facB_He_coast
+            _sigma_B[Model.sliceHe] *= land_coeff_He.ravel()
         
         # Generate Covariance matrixes
         B = Cov(_sigma_B)
@@ -667,7 +1010,16 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
         with open(config.path_init_4Dvar, 'rb') as f:
             print('Read previous minimum:',config.path_init_4Dvar)
             Xopt = pickle.load(f)
-
+            
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
+        if len(tmp_files)>0:
+            with open(tmp_files[-1], 'rb') as f:
+                print('Restart at:',tmp_files[-1])
+                Xopt = pickle.load(f)
+        else:
+            Xopt = var.Xb*0
     
     ###################
     # 3. Minimization #
@@ -842,7 +1194,7 @@ def ana_miost(config,State,dict_obs=None):
                 lmin= config.lmin, # !!!
                 lmax= config.lmax,
                 cutRo= 1.6,
-                factdec= 15.,
+                factdec= 15,
                 tdecmin= config.tdecmin, # !!!
                 tdecmax= config.tdecmax,
                 tssr= 0.5,
@@ -963,8 +1315,7 @@ def ana_miost(config,State,dict_obs=None):
         time1 = datetime.now()
         print('Loop from',init_miost_date.strftime("%Y-%m-%d"),'to',
               final_miost_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
-        
-    
+         
 
 def ana_harm(config,State,dict_obs=None):
     
@@ -973,17 +1324,17 @@ def ana_harm(config,State,dict_obs=None):
         obs.detrend_obs(dict_obs)
     
     time = []
-    ssh = []
+    ssh = np.array([])
     for date in dict_obs:
         time.append((date - config.init_date).total_seconds())
         path = dict_obs[date]['obs_name'][0]
         sat = dict_obs[date]['satellite'][0]
         ds = xr.open_dataset(path).squeeze()
-        ssh.append(ds[sat.name_obs_var[0]].values)
+        ssh = np.append(ssh,ds[sat.name_obs_var[0]].values)
         
     time = np.asarray(time)
     ssh = np.asarray(ssh)
-    
+
     # Harmonic analysis
     nt,ny,nx = ssh.shape
     G = np.empty((nt,2))
@@ -1012,7 +1363,51 @@ def ana_harm(config,State,dict_obs=None):
         date += config.saveoutput_time_step
     
     
+def solve_pcg(G, comp_Qinv, obs_invnois2,eps_rest=1.e-7,niter=800):
+
+    comp_CFAC = comp_Qinv**-0.5
     
+    comp_rest = G.T.dot(obs_invnois2) * comp_CFAC
+
+    comp_p = 1*comp_rest
+    comp_x = np.zeros_like((comp_rest))
+
+    rest = np.inner(comp_rest, comp_rest)
+    rest0 = +rest
+
+    itr = int(-1)
+    rest2 = 0
+    while ((rest / rest0 > eps_rest) & (itr < niter)):
+        itr += 1
+        ###########################################
+        # Compute A*p
+        ###########################################
+        cvec = G.T.dot(G.dot(comp_p * comp_CFAC) * obs_invnois2)
+        comp_Ap =  comp_p * comp_Qinv * comp_CFAC**2 + cvec * comp_CFAC
+
+        if itr >0: rest = +rest2
+
+        tmp = np.inner(comp_p, comp_Ap)
+        alphak = rest / tmp
+
+        ###########################################
+        # New state
+        ###########################################
+        comp_x += alphak * comp_p
+
+        # ###########################################
+        # New direction of descent
+        ###########################################
+        rest2 = np.inner(comp_rest - alphak * comp_Ap, comp_rest - alphak * comp_Ap)
+        betak = rest2 / rest
+
+        # Loop updates
+        comp_p *= betak
+        comp_p += comp_rest - alphak * comp_Ap 
+        comp_rest += -alphak * comp_Ap      
+            
+    return comp_x * comp_CFAC
+
     
     
     

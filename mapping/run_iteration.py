@@ -84,8 +84,13 @@ def get_dict_obs(config,State):
     date1 = config.init_date.strftime('%Y%m%d')
     date2 = config.final_date.strftime('%Y%m%d')
     box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
+<<<<<<< HEAD
     name_dict_obs = os.path.join(config.path_obs,
                                  f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic')
+=======
+    name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic'
+    
+>>>>>>> 5bd744db4d66640c2b1cd38a53b4e7e98208ea15
     if not os.path.exists(name_dict_obs):
         dict_obs = obs.obs(config,State)
         # Save obs for next iterations

@@ -169,7 +169,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
             # Read file
             #####################
             
-            ds = xr.open_mfdataset(file_bc,combine='by_coords')
+            ds = xr.open_mfdataset(file_bc,combine='by_coords').squeeze()
     
             
             if 'time' in name_var_bc:
