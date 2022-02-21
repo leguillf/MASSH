@@ -121,7 +121,7 @@ class RedBasis_BM:
                     tdec[-1][-1] = self.tdecmin
                 if tdec[-1][-1]>self.tdecmax:
                     tdec[-1][-1] = self.tdecmax
-                tdec[-1][-1] /= 2
+                tdec[-1][-1] *= self.factded
                 enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
                 nwave += ntheta*2*len(enst[iff][P])
                 
