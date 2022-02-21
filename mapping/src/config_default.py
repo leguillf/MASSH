@@ -246,7 +246,7 @@ snu = 100
 
 name_analysis = 'BFN'
 
-flag_use_boundary_conditions = True
+flag_use_boundary_conditions = False
 
 lenght_bc = 50
 
@@ -422,6 +422,16 @@ lat_distortion_eq= 5.
 distortion_eq_law= 2.
 
 gsize_max = 500000000
+
+sloptdec = -1.28
+
+Qmax = 100
+
+slopQ = -5
+
+lmeso = 300
+
+tmeso = 20
 
 #################################################################################################################################
 # Observation parameters

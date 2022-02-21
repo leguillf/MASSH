@@ -113,6 +113,7 @@ class Obsopt:
                 new_file_H = os.path.join(
                     self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
                 os.system(f"cp {file_H} {new_file_H}")
+                self.obs_sparse[t] = True
                 return t
         else:
             file_H = os.path.join(
@@ -153,34 +154,34 @@ class Obsopt:
         if obs_sparse:
             # Compute indexes and weights of neighbour grid pixels
             indexes,weights = self.interpolator(lon_obs,lat_obs)
-        else:
-            indexes,weights = np.arange(lon_obs.size),np.ones((lon_obs.size,))
-            indexes = indexes[:,np.newaxis]
-            weights = weights[:,np.newaxis]
         
-        # Compute mask 
-        maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
-        if self.flag_mask_coast:
-            coords_geo_obs = np.column_stack((lon_obs,lat_obs))
-            coords_car_obs = grid.geo2cart(coords_geo_obs)
-            for i in range(lon_obs.size):
-                _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
-                if _dist<self.dist_coast:
-                    maskobs[i] = True
         
-        # save in netcdf
-        dsout = xr.Dataset({"indexes": (("Nobs","Npix"), indexes),
-                            "weights": (("Nobs","Npix"), weights),
-                            "maskobs": (("Nobs"), maskobs)},                
-                           )
-        dsout.to_netcdf(file_H,
-            encoding={'indexes': {'dtype': 'int16'}})
+            # Compute mask 
+            maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
+            if self.flag_mask_coast:
+                coords_geo_obs = np.column_stack((lon_obs,lat_obs))
+                coords_car_obs = grid.geo2cart(coords_geo_obs)
+                for i in range(lon_obs.size):
+                    _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
+                    if _dist<self.dist_coast:
+                        maskobs[i] = True
+            
+            # save in netcdf
+            dsout = xr.Dataset({"indexes": (("Nobs","Npix"), indexes),
+                                "weights": (("Nobs","Npix"), weights),
+                                "maskobs": (("Nobs"), maskobs)},                
+                               )
+            dsout.to_netcdf(file_H,
+                encoding={'indexes': {'dtype': 'int16'}})
+            
+            if self.read_H:
+                    new_file_H = os.path.join(
+                        self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
+                    if file_H!=new_file_H:
+                        os.system(f"cp {file_H} {new_file_H}")
+                        
+        self.obs_sparse[t] = obs_sparse
         
-        if self.read_H:
-                new_file_H = os.path.join(
-                    self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
-                if file_H!=new_file_H:
-                    os.system(f"cp {file_H} {new_file_H}")
         
         return t
                 
@@ -232,7 +233,8 @@ class Obsopt:
     
     def H(self,t,X):
         
-        #if self.obs_sparse[t] :
+        if not self.obs_sparse[t] :
+            return X
         # Get indexes and weights of neighbour grid pixels
         ds = xr.open_dataset(os.path.join(
                 self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')))
@@ -673,7 +675,7 @@ class Variational_BM_IT:
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
         for i in range(len(self.checkpoint)-1):
-            
+
             timestamp = self.M.timestamps[self.checkpoint[i]]
             t = self.M.T[self.checkpoint[i]]
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
