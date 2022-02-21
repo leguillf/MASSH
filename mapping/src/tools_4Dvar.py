@@ -295,24 +295,30 @@ class Obsopt:
     
     def adj(self,t,adState,misfit):
         
-        adH = np.zeros(self.npix)
-        ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')))
-        indexes = ds['indexes'].values
-        weights = ds['weights'].values
-        maskobs = ds['maskobs'].values
-        Nobs,Npix = indexes.shape
+        if not self.obs_sparse[t] :
+            ind = adState.get_indobs()
+            adState.var[ind] += misfit.reshape(adState.var[ind].shape)
         
-        for i in range(Nobs):
-            if not maskobs[i]:
-                # Average
-                for j in range(Npix):
-                    if weights[i].sum()!=0:
-                        adH[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+        else:
+        
+            adH = np.zeros(self.npix)
+            ds = xr.open_dataset(os.path.join(
+                    self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')))
+            indexes = ds['indexes'].values
+            weights = ds['weights'].values
+            maskobs = ds['maskobs'].values
+            Nobs,Npix = indexes.shape
+            
+            for i in range(Nobs):
+                if not maskobs[i]:
+                    # Average
+                    for j in range(Npix):
+                        if weights[i].sum()!=0:
+                            adH[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+        
+            ind = adState.get_indobs()
     
-        ind = adState.get_indobs()
-
-        adState.var[ind] += adH.reshape(adState.var[ind].shape)
+            adState.var[ind] += adH.reshape(adState.var[ind].shape)
 
         
             
