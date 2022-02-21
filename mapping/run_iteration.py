@@ -84,8 +84,13 @@ def get_dict_obs(config,State):
     date1 = config.init_date.strftime('%Y%m%d')
     date2 = config.final_date.strftime('%Y%m%d')
     box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
+<<<<<<< HEAD
+    name_dict_obs = os.path.join(config.path_obs,
+                                 f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic')
+=======
     name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic'
     
+>>>>>>> 5bd744db4d66640c2b1cd38a53b4e7e98208ea15
     if not os.path.exists(name_dict_obs):
         dict_obs = obs.obs(config,State)
         # Save obs for next iterations
@@ -152,29 +157,32 @@ def compute_new_obs(it,dict_obs,config,State):
         
         # Open obs
         path_obs = dict_obs[date]['obs_name']
-        sat =  dict_obs[date]['satellite']
+        sat = dict_obs[date]['satellite']
         for _sat,_path_obs in zip(sat,path_obs):
+	    # Current obs dataset 
             ds = xr.open_dataset(_path_obs)
+            ssh_obs0 = ds[_sat.name_obs_var[0]].values.squeeze()
+            # New obs dataset
             dsout = ds.copy().load()
             ds.close()
             del ds
-            # Load current state
+            # Compute new obs by removing estimated map from previous run 
             if _sat.kind=='fullSSH':
                 # No grid interpolation
-                dsout[_sat.name_obs_var[0]].data -= ssh_now
+                dsout[_sat.name_obs_var[0]].data = ssh_obs0 - ssh_now
             elif _sat.kind=='swot_simulator':
                 # grid interpolation 
                 lon_obs = dsout[_sat.name_obs_lon].values
                 lat_obs = dsout[_sat.name_obs_lat].values
                 ssh_on_obs = interpolate.griddata((lon.ravel(),lat.ravel()),
-                                                ssh_now.ravel(),
-                                                (lon_obs.ravel(),lat_obs.ravel()))
-                dsout[_sat.name_obs_var[0]].data -=  ssh_on_obs.reshape(lon_obs.shape).data
+                                                   ssh_now.ravel(),
+                                                  (lon_obs.ravel(),lat_obs.ravel()))
+                dsout[_sat.name_obs_var[0]].data = ssh_obs0 - ssh_on_obs.reshape(lon_obs.shape)
+                
             # Writing new obs file
             dsout.to_netcdf(_path_obs)
             dsout.close()
-            del dsout
-        
+            del dsout 
         
             
             
