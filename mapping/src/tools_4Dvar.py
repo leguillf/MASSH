@@ -648,7 +648,7 @@ class Variational_BM_IT:
         # Grad test
         if config.compute_test:
             print('Gradient test:')
-            X = (np.random.random(self.comp.nwave+self.M.Model_IT.nParams)-0.5)*self.B.sigma 
+            X = 2*(np.random.random(self.comp.nwave+self.M.Model_IT.nParams)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
         
         
@@ -677,6 +677,12 @@ class Variational_BM_IT:
         Xit = X[self.comp.nwave:]
         
         # Init
+        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        ssh0 = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                            compute_geta=True,eta=Xbm,mode=None,
+                            save_wave_basis=self.save_wave_basis).reshape(
+                                (State.ny,State.nx))
+        State.setvar(ssh0,ind=0)
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
@@ -784,6 +790,14 @@ class Variational_BM_IT:
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
     
                 
+        # Init
+        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        adssh0 = adState.getvar(ind=0)
+        adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                            compute_geta=True,transpose=True,
+                            eta=adssh0.ravel()[np.newaxis,:],mode=None,
+                            save_wave_basis=self.save_wave_basis)
+        
         adX[:self.comp.nwave] = adXbm
         adX[self.comp.nwave:] = adXit
         

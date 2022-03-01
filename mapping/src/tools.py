@@ -207,7 +207,7 @@ def read_auxdata_mdt(filemdt_aux,name_var):
     fcid = Dataset(filemdt_aux, 'r')
     lon = np.array(fcid.variables[name_var['lon']][:])
     lat = np.array(fcid.variables[name_var['lat']][:])
-    mdt = np.array(fcid.variables[name_var['mdt']]).squeeze()
+    mdt = np.array(fcid.variables[name_var['var']]).squeeze()
     if mdt.shape[1]==lon.size:
         mdt = mdt.transpose()
     if len(lon.shape)==1:

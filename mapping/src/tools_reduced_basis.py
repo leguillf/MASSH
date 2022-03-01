@@ -550,8 +550,8 @@ class RedBasis_BM_2:
                     list_enst += enst[iff][P].repeat(2*ntheta).tolist()
                     list_tdec += [tdec[iff][P],]*_nwave
                     
-                
-
+            
+            print(1/ff[iff],Q[iwave-_nwave])
             self.P_wavebounds[iff][P+1] = iwave 
         self.iff_wavebounds[iff+1] = iwave 
 

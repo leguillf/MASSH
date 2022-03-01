@@ -42,8 +42,8 @@ def Model(config,State):
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
+        
 class Model_diffusion:
-    
     
     def __init__(self,config,State):
         # Time parameters
