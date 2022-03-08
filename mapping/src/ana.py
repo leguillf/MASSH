@@ -704,8 +704,8 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     else:
         Xa = var.Xb + res.x
     
-    Xbm = Xa[:var.comp.nwave]
-    Xit = Xa[var.comp.nwave:]
+    Xbm = Xa[:comp_bm.nwave]
+    Xit = Xa[comp_bm.nwave:]
         
     # Save minimum for next experiments
     with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
@@ -713,8 +713,8 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
         
     # init
     State0 = State.free()
-    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
-    ssh0 = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+    coords = [State.lon.flatten(),State.lat.flatten(),0]
+    ssh0 = comp_bm.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
                         compute_geta=True,eta=Xbm,mode=None,
                         save_wave_basis=var.save_wave_basis).reshape(
                             (State.ny,State.nx))
@@ -722,11 +722,11 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     date = config.init_date
     State0.save_output(date,mdt=Model.Model_BM.mdt)
     # Forward propagation
-    for i in range(len(var.checkpoint)-1):
-        t = Model.T[var.checkpoint[i]]
-        nstep = var.checkpoint[i+1] - var.checkpoint[i]
+    while date<=config.final_date:
+        t = (date - config.init_date).total_seconds()
+        
         # Forward
-        for j in range(nstep):
+        for j in range(config.checkpoint * config.dtmodel):
             Model.step(t+j*Model.dt,State0,Xit,nstep=1, 
                        Hbc=var.bc_field[i],Wbc=var.bc_weight)
             date += timedelta(seconds=config.dtmodel)
@@ -735,13 +735,12 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date,mdt=Model.Model_BM.mdt)
         # add Flux
-        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
-        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                           compute_geta=True,eta=Xbm,mode='flux',
-                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-    
+        coords = [State.lon.flatten(),State.lat.flatten(),t/3600/24]
+        F = comp_bm.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                          compute_geta=True,eta=Xbm,mode='flux',
+                          save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
         _var = State0.getvar(ind=0)
-        State0.setvar(_var + nstep*Model.dt*F/(3600*24),ind=0)
+        State0.setvar(_var + config.checkpoint*config.dtmodel/(3600*24) * F,ind=0)
     
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()

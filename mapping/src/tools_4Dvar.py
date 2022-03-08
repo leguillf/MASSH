@@ -389,12 +389,9 @@ class Variational_flux:
         self.wavelet_mode = config.wavelet_mode
         self.save_wave_basis = config.save_wave_basis
         self.comp = comp # Wavelet components
-        self.coords = [None]*3
-        self.coords[0] = State.lon.flatten()
-        self.coords[1] = State.lat.flatten()
-        self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
+        self.lon1d = State.lon.flatten()
+        self.lat1d = State.lat.flatten()
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
-        self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
         
         # Boundary conditions
         if config.flag_use_boundary_conditions:
@@ -418,6 +415,7 @@ class Variational_flux:
             print('Gradient test:')
             X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
+            
         
     def cost(self,X0):
                 
@@ -591,8 +589,8 @@ class Variational_BM_IT:
         self.tmp_DA_path = config.tmp_DA_path
         
         # Compute checkpoints
+        self.checkpoint_flux = []
         self.checkpoint = [0]
-        self.checkpoint_flux = [0]
         if H.isobserved(M.timestamps[0]):
             self.isobs = [True]
         else:
@@ -618,15 +616,12 @@ class Variational_BM_IT:
         self.prec = config.prec
         
         # Wavelet reduced basis
-        self.wavelet_mode = config.wavelet_mode
         self.save_wave_basis = config.save_wave_basis
         self.comp = comp # Wavelet components
-        self.coords = [None]*3
-        self.coords[0] = State.lon.flatten()
-        self.coords[1] = State.lat.flatten()
-        self.coords[2] = [c * self.M.dt/3600/24 for c in self.checkpoint]
+        self.lon1d = State.lon.flatten()
+        self.lat1d = State.lat.flatten()
+        self.dt_flux = config.checkpoint
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
-        self.nFluxPoints = len(self.coords[2]) * State.ny * State.nx 
         
         # Boundary conditions
         if config.flag_use_boundary_conditions:
@@ -677,7 +672,7 @@ class Variational_BM_IT:
         Xit = X[self.comp.nwave:]
         
         # Init
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        coords = [self.lon1d,self.lat1d,0]
         ssh0 = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                             compute_geta=True,eta=Xbm,mode=None,
                             save_wave_basis=self.save_wave_basis).reshape(
@@ -701,13 +696,14 @@ class Variational_BM_IT:
             self.M.step(t,State,Xit,nstep=nstep,Hbc=self.bc_field[i],Wbc=self.bc_weight)
             
             # 3. Add flux from wavelet
-            coords = [self.coords[0],self.coords[1],self.coords[2][i]]
-            F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg',
-                                compute_geta=True,eta=Xbm,mode='flux',
-                                save_wave_basis=self.save_wave_basis).reshape(
-                                    (State.ny,State.nx))  
-            var = State.getvar(ind=0)
-            State.setvar(var + nstep*self.M.dt*F/(3600*24),ind=0)
+            if self.checkpoint[i]%self.dt_flux==0:
+                coords = [self.lon1d,self.lat1d,t/3600/24]
+                F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg',
+                                    compute_geta=True,eta=Xbm,mode='flux',
+                                    save_wave_basis=self.save_wave_basis).reshape(
+                                        (State.ny,State.nx))  
+                var = State.getvar(ind=0)
+                State.setvar(var + self.dt_flux*self.M.dt*F/(3600*24),ind=0)
             
             # 4. Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
@@ -772,12 +768,13 @@ class Variational_BM_IT:
                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
             
             # 3. Add flux from wavelet
-            advar = adState.getvar(ind=0).flatten()
-            coords = [self.coords[0],self.coords[1],self.coords[2][i]]
-            adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                   compute_geta=True,transpose=True,mode='flux',
-                                   save_wave_basis=self.save_wave_basis,
-                                   eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
+            if self.checkpoint[i]%self.dt_flux==0:
+                coords = [self.lon1d,self.lat1d,t/3600/24]
+                advar = adState.getvar(ind=0).flatten()
+                adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                                       compute_geta=True,transpose=True,mode='flux',
+                                       save_wave_basis=self.save_wave_basis,
+                                       eta=self.M.dt/(3600*24)*self.dt_flux * advar[np.newaxis,:])
             
             # 2. Run adjoint model
             adXit = self.M.step_adj(t,adState, State, adXit, Xit, nstep=nstep,
@@ -791,7 +788,7 @@ class Variational_BM_IT:
     
                 
         # Init
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        coords = [self.lon1d,self.lat1d,0]
         adssh0 = adState.getvar(ind=0)
         adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                             compute_geta=True,transpose=True,
