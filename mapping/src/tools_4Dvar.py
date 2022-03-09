@@ -626,7 +626,7 @@ class Variational_BM_IT:
         # Boundary conditions
         if config.flag_use_boundary_conditions:
             timestamps_bc = np.array(
-                [pd.Timestamp(M.timestamps[i]) for i in self.checkpoint])
+                [pd.Timestamp(date) for date in M.timestamps[::self.dt_flux]])
             self.bc_field, self.bc_weight = grid.boundary_conditions(
                 config.file_boundary_conditions,
                 config.lenght_bc,
@@ -693,7 +693,8 @@ class Variational_BM_IT:
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Run forward model
-            self.M.step(t,State,Xit,nstep=nstep,Hbc=self.bc_field[i],Wbc=self.bc_weight)
+            ibc = int(self.checkpoint[i]//self.dt_flux)
+            self.M.step(t,State,Xit,nstep=nstep,Hbc=self.bc_field[ibc],Wbc=self.bc_weight)
             
             # 3. Add flux from wavelet
             if self.checkpoint[i]%self.dt_flux==0:

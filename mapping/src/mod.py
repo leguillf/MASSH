@@ -530,14 +530,6 @@ class Model_sw1l:
             self.Yin = +State.Y
             self.fin = +State.f
             
-        # State variable dimensions
-        self.shapeu = [State.var[0].shape[0]-2*self.sw_in,State.var[0].shape[1]-2*self.sw_in]
-        self.shapev = [State.var[1].shape[0]-2*self.sw_in,State.var[1].shape[1]-2*self.sw_in]
-        self.shapeh = [State.var[2].shape[0]-2*self.sw_in,State.var[2].shape[1]-2*self.sw_in]
-        self.nu = np.prod(self.shapeu)
-        self.nv = np.prod(self.shapev)
-        self.nh = np.prod(self.shapeh)
-
         # Time parameters
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
@@ -750,6 +742,8 @@ class Model_sw1l:
                                      gaussian mode')
                 He3d = np.tensordot(He,self.He_xy_gauss,(1,0))
                 indt = int(t//self.dt)
+                if indt>=self.He_t_gauss.shape[1]:
+                    indt = self.He_t_gauss.shape[1]-1
                 He2d = He_mean + \
                     np.tensordot(He3d,self.He_t_gauss[:,indt],(0,0))
                     
@@ -777,6 +771,8 @@ class Model_sw1l:
                                      gaussian mode')
                 hbcx_1d = np.tensordot(hbcx,self.bc_x_gauss,(-1,0))
                 indt = int(t//self.dt)
+                if indt>=self.bc_t_gauss.shape[1]:
+                    indt = self.bc_t_gauss.shape[1]-1
                 hbcx_1d = np.tensordot(hbcx_1d,self.bc_t_gauss[:,indt],(-2,0))
             
             elif self.bc_gauss==1:
@@ -794,6 +790,8 @@ class Model_sw1l:
                                      gaussian mode')
                 hbcy_1d = np.tensordot(hbcy,self.bc_y_gauss,(-1,0))
                 indt = int(t//self.dt)
+                if indt>=self.bc_t_gauss.shape[1]:
+                    indt = self.bc_t_gauss.shape[1]-1
                 hbcy_1d = np.tensordot(hbcy_1d,self.bc_t_gauss[:,indt],(-2,0))
             
             elif self.bc_gauss==1:
@@ -811,6 +809,8 @@ class Model_sw1l:
         
         if self.He_gauss==2:
             indt = int(t//self.dt)
+            if indt>=self.He_t_gauss.shape[1]:
+                indt = self.He_t_gauss.shape[1]-1
             adHe3d = adHe2d_incr[:,:,np.newaxis]*self.He_t_gauss[:,indt]
             adHe_incr += np.tensordot(adHe3d,
                                       self.He_xy_gauss[:,:,:],([0,1],[1,2])) 
@@ -830,6 +830,8 @@ class Model_sw1l:
         
         if self.bc_gauss==2:
            indt = int(t/self.dt)
+           if indt>=self.bc_t_gauss.shape[1]:
+               indt = self.bc_t_gauss.shape[1]-1
            adhbcx2d_incr = adhbcx1d_incr[:,:,:,:,:,np.newaxis]*\
                self.bc_t_gauss[:,indt]
            adhbcx_incr += np.tensordot(adhbcx2d_incr,
