@@ -381,6 +381,7 @@ class Variational_flux:
         else:
             self.isobs.append(False)   
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
+        self.checkpoint = np.asarray(self.checkpoint)
         
     
         # preconditioning
@@ -393,11 +394,12 @@ class Variational_flux:
         self.lon1d = State.lon.flatten()
         self.lat1d = State.lat.flatten()
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
+        self.dt_flux = config.checkpoint
         
         # Boundary conditions
         if config.flag_use_boundary_conditions:
             timestamps_bc = np.array(
-                [pd.Timestamp(M.timestamps[i]) for i in self.checkpoint])
+                [pd.Timestamp(date) for date in M.timestamps[::self.dt_flux]])
             self.bc_field, self.bc_weight = grid.boundary_conditions(
                 config.file_boundary_conditions,
                 config.lenght_bc,
@@ -439,7 +441,7 @@ class Variational_flux:
         Jo = 0.
         
         # Init
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        coords = [self.lon1d,self.lat1d,0]
         ssh0 = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                             compute_geta=True,eta=X,mode=None,
                             save_wave_basis=self.save_wave_basis).reshape(
@@ -452,6 +454,7 @@ class Variational_flux:
         for i in range(len(self.checkpoint)-1):
             
             timestamp = self.M.timestamps[self.checkpoint[i]]
+            t = self.M.T[self.checkpoint[i]]
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
             
             # 1. Misfit
@@ -460,18 +463,19 @@ class Variational_flux:
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
             # 2. Run forward model
-            self.M.step(State, nstep=nstep,Hbc=self.bc_field[i],Wbc=self.bc_weight)
+            ibc = int(self.checkpoint[i]//self.dt_flux)
+            self.M.step(State, nstep=nstep,Hbc=self.bc_field[ibc],Wbc=self.bc_weight)
             
             # 3. Compute Flux
-            coords = [self.coords[0],self.coords[1],self.coords[2][i]]
-            F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,mode='flux',
-                                save_wave_basis=self.save_wave_basis).reshape(
-                                    (State.ny,State.nx))
-                    
-            var = State.getvar(ind=State.get_indobs())
-            State.setvar(var + nstep*self.M.dt*F/(3600*24),
-                         ind=State.get_indobs())
+            if self.checkpoint[i]%self.dt_flux==0:
+                coords = [self.lon1d,self.lat1d,t/3600/24]
+                F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                                    compute_geta=True,eta=X,mode='flux',
+                                    save_wave_basis=self.save_wave_basis).reshape(
+                                        (State.ny,State.nx))
+                var = State.getvar(ind=State.get_indobs())
+                State.setvar(var + self.dt_flux*self.M.dt/(3600*24) * F,
+                             ind=State.get_indobs())
             
             # 4. Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
@@ -524,6 +528,8 @@ class Variational_flux:
         for i in reversed(range(0,len(self.checkpoint)-1)):
             
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
+            timestamp = self.M.timestamps[self.checkpoint[i]]
+            t = self.M.T[self.checkpoint[i]]
  
             # 4. Read model state
             State.load(os.path.join(self.tmp_DA_path,
@@ -531,26 +537,27 @@ class Variational_flux:
             
             
             # 3. Compute flux
-            advar = adState.getvar(ind=State.get_indobs()).flatten()
-            coords = [self.coords[0],self.coords[1],self.coords[2][i]]
-            adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                     compute_geta=True,transpose=True,mode='flux',
-                                     save_wave_basis=self.save_wave_basis,
-                                     eta=self.M.dt/(3600*24)* nstep*advar[np.newaxis,:])
+            if self.checkpoint[i]%self.dt_flux==0:
+                advar = adState.getvar(ind=State.get_indobs()).flatten()
+                coords = [self.lon1d,self.lat1d,t/3600/24]
+                adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
+                                         compute_geta=True,transpose=True,mode='flux',
+                                         save_wave_basis=self.save_wave_basis,
+                                         eta=self.M.dt/(3600*24)*self.dt_flux * advar[np.newaxis,:])
             
             
             # 2. Run adjoint model 
+            ibc = int(self.checkpoint[i]//self.dt_flux)
             self.M.step_adj(adState, State, nstep=nstep,
-                            Hbc=self.bc_field[i],Wbc=self.bc_weight) # i+1 --> i
+                            Hbc=self.bc_field[ibc],Wbc=self.bc_weight) # i+1 --> i
           
             # 1. Misfit 
             if self.isobs[i]:
-                timestamp = self.M.timestamps[self.checkpoint[i]]
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
         
         # Init
-        coords = [self.coords[0],self.coords[1],self.coords[2][0]]
+        coords = [self.lon1d,self.lat1d,0]
         adssh0 = adState.getvar(ind=0)
         adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
                             compute_geta=True,transpose=True,
@@ -613,7 +620,6 @@ class Variational_BM_IT:
             self.isobs.append(False)   
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
         self.checkpoint = np.asarray(self.checkpoint)
-        print(self.M.timestamps[self.checkpoint])
     
         # preconditioning
         self.prec = config.prec
@@ -781,8 +787,9 @@ class Variational_BM_IT:
                                        eta=self.M.dt/(3600*24)*self.dt_flux * advar[np.newaxis,:])
             
             # 2. Run adjoint model
+            ibc = int(self.checkpoint[i]//self.dt_flux)
             adXit = self.M.step_adj(t,adState, State, adXit, Xit, nstep=nstep,
-                                    Hbc=self.bc_field[i],Wbc=self.bc_weight) # i+1 --> i
+                                    Hbc=self.bc_field[ibc],Wbc=self.bc_weight) # i+1 --> i
                 
             # 1. Misfit 
             if self.isobs[i]:

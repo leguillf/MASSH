@@ -436,8 +436,8 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    comp_qg = RedBasis_BM(config,State)
-    qinv_qg = comp_qg.set_basis(return_qinv=True)
+    comp = RedBasis_BM(config,State)
+    q = comp.set_basis(return_q=True)
     
     print('\n*** Variational ***\n')
     # Covariance matrix
@@ -446,13 +446,13 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         B = Cov(config.sigma_B)
         R = Cov(config.sigma_R)
     else:
-        B = Cov(1/np.sqrt(qinv_qg))
+        B = Cov(np.sqrt(q))
         R = Cov(config.sigma_R)
     # backgroud state 
-    Xb = np.zeros((comp_qg.nwave,))
+    Xb = np.zeros((comp.nwave,))
     # Cost and Grad functions
     var = Variational_flux(
-        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp_qg, Xb=Xb)
+        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp, Xb=Xb)
     
     # Initial State 
     if config.path_init_4Dvar is None:
@@ -520,35 +520,34 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     # Init
     State0 = State.free()
     date = config.init_date
-    coords = [var.coords[0],var.coords[1],var.coords[2][0]]
-    ssh0 = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xa,mode=None,
-                            save_wave_basis=var.save_wave_basis).reshape(
-                                (State.ny,State.nx))
+    coords = [State.lon.flatten(),State.lat.flatten(),0]
+    ssh0 = comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                      compute_geta=True,eta=Xa,mode=None,
+                      save_wave_basis=var.save_wave_basis).reshape((State.ny,State.nx))
     State0.setvar(ssh0,ind=0)
     State0.save_output(date,mdt=Model.mdt)
     
-    #  Time loop
-    for i in range(len(var.checkpoint)-1):
-        nstep = var.checkpoint[i+1] - var.checkpoint[i]
-        
+    # Forward propagation
+    i = 0
+    while date<config.final_date:
+        t = (date - config.init_date).total_seconds()
         # Forward
-        for j in range(nstep):
-            Model.step(State0, Hbc=var.bc_field[i],Wbc=var.bc_weight)
+        for j in range(config.checkpoint):
+            Model.step(State0,nstep=1, 
+                       Hbc=var.bc_field[i],Wbc=var.bc_weight)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date,mdt=Model.mdt)
-        
-        # Add Flux
-        coords = [var.coords[0],var.coords[1],var.coords[2][i]]
-        F = var.comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=Xa,mode='flux',
-                            save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-        state = State0.getvar(ind=State.get_indobs())
-        State0.setvar(state + nstep*Model.dt*F/(3600*24),
-                         ind=State.get_indobs())
+        # add Flux
+        coords = [State.lon.flatten(),State.lat.flatten(),t/3600/24]
+        F = comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                       compute_geta=True,eta=Xa,mode='flux',
+                       save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+        _var = State0.getvar(ind=0)
+        State0.setvar(_var + config.checkpoint*config.dtmodel/(3600*24) * F,ind=0)
+        i += 1
         
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
@@ -567,7 +566,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     
     print('\n*** Wavelet reduced basis ***\n')
     comp_bm = RedBasis_BM(config,State)
-    qinv_bm = comp_bm.set_basis(return_qinv=True)
+    q_bm = comp_bm.set_basis(return_q=True)
     
     ###################
     # Variational    #
@@ -636,7 +635,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
                     land_coeff_He[:,p] = config.facB_He_coast
         _sigma_B[Model.Model_IT.sliceHe] *= land_coeff_He.ravel()
 
-    B = Cov(np.concatenate((1/np.sqrt(qinv_bm),_sigma_B)))
+    B = Cov(np.concatenate((np.sqrt(q_bm),_sigma_B)))
     
     # backgroud state 
     Xb = np.zeros((comp_bm.nwave+Model.Model_IT.nParams,))
