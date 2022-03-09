@@ -369,7 +369,8 @@ class Variational_flux:
         for i,t in enumerate(M.timestamps[:-1]):
             if i>0 and (H.isobserved(t) or check==config.checkpoint):
                 self.checkpoint.append(i)
-                check = 0
+                if check==config.checkpoint:
+                    check = 0
                 if H.isobserved(t):
                     self.isobs.append(True)
                 else:
@@ -599,7 +600,8 @@ class Variational_BM_IT:
         for i,t in enumerate(M.timestamps[:-1]):
             if i>0 and (H.isobserved(t) or check==config.checkpoint):
                 self.checkpoint.append(i)
-                check = 0
+                if check==config.checkpoint:
+                    check = 0
                 if H.isobserved(t):
                     self.isobs.append(True)
                 else:
@@ -610,7 +612,8 @@ class Variational_BM_IT:
         else:
             self.isobs.append(False)   
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
-        
+        self.checkpoint = np.asarray(self.checkpoint)
+        print(self.M.timestamps[self.checkpoint])
     
         # preconditioning
         self.prec = config.prec
@@ -1072,7 +1075,8 @@ class Variational_SW:
         for i,t in enumerate(M.timestamps[:-1]):
             if i>0 and (H.isobserved(t) or check==checkpoint):
                 self.checkpoint.append(i)
-                check = 0
+                if check==checkpoint:
+                    check = 0
                 if H.isobserved(t):
                     self.isobs.append(True)
                 else:
@@ -1082,18 +1086,7 @@ class Variational_SW:
             self.isobs.append(True)
         else:
             self.isobs.append(False)
-            
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
-        
-        dmax = np.sqrt((State.dx*State.nx)**2+(State.dy*State.ny)**2)
-        
-        
-        print('checkpoint:')
-        for i,check in enumerate(self.checkpoint):
-            print(M.timestamps[check],end='')
-            if self.isobs[i]:
-                print(': obs',end='')
-            print()
         
         # preconditioning
         self.prec = prec

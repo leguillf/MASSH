@@ -258,7 +258,8 @@ variable are SLAs!')
         while t<=config.final_date:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
-
+        self.timestamps = np.asarray(self.timestamps)
+        
         if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='QG1L':
             print('Tangent test:')
             self.tangent_test(State,10,config.flag_use_boundary_conditions)
@@ -543,6 +544,7 @@ class Model_sw1l:
         while t<=config.final_date:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
+        self.timestamps = np.asarray(self.timestamps)
         
         #########################
         # He 

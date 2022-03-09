@@ -725,9 +725,8 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
     i = 0
     while date<config.final_date:
         t = (date - config.init_date).total_seconds()
-        
         # Forward
-        for j in range(config.checkpoint * config.dtmodel):
+        for j in range(config.checkpoint):
             Model.step(t+j*Model.dt,State0,Xit,nstep=1, 
                        Hbc=var.bc_field[i],Wbc=var.bc_weight)
             date += timedelta(seconds=config.dtmodel)
@@ -741,7 +740,7 @@ def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
                           compute_geta=True,eta=Xbm,mode='flux',
                           save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
         _var = State0.getvar(ind=0)
-        State0.setvar(_var + config.checkpoint*config.dtmodel/(3600*24) * F,ind=0)
+        State0.setvar(_var + config.checkpoint * config.dtmodel/(3600*24) * F,ind=0)
         i += 1
     
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
