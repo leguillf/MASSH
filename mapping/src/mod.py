@@ -13,6 +13,8 @@ import numpy as np
 import os
 from math import sqrt,pi
 from datetime import timedelta
+import matplotlib.pylab as plt 
+from copy import deepcopy
 
 from . import tools, grid
 
@@ -141,9 +143,9 @@ class Model_diffusion:
         
         print('Adjoint test:',ps1/ps2)
     
+    
 class Model_qg1l:
-    
-    
+
     def __init__(self,config,State):
         # Model specific libraries
         if config.dir_model is None:
@@ -158,6 +160,8 @@ class Model_qg1l:
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
         self.T = np.arange(self.nt) * self.dt
+        self.ny = State.ny
+        self.nx = State.nx
         
         # Open MDT map if provided
         if config.Reynolds and config.path_mdt is not None and os.path.exists(config.path_mdt):
@@ -260,14 +264,14 @@ variable are SLAs!')
             t += timedelta(seconds=self.dt)
         self.timestamps = np.asarray(self.timestamps)
         
+        
         if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='QG1L':
             print('Tangent test:')
             self.tangent_test(State,10,config.flag_use_boundary_conditions)
-
             print('Adjoint test:')
             self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
-    def step(self,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step(self,State,params=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         SSH0 = State.getvar(ind=ind)
@@ -284,9 +288,12 @@ variable are SLAs!')
         # Time propagation
         for i in range(nstep):
             SSH1 = self.qgm.step(SSH1,way=1)
-
+        
         # Update state
-        State.setvar(SSH1,ind=ind)
+        if params is not None:
+            SSH1 += nstep*self.dt/(3600*24) * params
+        State.setvar(SSH1, ind=ind)
+
     
             
     def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
@@ -349,7 +356,7 @@ variable are SLAs!')
         if flag_pv:
             State.setvar(pv_1,1)
         
-    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step_tgl(self,dState,State,dparams=None,nstep=1,Hbc=None,Wbc=None,ind=0):
         
         # Get state variable
         dSSH0 = dState.getvar(ind=ind)
@@ -368,12 +375,14 @@ variable are SLAs!')
         
         # Time propagation
         for i in range(nstep):
-            
             dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1)
             SSH1 = self.qgm.step(h0=SSH1)
         
         # Update state
+        if dparams is not None:
+            dSSH1 += nstep*self.dt/(3600*24) * dparams
         dState.setvar(dSSH1,ind=ind)
+        
         
     def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
         
@@ -401,9 +410,7 @@ variable are SLAs!')
         # Time propagation
         for i in reversed(range(nstep)):
             SSH1 = traj[i]
-        
             adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
-            
         
         # Boundary conditions
         if Wbc is None:
@@ -412,16 +419,22 @@ variable are SLAs!')
             adSSH1 = (1-Wbc)*adSSH1
         
         # Update state  and parameters
+        adparams = nstep*self.dt/(3600*24) * adSSH0.flatten()
         adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)
         
-    
+        return adparams
+        
+        
+        
         
     def tangent_test(self,State,nstep,bc=False):
     
         State0 = State.random(1e-2)
         dState = State.random(1e-2)
-
+        
+        params = np.random.random((self.ny,self.nx))
+        dparams = np.random.random((self.ny,self.nx))
         
         if bc:
             Hbc = np.random.random((State.ny,State.nx))
@@ -430,7 +443,7 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         State0_tmp = State0.copy()
-        self.step(State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        self.step(State0_tmp,params,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -440,12 +453,12 @@ variable are SLAs!')
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+            self.step(State1,params+lambd*dparams,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(dState1,State0,
+            self.step_tgl(dState1,State0,lambd*dparams,
                           nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             dX = dState1.getvar(vect=True)
             
@@ -462,6 +475,7 @@ variable are SLAs!')
         
         # Perturbation
         dState = State.random()
+        dparams = np.random.random((self.ny,self.nx))
         dX = dState.getvar(vect=True)
         
         # Adjoint
@@ -475,18 +489,17 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         # Run TLM
-        self.step_tgl(dState,State0,
+        self.step_tgl(dState,State0,dparams,
                       nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         dY = dState.getvar(vect=True)
         
         # Run ADJ
-        self.step_adj(adState,State0,
+        adparams = self.step_adj(adState,State0,
                       nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         adX = adState.getvar(vect=True)
            
-        mask = np.isnan(dX + adX + dY + adY)
-        ps1 = np.inner(dX[~mask],adX[~mask])
-        ps2 = np.inner(dY[~mask],adY[~mask])
+        ps1 = np.inner(dX,adX) + np.inner(dparams.flatten(),adparams.flatten())
+        ps2 = np.inner(dY,adY) + np.inner(dparams.flatten(),adparams.flatten()*0)
         
         print(ps1/ps2)
 
@@ -517,7 +530,6 @@ class Model_sw1l:
         swm_adj = SourceFileLoader("swm_adj", 
                                  dir_model + "/swm_adj.py").load_module() 
         
-        
         # Model grid 
         self.sw_in = config.sw_in # Avoding boundary pixels
         print('Length of the boundary band to ignore:',self.sw_in)
@@ -544,13 +556,8 @@ class Model_sw1l:
         while t<=config.final_date:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
-        self.timestamps = np.asarray(self.timestamps)
+        self.timestamps = np.asarray(self.timestamps)        
         
-        #########################
-        # He 
-        #########################
-        
-        # Get background value for He
         if config.He_data is not None and os.path.exists(config.He_data['path']):
             ds = xr.open_dataset(config.He_data['path'])
             self.Heb = ds[config.He_data['var']].values
@@ -561,124 +568,35 @@ class Model_sw1l:
                 self.Heb = He_init
             print('Heb:',self.Heb)
             
-        # Gaussian components
-        self.shapeHe = [self.nyin,self.nxin] 
-        self.nHe = np.prod(self.shapeHe)
-        self.He_gauss = 0
-        if D_He is None:
-            D_He = config.D_He
-        if T_He is None:
-            T_He = config.T_He
-        ## In Space
-        if D_He is not None:
-            self.He_gauss = 1
-            He_xy_gauss = []
-            isub_He = int(D_He/State.dy)  
-            jsub_He = int(D_He/State.dx) 
-            self.Hey = np.arange(-2*isub_He*State.dy,
-                                 (self.nyin+3*isub_He)*State.dy,
-                                 isub_He*State.dy)
-            self.Hex = np.arange(-2*jsub_He*State.dx,
-                                 (self.nxin+3*jsub_He)*State.dx,
-                                 jsub_He*State.dx)
-            for yi in self.Hey:
-                for xj in self.Hex:
-                    mat = np.ones((self.shapeHe))
-                    for ii in range(self.nyin):
-                        for jj in range(self.nxin):
-                            dist = sqrt((self.Yin[ii,jj]-yi)**2+(self.Xin[ii,jj]-xj)**2)
-                            mat[ii,jj] = tools.gaspari_cohn(dist,7*D_He/2)
-                    He_xy_gauss.append(mat)
-            self.He_xy_gauss = np.asarray(He_xy_gauss)
-            self.nHe = len(He_xy_gauss)        
-            self.shapeHe = [self.nHe]
-            ## In time 
-            if T_He is not None:
-                self.He_gauss = 2
-                He_t_gauss = []
-                ksub_He = int(T_He/self.dt)  
-                for k in range(-2*ksub_He,self.nt+3*ksub_He,ksub_He):
-                    He_t_gauss.append(tools.gaspari_cohn(self.T-k*self.dt,7*T_He/2))
-                self.He_t_gauss = np.asarray(He_t_gauss)
-                self.shapeHe = [len(self.He_t_gauss),self.nHe]
-                self.nHe = np.prod(self.shapeHe)
-                
-            print('Gaussian He:',self.shapeHe)
-        
-        
-        #########################
-        # Boundary conditions 
-        #########################
-        
-        self.omegas = np.asarray(config.w_igws)
-        self.bc_kind = config.bc_kind
-        
-        # Angles for incoming wavenumbers
         if config.Ntheta>0:
             theta_p = np.arange(0,pi/2+pi/2/config.Ntheta,pi/2/config.Ntheta)
             self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
         else:
             self.bc_theta = np.array([0])
-    
-        # gaussian components
-        self.shapehbcx = [self.omegas.size,2,2,self.bc_theta.size,self.nxin]
-        self.shapehbcy = [self.omegas.size,2,2,self.bc_theta.size,self.nyin]
-        self.bc_gauss = 0
-        if D_bc is None:
-            D_bc = config.D_bc
-        if T_bc is None:
-            T_bc = config.T_bc
-        ## In Space
-        if D_bc is not None:
-            self.bc_gauss = 1
-            bc_x_gauss = []
-            bc_y_gauss = []
-            isub_bc = int(D_bc//State.dy)  
-            jsub_bc = int(D_bc//State.dx)  
-            self.bcy = np.arange(-2*isub_bc*State.dy,
-                                 (self.nyin+3*isub_bc)*State.dy,
-                                 isub_bc*State.dy)
-            self.bcx = np.arange(-2*jsub_bc*State.dx,
-                                 (self.nxin+3*jsub_bc)*State.dx,
-                                 jsub_bc*State.dx)
             
-            for xj in self.bcx:
-                bc_x_gauss.append(tools.gaspari_cohn(self.Xin[self.nyin//2,:]-xj,
-                                                     7*D_bc/2))
-            for yi in self.bcy:
-                bc_y_gauss.append(tools.gaspari_cohn(self.Yin[:,self.nxin//2]-yi,
-                                                     7*D_bc/2))   
-            self.bc_x_gauss = np.asarray(bc_x_gauss)
-            self.bc_y_gauss = np.asarray(bc_y_gauss)
-            self.shapehbcx[-1] = len(bc_x_gauss)
-            self.shapehbcy[-1] = len(bc_y_gauss)
-            ## In time 
-            if T_bc is not None:
-                self.bc_gauss = 2
-                bc_t_gauss = []
-                ksub_bc = int(T_bc//self.dt)  
-                self.bct = np.arange(-2*ksub_bc*self.dt,(self.nt+3*ksub_bc)*self.dt,ksub_bc*self.dt)
-                for kt in self.bct:
-                    bc_t_gauss.append(tools.gaspari_cohn(self.T-kt,7*T_bc/2))
-                self.bc_t_gauss = np.asarray(bc_t_gauss)
-                self.shapehbcx.insert(-1,len(bc_t_gauss))
-                self.shapehbcy.insert(-1,len(bc_t_gauss))         
-        self.nbcx = np.prod(self.shapehbcx)
-        self.nbcy = np.prod(self.shapehbcy)
-        self.nbc = self.nbcx + self.nbcy
+        self.omegas = np.asarray(config.w_igws)
+        self.bc_kind = config.bc_kind
         
         
-        print('BC:',self.bc_kind)
-        print('Omegas:',self.omegas)
-        print('Thetas:',self.bc_theta)
-        print('Shape BC x:',self.shapehbcx)
-        print('Shape BC y:',self.shapehbcy)
-        
-        # Slices for model parametersparameters
-        self.nParams = self.nHe + self.nbc
-        self.sliceHe = slice(0,self.nHe)
-        self.slicehbcx = slice(self.nHe,self.nHe+self.nbcx)
-        self.slicehbcy = slice(self.nHe+self.nbcx,self.nParams)
+        self.shapeHe = [State.ny,State.nx]
+        self.shapehbcx = [len(self.omegas), # tide frequencies
+                          2, # North/South
+                          2, # cos/sin
+                          len(self.bc_theta), # Angles
+                          State.nx # NX
+                          ]
+        self.shapehbcy = [len(self.omegas), # tide frequencies
+                          2, # North/South
+                          2, # cos/sin
+                          len(self.bc_theta), # Angles
+                          State.ny # NY
+                          ]
+        self.sliceHe = slice(0,np.prod(self.shapeHe))
+        self.slicehbcx = slice(np.prod(self.shapeHe),
+                               np.prod(self.shapeHe)+np.prod(self.shapehbcx))
+        self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
+                               np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
+        self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
         
         # Model initialization
         self.swm = swm_adj.Swm_adj(X=self.Xin,
@@ -705,206 +623,36 @@ class Model_sw1l:
         # Tests
         if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='SW1L':
             print('tangent test:')
-            self.tangent_test(State,10*self.dt,nstep=config.checkpoint)
+            #self.tangent_test(State,self.T[-1],nstep=config.checkpoint)
             print('adjoint test:')
-            self.adjoint_test(State,10*self.dt,nstep=config.checkpoint)
+            self.adjoint_test(State,self.T[-1],nstep=config.checkpoint)
        
-
-            
     def restart(self):
-        
         self.swm.restart()
     
-    def reshapeParams(self,params):
-        
-        He = +params[self.sliceHe].reshape(self.shapeHe)
-        hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
-        hbcy = +params[self.slicehbcy].reshape(self.shapehbcy)
-        
-        return He,hbcx,hbcy
-    
-    def vectorizeParams(self,He,hbcx,hbcy):
-        
-        params = np.zeros(self.nParams)
-        params[self.sliceHe] = He.ravel()
-        params[self.slicehbcx] = hbcx.ravel()
-        params[self.slicehbcy] = hbcy.ravel()
-        
-        return params
-        
-    def get_He2d(self,t=None,He=None,He_mean=None):
-        
-        if He_mean is None:
-            He_mean = self.Heb
-        
-        if He is not None:
-            if self.He_gauss==2:
-                if len(np.shape(He))!=2:
-                    raise SystemExit('Error: He need to be 2D in space-time \
-                                     gaussian mode')
-                He3d = np.tensordot(He,self.He_xy_gauss,(1,0))
-                indt = int(t//self.dt)
-                if indt>=self.He_t_gauss.shape[1]:
-                    indt = self.He_t_gauss.shape[1]-1
-                He2d = He_mean + \
-                    np.tensordot(He3d,self.He_t_gauss[:,indt],(0,0))
-                    
-            elif self.He_gauss==1:
-                if len(np.shape(He))!=1:
-                    raise SystemExit('Error: He need to be 1D in space \
-                                     gaussian mode')
-                He2d = He_mean +\
-                    np.sum(He[:,np.newaxis,np.newaxis]*self.He_xy_gauss,axis=0)
-            else:
-                He2d = He_mean + He
-                
-        else:
-            He2d = He_mean 
-            
-        return He2d
-    
-    def get_hbc1d(self,t=None,hbcx=None,hbcy=None):
-        
-        # South/North
-        if hbcx is not None:
-            if self.bc_gauss==2:
-                if len(np.shape(hbcx))!=6:
-                    raise SystemExit('Error: hbcx need to be 6D in space-time \
-                                     gaussian mode')
-                hbcx_1d = np.tensordot(hbcx,self.bc_x_gauss,(-1,0))
-                indt = int(t//self.dt)
-                if indt>=self.bc_t_gauss.shape[1]:
-                    indt = self.bc_t_gauss.shape[1]-1
-                hbcx_1d = np.tensordot(hbcx_1d,self.bc_t_gauss[:,indt],(-2,0))
-            
-            elif self.bc_gauss==1:
-                hbcx_1d = np.tensordot(hbcx,self.bc_x_gauss,(-1,0))
-            else:
-                hbcx_1d = hbcx
-        else:
-            hbcx_1d = np.zeros([self.omegas.size,2,2,self.bc_theta.size,self.shapeh[1]])
-        
-        # West/East
-        if hbcy is not None:
-            if self.bc_gauss==2:
-                if len(np.shape(hbcy))!=6:
-                    raise SystemExit('Error: hbcy need to be 6D in space-time \
-                                     gaussian mode')
-                hbcy_1d = np.tensordot(hbcy,self.bc_y_gauss,(-1,0))
-                indt = int(t//self.dt)
-                if indt>=self.bc_t_gauss.shape[1]:
-                    indt = self.bc_t_gauss.shape[1]-1
-                hbcy_1d = np.tensordot(hbcy_1d,self.bc_t_gauss[:,indt],(-2,0))
-            
-            elif self.bc_gauss==1:
-                hbcy_1d = np.tensordot(hbcy,self.bc_y_gauss,(-1,0))
-            else:
-                hbcy_1d = hbcy
-        else:
-            hbcy_1d = np.zeros([self.omegas.size,2,2,self.bc_theta.size,self.shapeh[0]])
-    
-        return hbcx_1d,hbcy_1d
-    
-    def reduced_shape_He(self,t,adHe2d_incr):
-        
-        adHe_incr = np.zeros(self.shapeHe)
-        
-        if self.He_gauss==2:
-            indt = int(t//self.dt)
-            if indt>=self.He_t_gauss.shape[1]:
-                indt = self.He_t_gauss.shape[1]-1
-            adHe3d = adHe2d_incr[:,:,np.newaxis]*self.He_t_gauss[:,indt]
-            adHe_incr += np.tensordot(adHe3d,
-                                      self.He_xy_gauss[:,:,:],([0,1],[1,2])) 
-        elif self.He_gauss==1:
-            for p in range(self.nHe):
-                adHe_incr[p] += np.sum(
-                    adHe2d_incr*self.He_xy_gauss[p,:,:])
-        else:
-            adHe_incr = adHe2d_incr
-        
-        return adHe_incr
-    
-    def reduced_shape_hbc(self,t,adhbcx1d_incr,adhbcy1d_incr):
-        
-        adhbcx_incr = np.zeros(self.shapehbcx)
-        adhbcy_incr = np.zeros(self.shapehbcy)
-        
-        if self.bc_gauss==2:
-           indt = int(t/self.dt)
-           if indt>=self.bc_t_gauss.shape[1]:
-               indt = self.bc_t_gauss.shape[1]-1
-           adhbcx2d_incr = adhbcx1d_incr[:,:,:,:,:,np.newaxis]*\
-               self.bc_t_gauss[:,indt]
-           adhbcx_incr += np.tensordot(adhbcx2d_incr,
-                     self.bc_x_gauss,(-2,-1))
-           
-           adhbcy2d_incr = adhbcy1d_incr[:,:,:,:,:,np.newaxis]*\
-               self.bc_t_gauss[:,indt]
-           adhbcy_incr += np.tensordot(adhbcy2d_incr,
-                     self.bc_y_gauss,(-2,-1))
-           
-        elif self.bc_gauss==1:
-            for p in range(len(self.bc_x_gauss)):
-                adhbcx_incr[:,:,:,:,p] +=  np.sum(
-                    adhbcx1d_incr*self.bc_x_gauss[p],axis=-1)
-            for p in range(len(self.bc_y_gauss)):
-                adhbcy_incr[:,:,:,:,p] +=  np.sum(
-                    adhbcy1d_incr*self.bc_y_gauss[p],axis=-1)
-        else:
-            adhbcx_incr += adhbcx1d_incr
-            adhbcy_incr += adhbcy1d_incr
-            
-        return adhbcx_incr,adhbcy_incr
-    
-        
     def step(self,t,State,params,nstep=1,t0=0,ind=[0,1,2]):
-        
-        # Get state variables and model parameters
-        u0,v0,h0 = State.getvar(ind=ind)
-        He,hbcx,hbcy = self.reshapeParams(params)
 
-        # Model parameters: switch to physical space
-        He2d = self.get_He2d(t,He,He_mean=self.Heb)
-        tbc = t
-        if self.bc_kind=='1d':
-            tbc += self.dt       
-        hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
+        # Init
+        u0,v0,h0 = State.getvar(ind)
+        u = +u0
+        v = +v0
+        h = +h0
         
-        # init
-        if self.sw_in>0:
-            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-        else:
-            uin = +u0
-            vin = +v0
-            hin = +h0
+        # Get params in physical space
+        He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
+        hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
+        hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
         
         # Time propagation
         for i in range(nstep):
-            
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            uin,vin,hin = self.swm_step(
+            u,v,h = self.swm_step(
                 t+i*self.dt,
-                uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
+                u,v,h,He=He,hbcx=hbcx,hbcy=hbcy,first=first)
             
-        # Update state
-        if self.sw_in>0:
-            u1 = +u0
-            u1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = uin
-            v1 = +v0
-            v1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = vin
-            h1 = +h0
-            h1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = hin
-        else:
-            u1 = +uin
-            v1 = +vin
-            h1 = +hin
-            
-        State.setvar([u1,v1,h1],ind=ind)
+        State.setvar([u,v,h],ind=ind)
         
     
     def step_tgl(self,t,dState,State,dparams,params,nstep=1,t0=0,ind=[0,1,2]):
@@ -913,160 +661,101 @@ class Model_sw1l:
         du0,dv0,dh0 = dState.getvar(ind=ind)
         u0,v0,h0 = State.getvar(ind=ind)
 
-        He,hbcx,hbcy = self.reshapeParams(params)
-        dHe,dhbcx,dhbcy = self.reshapeParams(dparams)
-        
-        # Model parameters: switch to physical space
-        He2d = self.get_He2d(t,He,He_mean=self.Heb)
-        dHe2d = self.get_He2d(t,dHe,He_mean=0.)
-        tbc = t
-        if self.bc_kind=='1d' :
-            tbc += self.dt
-        hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
-        dhbcx1d,dhbcy1d = self.get_hbc1d(tbc,dhbcx,dhbcy)
-        
-        # init
-        if self.sw_in>0:
-            duin = du0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            dvin = dv0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            dhin = dh0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-        else:
-            duin = +du0
-            dvin = +dv0
-            dhin = +dh0
-            uin = +u0
-            vin = +v0
-            hin = +h0
+        He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
+        hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
+        hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
+        dHe = dparams[self.sliceHe].reshape(self.shapeHe)
+        dhbcx = dparams[self.slicehbcx].reshape(self.shapehbcx)
+        dhbcy = dparams[self.slicehbcy].reshape(self.shapehbcy)
+    
+        du = +du0
+        dv = +dv0
+        dh = +dh0
+        u = +u0
+        v = +v0
+        h = +h0
         
         # Time propagation
         # Current trajectory
-        traj = [(uin,vin,hin)]
+        traj = [(u,v,h)]
         if nstep>1:
             for i in range(nstep):
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                uin,vin,hin = self.swm_step(
+                u,v,h = self.swm_step(
                         t+i*self.dt,
-                        uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
-                traj.append((uin,vin,hin))
+                        u,v,h,He=He,hbcx=hbcx,hbcy=hbcy,first=first)
+                traj.append((u,v,h))
             
         for i in range(nstep):
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            uin,vin,hin = traj[i]
+            u,v,h = traj[i]
             
-            duin,dvin,dhin = self.swm_step_tgl(
-                t+i*self.dt,duin,dvin,dhin,uin,vin,hin,
-                dHe=dHe2d,He=He2d,
-                dhbcx=dhbcx1d,dhbcy=dhbcy1d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
-      
-        # Update state 
-        if self.sw_in>0:
-            du1 = +du0
-            du1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = duin
-            dv1 = +dv0
-            dv1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = dvin
-            dh1 = +dh0
-            dh1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = dhin
-        else:
-            du1 = +duin
-            dv1 = +dvin
-            dh1 = +dhin
+            du,dv,dh = self.swm_step_tgl(
+                t+i*self.dt,du,dv,dh,u,v,h,
+                dHe=dHe,He=He,
+                dhbcx=dhbcx,dhbcy=dhbcy,hbcx=hbcx,hbcy=hbcy,first=first)
             
-        dState.setvar([du1,dv1,dh1],ind=ind)
+        dState.setvar([du,dv,dh],ind=ind)
         
-    
-    
-    def step_adj(self,t,adState, State, adparams0, params, nstep=1, t0=0,ind=None):
+
+    def step_adj(self,t,adState, State, params, nstep=1, t0=0,ind=None):
         
         # Get variables
         adu0,adv0,adh0 = adState.getvar(ind=ind)
         u0,v0,h0 = State.getvar(ind=ind)
-        He,hbcx,hbcy = self.reshapeParams(params)
-        adHe0,adhbcx0,adhbcy0 = self.reshapeParams(adparams0)
-        
-        # Model parameters: switch to physical space
-        He2d = self.get_He2d(t,He)
-        tbc = t
-        if self.bc_kind=='1d':
-            tbc += self.dt
-        hbcx1d,hbcy1d = self.get_hbc1d(tbc,hbcx,hbcy)
+        He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
+        hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
+        hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
         
         # Init
-        if self.sw_in>0:
-            aduin = adu0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            advin = adv0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            adhin = adh0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            uin = u0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            vin = v0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            hin = h0[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-        else:
-            aduin = +adu0
-            advin = +adv0
-            adhin = +adh0
-            uin = +u0
-            vin = +v0
-            hin = +h0
-        
-        adHe2d = 0
-        adhbcx1d = 0
-        adhbcy1d = 0
+        adu = +adu0
+        adv = +adv0
+        adh = +adh0
+        u = +u0
+        v = +v0
+        h = +h0
+        adHe = He*0
+        adhbcx = hbcx*0
+        adhbcy = hbcy*0
         
         # Time propagation
         # Current trajectory
-        traj = [(uin,vin,hin)]
+        traj = [(u,v,h)]
         if nstep>1:
             for i in range(nstep):
                 if t+i*self.dt==t0:
                         first = True
                 else: first = False
-                uin,vin,hin = self.swm_step(
+                u,v,h = self.swm_step(
                         t+i*self.dt,
-                        uin,vin,hin,He=He2d,hbcx=hbcx1d,hbcy=hbcy1d,first=first)
-                traj.append((uin,vin,hin))
+                        u,v,h,He=He,hbcx=hbcx,hbcy=hbcy,first=first)
+                traj.append((u,v,h))
             
         for i in reversed(range(nstep)):
             if t+i*self.dt==t0:
                     first = True
             else: first = False
-            uin,vin,hin = traj[i]
+            u,v,h = traj[i]
         
-            aduin,advin,adhin,adHe2d_tmp,adhbcx1d_tmp,adhbcy1d_tmp =\
-                self.swm_step_adj(t+i*self.dt,aduin,advin,adhin,uin,vin,hin,
-                                      He2d,hbcx1d,hbcy1d,first=first)
-            adHe2d += adHe2d_tmp
-            adhbcx1d += adhbcx1d_tmp
-            adhbcy1d += adhbcy1d_tmp
+            adu,adv,adh,adHe_tmp,adhbcx_tmp,adhbcy_tmp =\
+                self.swm_step_adj(t+i*self.dt,adu,adv,adh,u,v,h,
+                                      He,hbcx,hbcy,first=first)
+            adHe += adHe_tmp
+            adhbcx += adhbcx_tmp
+            adhbcy += adhbcy_tmp
             
-        # Back to reduced form
-        adHe = self.reduced_shape_He(t,adHe2d)
-        adHe += adHe0 
-        adhbcx,adhbcy = self.reduced_shape_hbc(tbc,adhbcx1d,adhbcy1d)
-        adhbcx += adhbcx0 
-        adhbcy += adhbcy0 
+        # Update state
+        adState.setvar([adu,adv,adh],ind=ind)
         
         # Update parameters
-        adparams = self.vectorizeParams(adHe,adhbcx,adhbcy)
+        adparams = np.concatenate((adHe.flatten(), adhbcx.flatten(), adhbcy.flatten()))
         
-        # Update state
-        if self.sw_in>0:
-            adu1 = +adu0
-            adu1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = aduin
-            adv1 = +adv0
-            adv1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = advin
-            adh1 = +adh0
-            adh1[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in] = adhin
-        else:
-            adu1 = +aduin
-            adv1 = +advin
-            adh1 = +adhin
-        adState.setvar([adu1,adv1,adh1],ind=ind)
         return adparams
+        
         
     def run(self,t0,tint,State,params,return_traj=False,nstep=1):
         if return_traj:
@@ -1090,18 +779,18 @@ class Model_sw1l:
             State_tmp.setvar(traj[i])
             _nstep = nstep
             self.step_tgl(t,dState,State_tmp,dparams,params,nstep=_nstep,t0=t0)
-
-
-    
-    def run_adj(self,t0,tint,adState,State,adparams,params,nstep=1):
+            
+    def run_adj(self,t0,tint,adState,State, params,nstep=1):
+        
         State_tmp = State.copy()
         tt,traj = self.run(t0,tint,State_tmp,params,return_traj=True,nstep=nstep)
+        adparams = 0
         for i in reversed(range(len(tt[:-1]))):
             t = tt[i]
             State_tmp.setvar(traj[i])
             _nstep = nstep
-            adparams = self.step_adj(
-                t,adState,State_tmp,adparams,params,nstep=_nstep,t0=t0)
+            adparams += self.step_adj(
+                t,adState,State_tmp,params,nstep=_nstep,t0=t0)
         return adparams
     
     def tangent_test(self,State,tint,t0=0,nstep=1):
@@ -1109,12 +798,11 @@ class Model_sw1l:
         State0 = State.random()
         dState = State.random()
         
-        params = np.random.random(self.nParams)
-        dparams = np.random.random(self.nParams)
+        params =  np.random.random((self.nparams,))
+        dparams =  np.random.random((self.nparams,))
         
         State0_tmp = State0.copy()
         self.run(t0,tint,State0_tmp,params,nstep=nstep)
-        #self.step(t0,State0_tmp,params,nstep=nstep)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -1124,14 +812,13 @@ class Model_sw1l:
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
+ 
             self.run(t0,tint,State1,params+lambd*dparams,nstep=nstep)
-            #self.step(t0,State1,params+lambd*dparams,nstep=nstep)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
             self.run_tgl(t0,tint,dState1,State0,lambd*dparams,params,nstep=nstep)
-            #self.step_tgl(t0,dState1,State0,lambd*dparams,params,nstep=nstep)
             dX = dState1.getvar(vect=True)
             
             ps = np.linalg.norm(X1-X2-dX)/np.linalg.norm(dX)
@@ -1143,37 +830,28 @@ class Model_sw1l:
         
         # Current trajectory
         State0 = State.random()
-        params = np.random.random(self.nParams)
+        params =  np.random.random((self.nparams,))
         
         # Perturbation
         dState = State.random()
         dX = dState.getvar(vect=True)
-        dparams = np.random.random(self.nParams)
-        dX = np.concatenate((dX,dparams))
+        dparams = np.random.random((self.nparams,))
         
         # Adjoint
         adState = State.random()
         adX = adState.getvar(vect=True)
-        adparams = np.random.random(self.nParams)
-        adX = np.concatenate((adX,adparams))
         
         # Run TLM
         self.run_tgl(t0,tint,dState,State0,dparams,params,nstep=nstep)
-        #self.step_tgl(t0,dState,State0,dparams,params,nstep=nstep)
         TLM = dState.getvar(vect=True)
-        
-        TLM = np.concatenate((TLM,dparams))
         
         # Run ADJ
         adparams = self.run_adj(
-            t0,tint,adState,State0,adparams,params,nstep=nstep)
-        #adparams = self.step_adj(
-        #    t0,adState,State0,adparams,params,nstep=nstep)
+            t0,tint,adState,State0,params,nstep=nstep)
         ADM = adState.getvar(vect=True)
-        ADM = np.concatenate((ADM,adparams))
         
-        ps1 = np.inner(TLM,adX)
-        ps2 = np.inner(dX,ADM)
+        ps1 = np.inner(TLM,adX) + np.inner(dparams,adparams*0) 
+        ps2 = np.inner(dX,ADM) + np.inner(dparams,adparams) 
         
         print(ps1/ps2)
 

@@ -499,8 +499,6 @@ class State:
         with xr.open_dataset(filename) as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values
-                
-                
     
     def random(self,ampl=1):
         other = self.free()

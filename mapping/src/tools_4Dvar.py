@@ -12,7 +12,7 @@ import pandas as pd
 from datetime import timedelta,datetime
 from src import grad_tool as grad_tool
 from src import grid as grid
-
+from copy import deepcopy
 
 
 import matplotlib.pylab as plt 
@@ -103,6 +103,30 @@ class Obsopt:
         
         for t in self.date_obs:
             self.process_obs(t)
+            
+        # Compute checkpoints
+        self.checkpoint = [0]
+        if self.isobserved(Model.timestamps[0]):
+            self.isobs = [True]
+        else:
+            self.isobs = [False]
+        check = 0
+        for i,t in enumerate(Model.timestamps[:-1]):
+            if i>0 and (self.isobserved(t) or check==config.checkpoint):
+                self.checkpoint.append(i)
+                if check==config.checkpoint:
+                    check = 0
+                if self.isobserved(t):
+                    self.isobs.append(True)
+                else:
+                    self.isobs.append(False)
+            check += 1
+        if self.isobserved(Model.timestamps[-1]):
+            self.isobs.append(True)
+        else:
+            self.isobs.append(False)   
+        self.checkpoint.append(len(Model.timestamps)-1) # last timestep
+        self.checkpoint = np.asarray(self.checkpoint)
             
     def process_obs(self,t):
         
@@ -341,7 +365,7 @@ class Cov :
 class Variational_flux:
     
     def __init__(self, 
-                 config=None, M=None, H=None, State=None, R=None,B=None, comp=None, Xb=None):
+                 config=None, M=None, H=None, State=None, R=None,B=None, basis=None, Xb=None):
         
         # Objects
         self.M = M # model
@@ -358,65 +382,18 @@ class Variational_flux:
         # Temporary path where to save model trajectories
         self.tmp_DA_path = config.tmp_DA_path
         
-        # Compute checkpoints
-        self.checkpoint = [0]
-        self.checkpoint_flux = [0]
-        if H.isobserved(M.timestamps[0]):
-            self.isobs = [True]
-        else:
-            self.isobs = [False]
-        check = 0
-        for i,t in enumerate(M.timestamps[:-1]):
-            if i>0 and (H.isobserved(t) or check==config.checkpoint):
-                self.checkpoint.append(i)
-                if check==config.checkpoint:
-                    check = 0
-                if H.isobserved(t):
-                    self.isobs.append(True)
-                else:
-                    self.isobs.append(False)
-            check += 1
-        if H.isobserved(M.timestamps[-1]):
-            self.isobs.append(True)
-        else:
-            self.isobs.append(False)   
-        self.checkpoint.append(len(M.timestamps)-1) # last timestep
-        self.checkpoint = np.asarray(self.checkpoint)
-        
-    
         # preconditioning
         self.prec = config.prec
         
         # Wavelet reduced basis
-        self.wavelet_mode = config.wavelet_mode
-        self.save_wave_basis = config.save_wave_basis
-        self.comp = comp # Wavelet components
+        self.basis = basis
         self.lon1d = State.lon.flatten()
         self.lat1d = State.lat.flatten()
-        self.coords_name = {'lon':0, 'lat':1, 'time':2}
-        self.dt_flux = config.checkpoint
         
-        # Boundary conditions
-        if config.flag_use_boundary_conditions:
-            timestamps_bc = np.array(
-                [pd.Timestamp(date) for date in M.timestamps[::self.dt_flux]])
-            self.bc_field, self.bc_weight = grid.boundary_conditions(
-                config.file_boundary_conditions,
-                config.lenght_bc,
-                config.name_var_bc,
-                timestamps_bc,
-                State.lon,
-                State.lat,
-                config.flag_plot,
-                mask=np.copy(State.mask))
-        else: 
-            self.bc_field = np.array([None,]*len(M.timestamps))
-            self.bc_weight = None
-               
         # Grad test
         if config.compute_test:
             print('Gradient test:')
-            X = (np.random.random(self.comp.nwave)-0.5)*self.B.sigma 
+            X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
             
         
@@ -441,49 +418,32 @@ class Variational_flux:
         Jo = 0.
         
         # Init
-        coords = [self.lon1d,self.lat1d,0]
-        ssh0 = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=X,mode=None,
-                            save_wave_basis=self.save_wave_basis).reshape(
-                                (State.ny,State.nx))
-        State.setvar(ssh0,ind=0)
-        
         State.save(os.path.join(self.tmp_DA_path,
-                    'model_state_' + str(self.checkpoint[0]) + '.nc'))
+                        'model_state_' + str(self.H.checkpoint[0]) + '.nc'))
         
-        for i in range(len(self.checkpoint)-1):
-            
-            timestamp = self.M.timestamps[self.checkpoint[i]]
-            t = self.M.T[self.checkpoint[i]]
-            nstep = self.checkpoint[i+1] - self.checkpoint[i]
+        for i in range(len(self.H.checkpoint)-1):
+
+            timestamp = self.M.timestamps[self.H.checkpoint[i]]
+            t = self.M.T[self.H.checkpoint[i]]
+            nstep = self.H.checkpoint[i+1] - self.H.checkpoint[i]
             
             # 1. Misfit
-            if self.isobs[i]:
+            if self.H.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
-            # 2. Run forward model
-            ibc = int(self.checkpoint[i]//self.dt_flux)
-            self.M.step(State, nstep=nstep,Hbc=self.bc_field[ibc],Wbc=self.bc_weight)
+            # 2. Reduced basis
+            params = self.basis.operg(X,i).reshape((State.ny,State.nx))
             
-            # 3. Compute Flux
-            if self.checkpoint[i]%self.dt_flux==0:
-                coords = [self.lon1d,self.lat1d,t/3600/24]
-                F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                    compute_geta=True,eta=X,mode='flux',
-                                    save_wave_basis=self.save_wave_basis).reshape(
-                                        (State.ny,State.nx))
-                var = State.getvar(ind=State.get_indobs())
-                State.setvar(var + self.dt_flux*self.M.dt/(3600*24) * F,
-                             ind=State.get_indobs())
+            # 3. Run forward model
+            self.M.step(State, params=params, nstep=nstep)
             
             # 4. Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
+                        'model_state_' + str(self.H.checkpoint[i+1]) + '.nc'))
             
-            
-        if self.isobs[-1]:
-            misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State,square=False) # d=Hx-xobsx
+        if self.H.isobs[-1]:
+            misfit = self.H.misfit(self.M.timestamps[self.H.checkpoint[-1]],State,square=False) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
@@ -517,54 +477,36 @@ class Variational_flux:
         State = self.State.free()
         
         # Last timestamp
-        if self.isobs[-1]:
+        if self.H.isobs[-1]:
             State.load(os.path.join(self.tmp_DA_path,
-                       'model_state_' + str(self.checkpoint[-1]) + '.nc'))
-            timestamp = self.M.timestamps[self.checkpoint[-1]]
+                       'model_state_' + str(self.H.checkpoint[-1]) + '.nc'))
+            timestamp = self.M.timestamps[self.H.checkpoint[-1]]
             misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
             self.H.adj(timestamp,adState,self.R.inv(misfit))
 
         # Time loop
-        for i in reversed(range(0,len(self.checkpoint)-1)):
+        adparams = 0
+        for i in reversed(range(0,len(self.H.checkpoint)-1)):
             
-            nstep = self.checkpoint[i+1] - self.checkpoint[i]
-            timestamp = self.M.timestamps[self.checkpoint[i]]
-            t = self.M.T[self.checkpoint[i]]
+            nstep = self.H.checkpoint[i+1] - self.H.checkpoint[i]
+            timestamp = self.M.timestamps[self.H.checkpoint[i]]
+            t = self.M.T[self.H.checkpoint[i]]
  
             # 4. Read model state
             State.load(os.path.join(self.tmp_DA_path,
-                       'model_state_' + str(self.checkpoint[i]) + '.nc'))
+                       'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
             
+            # 3. Run adjoint model 
+            adparams = self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
             
-            # 3. Compute flux
-            if self.checkpoint[i]%self.dt_flux==0:
-                advar = adState.getvar(ind=State.get_indobs()).flatten()
-                coords = [self.lon1d,self.lat1d,t/3600/24]
-                adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                         compute_geta=True,transpose=True,mode='flux',
-                                         save_wave_basis=self.save_wave_basis,
-                                         eta=self.M.dt/(3600*24)*self.dt_flux * advar[np.newaxis,:])
-            
-            
-            # 2. Run adjoint model 
-            ibc = int(self.checkpoint[i]//self.dt_flux)
-            self.M.step_adj(adState, State, nstep=nstep,
-                            Hbc=self.bc_field[ibc],Wbc=self.bc_weight) # i+1 --> i
-          
+            # 2. Reduced basis
+            adX += self.basis.operg_transpose(adparams,i)
+                
             # 1. Misfit 
-            if self.isobs[i]:
+            if self.H.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-        
-        # Init
-        coords = [self.lon1d,self.lat1d,0]
-        adssh0 = adState.getvar(ind=0)
-        adX += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                            compute_geta=True,transpose=True,
-                            eta=adssh0.ravel()[np.newaxis,:],mode=None,
-                            save_wave_basis=self.save_wave_basis)
-        
-        
+          
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
@@ -629,7 +571,7 @@ class Variational_BM_IT:
         self.comp = comp # Wavelet components
         self.lon1d = State.lon.flatten()
         self.lat1d = State.lat.flatten()
-        self.dt_flux = config.checkpoint
+        self.dt_comp = config.checkpoint # Number of timesteps between two successive reduced-basis components update
         self.coords_name = {'lon':0, 'lat':1, 'time':2}
         
         # Boundary conditions
@@ -702,11 +644,11 @@ class Variational_BM_IT:
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Run forward model
-            ibc = int(self.checkpoint[i]//self.dt_flux)
+            ibc = int(self.checkpoint[i]//self.dt_comp)
             self.M.step(t,State,Xit,nstep=nstep,Hbc=self.bc_field[ibc],Wbc=self.bc_weight)
             
             # 3. Add flux from wavelet
-            if self.checkpoint[i]%self.dt_flux==0:
+            if self.checkpoint[i]%self.comp_ana==0:
                 coords = [self.lon1d,self.lat1d,t/3600/24]
                 F = self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg',
                                     compute_geta=True,eta=Xbm,mode='flux',
@@ -778,7 +720,7 @@ class Variational_BM_IT:
                        'model_state_' + str(self.checkpoint[i]) + '.nc'))
             
             # 3. Add flux from wavelet
-            if self.checkpoint[i]%self.dt_flux==0:
+            if self.checkpoint[i]%self.dt_comp==0:
                 coords = [self.lon1d,self.lat1d,t/3600/24]
                 advar = adState.getvar(ind=0).flatten()
                 adXbm += self.comp.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
@@ -817,7 +759,6 @@ class Variational_BM_IT:
         adState.plot(ind=State.get_indsave())
         
         return g 
-    
     
 class Variational_QG_init :
     
@@ -1053,9 +994,7 @@ class Variational_QG_init :
         
 class Variational_SW:
     
-    def __init__(self, 
-                 M=None, H=None, State=None, R=None,B=None, Xb=None, 
-                 tmp_DA_path=None, checkpoint=1, prec=False,compute_test=False):
+    def __init__(self, config=None, M=None, H=None, State=None, R=None,B=None, basis=None, Xb=None):
         
         # Objects
         self.M = M # model
@@ -1070,7 +1009,7 @@ class Variational_SW:
         self.Xb = Xb
         
         # Temporary path where to save model trajectories
-        self.tmp_DA_path = tmp_DA_path
+        self.tmp_DA_path = config.tmp_DA_path
         
         # Compute checkpoints
         self.checkpoint = [0]
@@ -1080,9 +1019,9 @@ class Variational_SW:
             self.isobs = [False]
         check = 0
         for i,t in enumerate(M.timestamps[:-1]):
-            if i>0 and (H.isobserved(t) or check==checkpoint):
+            if i>0 and (H.isobserved(t) or check==config.checkpoint):
                 self.checkpoint.append(i)
-                if check==checkpoint:
+                if check==config.checkpoint:
                     check = 0
                 if H.isobserved(t):
                     self.isobs.append(True)
@@ -1095,12 +1034,17 @@ class Variational_SW:
             self.isobs.append(False)
         self.checkpoint.append(len(M.timestamps)-1) # last timestep
         
+        # Reduced basis components
+        self.basis = basis
+        self.dt_basis = config.checkpoint # Number of timesteps between two successive reduced-basis components update
+        self.indt_basis = np.arange(0,self.checkpoint[-1],config.checkpoint) 
+        
         # preconditioning
-        self.prec = prec
+        self.prec = config.prec
 
         # Grad test
-        if compute_test:
-            X = np.random.random()
+        if config.compute_test:
+            X = np.random.random((self.basis.nbasis))-0.5
             if self.B is not None:
                 X *= self.B.sigma 
             print('gradient test:')
@@ -1108,7 +1052,7 @@ class Variational_SW:
         
         
     def cost(self,X0):
-        
+
         # initial state
         State = self.State.free()
         
@@ -1129,37 +1073,44 @@ class Variational_SW:
         State.save(os.path.join(self.tmp_DA_path,
                     'model_state_' + str(self.checkpoint[0]) + '.nc'))
         
+        params = self.basis.operg(X,0)
         for i in range(len(self.checkpoint)-1):
             
-            timestamp = self.M.timestamps[self.checkpoint[i]]
             t = self.M.T[self.checkpoint[i]]
+            timestamp = self.M.timestamps[self.checkpoint[i]]
             
             # Misfit
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
-                
+            
+            # Reduced basis
+            if i>0 and self.checkpoint[i] in self.indt_basis:
+                params = self.basis.operg(X,int(self.checkpoint[i]//self.dt_basis))
+            
             # Run forward model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
-            self.M.step(t,State,X,nstep=nstep)
-            
+            self.M.step(t,State,params,nstep=nstep)
+                
             # Save state for adj computation 
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoint[i+1]) + '.nc'))
             
-
         if self.isobs[-1]:
             misfit = self.H.misfit(self.M.timestamps[self.checkpoint[-1]],State,square=False) # d=Hx-xobsx
             Jo = Jo + misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
+
+        
+        State.plot()
         
         return J
     
         
     def grad(self,X0): 
-                
+        
         X = +X0 
         
         if self.B is not None:
@@ -1175,7 +1126,7 @@ class Variational_SW:
         
         # Ajoint initialization   
         adState = self.State.free()
-        adX = np.zeros_like(X0)
+        adX = X0*0
         
         # Current trajectory
         State = self.State.free()
@@ -1191,8 +1142,9 @@ class Variational_SW:
             
         # Time loop
         self.M.restart()  
+        params = self.basis.operg(X,-1)
+        adparams = np.zeros(self.basis.nphys)
         for i in reversed(range(0,len(self.checkpoint)-1)):
-            
             timestamp = self.M.timestamps[self.checkpoint[i]]
             t = self.M.T[self.checkpoint[i]]
             
@@ -1202,18 +1154,25 @@ class Variational_SW:
             
             # Run adjoint model
             nstep = self.checkpoint[i+1] - self.checkpoint[i]
-            adX = self.M.step_adj(t, adState, State, adX, X, nstep=nstep)
+            adparams += self.M.step_adj(t, adState, State, params, nstep=nstep)
             
+            # Reduced basis
+            if self.checkpoint[i] in self.indt_basis:
+                adX += self.basis.operg_transpose(adparams,int(self.checkpoint[i]//self.dt_basis))
+                params = self.basis.operg(X,int(self.checkpoint[i]//self.dt_basis)-1)
+                adparams = np.zeros(self.basis.nphys)
+
             # Misfit 
             if self.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
-            
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-                
+        
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
+        
+        adState.plot()
         
         return g 
             

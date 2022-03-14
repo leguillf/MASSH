@@ -383,9 +383,9 @@ name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
 
 wavelet_mode = 'flux'
 
-facns= 1. #factor for wavelet spacing= space
+facns= 1.5 #factor for wavelet spacing= space
 
-facnlt= 2.
+facnlt= 1
 
 npsp= 3.5 # Defines the wavelet shape
 

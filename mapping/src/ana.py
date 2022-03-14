@@ -436,8 +436,9 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    comp = RedBasis_BM(config,State)
-    q = comp.set_basis(return_q=True)
+    basis = RedBasis_BM(config)
+    time_basis = H.checkpoint * Model.dt / (24*3600)
+    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
     
     print('\n*** Variational ***\n')
     # Covariance matrix
@@ -446,13 +447,13 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         B = Cov(config.sigma_B)
         R = Cov(config.sigma_R)
     else:
-        B = Cov(np.sqrt(q))
+        B = Cov(Q)
         R = Cov(config.sigma_R)
     # backgroud state 
-    Xb = np.zeros((comp.nwave,))
+    Xb = np.zeros((basis.nbasis,))
     # Cost and Grad functions
     var = Variational_flux(
-        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp, Xb=Xb)
+        config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
     
     # Initial State 
     if config.path_init_4Dvar is None:
@@ -520,33 +521,20 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     # Init
     State0 = State.free()
     date = config.init_date
-    coords = [State.lon.flatten(),State.lat.flatten(),0]
-    ssh0 = comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                      compute_geta=True,eta=Xa,mode=None,
-                      save_wave_basis=var.save_wave_basis).reshape((State.ny,State.nx))
-    State0.setvar(ssh0,ind=0)
     State0.save_output(date,mdt=Model.mdt)
-    
     # Forward propagation
     i = 0
     while date<config.final_date:
-        t = (date - config.init_date).total_seconds()
+        # Reduced basiss
+        params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
         # Forward
         for j in range(config.checkpoint):
-            Model.step(State0,nstep=1, 
-                       Hbc=var.bc_field[i],Wbc=var.bc_weight)
+            Model.step(State0,params=params,nstep=1)
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
                 State0.save_output(date,mdt=Model.mdt)
-        # add Flux
-        coords = [State.lon.flatten(),State.lat.flatten(),t/3600/24]
-        F = comp.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                       compute_geta=True,eta=Xa,mode='flux',
-                       save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-        _var = State0.getvar(ind=0)
-        State0.setvar(_var + config.checkpoint*config.dtmodel/(3600*24) * F,ind=0)
         i += 1
         
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
@@ -927,85 +915,32 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
         from . import obs
         obs.detrend_obs(dict_obs)
     
+    ##################
+    # 2. Reduced basis
+    ##################
+    print('\n*** Reduced basis ***\n')
+     
+    from .tools_reduced_basis import RedBasis_IT
+    dt_basis = config.checkpoint*config.dtmodel/(3600*24) # time between two basis function in days
+    time_basis = np.arange(0,(config.final_date - config.init_date).total_seconds()/24/3600,dt_basis)
+    basis = RedBasis_IT(config)
+    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
+    
     ###################
     # 2. Variationnal #
     ###################
     print('\n*** Variational ***\n')
     
     # Covariance matrixes
-    if None in [config.sigma_R,config.sigma_B_He,config.sigma_B_bc]:          
-        # Least squares
-        B = None
-        R = Cov(1)
-    else:
-        _sigma_B = np.zeros((Model.nParams)) 
-        # error on He
-        _sigma_B[Model.sliceHe] = config.sigma_B_He 
-        # error on OBCs
-        if hasattr(config.sigma_B_bc, '__len__'):
-            # Specific value for each tidal cxomponent
-            if len(config.sigma_B_bc) == len(config.w_igws):
-                N_one_component_x = Model.nbcx//len(config.w_igws)
-                N_one_component_y = Model.nbcy//len(config.w_igws)
-                for i,_sigma in enumerate(config.sigma_B_bc):
-                    _sigma_B[Model.slicehbcx][
-                        i*N_one_component_x:(i+1)*N_one_component_x] = _sigma
-                    _sigma_B[Model.slicehbcy][
-                        i*N_one_component_y:(i+1)*N_one_component_y] = _sigma
-            else:
-                _sigma_B[Model.slicehbcx] = config.sigma_B_bc[0]
-                _sigma_B[Model.slicehbcy] = config.sigma_B_bc[0]
-        else:
-            _sigma_B[Model.slicehbcx] = config.sigma_B_bc
-            _sigma_B[Model.slicehbcy] = config.sigma_B_bc
-        
-        if np.any(State.mask):
-            # We divide the covariance by 10 for land pixels
-            land_coeff_x = np.ones(Model.shapehbcx)
-            land_coeff_y = np.ones(Model.shapehbcy)
-            # Loop over OBC coordinates 
-            for j,x in enumerate(Model.bcx): # South/North
-                # look for the closest grid pixel 
-                jS = np.argmin(np.abs(State.X[0,:]-x)) # South
-                jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
-                if State.mask[0,jS]:
-                    land_coeff_x[:,0,:,:,:,j] = config.facB_bc_coast
-                if State.mask[-1,jN]:
-                    land_coeff_x[:,1,:,:,:,j] = config.facB_bc_coast
-            for i,y in enumerate(Model.bcy): # West/East
-                # look for the closest grid pixel 
-                iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
-                iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
-                if State.mask[iW,0]:
-                    land_coeff_y[:,0,:,:,:,i] = config.facB_bc_coast
-                if State.mask[iE,-1]:
-                    land_coeff_y[:,1,:,:,:,i] = config.facB_bc_coast
-            _sigma_B[Model.slicehbcx] *= land_coeff_x.ravel()
-            _sigma_B[Model.slicehbcy] *= land_coeff_y.ravel()
-            # Loop over He coordinates 
-            land_coeff_He = np.ones(Model.shapeHe)
-            p = -1
-            for i,y in enumerate(Model.Hey):
-                for j,x in enumerate(Model.Hex):
-                    p += 1
-                    dist = np.sqrt((State.Y-y)**2+(State.X-x)**2)
-                    i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
-                    if State.mask[i0,j0]:
-                        land_coeff_He[:,p] = config.facB_He_coast
-            _sigma_B[Model.sliceHe] *= land_coeff_He.ravel()
-        
-        # Generate Covariance matrixes
-        B = Cov(_sigma_B)
-        R = Cov(config.sigma_R)
+    B = Cov(Q)
+    R = Cov(config.sigma_R)
         
     # backgroud state 
-    Xb = np.zeros((Model.nParams,))
+    Xb = np.zeros((basis.nbasis,))
         
     # Cost and Grad functions
     var = Variational_SW(
-        M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec,compute_test=config.compute_test)
+        config=config, M=Model, H=H, State=State, B=B, R=R, Xb=Xb, basis=basis)
     
     # Initial State 
     if config.path_init_4Dvar is None:
@@ -1073,19 +1008,24 @@ def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
     
     # Steady initial state
     State0 = State.free()
-    State0.save_output(config.init_date)
-    for i in range(Model.nt-1):
-        t = Model.T[i] # seconds
-        date = Model.timestamps[i+1] # date
-        
-        Model.step(t,State0,Xa)
-        
-        if (((date - config.init_date).total_seconds()
-             /config.saveoutput_time_step.total_seconds())%1 == 0)\
-            & (date>config.init_date) & (date<=config.final_date) :
-            # Save State
-            State0.save_output(date)
-    
+    date = config.init_date
+    State0.save_output(date)
+    # Forward propagation
+    i = 0
+    while date<config.final_date:
+        t = (date - config.init_date).total_seconds()
+        # Reduced basis
+        params = basis.operg(Xa,i)
+        # Forward
+        for j in range(config.checkpoint):
+            Model.step(t+j*Model.dt,State0,params,nstep=1)
+            date += timedelta(seconds=config.dtmodel)
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                State0.save_output(date)
+        i += 1
+
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
     print()
