@@ -291,7 +291,7 @@ variable are SLAs!')
         
         # Update state
         if params is not None:
-            SSH1 += nstep*self.dt/(3600*24) * params
+            SSH1 += nstep*self.dt/(3600*24) * params.reshape((State.ny,State.nx))
         State.setvar(SSH1, ind=ind)
 
     
@@ -380,7 +380,7 @@ variable are SLAs!')
         
         # Update state
         if dparams is not None:
-            dSSH1 += nstep*self.dt/(3600*24) * dparams
+            dSSH1 += nstep*self.dt/(3600*24) * dparams.reshape((State.ny,State.nx))
         dState.setvar(dSSH1,ind=ind)
         
         

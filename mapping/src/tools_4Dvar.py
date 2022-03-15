@@ -418,6 +418,10 @@ class Variational_flux:
         Jo = 0.
         
         # Init
+        varinit = self.basis.operg(X,0,norm=False)
+        params = varinit*0
+        State.setvar(varinit.reshape((State.ny,State.nx)),ind=0)
+        
         State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.H.checkpoint[0]) + '.nc'))
         
@@ -433,7 +437,8 @@ class Variational_flux:
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
             # 2. Reduced basis
-            params = self.basis.operg(X,i).reshape((State.ny,State.nx))
+            if i>0:
+                params = self.basis.operg(X,i)
             
             # 3. Run forward model
             self.M.step(State, params=params, nstep=nstep)
@@ -485,7 +490,6 @@ class Variational_flux:
             self.H.adj(timestamp,adState,self.R.inv(misfit))
 
         # Time loop
-        adparams = 0
         for i in reversed(range(0,len(self.H.checkpoint)-1)):
             
             nstep = self.H.checkpoint[i+1] - self.H.checkpoint[i]
@@ -500,13 +504,16 @@ class Variational_flux:
             adparams = self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
             
             # 2. Reduced basis
-            adX += self.basis.operg_transpose(adparams,i)
+            if i>0:
+                adX += self.basis.operg_transpose(adparams,i)
                 
             # 1. Misfit 
             if self.H.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-          
+        
+        adX += self.basis.operg_transpose(adState.getvar(ind=0).flatten(),0,norm=False)
+        
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         

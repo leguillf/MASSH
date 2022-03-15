@@ -371,6 +371,7 @@ class RedBasis_BM:
 
         # Wavelet space-time coordinates     
         self.wave_xy = [None,]*nf
+        self.wave_t_norm = [None,]*nf
         self.wave_t = [None,]*nf
         self.slicef = [None,]*nf
         NT = np.empty(nf, dtype='int32') # Nomber of time locations for a given frequency
@@ -437,10 +438,10 @@ class RedBasis_BM:
                 iobs = np.where(abs(time-time0) < tdec)
                 t = np.linspace(-tdec,tdec)
                 I =  np.sum(mywindow(t/tdec))*(t[1]-t[0])
-                wave_t_f[i,iobs] = mywindow(abs(time-time0)[iobs]/tdec)/I     
+                wave_t_f[i,iobs] = mywindow(abs(time-time0)[iobs]/tdec)   
+            self.wave_t_norm[iff] = wave_t_f/I  
             self.wave_t[iff] = wave_t_f
 
-   
         # Fill the Q diagonal matrix (expected variance for each wavelet)            
         Q = np.zeros((nbasis,))
         iwave = 0
@@ -469,7 +470,7 @@ class RedBasis_BM:
             return np.sqrt(Q)
         
     
-    def operg(self,psi,t):
+    def operg(self,psi,t,norm=True):
         
         """
             Project to physicial space
@@ -479,11 +480,15 @@ class RedBasis_BM:
         for iff in range(self.nf):
             psi_f = psi[self.slicef[iff]]
             psi_f = psi_f.reshape((self.NT[iff],self.NS[iff]))
-            phi += np.tensordot(np.tensordot(psi_f,self.wave_xy[iff],(-1,0)),
-                                self.wave_t[iff][:,t],(0,0))
+            if norm:
+                phi += np.tensordot(np.tensordot(psi_f,self.wave_xy[iff],(-1,0)),
+                                    self.wave_t_norm[iff][:,t],(0,0))
+            else:
+                phi += np.tensordot(np.tensordot(psi_f,self.wave_xy[iff],(-1,0)),
+                                    self.wave_t[iff][:,t],(0,0))
         return phi
     
-    def operg_transpose(self,phi,t):
+    def operg_transpose(self,phi,t,norm=True):
         
         """
             Project to reduced space
@@ -491,10 +496,14 @@ class RedBasis_BM:
         
         psi = np.zeros((self.nbasis,))
         for iff in range(self.nf):
-            
-            psi[self.slicef[iff]] = np.tensordot(
-                phi[:,np.newaxis]*self.wave_t[iff][:,t],
-                                       self.wave_xy[iff],[0,1]).flatten() 
+            if norm:
+                psi[self.slicef[iff]] = np.tensordot(
+                    phi[:,np.newaxis]*self.wave_t_norm[iff][:,t],
+                                           self.wave_xy[iff],[0,1]).flatten() 
+            else:
+                psi[self.slicef[iff]] = np.tensordot(
+                    phi[:,np.newaxis]*self.wave_t[iff][:,t],
+                                           self.wave_xy[iff],[0,1]).flatten() 
         return psi
     
     def test_operg(self,t=0):

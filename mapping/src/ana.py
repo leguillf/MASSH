@@ -520,13 +520,17 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         pickle.dump(Xa,f)
     # Init
     State0 = State.free()
+    varinit = basis.operg(Xa,0,norm=False)
+    params = varinit*0
+    State0.setvar(varinit.reshape((State.ny,State.nx)),ind=0)
     date = config.init_date
     State0.save_output(date,mdt=Model.mdt)
     # Forward propagation
     i = 0
     while date<config.final_date:
-        # Reduced basiss
-        params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
+        # Reduced basis
+        if i>0:
+            params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
         # Forward
         for j in range(config.checkpoint):
             Model.step(State0,params=params,nstep=1)
