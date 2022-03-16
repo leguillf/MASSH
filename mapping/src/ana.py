@@ -429,14 +429,14 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     Run a 4Dvar analysis
     '''
     from .tools_4Dvar import Obsopt, Cov, Variational_flux
-    from .tools_reduced_basis import RedBasis_BM
+    from .tools_reduced_basis import RedBasis_BM_2
 
     
     print('\n*** Observation operator ***\n')
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    basis = RedBasis_BM(config)
+    basis = RedBasis_BM_2(config)
     time_basis = H.checkpoint * Model.dt / (24*3600)
     Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
     
@@ -520,16 +520,27 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         pickle.dump(Xa,f)
     # Init
     State0 = State.free()
-    varinit = basis.operg(Xa,0,norm=False)
-    params = varinit*0
-    State0.setvar(varinit.reshape((State.ny,State.nx)),ind=0)
+    #varinit = basis.operg(Xa,0,norm=False)
+    #params = varinit*0
+    #State0.setvar(varinit.reshape((State.ny,State.nx)),ind=0)
+    coords = [State.lon.flatten(),State.lat.flatten(),0]
+    ssh0 = basis.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                      compute_geta=True,eta=Xa,mode=None,
+                      save_wave_basis=var.save_wave_basis).reshape((State.ny,State.nx))
+    State0.setvar(ssh0,ind=0)
+    
     date = config.init_date
     State0.save_output(date,mdt=Model.mdt)
     # Forward propagation
     i = 0
     while date<config.final_date:
+        t = (date - config.init_date).total_seconds()
         # Reduced basis
-        params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
+        #params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
+        coords = [State.lon.flatten(),State.lat.flatten(),t/3600/24]
+        params = basis.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
+                       compute_geta=True,eta=Xa,mode='flux',
+                       save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
         # Forward
         for j in range(config.checkpoint):
             Model.step(State0,params=params,nstep=1)

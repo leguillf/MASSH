@@ -451,12 +451,7 @@ class RedBasis_BM:
             else:
                 Q[self.slicef[iff]] = self.Qmax * self.lmeso**self.slopQ * ff[iff]**self.slopQ
 
-        
-        plt.figure()
-        plt.plot(Q)
-        plt.yscale('log')
-        plt.show()
-        
+
         self.nf = nf
         self.NS = NS
         self.NT = NT
@@ -661,6 +656,7 @@ class RedBasis_BM_2:
         self.NP=NP
         self.enst=enst
         self.nwave=nwave
+        self.nbasis = self.nwave
         self.nf=nf
         self.theta=theta
         self.ntheta=ntheta
