@@ -444,16 +444,18 @@ class RedBasis_BM:
 
         # Fill the Q diagonal matrix (expected variance for each wavelet)            
         Q = np.zeros((nbasis,))
-        iwave = 0
         # Loop on all wavelets of given pseudo-period
         for iff in range(nf):
             if 1/ff[iff]>self.lmeso:
-                Q[iwave:iwave+NS[iff]*NT[iff]] = self.Qmax   
+                Q[self.slicef[iff]] = self.Qmax   
             else:
-                Q[iwave:iwave+NS[iff]*NT[iff]] = self.Qmax * self.lmeso**self.slopQ * ff[iff]**self.slopQ
-            print(1/ff[iff],Q[iwave])
-            iwave += NS[iff]*NT[iff]
+                Q[self.slicef[iff]] = self.Qmax * self.lmeso**self.slopQ * ff[iff]**self.slopQ
 
+        
+        plt.figure()
+        plt.plot(Q)
+        plt.yscale('log')
+        plt.show()
         
         self.nf = nf
         self.NS = NS
@@ -647,6 +649,11 @@ class RedBasis_BM_2:
             
         nwave = iwave
         Q=Q[:nwave]
+        
+        plt.figure()
+        plt.plot(Q)
+        plt.yscale('log')
+        plt.show()
         
         self.DX=DX
         self.ENSLON=ENSLON

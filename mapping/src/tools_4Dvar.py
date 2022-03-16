@@ -437,8 +437,7 @@ class Variational_flux:
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
             # 2. Reduced basis
-            if i>0:
-                params = self.basis.operg(X,i)
+            params = self.basis.operg(X,i)
             
             # 3. Run forward model
             self.M.step(State, params=params, nstep=nstep)
@@ -504,8 +503,7 @@ class Variational_flux:
             adparams = self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
             
             # 2. Reduced basis
-            if i>0:
-                adX += self.basis.operg_transpose(adparams,i)
+            adX += self.basis.operg_transpose(adparams,i)
                 
             # 1. Misfit 
             if self.H.isobs[i]:

@@ -529,8 +529,7 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     i = 0
     while date<config.final_date:
         # Reduced basis
-        if i>0:
-            params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
+        params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
         # Forward
         for j in range(config.checkpoint):
             Model.step(State0,params=params,nstep=1)
