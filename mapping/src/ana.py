@@ -38,14 +38,8 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     elif config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
     
-    elif config.name_analysis=='4Dvar' and config.name_model in ['QG1L','Diffusion']:
-        if config.reduced_basis==True:
-            return ana_4Dvar_flux(config,State,Model,dict_obs)
-        else:
-            return ana_4Dvar_QG_init(config,State,Model,dict_obs)
-        
-    elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
-        return ana_4Dvar_SW(config,State,Model,dict_obs)
+    elif config.name_analysis=='4Dvar':
+        return ana_4Dvar(config,State,Model,dict_obs)
     
     elif config.name_analysis=='4Dvar' and  hasattr(config.name_model,'__len__') and len(config.name_model)==2:
         return ana_4Dvar_BM_IT(config,State,Model,dict_obs)
@@ -80,7 +74,9 @@ def ana_forward(config,State,Model):
         
     return
 
-              
+         
+
+        
 def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     """
     NAME
@@ -424,23 +420,31 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
     return
 
-def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
+
+
+def ana_4Dvar(config,State,Model,dict_obs=None) :
+    
     '''
     Run a 4Dvar analysis
     '''
-    from .tools_4Dvar import Obsopt, Cov, Variational_flux
-    from .tools_reduced_basis import RedBasis_BM_2
 
-    
     print('\n*** Observation operator ***\n')
+    from .tools_4Dvar import Obsopt
     H = Obsopt(config,State,dict_obs,Model)
     
     print('\n*** Wavelet reduced basis ***\n')
-    basis = RedBasis_BM_2(config)
+    
+    if config.name_model=='QG1L':
+        from .tools_reduced_basis import RedBasis_BM as RedBasis
+    elif config.name_model=='SW1L':
+        from .tools_reduced_basis import RedBasis_IT as RedBasis
+        
+    basis = RedBasis(config)
     time_basis = H.checkpoint * Model.dt / (24*3600)
     Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
     
-    print('\n*** Variational ***\n')
+    print('\n*** Covariances ***\n')
+    from .tools_4Dvar import Cov
     # Covariance matrix
     if config.sigma_B is not None:          
         # Least squares
@@ -449,10 +453,13 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
     else:
         B = Cov(Q)
         R = Cov(config.sigma_R)
+        
+    print('\n*** Variational ***\n')
+    from .tools_4Dvar import Variational
     # backgroud state 
     Xb = np.zeros((basis.nbasis,))
     # Cost and Grad functions
-    var = Variational_flux(
+    var = Variational(
         config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
     
     # Initial State 
@@ -520,36 +527,26 @@ def ana_4Dvar_flux(config,State,Model,dict_obs=None) :
         pickle.dump(Xa,f)
     # Init
     State0 = State.free()
-    #varinit = basis.operg(Xa,0,norm=False)
-    #params = varinit*0
-    #State0.setvar(varinit.reshape((State.ny,State.nx)),ind=0)
-    coords = [State.lon.flatten(),State.lat.flatten(),0]
-    ssh0 = basis.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                      compute_geta=True,eta=Xa,mode=None,
-                      save_wave_basis=var.save_wave_basis).reshape((State.ny,State.nx))
-    State0.setvar(ssh0,ind=0)
-    
     date = config.init_date
-    State0.save_output(date,mdt=Model.mdt)
+
     # Forward propagation
-    i = 0
     while date<config.final_date:
         t = (date - config.init_date).total_seconds()
         # Reduced basis
-        #params = basis.operg(Xa,i).reshape((State.ny,State.nx))  
-        coords = [State.lon.flatten(),State.lat.flatten(),t/3600/24]
-        params = basis.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                       compute_geta=True,eta=Xa,mode='flux',
-                       save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
+        basis.operg(Xa,t/3600/24,State=State0)
+        
         # Forward
         for j in range(config.checkpoint):
-            Model.step(State0,params=params,nstep=1)
+            
+            Model.step(t+j*config.dtmodel,State0,nstep=1)
+    
             date += timedelta(seconds=config.dtmodel)
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
+                    
                 State0.save_output(date,mdt=Model.mdt)
-        i += 1
+
         
     del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
     gc.collect()
@@ -914,136 +911,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
     return Xout
     
     
-def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
-    
-    from .tools_4Dvar import Obsopt, Cov, Variational_SW
-            
-    #################
-    # 1. Obs op     #
-    #################
-    print('\n*** Obs op ***\n')
-    H = Obsopt(config,State,dict_obs,Model)
-    
-    if config.detrend:
-        print('\n*** Detrend obs ***\n')
-        from . import obs
-        obs.detrend_obs(dict_obs)
-    
-    ##################
-    # 2. Reduced basis
-    ##################
-    print('\n*** Reduced basis ***\n')
-     
-    from .tools_reduced_basis import RedBasis_IT
-    dt_basis = config.checkpoint*config.dtmodel/(3600*24) # time between two basis function in days
-    time_basis = np.arange(0,(config.final_date - config.init_date).total_seconds()/24/3600,dt_basis)
-    basis = RedBasis_IT(config)
-    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
-    
-    ###################
-    # 2. Variationnal #
-    ###################
-    print('\n*** Variational ***\n')
-    
-    # Covariance matrixes
-    B = Cov(Q)
-    R = Cov(config.sigma_R)
-        
-    # backgroud state 
-    Xb = np.zeros((basis.nbasis,))
-        
-    # Cost and Grad functions
-    var = Variational_SW(
-        config=config, M=Model, H=H, State=State, B=B, R=R, Xb=Xb, basis=basis)
-    
-    # Initial State 
-    if config.path_init_4Dvar is None:
-        Xopt = np.zeros_like(var.Xb)
-    else:
-        # Read previous minimum 
-        with open(config.path_init_4Dvar, 'rb') as f:
-            print('Read previous minimum:',config.path_init_4Dvar)
-            Xopt = pickle.load(f)
-            
-    # Restart mode
-    if config.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
-        if len(tmp_files)>0:
-            with open(tmp_files[-1], 'rb') as f:
-                print('Restart at:',tmp_files[-1])
-                Xopt = pickle.load(f)
-        else:
-            Xopt = var.Xb*0
-    
-    ###################
-    # 3. Minimization #
-    ###################
-    print('\n*** Minimization ***\n')
-    J0 = var.cost(Xopt)
-    g0 = var.grad(Xopt)
-    projg0 = np.max(np.abs(g0))
-    print('J0=',"{:e}".format(J0))
-    print('projg0',"{:e}".format(projg0))
-    
-    
-    def callback(XX,projg0=projg0):
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d_%H%M%S")
-        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
-            pickle.dump(XX,f)
-    
-    options = {'disp': True, 'maxiter': config.maxiter}
-    if config.gtol is not None:
-        options['gtol'] = config.gtol*projg0
-        
-    res = opt.minimize(var.cost,Xopt,
-                    method='L-BFGS-B',
-                    jac=var.grad,
-                    options=options,
-                    callback=callback)
 
-    print ('\nIs the minimization successful? {}'.format(res.success))
-    print ('\nFinal cost function value: {}'.format(res.fun))
-    print ('\nNumber of iterations: {}'.format(res.nit))
-
-    ########################
-    # 4. Saving trajectory #
-    ########################
-    print('\n*** Saving trajectory ***\n')
-    
-    if config.prec:
-        Xa = var.Xb + B.sqr(res.x)
-    else:
-        Xa = var.Xb + res.x
-        
-    # Save minimum for next experiments
-    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
-        pickle.dump(Xa,f)
-    
-    # Steady initial state
-    State0 = State.free()
-    date = config.init_date
-    State0.save_output(date)
-    # Forward propagation
-    i = 0
-    while date<config.final_date:
-        t = (date - config.init_date).total_seconds()
-        # Reduced basis
-        params = basis.operg(Xa,i)
-        # Forward
-        for j in range(config.checkpoint):
-            Model.step(t+j*Model.dt,State0,params,nstep=1)
-            date += timedelta(seconds=config.dtmodel)
-            if (((date - config.init_date).total_seconds()
-                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>config.init_date) & (date<=config.final_date) :
-                State0.save_output(date)
-        i += 1
-
-    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
-    gc.collect()
-    print()
-        
 
 def ana_miost(config,State,dict_obs=None):
     

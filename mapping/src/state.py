@@ -117,6 +117,11 @@ class State:
                                              self.lon,
                                              self.lat)
         
+        # Model parameters
+        self.params = None
+        
+        
+        
     def __str__(self):
         message = ''
         for name in self.name_var:
@@ -470,6 +475,9 @@ class State:
                     
             outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
             
+        if self.params is not None:
+            outvars['params'] = (('p',self.params.flatten()))
+            
         ds = xr.Dataset(outvars)
         ds.to_netcdf(filename)
         ds.close()
@@ -499,6 +507,8 @@ class State:
         with xr.open_dataset(filename) as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values
+            if 'params' in ds:
+                self.params = ds.params.values
     
     def random(self,ampl=1):
         other = self.free()
@@ -509,6 +519,8 @@ class State:
     def free(self):
         other = State(self.config,first=False)
         other.mask = self.mask
+        other.params = self.params
+        
         return other
     
     def copy(self):
@@ -516,6 +528,9 @@ class State:
         for i in range(len(self.name_var)):
             other.var.values[i] = deepcopy(self.var.values[i])
         other.mask = self.mask
+        if self.params is not None:
+            other.params = +self.params
+        
         return other
     
     def getvar(self,ind=None,vect=False):
@@ -552,10 +567,14 @@ class State:
     def scalar(self,coeff):
         for i, name in enumerate(self.name_var):
             self.var.values[i] *= coeff
+        if self.params is not None:
+            self.params *= coeff
         
     def Sum(self,State1):
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
+        if self.params is not None and State1.params is not None:
+            self.params += State1.params
             
     def plot(self,title=None,cmap='RdBu_r',ind=None):
         

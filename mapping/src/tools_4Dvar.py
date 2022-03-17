@@ -361,167 +361,8 @@ class Cov :
     def sqr(self,X):
         return self.sigma**0.5 * X
     
-
-# class Variational_flux:
     
-#     def __init__(self, 
-#                  config=None, M=None, H=None, State=None, R=None,B=None, basis=None, Xb=None):
-        
-#         # Objects
-#         self.M = M # model
-#         self.H = H # observational operator
-#         self.State = State # state variables
-    
-#         # Covariance matrixes
-#         self.B = B
-#         self.R = R
-        
-#         # Background state
-#         self.Xb = Xb
-        
-#         # Temporary path where to save model trajectories
-#         self.tmp_DA_path = config.tmp_DA_path
-        
-#         # preconditioning
-#         self.prec = config.prec
-        
-#         # Wavelet reduced basis
-#         self.basis = basis
-#         self.lon1d = State.lon.flatten()
-#         self.lat1d = State.lat.flatten()
-        
-#         # Grad test
-#         if config.compute_test:
-#             print('Gradient test:')
-#             X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
-#             grad_test(self.cost,self.grad,X)
-            
-        
-#     def cost(self,X0):
-                
-#         # initial state
-#         State = self.State.free()
-        
-#         # Background cost function evaluation 
-#         if self.B is not None:
-#             if self.prec :
-#                 X  = self.B.sqr(X0) + self.Xb
-#                 Jb = X0.dot(X0) # cost of background term
-#             else:
-#                 X  = X0 + self.Xb
-#                 Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
-#         else:
-#             X  = X0 + self.Xb
-#             Jb = 0
-    
-#         # Observational cost function evaluation
-#         Jo = 0.
-        
-#         # Init
-#         varinit = self.basis.operg(X,0,norm=False)
-#         params = varinit*0
-#         State.setvar(varinit.reshape((State.ny,State.nx)),ind=0)
-        
-#         State.save(os.path.join(self.tmp_DA_path,
-#                         'model_state_' + str(self.H.checkpoint[0]) + '.nc'))
-        
-#         for i in range(len(self.H.checkpoint)-1):
-
-#             timestamp = self.M.timestamps[self.H.checkpoint[i]]
-#             t = self.M.T[self.H.checkpoint[i]]
-#             nstep = self.H.checkpoint[i+1] - self.H.checkpoint[i]
-            
-#             # 1. Misfit
-#             if self.H.isobs[i]:
-#                 misfit = self.H.misfit(timestamp,State,square=False) # d=Hx-xobs   
-#                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
-            
-#             # 2. Reduced basis
-#             params = self.basis.operg(X,i)
-            
-#             # 3. Run forward model
-#             self.M.step(State, params=params, nstep=nstep)
-            
-#             # 4. Save state for adj computation 
-#             State.save(os.path.join(self.tmp_DA_path,
-#                         'model_state_' + str(self.H.checkpoint[i+1]) + '.nc'))
-            
-#         if self.H.isobs[-1]:
-#             misfit = self.H.misfit(self.M.timestamps[self.H.checkpoint[-1]],State,square=False) # d=Hx-xobsx
-#             Jo += misfit.dot(self.R.inv(misfit))  
-        
-#         # Cost function 
-#         J = 1/2 * (Jo + Jb)
-        
-#         State.plot()
-        
-#         return J
-    
-        
-#     def grad(self,X0): 
-                
-#         X = +X0 
-        
-#         if self.B is not None:
-#             if self.prec :
-#                 X  = self.B.sqr(X0) + self.Xb
-#                 gb = X0      # gradient of background term
-#             else:
-#                 X  = X0 + self.Xb
-#                 gb = self.B.inv(X0) # gradient of background term
-#         else:
-#             X  = X0 + self.Xb
-#             gb = 0
-            
-#         # Ajoint initialization   
-#         adState = self.State.free()
-#         adX = np.zeros_like(X)
-        
-#         # Current trajectory
-#         State = self.State.free()
-        
-#         # Last timestamp
-#         if self.H.isobs[-1]:
-#             State.load(os.path.join(self.tmp_DA_path,
-#                        'model_state_' + str(self.H.checkpoint[-1]) + '.nc'))
-#             timestamp = self.M.timestamps[self.H.checkpoint[-1]]
-#             misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
-#             self.H.adj(timestamp,adState,self.R.inv(misfit))
-
-#         # Time loop
-#         for i in reversed(range(0,len(self.H.checkpoint)-1)):
-            
-#             nstep = self.H.checkpoint[i+1] - self.H.checkpoint[i]
-#             timestamp = self.M.timestamps[self.H.checkpoint[i]]
-#             t = self.M.T[self.H.checkpoint[i]]
- 
-#             # 4. Read model state
-#             State.load(os.path.join(self.tmp_DA_path,
-#                        'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
-            
-#             # 3. Run adjoint model 
-#             adparams = self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
-            
-#             # 2. Reduced basis
-#             adX += self.basis.operg_transpose(adparams,i)
-                
-#             # 1. Misfit 
-#             if self.H.isobs[i]:
-#                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
-#                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-        
-#         adX += self.basis.operg_transpose(adState.getvar(ind=0).flatten(),0,norm=False)
-        
-#         if self.prec :
-#             adX = np.transpose(self.B.sqr(adX)) 
-        
-#         g = adX + gb  # total gradient
-        
-#         adState.plot()
-        
-#         return g 
-    
-class Variational_flux:
+class Variational:
     
     def __init__(self, 
                  config=None, M=None, H=None, State=None, R=None,B=None, basis=None, Xb=None):
@@ -545,21 +386,14 @@ class Variational_flux:
         self.prec = config.prec
         
         # Wavelet reduced basis
-        self.basis = basis
-        self.lon1d = State.lon.flatten()
-        self.lat1d = State.lat.flatten()
-        self.save_wave_basis = config.save_wave_basis
-        
-        
-        self.lon1d = State.lon.flatten()
-        self.lat1d = State.lat.flatten()
-        self.coords_name = {'lon':0, 'lat':1, 'time':2}
+        self.basis = basis 
         
         # Grad test
         if config.compute_test:
             print('Gradient test:')
             X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
+            
             
         
     def cost(self,X0):
@@ -574,25 +408,13 @@ class Variational_flux:
                 Jb = X0.dot(X0) # cost of background term
             else:
                 X  = X0 + self.Xb
-                Jb = np.dot(X0,self.B.inv(X0))        # cost of background term
+                Jb = np.dot(X0,self.B.inv(X0)) # cost of background term
         else:
             X  = X0 + self.Xb
             Jb = 0
     
         # Observational cost function evaluation
         Jo = 0.
-        
-        # Init
-        coords = [self.lon1d,self.lat1d,0]
-        ssh0 = self.basis.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                            compute_geta=True,eta=X,mode=None,
-                            save_wave_basis=self.save_wave_basis).reshape(
-                                (State.ny,State.nx))
-        State.setvar(ssh0,ind=0)
-        
-        State.save(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.H.checkpoint[0]) + '.nc'))
-        
         for i in range(len(self.H.checkpoint)-1):
 
             timestamp = self.M.timestamps[self.H.checkpoint[i]]
@@ -605,21 +427,18 @@ class Variational_flux:
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
             # 2. Reduced basis
-            #params = self.basis.operg(X,i)
-            coords = [self.lon1d,self.lat1d,t/3600/24]
-            params = self.basis.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                compute_geta=True,eta=X,mode='flux',
-                                save_wave_basis=self.save_wave_basis).reshape(
-                                    (State.ny,State.nx))
-            
-            # 3. Run forward model
-            self.M.step(State, params=params, nstep=nstep)
-            
-            # 4. Save state for adj computation 
+            self.basis.operg(X,t/3600/24,State=State)
+        
             State.save(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.H.checkpoint[i+1]) + '.nc'))
+                        'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
+
+            # 3. Run forward model
+            self.M.step(t, State, nstep=nstep)
+            
             
         if self.H.isobs[-1]:
+            State.save(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.H.checkpoint[-1]) + '.nc'))
             misfit = self.H.misfit(self.M.timestamps[self.H.checkpoint[-1]],State,square=False) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))  
         
@@ -646,12 +465,12 @@ class Variational_flux:
             X  = X0 + self.Xb
             gb = 0
             
-        # Ajoint initialization   
-        adState = self.State.free()
-        adX = np.zeros_like(X)
-        
         # Current trajectory
         State = self.State.free()
+        
+        # Ajoint initialization   
+        adState = self.State.free()
+        adX = X*0
         
         # Last timestamp
         if self.H.isobs[-1]:
@@ -673,26 +492,15 @@ class Variational_flux:
                        'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
             
             # 3. Run adjoint model 
-            adparams = self.M.step_adj(adState, State, nstep=nstep) # i+1 --> i
+            self.M.step_adj(t, adState, State, nstep=nstep) # i+1 --> i
             
             # 2. Reduced basis
-           # adX += self.basis.operg_transpose(adparams,i)
-            coords = [self.lon1d,self.lat1d,t/3600/24]
-            adX += self.basis.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                                         compute_geta=True,transpose=True,mode='flux',
-                                         save_wave_basis=self.save_wave_basis,
-                                         eta=adparams[np.newaxis,:])
+            self.basis.operg_transpose(adState,adX,t/3600/24)
                 
             # 1. Misfit 
             if self.H.isobs[i]:
                 misfit = self.H.misfit(timestamp,State,square=True) # d=Hx-yobs
                 self.H.adj(timestamp,adState,self.R.inv(misfit))
-        
-        #adX += self.basis.operg_transpose(adState.getvar(ind=0).flatten(),0,norm=False)
-        adX += self.basis.operg(coords=coords,coords_name=self.coords_name, coordtype='reg', 
-                            compute_geta=True,transpose=True,
-                            eta=adState.getvar(ind=0).flatten()[np.newaxis,:],mode=None,
-                            save_wave_basis=self.save_wave_basis)
         
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -1311,12 +1119,13 @@ class Variational_SW:
             X  = X0 + self.Xb
             gb = 0
         
+        # Current trajectory
+        State = self.State.free()
+        
         # Ajoint initialization   
         adState = self.State.free()
         adX = X0*0
-        
-        # Current trajectory
-        State = self.State.free()
+        adparams = np.zeros(self.basis.nphys)
         
         # Last timestamp
         if self.isobs[-1]:
@@ -1330,7 +1139,7 @@ class Variational_SW:
         # Time loop
         self.M.restart()  
         params = self.basis.operg(X,-1)
-        adparams = np.zeros(self.basis.nphys)
+        
         for i in reversed(range(0,len(self.checkpoint)-1)):
             timestamp = self.M.timestamps[self.checkpoint[i]]
             t = self.M.T[self.checkpoint[i]]
