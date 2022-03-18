@@ -41,9 +41,6 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     elif config.name_analysis=='4Dvar':
         return ana_4Dvar(config,State,Model,dict_obs)
     
-    elif config.name_analysis=='4Dvar' and  hasattr(config.name_model,'__len__') and len(config.name_model)==2:
-        return ana_4Dvar_BM_IT(config,State,Model,dict_obs)
-    
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
     
@@ -438,6 +435,8 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         from .tools_reduced_basis import RedBasis_BM as RedBasis
     elif config.name_model=='SW1L':
         from .tools_reduced_basis import RedBasis_IT as RedBasis
+    elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        from .tools_reduced_basis import RedBasis_BM_IT as RedBasis
         
     basis = RedBasis(config)
     time_basis = H.checkpoint * Model.dt / (24*3600)
@@ -527,6 +526,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         pickle.dump(Xa,f)
     # Init
     State0 = State.free()
+    State0.params = np.zeros((Model.nparams,))
     date = config.init_date
 
     # Forward propagation

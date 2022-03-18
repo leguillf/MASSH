@@ -400,6 +400,7 @@ class Variational:
                 
         # initial state
         State = self.State.free()
+        State.params = np.zeros((self.M.nparams,))
         
         # Background cost function evaluation 
         if self.B is not None:
@@ -470,6 +471,7 @@ class Variational:
         
         # Ajoint initialization   
         adState = self.State.free()
+        adState.params = np.zeros((self.M.nparams,))
         adX = X*0
         
         # Last timestamp

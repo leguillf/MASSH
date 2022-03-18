@@ -230,7 +230,7 @@ class RedBasis_IT:
             return Q
         
         
-    def operg(self,X,t,State):
+    def operg(self,X,t,State=None):
         """
             Project to physicial space
         """
@@ -618,7 +618,64 @@ class RedBasis_BM:
                 adState.params = np.zeros((self.nphys,))
             adX += self.operg(adState.params, t, transpose=True)
             
+
+class RedBasis_BM_IT:
+   
+    def __init__(self,config):
+        self.RedBasis_BM = RedBasis_BM(config)
+        self.RedBasis_IT = RedBasis_IT(config)
         
+    def set_basis(self,time,lon,lat,return_q=False):
+        
+        print('* Reduced basis for BM:')
+        Qbm = self.RedBasis_BM.set_basis(time,lon,lat,return_q=return_q)
+        
+        print('* Reduced basis for IT:')
+        Qit = self.RedBasis_IT.set_basis(time,lon,lat,return_q=return_q)
+        
+        self.nbasis = self.RedBasis_BM.nbasis + self.RedBasis_IT.nbasis
+        self.slicebm = slice(0,self.RedBasis_BM.nbasis)
+        self.sliceit = slice(self.RedBasis_BM.nbasis,
+                             self.RedBasis_BM.nbasis + self.RedBasis_IT.nbasis)
+        self.slicebm_phys = slice(0,self.RedBasis_BM.nphys)
+        self.sliceit_phys = slice(self.RedBasis_BM.nphys,
+                                  self.RedBasis_BM.nphys + self.RedBasis_IT.nphys)
+        
+        if return_q:
+            return np.concatenate((Qbm,Qit))
+        
+    
+    def operg(self, X, t, transpose=False,State=None):
+        
+        """
+            Project to physicial space
+        """
+        
+        phi_bm = self.RedBasis_BM.operg(X[self.slicebm],t)
+        phi_it = self.RedBasis_IT.operg(X[self.slicebm],t)
+        
+        phi = np.concatenate((phi_bm,phi_it))
+        
+        if State is not None:
+            if t==0:
+                State.setvar(phi_bm.reshape((State.ny,State.nx)),ind=0)
+                State.params[self.slicebm_phys] = np.zeros_like(phi_bm)
+                State.params[self.sliceit_phys] = phi_it
+            else:
+                State.params = phi
+        
+        else:
+            return phi
+        
+    def operg_transpose(self, adState, adX, t):
+        
+        """
+            Project to reduced space
+        """
+        
+        self.RedBasis_BM.operg_transpose(adState,adX[self.slicebm],t)
+        self.RedBasis_IT.operg_transpose(adState,adX[self.sliceit],t)
+            
     
 class RedBasis_BM_2:
    
