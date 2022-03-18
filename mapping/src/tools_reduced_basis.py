@@ -641,6 +641,14 @@ class RedBasis_BM_IT:
         self.sliceit_phys = slice(self.RedBasis_BM.nphys,
                                   self.RedBasis_BM.nphys + self.RedBasis_IT.nphys)
         
+        self.RedBasis_IT.sliceHe_phys = slice(self.RedBasis_BM.nphys,
+                                              self.RedBasis_BM.nphys + np.prod(self.RedBasis_IT.shapeHe_phys))
+        self.RedBasis_IT.slicehbcx_phys = slice(self.RedBasis_BM.nphys + np.prod(self.RedBasis_IT.shapeHe_phys),
+                               self.RedBasis_BM.nphys + np.prod(self.RedBasis_IT.shapeHe_phys)+np.prod(self.RedBasis_IT.shapehbcx_phys))
+        self.RedBasis_IT.slicehbcy_phys = slice(self.RedBasis_BM.nphys + np.prod(self.RedBasis_IT.shapeHe_phys)+np.prod(self.RedBasis_IT.shapehbcx_phys),
+                               self.RedBasis_BM.nphys + np.prod(self.RedBasis_IT.shapeHe_phys)+np.prod(self.RedBasis_IT.shapehbcx_phys)+np.prod(self.RedBasis_IT.shapehbcy_phys))
+        
+        
         if return_q:
             return np.concatenate((Qbm,Qit))
         
