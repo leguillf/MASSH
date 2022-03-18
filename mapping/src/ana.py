@@ -441,7 +441,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     basis = RedBasis(config)
     time_basis = H.checkpoint * Model.dt / (24*3600)
     Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
-    
+
     print('\n*** Covariances ***\n')
     from .tools_4Dvar import Cov
     # Covariance matrix

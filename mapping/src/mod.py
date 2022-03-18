@@ -825,6 +825,7 @@ class Model_sw1l:
         
         # Adjoint
         adState = State.random()
+        adState.params = np.zeros((self.nparams,))
         adX = adState.getvar(vect=True)
         
         # Run TLM

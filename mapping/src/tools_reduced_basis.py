@@ -660,7 +660,7 @@ class RedBasis_BM_IT:
         """
         
         phi_bm = self.RedBasis_BM.operg(X[self.slicebm],t)
-        phi_it = self.RedBasis_IT.operg(X[self.slicebm],t)
+        phi_it = self.RedBasis_IT.operg(X[self.sliceit],t)
         
         phi = np.concatenate((phi_bm,phi_it))
         
