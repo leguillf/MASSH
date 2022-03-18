@@ -344,7 +344,7 @@ variable are SLAs!')
             if np.any(np.isfinite(Nudging_term['ssh'])):
                 indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1) 
                 pv_1[indNoNan] -= (1-Wbc[indNoNan]) *\
-                    (self.State.g*self.State.f[indNoNan])/self.c[indNoNan]**2 * \
+                    (State.g*State.f[indNoNan])/self.c[indNoNan]**2 * \
                         Nudging_term['ssh'][indNoNan]
                 # Inversion pv -> ssh
                 ssh_b = +ssh_1
