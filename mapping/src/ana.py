@@ -139,15 +139,15 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         # 3. BOUNDARY AND INITIAL CONDITIONS #
         ######################################
         # Boundary condition
-        if config.flag_use_boundary_conditions:
+        if config.flag_use_bc:
             periods = (final_bfn_date-init_bfn_date).total_seconds()//\
                 one_time_step.total_seconds() + 1
             timestamps = pd.date_range(init_bfn_date,
                                        final_bfn_date,
                                        periods=periods
                                       )
-                
-            bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
+    
+            bc_field, bc_weight = grid.boundary_conditions(config.file_bc,
                                                            config.lenght_bc,
                                                            config.name_var_bc,
                                                            timestamps,
@@ -155,7 +155,8 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            State.lat,
                                                            config.flag_plot,
                                                            bfn_obj.sponge,
-                                                           mask=+State.mask)
+                                                           mask=State.mask,
+                                                           coast=config.use_bc_on_coast)
             # Add mdt if provided 
             if config.add_mdt_bc:
                 try: 
@@ -552,199 +553,6 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     gc.collect()
     print()
     
-    
-def ana_4Dvar_BM_IT(config,State,Model,dict_obs=None) :
-    '''
-    Run a 4Dvar analysis
-    '''
-    from .tools_4Dvar import Obsopt, Cov, Variational_BM_IT
-    from .tools_reduced_basis import RedBasis_BM
-
-    print('\n*** Observation operator ***\n')
-    H = Obsopt(config,State,dict_obs,Model)
-    
-    print('\n*** Wavelet reduced basis ***\n')
-    comp_bm = RedBasis_BM(config,State)
-    q_bm = comp_bm.set_basis(return_q=True)
-    
-    ###################
-    # Variational    #
-    ###################
-    print('\n*** Variational ***\n')
-    
-    # Covariance matrix
-    R = Cov(config.sigma_R)
-    _sigma_B = np.zeros((Model.Model_IT.nParams)) 
-    # error on He
-    _sigma_B[Model.Model_IT.sliceHe] = config.sigma_B_He 
-    # error on OBCs
-    
-    if hasattr(config.sigma_B_bc, '__len__'):
-        # Specific value for each tidal component
-        if len(config.sigma_B_bc) == len(config.w_igws):
-            N_one_component_x = Model.Model_IT.nbcx//len(config.w_igws)
-            N_one_component_y = Model.Model_IT.nbcy//len(config.w_igws)
-            for i,_sigma in enumerate(config.sigma_B_bc):
-                _sigma_B[Model.Model_IT.slicehbcx][
-                    i*N_one_component_x:(i+1)*N_one_component_x] = _sigma
-                _sigma_B[Model.Model_IT.slicehbcy][
-                    i*N_one_component_y:(i+1)*N_one_component_y] = _sigma
-        else:
-            _sigma_B[Model.Model_IT.slicehbcx] = config.sigma_B_bc[0]
-            _sigma_B[Model.Model_IT.slicehbcy] = config.sigma_B_bc[0]
-    else:
-        _sigma_B[Model.Model_IT.slicehbcx] = config.sigma_B_bc
-        _sigma_B[Model.Model_IT.slicehbcy] = config.sigma_B_bc
-            
-    if np.any(State.mask) and config.Nmodes==1:
-        
-        # Reduced apriori for land pixels
-        land_coeff_bcx = np.ones(Model.Model_IT.shapehbcx)
-        land_coeff_bcy = np.ones(Model.Model_IT.shapehbcy)
-        # Loop over OBC coordinates 
-        for j,x in enumerate(Model.Model_IT.bcx): # South/North
-            # look for the closest grid pixel 
-            jS = np.argmin(np.abs(State.X[0,:]-x)) # South
-            jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
-            if State.mask[0,jS]:
-                land_coeff_bcx[:,0,:,:,:,j] = config.facB_bc_coast
-            if State.mask[-1,jN]:
-                land_coeff_bcx[:,1,:,:,:,j] = config.facB_bc_coast
-        for i,y in enumerate(Model.Model_IT.bcy): # West/East
-            # look for the closest grid pixel 
-            iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
-            iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
-            if State.mask[iW,0]:
-                land_coeff_bcy[:,0,:,:,:,i] = config.facB_bc_coast
-            if State.mask[iE,-1]:
-                land_coeff_bcy[:,1,:,:,:,i] = config.facB_bc_coast
-        
-        _sigma_B[Model.Model_IT.slicehbcx] *= land_coeff_bcx.ravel()
-        _sigma_B[Model.Model_IT.slicehbcy] *= land_coeff_bcy.ravel()
-        
-        # Loop over He coordinates 
-        land_coeff_He = np.ones(Model.Model_IT.shapeHe)
-        p = -1
-        for i,y in enumerate(Model.Model_IT.Hey):
-            for j,x in enumerate(Model.Model_IT.Hex):
-                p += 1
-                dist = np.sqrt((State.Y-y)**2+(State.X-x)**2)
-                i0,j0 = np.unravel_index(dist.argmin(),dist.shape)
-                if State.mask[i0,j0]:
-                    land_coeff_He[:,p] = config.facB_He_coast
-        _sigma_B[Model.Model_IT.sliceHe] *= land_coeff_He.ravel()
-
-    B = Cov(np.concatenate((np.sqrt(q_bm),_sigma_B)))
-    
-    # backgroud state 
-    Xb = np.zeros((comp_bm.nwave+Model.Model_IT.nParams,))
-    
-    # Cost and Grad functions
-    var = Variational_BM_IT(
-        config=config, M=Model, H=H, State=State, B=B, R=R, comp=comp_bm, Xb=Xb)
-    
-    # Initial State 
-    if config.path_init_4Dvar is None:
-        Xopt = var.Xb*0
-    else:
-        # Read previous minimum 
-        with open(config.path_init_4Dvar, 'rb') as f:
-            print('Read previous minimum:',config.path_init_4Dvar)
-            Xopt = pickle.load(f)
-    
-    # Restart mode
-    if config.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
-        if len(tmp_files)>0:
-            with open(tmp_files[-1], 'rb') as f:
-                print('Restart at:',tmp_files[-1])
-                Xopt = pickle.load(f)
-        else:
-            Xopt = var.Xb*0
-            
-    ###################
-    # Minimization    #
-    ###################
-    print('\n*** Minimization ***\n')
-    J0 = var.cost(Xopt)
-    g0 = var.grad(Xopt)
-    projg0 = np.max(np.abs(g0))
-    print('J0=',"{:e}".format(J0))
-    print('projg0=',"{:e}".format(projg0))
-    
-    
-    def callback(XX,projg0=projg0):
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d_%H%M%S")
-        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
-            pickle.dump(XX,f)
-    
-    options = {'disp': True, 'maxiter': config.maxiter}
-    if config.gtol is not None:
-        options['gtol'] = config.gtol*projg0
-        
-    res = opt.minimize(var.cost,Xopt,
-                    method='L-BFGS-B',
-                    jac=var.grad,
-                    options=options,
-                    callback=callback)
-
-    print ('\nIs the minimization successful? {}'.format(res.success))
-    print ('\nFinal cost function value: {}'.format(res.fun))
-    print ('\nNumber of iterations: {}'.format(res.nit))
-
-    ########################
-    #    Saving trajectory #
-    ########################
-    print('\n*** Saving trajectory ***\n')
-    if config.prec:
-        Xa = var.Xb + B.sqr(res.x)
-    else:
-        Xa = var.Xb + res.x
-    
-    Xbm = Xa[:comp_bm.nwave]
-    Xit = Xa[comp_bm.nwave:]
-        
-    # Save minimum for next experiments
-    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
-        pickle.dump(Xa,f)
-        
-    # init
-    State0 = State.free()
-    coords = [State.lon.flatten(),State.lat.flatten(),0]
-    ssh0 = comp_bm.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                        compute_geta=True,eta=Xbm,mode=None,
-                        save_wave_basis=var.save_wave_basis).reshape(
-                            (State.ny,State.nx))
-    State0.setvar(ssh0,ind=0)
-    date = config.init_date
-    State0.save_output(date,mdt=Model.Model_BM.mdt)
-    # Forward propagation
-    i = 0
-    while date<config.final_date:
-        t = (date - config.init_date).total_seconds()
-        # Forward
-        for j in range(config.checkpoint):
-            Model.step(t+j*Model.dt,State0,Xit,nstep=1, 
-                       Hbc=var.bc_field[i],Wbc=var.bc_weight)
-            date += timedelta(seconds=config.dtmodel)
-            if (((date - config.init_date).total_seconds()
-                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>config.init_date) & (date<=config.final_date) :
-                State0.save_output(date,mdt=Model.Model_BM.mdt)
-        # add Flux
-        coords = [State.lon.flatten(),State.lat.flatten(),t/3600/24]
-        F = comp_bm.operg(coords=coords,coords_name=var.coords_name, coordtype='reg', 
-                          compute_geta=True,eta=Xbm,mode='flux',
-                          save_wave_basis=config.save_wave_basis).reshape((State.ny,State.nx))  
-        _var = State0.getvar(ind=0)
-        State0.setvar(_var + config.checkpoint * config.dtmodel/(3600*24) * F,ind=0)
-        i += 1
-    
-    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
-    gc.collect()
-    print()
-        
     
 def ana_4Dvar_QG_init(config,State,Model,dict_obs=None) :
     '''

@@ -225,6 +225,12 @@ variable are SLAs!')
                                    State.lat)
         else:
             self.c = config.c0 * np.ones((State.ny,State.nx))
+        
+        if config.flag_plot>1:
+            plt.figure()
+            plt.pcolormesh(self.c)
+            plt.colorbar()
+            plt.show()
             
             
         # Model Parameters (Flux)
