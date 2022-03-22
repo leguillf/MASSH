@@ -205,16 +205,6 @@ Nmodes = 1
 
 He_init = 0.9 # Mean height (in m)
 
-Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
-
-D_He = 200e3 # Space scale of gaussian decomposition for He (in m)
-
-T_He = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for He (in m)
-
-D_bc = 200e3 # Space scale of gaussian decomposition for boundary conditions (in m)
-
-T_bc = timedelta(days=10).total_seconds() # Time scale of gaussian decomposition for boundary conditions (in m)
-
 He_data = None # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
 
 # - parameter specific to diffusion model
@@ -372,56 +362,30 @@ obs_subsampling = 1
 
 
 #########################################
-### Wavelet basis specific parameters ### 
+### Reduced basis specific parameters ### 
 #########################################
 
-file_aux = ''
+# For BM
 
-filec_aux = ''
+facns = 1. #factor for wavelet spacing= space
 
-name_var_c = {'lon':'lon','lat':'lat','var':'c1'}
-
-wavelet_mode = 'flux'
-
-facns= 1.5 #factor for wavelet spacing= space
-
-facnlt= 1
+facnlt = 2. #factor for wavelet spacing= time
 
 npsp= 3.5 # Defines the wavelet shape
 
-facpsp= 1.5 #1.5 # factor to fix df between wavelets
+facpsp= 1.5 # factor to fix df between wavelets
 
 lmin= 80 
 
 lmax= 970.
 
-cutRo= 1.6
-
-factdec= 15.
+factdec= 0.5
 
 tdecmin= 2.5
 
 tdecmax= 40.
 
-tssr= 0.5
-
-facRo= 8.
-
-Romax= 150.
-
 facQ= 1
-
-depth1= 0.  
-
-depth2= 30.   
-
-distortion_eq= 2.
-
-lat_distortion_eq= 5.
-
-distortion_eq_law= 2.
-
-gsize_max = 500000000
 
 sloptdec = -1.28
 
@@ -432,6 +396,21 @@ slopQ = -5
 lmeso = 300
 
 tmeso = 20
+
+
+# For IT 
+
+Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
+
+facgauss = 3.5  # factor for gaussian spacing= both space/time
+
+D_He = 200 # Space scale of gaussian decomposition for He (in km)
+
+T_He = 20 # Time scale of gaussian decomposition for He (in days)
+
+D_bc = 200 # Space scale of gaussian decomposition for boundary conditions (in km)
+
+T_bc = 20 # Time scale of gaussian decomposition for boundary conditions (in days)
 
 #################################################################################################################################
 # Observation parameters

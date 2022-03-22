@@ -19,8 +19,8 @@ class RedBasis_IT:
 
         self.km2deg =1./110
     
-        self.facns = config.facns
-        self.facnlt = config.facnlt
+        self.facns = config.facgauss
+        self.facnlt = config.facgauss
         self.D_He = config.D_He
         self.T_He = config.T_He
         self.D_bc = config.D_bc
