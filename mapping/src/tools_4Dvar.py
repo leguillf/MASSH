@@ -386,7 +386,9 @@ class Variational:
         self.prec = config.prec
         
         # Wavelet reduced basis
+        self.dtbasis = config.checkpoint
         self.basis = basis 
+        
         
         # Grad test
         if config.compute_test:
@@ -428,7 +430,8 @@ class Variational:
                 Jo += self.H.misfit(timestamp,State).dot(self.R.inv(misfit))
             
             # 2. Reduced basis
-            self.basis.operg(X,t/3600/24,State=State)
+            if self.H.checkpoint[i]%self.dtbasis==0:
+                self.basis.operg(X,t/3600/24,State=State)
         
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
@@ -497,7 +500,9 @@ class Variational:
             self.M.step_adj(t, adState, State, nstep=nstep) # i+1 --> i
             
             # 2. Reduced basis
-            self.basis.operg_transpose(adState,adX,t/3600/24)
+            if self.H.checkpoint[i]%self.dtbasis==0:
+                self.basis.operg_transpose(adState,adX,t/3600/24)
+                adState.params *= 0
                 
             # 1. Misfit 
             if self.H.isobs[i]:

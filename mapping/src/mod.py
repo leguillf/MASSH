@@ -434,7 +434,7 @@ variable are SLAs!')
         
         # Update state  and parameters
         if adState.params is not None:
-            adState.params[self.sliceparams] = nstep*self.dt/(3600*24) * adSSH0.flatten()
+            adState.params[self.sliceparams] += nstep*self.dt/(3600*24) * adSSH0.flatten()
             
         adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)
@@ -779,7 +779,7 @@ class Model_sw1l:
         adState.setvar([adu,adv,adh],ind=ind)
         
         # Update parameters
-        adState.params[self.sliceparams] = np.concatenate((adHe.flatten(), adhbcx.flatten(), adhbcy.flatten()))
+        adState.params[self.sliceparams] += np.concatenate((adHe.flatten(), adhbcx.flatten(), adhbcy.flatten()))
 
         
 
