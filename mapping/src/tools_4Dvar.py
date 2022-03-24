@@ -77,19 +77,23 @@ class Obsopt:
         self.Npix = config.Npix_H
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
-        self.coords_car_bc = []
+
         if State.config['name_model'] in ['SW1L','SW1LM']:
-            coords_geo_bc = (
+            coords_geo_bc = np.column_stack((
                 np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
                 np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
-                )
-            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
+                ))
+            
         elif State.config['name_model']=='QG1L' or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
             if State.config['name_model']=='QG1L': mask = Model.qgm.mask
             else: mask = Model.Model_BM.qgm.mask
-            coords_geo_bc = State.lon[mask<2].ravel(),State.lat[mask<2].ravel()
-            self.coords_car_bc = grid.geo2cart(coords_geo_bc)
-
+            coords_geo_bc = np.column_stack((State.lon[mask<2].ravel(),State.lat[mask<2].ravel()))
+        
+        self.ind_bc = []
+        for i in range(coords_geo.shape[0]):
+            if np.any(np.all(np.isclose(coords_geo_bc,coords_geo[i]), axis=1)):
+                self.ind_bc.append(i)
+        
         # Mask coast pixels
         self.dist_coast = config.dist_coast
         if config.mask_coast and self.dist_coast is not None and State.mask is not None and np.any(State.mask):
@@ -129,7 +133,7 @@ class Obsopt:
         self.checkpoint = np.asarray(self.checkpoint)
             
     def process_obs(self,t):
-        
+
         if self.read_H and not self.compute_H:
             file_H = os.path.join(
                 self.path_H,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
@@ -174,11 +178,10 @@ class Obsopt:
             lat = lat.ravel()
             lon_obs = np.concatenate((lon_obs,lon))
             lat_obs = np.concatenate((lat_obs,lat))
-                                        
+        
         if obs_sparse:
             # Compute indexes and weights of neighbour grid pixels
             indexes,weights = self.interpolator(lon_obs,lat_obs)
-        
         
             # Compute mask 
             maskobs = np.isnan(lon_obs)*np.isnan(lat_obs)
@@ -206,7 +209,6 @@ class Obsopt:
                         
         self.obs_sparse[t] = obs_sparse
         
-        
         return t
                 
     
@@ -229,8 +231,8 @@ class Obsopt:
 
         indexes = []
         weights = []
-        for i in range(lon_obs.size):
-            _dist = np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car),axis=1))
+        for iobs in range(lon_obs.size):
+            _dist = np.sqrt(np.sum(np.square(coords_car_obs[iobs]-self.coords_car),axis=1))
             # Npix closest
             ind_closest = np.argsort(_dist)
             # Get Npix closest pixels (ignoring boundary pixels)
@@ -239,15 +241,14 @@ class Obsopt:
             ind = []
             w = []
             while n<self.Npix:
-                if self.coords_car[ind_closest[i]] in self.coords_car_bc:
+                if ind_closest[i] in self.ind_bc:
                     #Ignoring boundary pixels 
-                    i +=1 
-                    continue
+                    w.append(0.)
                 else:
-                    ind.append(ind_closest[i])
                     w.append(1/_dist[ind_closest[i]])
-                    n += 1
-                    i +=1 
+                ind.append(ind_closest[i])
+                n += 1
+                i +=1 
             indexes.append(ind)
             weights.append(w)   
             
@@ -273,7 +274,10 @@ class Obsopt:
             if not mask:
                 # Average
                 if ind.size>1:
-                    HX[i] = np.average(X[ind],weights=w)
+                    try:
+                        HX[i] = np.average(X[ind],weights=w)
+                    except:
+                        HX[i] = np.nan
                 else:
                     HX[i] = X[ind[0]]
             else:
@@ -341,7 +345,7 @@ class Obsopt:
                             adH[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
         
             ind = adState.get_indobs()
-    
+            
             adState.var[ind] += adH.reshape(adState.var[ind].shape)
 
         
@@ -438,7 +442,6 @@ class Variational:
 
             # 3. Run forward model
             self.M.step(t, State, nstep=nstep)
-            
             
         if self.H.isobs[-1]:
             State.save(os.path.join(self.tmp_DA_path,

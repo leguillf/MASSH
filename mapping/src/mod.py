@@ -583,6 +583,7 @@ class Model_sw1l:
         if config.Ntheta>0:
             theta_p = np.arange(0,pi/2+pi/2/config.Ntheta,pi/2/config.Ntheta)
             self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
+            print(self.bc_theta)
         else:
             self.bc_theta = np.array([0])
             
@@ -1235,7 +1236,8 @@ class Model_BM_IT:
         # Adjoint
         adState = State.random()
         adX = adState.getvar(vect=True)
-        adState.params = np.random.random((self.nparams,))
+        adparams = np.random.random((self.nparams,))
+        adState.params = +adparams
         
         # Run TLM
         self.step_tgl(t0,dState,State0,nstep=nstep)
@@ -1245,7 +1247,7 @@ class Model_BM_IT:
         self.step_adj(t0,adState,State0,nstep=nstep)
         ADM = adState.getvar(vect=True)
 
-        ps1 = np.inner(TLM,adX) + np.inner(dState.params,adState.params*0) 
+        ps1 = np.inner(TLM,adX) + np.inner(dState.params,adparams) 
         ps2 = np.inner(dX,ADM)  + np.inner(dState.params,adState.params) 
         
         print(ps1/ps2)

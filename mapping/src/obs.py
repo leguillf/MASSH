@@ -182,8 +182,6 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
     ds = ds.where((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
                   (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs), drop=True)
     
-
-                  
     # Time loop
     for dt_curr in dt_list:
         
