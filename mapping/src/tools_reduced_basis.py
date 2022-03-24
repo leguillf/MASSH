@@ -30,8 +30,10 @@ class RedBasis_IT:
         self.sigma_B_bc = config.sigma_B_bc
         
         self.Ntheta = config.Ntheta
-        if self.Ntheta>0:
+        if self.Ntheta>1:
             self.Ntheta += 3 # We add -pi/2,0,pi/2
+        elif self.Ntheta==1:
+            self.Ntheta += 2 # We add -pi/2,pi/2
         else:
             self.Ntheta = 1 # Only angle 0°
             
