@@ -213,7 +213,15 @@ path_init_4Dvar = None # To restart the minimization process from a specified co
 
 restart_4Dvar = False # To restart the minimization process from the last control vector
 
-path_H = None 
+gtol = None # Gradient norm must be less than gtol before successful termination.
+
+maxiter = 20 # Maximal number of iterations for the minimization process
+
+opt_method = 'L-BFGS-B' # method for scipy.optimize.minimize
+
+save_minimization = False # save cost function and its gradient at each iteration 
+
+path_H = None # Directory where to save observational operator
 
 compute_H = False # Force computing H 
 
@@ -250,10 +258,6 @@ grad_term = False # Add a term that minimizes the gradient of SSH in the cost fu
 filter_name = None # name of filter used in preconditionning
 
 filter_order = None # order of the filter
-
-gtol = 1e-5 # Gradient norm must be less than gtol before successful termination.
-
-maxiter = 20 # Maximal number of iterations for the minimization process
 
 mask_coast = False
 

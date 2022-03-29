@@ -467,17 +467,20 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         Xopt = var.Xb*0
     else:
         # Read previous minimum 
-        with open(config.path_init_4Dvar, 'rb') as f:
-            print('Read previous minimum:',config.path_init_4Dvar)
-            Xopt = pickle.load(f)
+        print('Read previous minimum:',config.path_init_4Dvar)
+        ds = xr.open_dataset(config.path_init_4Dvar)
+        Xopt = ds.res.values
+        ds.close()
+
     
     # Restart mode
     if config.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*')))
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*.nc')))
         if len(tmp_files)>0:
-            with open(tmp_files[-1], 'rb') as f:
-                print('Restart at:',tmp_files[-1])
-                Xopt = pickle.load(f)
+            print('Restart at:',tmp_files[-1])
+            ds = xr.open_dataset(tmp_files[-1])
+            Xopt = ds.res.values
+            ds.close()
         else:
             Xopt = var.Xb*0
             
@@ -485,23 +488,23 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     # Minimization    #
     ###################
     print('\n*** Minimization ***\n')
-    J0 = var.cost(Xopt)
-    g0 = var.grad(Xopt)
-    projg0 = np.max(np.abs(g0))
-    print('J0=',"{:e}".format(J0))
-    print('projg0=',"{:e}".format(projg0))
-    
-    
-    def callback(XX,projg0=projg0):
+    # Callback function called at every minimization iterations
+    def callback(XX):
         now = datetime.now()
         current_time = now.strftime("%Y-%m-%d_%H%M%S")
-        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
-            pickle.dump(XX,f)
-    
+        ds = xr.Dataset({'res':(('x',),XX)})
+        ds.to_netcdf(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.nc'))
+        ds.close()
+            
+    # Minimization options
     options = {'disp': True, 'maxiter': config.maxiter}
     if config.gtol is not None:
+        J0 = var.cost(Xopt)
+        g0 = var.grad(Xopt)
+        projg0 = np.max(np.abs(g0))
         options['gtol'] = config.gtol*projg0
         
+    # Run minimization 
     res = opt.minimize(var.cost,Xopt,
                     method=config.opt_method,
                     jac=var.grad,
@@ -511,7 +514,13 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     print ('\nIs the minimization successful? {}'.format(res.success))
     print ('\nFinal cost function value: {}'.format(res.fun))
     print ('\nNumber of iterations: {}'.format(res.nit))
-
+    
+    # Save minimization trajectory
+    if config.save_minimization:
+        ds = xr.Dataset({'cost':(('it'),var.J),'grad':(('it'),var.G)})
+        ds.to_netcdf(os.path.join(config.tmp_DA_path,'minimization_trajectory.nc'))
+        ds.close()
+        
     ########################
     #    Saving trajectory #
     ########################
@@ -523,8 +532,10 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         Xa = var.Xb + res.x
         
     # Save minimum for next experiments
-    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
-        pickle.dump(Xa,f)
+    ds = xr.Dataset({'res':(('x',),Xa)})
+    ds.to_netcdf(os.path.join(config.tmp_DA_path,'Xini.nc'))
+    ds.close()
+
     # Init
     State0 = State.free()
     State0.params = np.zeros((Model.nparams,))
@@ -549,7 +560,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
                 State0.save_output(date,mdt=Model.mdt)
 
         
-    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
+    del State, State0, res, Xa, dict_obs, B, R
     gc.collect()
     print()
     

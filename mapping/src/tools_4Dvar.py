@@ -393,6 +393,11 @@ class Variational:
         self.dtbasis = config.checkpoint
         self.basis = basis 
         
+        # Save cost function and its gradient at each iteration 
+        self.save_minimization = config.save_minimization
+        if self.save_minimization:
+            self.J = []
+            self.G = []
         
         # Grad test
         if config.compute_test:
@@ -453,6 +458,9 @@ class Variational:
         J = 1/2 * (Jo + Jb)
         
         State.plot()
+        
+        if self.save_minimization:
+            self.J.append(J)
         
         return J
     
@@ -518,6 +526,9 @@ class Variational:
         g = adX + gb  # total gradient
         
         adState.plot()
+        
+        if self.save_minimization:
+            self.G.append(np.max(np.abs(g)))
         
         return g 
     
