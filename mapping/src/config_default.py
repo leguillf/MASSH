@@ -261,7 +261,7 @@ filter_order = None # order of the filter
 
 mask_coast = False
 
-dist_coast = 100 #km
+dist_coast = 100 # km
 
 
 ####################################

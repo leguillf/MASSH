@@ -213,7 +213,7 @@ variable are SLAs!')
     
         
         # Open Rossby Radius if provided
-        if config.c0 is None and self.mdt is not None and config.filec_aux is not None and os.path.exists(config.filec_aux):
+        if self.mdt is not None and config.filec_aux is not None and os.path.exists(config.filec_aux):
             
             print('Rossby Radius is prescribed, be sure to have provided MDT as well')
 
@@ -223,8 +223,20 @@ variable are SLAs!')
                                    config.name_var_c,
                                    State.lon,
                                    State.lat)
+            
+            if config.cmin is not None:
+                self.c[self.c<config.cmin] = config.cmin
+            
+            if config.cmax is not None:
+                self.c[self.c>config.cmax] = config.cmax
+                
         else:
             self.c = config.c0 * np.ones((State.ny,State.nx))
+            
+        plt.figure()
+        plt.pcolormesh(self.c)
+        plt.colorbar()
+        plt.show()
         
         if config.flag_plot>1:
             plt.figure()
