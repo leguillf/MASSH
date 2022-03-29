@@ -291,9 +291,9 @@ npsp= 3.5 # Defines the wavelet shape
 
 facpsp= 1.5 # factor to fix df between wavelets
 
-lmin= 80 # minimal wavelength
+lmin= 80 # minimal wavelength (in km)
 
-lmax= 970. # maximal wavelength
+lmax= 970. # maximal wavelength (in km)
 
 lmeso = 300 # Largest mesoscale wavelenght 
 

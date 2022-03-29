@@ -430,7 +430,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     from .tools_4Dvar import Obsopt
     H = Obsopt(config,State,dict_obs,Model)
     
-    print('\n*** Wavelet reduced basis ***\n')
+    print('\n*** Reduced basis ***\n')
     
     if config.name_model=='QG1L':
         from .tools_reduced_basis import RedBasis_BM as RedBasis
@@ -503,7 +503,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         options['gtol'] = config.gtol*projg0
         
     res = opt.minimize(var.cost,Xopt,
-                    method='L-BFGS-B',
+                    method=config.opt_method,
                     jac=var.grad,
                     options=options,
                     callback=callback)

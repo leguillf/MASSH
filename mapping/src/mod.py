@@ -509,9 +509,10 @@ variable are SLAs!')
         # Run ADJ
         self.step_adj(0,adState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         adX = adState.getvar(vect=True)
-           
-        ps1 = np.inner(dX,adX) + np.inner(dState.params.flatten(),adState.params.flatten())
-        ps2 = np.inner(dY,adY) + np.inner(dState.params.flatten(),adState.params.flatten()*0)
+        
+        mask = np.isnan(dX+adX+dY+adY)
+        ps1 = np.inner(dX[~mask],adX[~mask]) + np.inner(dState.params.flatten()[~mask],adState.params.flatten()[~mask])
+        ps2 = np.inner(dY[~mask],adY[~mask]) + np.inner(dState.params.flatten(),adState.params.flatten()*0)
         
         print(ps1/ps2)
 
