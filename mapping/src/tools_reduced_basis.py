@@ -346,6 +346,7 @@ class RedBasis_BM:
         self.lmeso = config.lmeso
         self.tmeso = config.tmeso
         self.save_wave_basis = config.save_wave_basis
+        self.wavelet_init = config.wavelet_init
 
         # Dictionnaries to save wave coefficients and indexes for repeated runs
         self.path_save_tmp = config.tmp_DA_path
@@ -541,7 +542,7 @@ class RedBasis_BM:
                             try:
                                 if abs(dt) < self.tdec[iff][P]:
                                     fact = mywindow(dt / self.tdec[iff][P])
-                                    if t>0: #time normalization except for first timestamp
+                                    if t>0 or not self.wavelet_init: # time normalization except for first timestamp
                                         tt = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
                                         I =  np.sum(mywindow(tt/self.tdec[iff][P]))*(tt[1]-tt[0])
                                         fact /= I 
@@ -598,7 +599,8 @@ class RedBasis_BM:
         
         if State is not None:
             if t==0:
-                State.setvar(phi.reshape((State.ny,State.nx)),ind=0)
+                if self.wavelet_init:
+                    State.setvar(phi.reshape((State.ny,State.nx)),ind=0)
                 State.params = np.zeros_like(phi)
             else:
                 State.params = phi
@@ -613,7 +615,7 @@ class RedBasis_BM:
             Project to reduced space
         """
         
-        if t==0:
+        if t==0 and self.wavelet_init:
             adX += self.operg(adState.getvar(ind=0).flatten(), 0, transpose=True)
         else:
             if adState.params is None:

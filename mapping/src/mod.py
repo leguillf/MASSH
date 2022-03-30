@@ -233,10 +233,6 @@ variable are SLAs!')
         else:
             self.c = config.c0 * np.ones((State.ny,State.nx))
             
-        plt.figure()
-        plt.pcolormesh(self.c)
-        plt.colorbar()
-        plt.show()
         
         if config.flag_plot>1:
             plt.figure()

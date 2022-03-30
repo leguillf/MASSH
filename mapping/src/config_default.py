@@ -285,7 +285,9 @@ obs_subsampling = 1
 
 # - For BM
 
-save_wave_basis = False
+save_wave_basis = False # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+
+wavelet_init = False # Estimate the initial state 
 
 facns = 1. #factor for wavelet spacing= space
 
