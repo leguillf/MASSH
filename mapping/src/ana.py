@@ -41,6 +41,9 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     elif config.name_analysis=='4Dvar':
         return ana_4Dvar(config,State,Model,dict_obs)
     
+    elif config.name_analysis=='incr4Dvar':
+        return ana_incr4Dvar(config,State,Model,dict_obs)
+    
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
     
@@ -517,7 +520,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     
     # Save minimization trajectory
     if config.save_minimization:
-        ds = xr.Dataset({'cost':(('it'),var.J),'grad':(('it'),var.G)})
+        ds = xr.Dataset({'cost':(('j'),var.J),'grad':(('g'),var.G)})
         ds.to_netcdf(os.path.join(config.tmp_DA_path,'minimization_trajectory.nc'))
         ds.close()
         
@@ -530,6 +533,171 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         Xa = var.Xb + B.sqr(res.x)
     else:
         Xa = var.Xb + res.x
+        
+    # Save minimum for next experiments
+    ds = xr.Dataset({'res':(('x',),Xa)})
+    ds.to_netcdf(os.path.join(config.tmp_DA_path,'Xini.nc'))
+    ds.close()
+
+    # Init
+    State0 = State.free()
+    State0.params = np.zeros((Model.nparams,))
+    date = config.init_date
+
+    # Forward propagation
+    while date<config.final_date:
+        # current time in secondes
+        t = (date - config.init_date).total_seconds()
+        
+        # Reduced basis
+        basis.operg(Xa,t/3600/24,State=State0)
+        
+        # Forward
+        for j in range(config.checkpoint):
+            
+            Model.step(t+j*config.dtmodel,State0,nstep=1)
+    
+            date += timedelta(seconds=config.dtmodel)
+            
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                
+                # Save output
+                State0.save_output(date,mdt=Model.mdt)
+
+        
+    del State, State0, res, Xa, dict_obs, B, R
+    gc.collect()
+    print()
+    
+
+def ana_incr4Dvar(config,State,Model,dict_obs=None) :
+    
+    '''
+    Run a 4Dvar analysis
+    '''
+
+    print('\n*** Observation operator ***\n')
+    from .tools_4Dvar import Obsopt
+    H = Obsopt(config,State,dict_obs,Model)
+    
+    print('\n*** Reduced basis ***\n')
+    
+    if config.name_model=='QG1L':
+        from .tools_reduced_basis import RedBasis_BM as RedBasis
+    elif config.name_model=='SW1L':
+        from .tools_reduced_basis import RedBasis_IT as RedBasis
+    elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        from .tools_reduced_basis import RedBasis_BM_IT as RedBasis
+        
+    basis = RedBasis(config)
+    time_basis = H.checkpoint * Model.dt / (24*3600)
+    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
+
+    print('\n*** Covariances ***\n')
+    from .tools_4Dvar import Cov
+    # Covariance matrix
+    if config.sigma_B is not None:          
+        # Least squares
+        B = Cov(config.sigma_B)
+        R = Cov(config.sigma_R)
+    else:
+        B = Cov(Q)
+        R = Cov(config.sigma_R)
+        
+    print('\n*** Variational ***\n')
+    from .tools_4Dvar import Variational
+    # backgroud state 
+    Xb = np.zeros((basis.nbasis,))
+    # Cost and Grad functions
+    var = Variational(
+        config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
+    
+    # Initial State of the outer loop
+    if config.path_init_4Dvar is None:
+        Xa = var.Xb*0
+    else:
+        # Read previous minimum 
+        print('Read previous minimum:',config.path_init_4Dvar)
+        ds = xr.open_dataset(config.path_init_4Dvar)
+        Xa = ds.res.values
+        ds.close()
+
+    
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*.nc')))
+        if len(tmp_files)>0:
+            print('Restart at:',tmp_files[-1])
+            ds = xr.open_dataset(tmp_files[-1])
+            Xa = ds.res.values
+            ds.close()
+        else:
+            Xa = var.Xb*0
+    
+    
+        
+    ###################
+    #  Outer loop     #
+    ###################
+    for i in range(config.maxiter_outer):
+        
+        print(f'*** Outer loop {i} ***')
+        
+        ######################
+        #  Model integration #    
+        ######################
+        J = var.cost(Xa)
+        print(f'\ncost: {J}\n')
+
+        ###################
+        #  Inner loop     #
+        ###################
+        # Initial State of the inner loop
+        dX = Xa*0
+        var.X0 = +Xa
+    
+        # Callback function called at every minimization iterations
+        def callback(XX):
+            now = datetime.now()
+            current_time = now.strftime("%Y-%m-%d_%H%M%S")
+            ds = xr.Dataset({'res':(('x',),XX)})
+            ds.to_netcdf(os.path.join(config.tmp_DA_path,f'X{i}_'+current_time+'.nc'))
+            ds.close()
+        # Minimization options
+        options = {'disp': True, 'maxiter': config.maxiter_inner}
+                
+        # Run minimization 
+        res = opt.minimize(var.dcost,dX,
+                        method=config.opt_method,
+                        jac=var.grad,
+                        options=options,
+                        callback=callback)
+        
+        dXa = res.x
+        
+        ###################
+        #    Update       #
+        ###################
+        Xa += dXa
+    
+    
+    # Save minimization trajectory
+    if config.save_minimization:
+        ds = xr.Dataset({'dcost':(('dj'),var.dJ),'cost':(('j'),var.J),'grad':(('g'),var.G)})
+        ds.to_netcdf(os.path.join(config.tmp_DA_path,'minimization_trajectory.nc'))
+        ds.close()
+        
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    
+    if config.prec:
+        Xa = var.Xb + B.sqr(Xa)
+    else:
+        Xa = var.Xb + Xa
         
     # Save minimum for next experiments
     ds = xr.Dataset({'res':(('x',),Xa)})

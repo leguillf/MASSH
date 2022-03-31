@@ -217,6 +217,10 @@ gtol = None # Gradient norm must be less than gtol before successful termination
 
 maxiter = 20 # Maximal number of iterations for the minimization process
 
+maxiter_inner = 3 # Maximal number of iterations for the outer loop (only for incr4Dvar)
+
+maxiter_outer = 3 # Maximal number of iterations for the inner loop (only for incr4Dvar)
+
 opt_method = 'L-BFGS-B' # method for scipy.optimize.minimize
 
 save_minimization = False # save cost function and its gradient at each iteration 

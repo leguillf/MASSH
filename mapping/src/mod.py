@@ -252,7 +252,7 @@ variable are SLAs!')
         SourceFileLoader("qgm_tgl", 
                                  dir_model + "/qgm_tgl.py").load_module() 
         
-        if config.name_analysis=='4Dvar':
+        if config.name_analysis in ['4Dvar','incr4Dvar']:
             qgm_adj = SourceFileLoader("qgm_adj", 
                                      dir_model + "/qgm_adj.py").load_module() 
             model = qgm_adj.Qgm_adj
