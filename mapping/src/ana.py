@@ -543,7 +543,9 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
 
     # Forward propagation
     while date<config.final_date:
+        # current time in secondes
         t = (date - config.init_date).total_seconds()
+        
         # Reduced basis
         basis.operg(Xa,t/3600/24,State=State0)
         
@@ -553,10 +555,12 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
             Model.step(t+j*config.dtmodel,State0,nstep=1)
     
             date += timedelta(seconds=config.dtmodel)
+            
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.init_date) & (date<=config.final_date) :
-                    
+                
+                # Save output
                 State0.save_output(date,mdt=Model.mdt)
 
         
