@@ -361,7 +361,7 @@ class Qgm_adj(Qgm_tgl):
         r_list = [r]
         d_list = [d]
         if self.qgiter_adj>1:
-            for itr in range(self.qgiter): 
+            for itr in range(self.qgiter_adj): 
                 # Update guess value
                 x = +xnew
                 

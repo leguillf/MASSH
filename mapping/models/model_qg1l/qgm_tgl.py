@@ -216,8 +216,8 @@ class Qgm_tgl(Qgm):
         beta_list = []
         r_list = [r]
         d_list = [d]
-        if self.qgiter>1:
-            for itr in range(self.qgiter): 
+        if self.qgiter_adj>1:
+            for itr in range(self.qgiter_adj): 
                 # Update guess value
                 x = +xnew
                 
@@ -265,8 +265,8 @@ class Qgm_tgl(Qgm):
         dalpha = self.alpha_tgl(dd,dr,d_list[0],r_list[0])
         dxnew = dx + dalpha*d_list[0] + alpha_list[0]*dd
         
-        if self.qgiter>1:
-            for itr in range(self.qgiter): 
+        if self.qgiter_adj>1:
+            for itr in range(self.qgiter_adj): 
                 
                 # 1. Update guess value
                 dx = +dxnew
