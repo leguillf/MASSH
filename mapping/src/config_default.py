@@ -198,6 +198,12 @@ add_mdt_bc = False # Add mdt to boundary conditions. Useful only if we only have
 
 use_bc_on_coast = True # use boundary conditions on coast. Useful only if MDT or a mask is provided 
 
+bc_mindepth = None # minimal depth below which boundary conditions are used  
+
+file_depth = None # netcdf file(s) in whihch the topography is stored
+
+name_var_depth = {'time':'','lon':'','lat':'','var':''} # name of the topography variable
+
 scalenudg = None 
 
 Knudg = None

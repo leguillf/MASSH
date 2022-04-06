@@ -159,7 +159,9 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            config.flag_plot,
                                                            bfn_obj.sponge,
                                                            mask=State.mask,
-                                                           coast=config.use_bc_on_coast)
+                                                           coast=config.use_bc_on_coast,
+                                                           depth=State.depth,
+                                                           mindepth=config.bc_mindepth)
             # Add mdt if provided 
             if config.add_mdt_bc:
                 try: 

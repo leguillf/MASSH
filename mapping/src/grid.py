@@ -154,7 +154,7 @@ def interp2d(ds,name_vars,lon_out,lat_out):
 
 def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                         lon2d, lat2d, flag_plot=0, sponge='gaspari-cohn',
-                        mask=None, coast=False):
+                        mask=None, coast=False,depth=None,mindepth=None):
 
     if type(timestamps) in [int,float]:
         timestamps = np.array([timestamps])
@@ -300,6 +300,8 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                 mask = np.isnan(var_bc_interpTime)
             else:
                 mask = np.isnan(np.sum(var_bc_interpTime,axis=0))
+        if depth is not None and mindepth is not None:
+            mask[depth>mindepth] = True
     else:
         mask = np.zeros(lon2d.shape,dtype=bool)
     

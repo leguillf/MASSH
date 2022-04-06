@@ -98,8 +98,11 @@ class State:
         if not os.path.exists(config.tmp_DA_path):
             os.makedirs(config.tmp_DA_path)
             
-        # MDT
+        
+        self.mdt = None
+        self.depth = None
         if first:
+            # MDT
             if config.path_mdt is not None and os.path.exists(config.path_mdt):
             
                 ds = xr.open_dataset(config.path_mdt).squeeze()
@@ -116,6 +119,15 @@ class State:
                                              name_var_mdt,
                                              self.lon,
                                              self.lat)
+            # MDT
+            if config.file_depth is not None and os.path.exists(config.file_depth):
+                ds = xr.open_dataset(config.file_depth).squeeze()
+            
+                self.depth = grid.interp2d(ds,
+                                         config.name_var_depth,
+                                         self.lon,
+                                         self.lat)
+            
         
         # Model parameters
         self.params = None
@@ -520,6 +532,8 @@ class State:
         other = State(self.config,first=False)
         other.mask = self.mask
         other.params = self.params
+        other.mdt = self.mdt
+        other.depth = self.depth
         
         return other
     
@@ -528,6 +542,8 @@ class State:
         for i in range(len(self.name_var)):
             other.var.values[i] = deepcopy(self.var.values[i])
         other.mask = self.mask
+        other.mdt = self.mdt
+        other.depth = self.depth
         if self.params is not None:
             other.params = +self.params
         
