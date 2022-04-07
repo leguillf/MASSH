@@ -31,7 +31,7 @@ class State:
     
    # __slots__ = ('config','lon','lat','var','name_lon','name_lat','name_var','name_exp_save','path_save','ny','nx','f','g')
     
-    def __init__(self,config,first=False):
+    def __init__(self,config,first=True):
         
         self.config = config
         self.first = first
@@ -80,16 +80,59 @@ class State:
             self.ini_var_sw1l(config)
         elif config.name_model=='SW1LM':
             self.ini_var_sw1lm(config)
+        elif hasattr(config.name_model,'__len__') and len(config.name_model)==2 :
+            self.ini_var_bm_it(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
         # Read output variable from previous run 
         if config.name_init == 'restart':
             self.ini_var_restart()
         # Add mask if provided
-        self.ini_mask(config)
-            
+        if self.first:
+            try: self.ini_mask(config)
+            except: 
+                print('Warning: unable to compute mask')
+                self.mask = np.zeros((self.ny,self.nx),dtype='bool')
+        else:
+            self.mask = np.zeros((self.ny,self.nx),dtype='bool')   
         if not os.path.exists(config.tmp_DA_path):
             os.makedirs(config.tmp_DA_path)
+            
+        
+        self.mdt = None
+        self.depth = None
+        if first:
+            # MDT
+            if config.path_mdt is not None and os.path.exists(config.path_mdt):
+            
+                ds = xr.open_dataset(config.path_mdt).squeeze()
+                
+                name_var_mdt = {}
+                name_var_mdt['lon'] = config.name_var_mdt['lon']
+                name_var_mdt['lat'] = config.name_var_mdt['lat']
+                
+                
+                
+                if 'mdt' in config.name_var_mdt and config.name_var_mdt['mdt'] in ds:
+                    name_var_mdt['var'] = config.name_var_mdt['mdt']
+                    self.mdt = grid.interp2d(ds,
+                                             name_var_mdt,
+                                             self.lon,
+                                             self.lat)
+            # MDT
+            if config.file_depth is not None and os.path.exists(config.file_depth):
+                ds = xr.open_dataset(config.file_depth).squeeze()
+            
+                self.depth = grid.interp2d(ds,
+                                         config.name_var_depth,
+                                         self.lon,
+                                         self.lat)
+            
+        
+        # Model parameters
+        self.params = None
+        
+        
         
     def __str__(self):
         message = ''
@@ -206,7 +249,7 @@ class State:
                 print('Warning: For SW1L: wrong number variable names')
             self.name_var = ['u','v','h']
         if self.first:
-                print(self.name_var)
+            print(self.name_var)
             
         for i, var in enumerate(self.name_var):
             if i==0:
@@ -247,7 +290,33 @@ class State:
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
-            
+        
+    def ini_var_bm_it(self,config):
+        if len(config.name_mod_var) != 1 + config.Nmodes*3 + 1:
+            if self.first:
+                print('Warning: For BM & IT: wrong number variable names')
+            self.name_var = ["h_bm"]
+            if config.Nmodes==1:
+                self.name_var += ["u_it","v_it","h_it","h"]
+            else:
+                for i in range(1,config.Nmodes+1):
+                    self.name_var += [f"u_it_{i}",f"v_it_{i}",f"h_it_{i}"]
+                self.name_var += ["u_it","v_it","h_it","h"]   
+        
+            if self.first:
+                print(self.name_var)
+                
+        for i, var in enumerate(self.name_var):
+            if i%3==0 or i==len(self.name_var)-1:
+                # SSH
+                self.var[var] = np.zeros((self.ny,self.nx))
+            elif i%3==1:
+                # U
+                self.var[var] = np.zeros((self.ny,self.nx-1))
+            elif i%3==2:
+                # V
+                self.var[var] = np.zeros((self.ny-1,self.nx))
+        
             
         
     def ini_var_restart(self):
@@ -271,38 +340,42 @@ class State:
         """
         
         # Read mask
-        if config.name_init_mask is None or not os.path.exists(config.name_init_mask):
+        if config.name_init_mask is not None and os.path.exists(config.name_init_mask):
+            ds = xr.open_dataset(config.name_init_mask).squeeze()
+            name_lon = config.name_var_mask['lon']
+            name_lat = config.name_var_mask['lat']
+            name_var = config.name_var_mask['var']
+        elif config.path_mdt is not None and os.path.exists(config.path_mdt):
+            ds = xr.open_dataset(config.path_mdt).squeeze()
+            name_lon = config.name_var_mdt['lon']
+            name_lat = config.name_var_mdt['lat']
+            name_var = config.name_var_mdt['mdt']
+        else:
             self.mask = np.zeros((self.ny,self.nx),dtype='bool')
             return
         
-        ds = xr.open_dataset(config.name_init_mask).squeeze()
-        lon = ds[config.name_var_mask['lon']]
-        lat = ds[config.name_var_mask['lat']]
-        var = ds[config.name_var_mask['var']]
+        dlon =  (self.lon[:,1:] - self.lon[:,:-1]).max()
+        dlat =  (self.lat[1:,:] - self.lat[:-1,:]).max()
+       
+        ds = ds.sel(
+            {name_lon:slice(self.lon.min()-dlon,self.lon.max()+dlon),
+             name_lat:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
         
+        lon = ds[name_lon].values
+        lat = ds[name_lat].values
+        var = ds[name_var].values
         lon = lon % 360
         
-        if len(lon.shape)==2:
-            dlon =  (lon[:,1:] - lon[:,:-1]).max().values
-            dlat =  (lat[1:,:] - lat[:-1,:]).max().values
-        else:
-            dlon = (lon[1:] - lon[:-1]).max().values
-            dlat = (lat[1:] - lat[:-1]).max().values
-            
-        ds = ds.sel(
-            {config.name_var_mask['lon']:slice(self.lon.min()-dlon,self.lon.max()+dlon),
-             config.name_var_mask['lat']:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
-        
         if len(lon.shape)==1:
-            lon_mask,lat_mask = np.meshgrid(lon.values,lat.values)
+            lon_mask,lat_mask = np.meshgrid(lon,lat)
         else:
-            lon_mask = lon.values
-            lat_mask = lat.values
+            lon_mask = +lon
+            lat_mask = +lat
                 
         if len(var.shape)==2:
-            mask = var.values
+            mask = +var
         elif len(var.shape)==3:
-            mask = var[0,:,:].values
+            mask = +var[0,:,:]
         
         # Interpolate to state grid
         if np.any(lon_mask!=self.lon) or np.any(lat_mask!=self.lat):
@@ -311,20 +384,19 @@ class State:
                 (self.lon.ravel(),self.lat.ravel())).reshape((self.ny,self.nx))
         else:
             mask_interp = mask.copy()
-
+        
         # Convert to bool if float type     
         if mask_interp.dtype!=np.bool : 
             self.mask = np.empty((self.ny,self.nx),dtype='bool')
-            ind_mask = (np.isnan(mask_interp)) | (np.abs(mask_interp)>10)
+            ind_mask = (np.isnan(mask_interp)) | (mask_interp==1) | (np.abs(mask_interp)>10)
             self.mask[ind_mask] = True
             self.mask[~ind_mask] = False
         else:
             self.mask = mask_interp.copy()
-                
+                            
         # Apply to state variable (SSH only)
-        if config.name_model=='QG1L':
+        if config.name_model=='QG1L' or (hasattr(config.name_model,'__len__') and len(config.name_model)==2):
             self.var[0][self.mask] = np.nan
-        
             
 
     def save_output(self,date,mdt=None):
@@ -352,7 +424,7 @@ class State:
             vars_to_save = [self.getvar(ind=indsave)]
          
         var = {}              
-        for name_var,var_to_save in zip(names_var,vars_to_save):
+        for i,(name_var,var_to_save) in enumerate(zip(names_var,vars_to_save)):
             # Apply Mask
             if self.mask is not None:
                 var_to_save[self.mask] = np.nan
@@ -372,13 +444,9 @@ class State:
             
             var[name_var] = (dims,var_to_save)
         
-            # If MDT provided, compute SSH from state variable (which is supposed to be SLA)
-            if mdt is not None:
-                name_ssh = 'ssh'
-                if name_var.lower=='ssh':
-                    name_ssh = 'ssh_mdt'
-                var[name_ssh] =(dims,var_to_save + mdt[np.newaxis,:,:])
-
+        
+        if mdt is not None:
+            var['mdt'] = (dims[1:],mdt)
             
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
@@ -419,6 +487,9 @@ class State:
                     
             outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
             
+        if self.params is not None:
+            outvars['params'] = (('p',self.params.flatten()))
+            
         ds = xr.Dataset(outvars)
         ds.to_netcdf(filename)
         ds.close()
@@ -448,8 +519,8 @@ class State:
         with xr.open_dataset(filename) as ds:
             for i, name in enumerate(self.name_var):
                 self.var.values[i] = ds[name].values
-                
-                
+            if 'params' in ds:
+                self.params = ds.params.values
     
     def random(self,ampl=1):
         other = self.free()
@@ -459,12 +530,23 @@ class State:
     
     def free(self):
         other = State(self.config,first=False)
+        other.mask = self.mask
+        other.params = self.params
+        other.mdt = self.mdt
+        other.depth = self.depth
+        
         return other
     
     def copy(self):
         other = State(self.config,first=False)
         for i in range(len(self.name_var)):
             other.var.values[i] = deepcopy(self.var.values[i])
+        other.mask = self.mask
+        other.mdt = self.mdt
+        other.depth = self.depth
+        if self.params is not None:
+            other.params = +self.params
+        
         return other
     
     def getvar(self,ind=None,vect=False):
@@ -501,12 +583,19 @@ class State:
     def scalar(self,coeff):
         for i, name in enumerate(self.name_var):
             self.var.values[i] *= coeff
+        if self.params is not None:
+            self.params *= coeff
         
     def Sum(self,State1):
         for i, name in enumerate(self.name_var):
             self.var.values[i] += State1.var.values[i]
+        if self.params is not None and State1.params is not None:
+            self.params += State1.params
             
     def plot(self,title=None,cmap='RdBu_r',ind=None):
+        
+        if self.config.flag_plot==0:
+            return
         
         if ind is not None:
             indvar = ind
@@ -514,7 +603,7 @@ class State:
             indvar = np.arange(0,len(self.name_var))
         nvar = len(indvar)
  
-        fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5),sharey=True)
+        fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5))
         
         if title is not None:
             fig.suptitle(title)
@@ -524,7 +613,7 @@ class State:
             
         for ax,i in zip(axs,indvar):
             ax.set_title(self.name_var[i])
-            im = ax.pcolormesh(self.lon,self.lat,self.var.values[i],cmap=cmap,\
+            im = ax.pcolormesh(self.var.values[i],cmap=cmap,\
                                shading='auto')
             plt.colorbar(im,ax=ax)
         
@@ -542,6 +631,8 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return 2 + (self.config.Nmodes)*3
+        elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
+            return -1
         else :
             return 0
             
@@ -555,6 +646,10 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]
+        elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
+            ind = [i*3 for i in range(self.config.Nmodes+1)]
+            ind.append(-1)
+            return ind
         else :
             return 0
 

@@ -16,6 +16,7 @@ import scipy.optimize as opt
 import gc
 import pandas as pd
 import xarray as xr
+import glob
 from importlib.machinery import SourceFileLoader 
 
 from . import grid
@@ -33,16 +34,22 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     
     if config.name_analysis is None: 
         return ana_forward(config,State,Model)
-    if config.name_analysis=='BFN':
+    
+    elif config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
-    elif config.name_analysis=='4Dvar' and config.name_model=='QG1L':
-        return ana_4Dvar_QG(config,State,Model,dict_obs)
-    elif config.name_analysis=='4Dvar' and config.name_model in ['SW1L','SW1LM']:
-        return ana_4Dvar_SW(config,State,Model,dict_obs)
+    
+    elif config.name_analysis=='4Dvar':
+        return ana_4Dvar(config,State,Model,dict_obs)
+    
+    elif config.name_analysis=='incr4Dvar':
+        return ana_incr4Dvar(config,State,Model,dict_obs)
+    
     elif config.name_analysis=='MIOST':
         return ana_miost(config,State,dict_obs)
+    
     elif config.name_analysis=='HARM':
         return ana_harm(config,State,dict_obs)
+    
     else:
         sys.exit(config.name_analysis + ' not implemented yet')
         
@@ -67,7 +74,9 @@ def ana_forward(config,State,Model):
         
     return
 
-              
+         
+
+        
 def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     """
     NAME
@@ -133,15 +142,15 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         # 3. BOUNDARY AND INITIAL CONDITIONS #
         ######################################
         # Boundary condition
-        if config.flag_use_boundary_conditions:
+        if config.flag_use_bc:
             periods = (final_bfn_date-init_bfn_date).total_seconds()//\
                 one_time_step.total_seconds() + 1
             timestamps = pd.date_range(init_bfn_date,
                                        final_bfn_date,
                                        periods=periods
                                       )
-                
-            bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
+    
+            bc_field, bc_weight = grid.boundary_conditions(config.file_bc,
                                                            config.lenght_bc,
                                                            config.name_var_bc,
                                                            timestamps,
@@ -149,7 +158,17 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                                                            State.lat,
                                                            config.flag_plot,
                                                            bfn_obj.sponge,
-                                                           mask=+State.mask)
+                                                           mask=State.mask,
+                                                           coast=config.use_bc_on_coast,
+                                                           depth=State.depth,
+                                                           mindepth=config.bc_mindepth)
+            # Add mdt if provided 
+            if config.add_mdt_bc:
+                try: 
+                    mdt = +State.mdt[np.newaxis,:,:]
+                    mdt[np.isnan(mdt)] = 0
+                    bc_field += mdt
+                except : print('Warning : unable to add MDT to boundary field')
         else:
             bc_field = bc_weight = bc_field_t = None
 
@@ -406,8 +425,321 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
 
 
 
+def ana_4Dvar(config,State,Model,dict_obs=None) :
+    
+    '''
+    Run a 4Dvar analysis
+    '''
 
-def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
+    print('\n*** Observation operator ***\n')
+    from .tools_4Dvar import Obsopt
+    H = Obsopt(config,State,dict_obs,Model)
+    
+    print('\n*** Reduced basis ***\n')
+    
+    if config.name_model=='QG1L':
+        from .tools_reduced_basis import RedBasis_BM as RedBasis
+    elif config.name_model=='SW1L':
+        from .tools_reduced_basis import RedBasis_IT as RedBasis
+    elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        from .tools_reduced_basis import RedBasis_BM_IT as RedBasis
+        
+    basis = RedBasis(config)
+    time_basis = H.checkpoint * Model.dt / (24*3600)
+    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
+
+    print('\n*** Covariances ***\n')
+    from .tools_4Dvar import Cov
+    # Covariance matrix
+    if config.sigma_B is not None:          
+        # Least squares
+        B = Cov(config.sigma_B)
+        R = Cov(config.sigma_R)
+    else:
+        B = Cov(Q)
+        R = Cov(config.sigma_R)
+        
+    print('\n*** Variational ***\n')
+    from .tools_4Dvar import Variational
+    # backgroud state 
+    Xb = np.zeros((basis.nbasis,))
+    # Cost and Grad functions
+    var = Variational(
+        config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
+    
+    # Initial State 
+    if config.path_init_4Dvar is None:
+        Xopt = var.Xb*0
+    else:
+        # Read previous minimum 
+        print('Read previous minimum:',config.path_init_4Dvar)
+        ds = xr.open_dataset(config.path_init_4Dvar)
+        Xopt = ds.res.values
+        ds.close()
+
+    
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*.nc')))
+        if len(tmp_files)>0:
+            print('Restart at:',tmp_files[-1])
+            ds = xr.open_dataset(tmp_files[-1])
+            Xopt = ds.res.values
+            ds.close()
+        else:
+            Xopt = var.Xb*0
+            
+    ###################
+    # Minimization    #
+    ###################
+    print('\n*** Minimization ***\n')
+    # Callback function called at every minimization iterations
+    def callback(XX):
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d_%H%M%S")
+        ds = xr.Dataset({'res':(('x',),XX)})
+        ds.to_netcdf(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.nc'))
+        ds.close()
+            
+    # Minimization options
+    options = {'disp': True, 'maxiter': config.maxiter}
+    if config.gtol is not None:
+        J0 = var.cost(Xopt)
+        g0 = var.grad(Xopt)
+        projg0 = np.max(np.abs(g0))
+        options['gtol'] = config.gtol*projg0
+        
+    # Run minimization 
+    res = opt.minimize(var.cost,Xopt,
+                    method=config.opt_method,
+                    jac=var.grad,
+                    options=options,
+                    callback=callback)
+
+    print ('\nIs the minimization successful? {}'.format(res.success))
+    print ('\nFinal cost function value: {}'.format(res.fun))
+    print ('\nNumber of iterations: {}'.format(res.nit))
+    
+    # Save minimization trajectory
+    if config.save_minimization:
+        ds = xr.Dataset({'cost':(('j'),var.J),'grad':(('g'),var.G)})
+        ds.to_netcdf(os.path.join(config.tmp_DA_path,'minimization_trajectory.nc'))
+        ds.close()
+        
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    
+    if config.prec:
+        Xa = var.Xb + B.sqr(res.x)
+    else:
+        Xa = var.Xb + res.x
+        
+    # Save minimum for next experiments
+    ds = xr.Dataset({'res':(('x',),Xa)})
+    ds.to_netcdf(os.path.join(config.tmp_DA_path,'Xini.nc'))
+    ds.close()
+
+    # Init
+    State0 = State.free()
+    State0.params = np.zeros((Model.nparams,))
+    date = config.init_date
+
+    # Forward propagation
+    while date<config.final_date:
+        # current time in secondes
+        t = (date - config.init_date).total_seconds()
+        
+        # Reduced basis
+        basis.operg(Xa,t/3600/24,State=State0)
+        
+        # Forward
+        for j in range(config.checkpoint):
+            
+            Model.step(t+j*config.dtmodel,State0,nstep=1)
+    
+            date += timedelta(seconds=config.dtmodel)
+            
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                
+                # Save output
+                State0.save_output(date,mdt=Model.mdt)
+
+        
+    del State, State0, res, Xa, dict_obs, B, R
+    gc.collect()
+    print()
+    
+
+def ana_incr4Dvar(config,State,Model,dict_obs=None) :
+    
+    '''
+    Run a 4Dvar analysis
+    '''
+
+    print('\n*** Observation operator ***\n')
+    from .tools_4Dvar import Obsopt
+    H = Obsopt(config,State,dict_obs,Model)
+    
+    print('\n*** Reduced basis ***\n')
+    
+    if config.name_model=='QG1L':
+        from .tools_reduced_basis import RedBasis_BM as RedBasis
+    elif config.name_model=='SW1L':
+        from .tools_reduced_basis import RedBasis_IT as RedBasis
+    elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        from .tools_reduced_basis import RedBasis_BM_IT as RedBasis
+        
+    basis = RedBasis(config)
+    time_basis = H.checkpoint * Model.dt / (24*3600)
+    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
+
+    print('\n*** Covariances ***\n')
+    from .tools_4Dvar import Cov
+    # Covariance matrix
+    if config.sigma_B is not None:          
+        # Least squares
+        B = Cov(config.sigma_B)
+        R = Cov(config.sigma_R)
+    else:
+        B = Cov(Q)
+        R = Cov(config.sigma_R)
+        
+    print('\n*** Variational ***\n')
+    from .tools_4Dvar import Variational
+    # backgroud state 
+    Xb = np.zeros((basis.nbasis,))
+    # Cost and Grad functions
+    var = Variational(
+        config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
+    
+    # Initial State of the outer loop
+    if config.path_init_4Dvar is None:
+        Xa = var.Xb*0
+    else:
+        # Read previous minimum 
+        print('Read previous minimum:',config.path_init_4Dvar)
+        ds = xr.open_dataset(config.path_init_4Dvar)
+        Xa = ds.res.values
+        ds.close()
+
+    
+    # Restart mode
+    if config.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*.nc')))
+        if len(tmp_files)>0:
+            print('Restart at:',tmp_files[-1])
+            ds = xr.open_dataset(tmp_files[-1])
+            Xa = ds.res.values
+            ds.close()
+        else:
+            Xa = var.Xb*0
+    
+    
+        
+    ###################
+    #  Outer loop     #
+    ###################
+    for i in range(config.maxiter_outer):
+        
+        print(f'*** Outer loop {i} ***')
+        
+        ######################
+        #  Model integration #    
+        ######################
+        J = var.cost(Xa)
+        print(f'\ncost: {J}\n')
+
+        ###################
+        #  Inner loop     #
+        ###################
+        # Initial State of the inner loop
+        dX = Xa*0
+        var.X0 = +Xa
+    
+        # Callback function called at every minimization iterations
+        def callback(XX):
+            now = datetime.now()
+            current_time = now.strftime("%Y-%m-%d_%H%M%S")
+            ds = xr.Dataset({'res':(('x',),XX)})
+            ds.to_netcdf(os.path.join(config.tmp_DA_path,f'X{i}_'+current_time+'.nc'))
+            ds.close()
+        # Minimization options
+        options = {'disp': True, 'maxiter': config.maxiter_inner}
+                
+        # Run minimization 
+        res = opt.minimize(var.dcost,dX,
+                        method=config.opt_method,
+                        jac=var.grad,
+                        options=options,
+                        callback=callback)
+        
+        dXa = res.x
+        
+        ###################
+        #    Update       #
+        ###################
+        Xa += dXa
+    
+    
+    # Save minimization trajectory
+    if config.save_minimization:
+        ds = xr.Dataset({'dcost':(('dj'),var.dJ),'cost':(('j'),var.J),'grad':(('g'),var.G)})
+        ds.to_netcdf(os.path.join(config.tmp_DA_path,'minimization_trajectory.nc'))
+        ds.close()
+        
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    
+    if config.prec:
+        Xa = var.Xb + B.sqr(Xa)
+    else:
+        Xa = var.Xb + Xa
+        
+    # Save minimum for next experiments
+    ds = xr.Dataset({'res':(('x',),Xa)})
+    ds.to_netcdf(os.path.join(config.tmp_DA_path,'Xini.nc'))
+    ds.close()
+
+    # Init
+    State0 = State.free()
+    State0.params = np.zeros((Model.nparams,))
+    date = config.init_date
+
+    # Forward propagation
+    while date<config.final_date:
+        # current time in secondes
+        t = (date - config.init_date).total_seconds()
+        
+        # Reduced basis
+        basis.operg(Xa,t/3600/24,State=State0)
+        
+        # Forward
+        for j in range(config.checkpoint):
+            
+            Model.step(t+j*config.dtmodel,State0,nstep=1)
+    
+            date += timedelta(seconds=config.dtmodel)
+            
+            if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+                
+                # Save output
+                State0.save_output(date,mdt=Model.mdt)
+
+        
+    del State, State0, res, Xa, dict_obs, B, R
+    gc.collect()
+    print()
+    
+    
+def ana_4Dvar_QG_init(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
@@ -430,7 +762,6 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
     i = 0
     while date_ini<config.final_date :
         date_end = date_ini + window_length # date at end of the assimilation window
-        middle_date = date_ini + window_length/2
         print(f'\n*** window {i} from {date_ini} to {date_end} ***\n')
         if i==0 :
             first_assimilation = True
@@ -514,15 +845,13 @@ def ana_4Dvar_QG(config,State,Model,dict_obs=None) :
         
         print('\n*** final analysed state ***\n')
         
-        
-
 
 def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :
     '''
     run one assimilation on the window considered which start at time date_ini
     '''
     from .tools_4Dvar import Obsopt, Cov
-    from .tools_4Dvar import Variational_QG as Variational
+    from .tools_4Dvar import Variational_QG_init as Variational
     
     # create obsopt if not filled out
     if H==None :
@@ -575,164 +904,7 @@ def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=N
     return Xout
     
     
-def ana_4Dvar_SW(config,State,Model,dict_obs=None, *args, **kwargs):
-    
-    from .tools_4Dvar import Obsopt, Cov, Variational_SW
-            
-    #################
-    # 1. Obs op     #
-    #################
-    print('\n*** Obs op ***\n')
-    H = Obsopt(config,State,dict_obs,Model)
-    
-    if config.detrend:
-        print('\n*** Detrend obs ***\n')
-        from . import obs
-        obs.detrend_obs(dict_obs)
-    
-    ###################
-    # 2. Variationnal #
-    ###################
-    print('\n*** Variational ***\n')
-    
-    # Covariance matrixes
-    if None in [config.sigma_R,config.sigma_B_He,config.sigma_B_bc]:          
-        # Least squares
-        B = None
-        R = Cov(1)
-    else:
-        _sigma_B = np.zeros((Model.nParams)) 
-        # error on He
-        _sigma_B[Model.sliceHe] = config.sigma_B_He 
-        # error on OBCs
-        if hasattr(config.sigma_B_bc, '__len__'):
-            # Specific value for each tidal cxomponent
-            if len(config.sigma_B_bc) == len(config.w_igws):
-                N_one_component_x = Model.nbcx//len(config.w_igws)
-                N_one_component_y = Model.nbcy//len(config.w_igws)
-                for i,_sigma in enumerate(config.sigma_B_bc):
-                    _sigma_B[Model.slicehbcx][
-                        i*N_one_component_x:(i+1)*N_one_component_x] = _sigma
-                    _sigma_B[Model.slicehbcy][
-                        i*N_one_component_y:(i+1)*N_one_component_y] = _sigma
-            else:
-                _sigma_B[Model.slicehbcx] = config.sigma_B_bc[0]
-                _sigma_B[Model.slicehbcy] = config.sigma_B_bc[0]
-        else:
-            _sigma_B[Model.slicehbcx] = config.sigma_B_bc
-            _sigma_B[Model.slicehbcy] = config.sigma_B_bc
-        
-        # if np.any(State.mask):
-        #     # We divide the covariance by 10 for land pixels
-        #     land_coeff_x = np.ones(Model.shapehbcx)
-        #     land_coeff_y = np.ones(Model.shapehbcy)
-        #     # Loop over OBC coordinates 
-        #     for j,x in enumerate(Model.bcx): # South/North
-        #         # look for the closest grid pixel 
-        #         jS = np.argmin(np.abs(State.X[0,:]-x)) # South
-        #         jN = np.argmin(np.abs(State.X[-1,:]-x)) # North
-        #         if State.mask[0,jS]:
-        #             land_coeff_x[:,0,:,:,:,j] = 0.1
-        #         if State.mask[-1,jN]:
-        #             land_coeff_x[:,1,:,:,:,j] = 0.1
-        #     for i,y in enumerate(Model.bcy): # West/East
-        #         # look for the closest grid pixel 
-        #         iW = np.argmin(np.abs(State.Y[:,0]-y)) # West
-        #         iE = np.argmin(np.abs(State.Y[:,-1]-y)) # East
-        #         if State.mask[iW,0]:
-        #             land_coeff_y[:,0,:,:,:,i] = 0.1
-        #         if State.mask[iE,-1]:
-        #             land_coeff_y[:,1,:,:,:,i] = 0.1
-        #     _sigma_B[Model.slicehbcx] *= land_coeff_x.ravel()
-        #     _sigma_B[Model.slicehbcy] *= land_coeff_y.ravel()
-        
-        # Generate Covariance matrixes
-        B = Cov(_sigma_B)
-        R = Cov(config.sigma_R)
-        
-    # backgroud state 
-    Xb = np.zeros((Model.nParams,))
-        
-    # Cost and Grad functions
-    var = Variational_SW(
-        M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path, checkpoint=config.checkpoint,
-        prec=config.prec,compute_test=config.compute_test)
-    
-    # Initial State 
-    if config.path_init_4Dvar is None:
-        Xopt = np.zeros_like(var.Xb)
-    else:
-        # Read previous minimum 
-        with open(config.path_init_4Dvar, 'rb') as f:
-            print('Read previous minimum:',config.path_init_4Dvar)
-            Xopt = pickle.load(f)
 
-    
-    ###################
-    # 3. Minimization #
-    ###################
-    print('\n*** Minimization ***\n')
-    J0 = var.cost(Xopt)
-    g0 = var.grad(Xopt)
-    projg0 = np.max(np.abs(g0))
-    print('J0=',"{:e}".format(J0))
-    print('projg0',"{:e}".format(projg0))
-    
-    
-    def callback(XX,projg0=projg0):
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d_%H%M%S")
-        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
-            pickle.dump(XX,f)
-    
-    options = {'disp': True, 'maxiter': config.maxiter}
-    if config.gtol is not None:
-        options['gtol'] = config.gtol*projg0
-        
-    res = opt.minimize(var.cost,Xopt,
-                    method='L-BFGS-B',
-                    jac=var.grad,
-                    options=options,
-                    callback=callback)
-
-    print ('\nIs the minimization successful? {}'.format(res.success))
-    print ('\nFinal cost function value: {}'.format(res.fun))
-    print ('\nNumber of iterations: {}'.format(res.nit))
-
-    ########################
-    # 4. Saving trajectory #
-    ########################
-    print('\n*** Saving trajectory ***\n')
-    
-    if config.prec:
-        Xa = var.Xb + B.sqr(res.x)
-    else:
-        Xa = var.Xb + res.x
-        
-    # Save minimum for next experiments
-    with open(os.path.join(config.tmp_DA_path,'Xini.pic'), 'wb') as f:
-        pickle.dump(Xa,f)
-    
-    # Steady initial state
-    State0 = State.free()
-    State0.save_output(config.init_date)
-    for i in range(Model.nt-1):
-        t = Model.T[i] # seconds
-        date = Model.timestamps[i+1] # date
-        
-        Model.step(t,State0,Xa)
-        
-        if (((date - config.init_date).total_seconds()
-             /config.saveoutput_time_step.total_seconds())%1 == 0)\
-            & (date>config.init_date) & (date<=config.final_date) :
-            # Save State
-            State0.save_output(date)
-    
-    del State, State0, res, Xa, dict_obs,J0,g0,projg0,B,R
-    gc.collect()
-    print()
-        
 
 def ana_miost(config,State,dict_obs=None):
     
@@ -842,7 +1014,7 @@ def ana_miost(config,State,dict_obs=None):
                 lmin= config.lmin, # !!!
                 lmax= config.lmax,
                 cutRo= 1.6,
-                factdec= 15.,
+                factdec= 15,
                 tdecmin= config.tdecmin, # !!!
                 tdecmax= config.tdecmax,
                 tssr= 0.5,
@@ -963,8 +1135,7 @@ def ana_miost(config,State,dict_obs=None):
         time1 = datetime.now()
         print('Loop from',init_miost_date.strftime("%Y-%m-%d"),'to',
               final_miost_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
-        
-    
+         
 
 def ana_harm(config,State,dict_obs=None):
     
@@ -973,17 +1144,17 @@ def ana_harm(config,State,dict_obs=None):
         obs.detrend_obs(dict_obs)
     
     time = []
-    ssh = []
+    ssh = np.array([])
     for date in dict_obs:
         time.append((date - config.init_date).total_seconds())
         path = dict_obs[date]['obs_name'][0]
         sat = dict_obs[date]['satellite'][0]
         ds = xr.open_dataset(path).squeeze()
-        ssh.append(ds[sat.name_obs_var[0]].values)
+        ssh = np.append(ssh,ds[sat.name_obs_var[0]].values)
         
     time = np.asarray(time)
     ssh = np.asarray(ssh)
-    
+
     # Harmonic analysis
     nt,ny,nx = ssh.shape
     G = np.empty((nt,2))
@@ -1012,7 +1183,51 @@ def ana_harm(config,State,dict_obs=None):
         date += config.saveoutput_time_step
     
     
+def solve_pcg(G, comp_Qinv, obs_invnois2,eps_rest=1.e-7,niter=800):
+
+    comp_CFAC = comp_Qinv**-0.5
     
+    comp_rest = G.T.dot(obs_invnois2) * comp_CFAC
+
+    comp_p = 1*comp_rest
+    comp_x = np.zeros_like((comp_rest))
+
+    rest = np.inner(comp_rest, comp_rest)
+    rest0 = +rest
+
+    itr = int(-1)
+    rest2 = 0
+    while ((rest / rest0 > eps_rest) & (itr < niter)):
+        itr += 1
+        ###########################################
+        # Compute A*p
+        ###########################################
+        cvec = G.T.dot(G.dot(comp_p * comp_CFAC) * obs_invnois2)
+        comp_Ap =  comp_p * comp_Qinv * comp_CFAC**2 + cvec * comp_CFAC
+
+        if itr >0: rest = +rest2
+
+        tmp = np.inner(comp_p, comp_Ap)
+        alphak = rest / tmp
+
+        ###########################################
+        # New state
+        ###########################################
+        comp_x += alphak * comp_p
+
+        # ###########################################
+        # New direction of descent
+        ###########################################
+        rest2 = np.inner(comp_rest - alphak * comp_Ap, comp_rest - alphak * comp_Ap)
+        betak = rest2 / rest
+
+        # Loop updates
+        comp_p *= betak
+        comp_p += comp_rest - alphak * comp_Ap 
+        comp_rest += -alphak * comp_Ap      
+            
+    return comp_x * comp_CFAC
+
     
     
     

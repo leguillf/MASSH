@@ -8,6 +8,8 @@ Created on Thu Dec 12 12:15:36 2019
 import numpy as np 
 import xarray as xr
 import scipy.linalg as spl
+from netCDF4 import Dataset
+import scipy
 
 
 
@@ -147,3 +149,70 @@ def detrendn(da, axes=None):
     lin_trend = np.reshape(d_est, da.shape)
 
     return da - lin_trend
+
+
+def read_auxdata_geos(file_aux):
+
+    # Read spectrum database
+    fcid = Dataset(file_aux, 'r')
+    ff1 = np.array(fcid.variables['f'][:])
+    lon = np.array(fcid.variables['lon'][:])
+    lat = np.array(fcid.variables['lat'][:])
+    NOISEFLOOR = np.array(fcid.variables['NOISEFLOOR'][:,:])
+    PSDS = np.array(fcid.variables['PSDS'][:,:,:])
+    tdec = np.array(fcid.variables['tdec'][:,:,:])
+
+    finterpPSDS = scipy.interpolate.RegularGridInterpolator((ff1,lat,lon),PSDS,bounds_error=False,fill_value=None)
+    finterpTDEC = scipy.interpolate.RegularGridInterpolator((ff1,lat,lon),tdec,bounds_error=False,fill_value=None)
+    #finterpTDEC = []
+    finterpNOISEFLOOR = scipy.interpolate.RegularGridInterpolator((lat,lon),NOISEFLOOR,bounds_error=False,fill_value=None)
+
+    return finterpPSDS,finterpTDEC,  finterpNOISEFLOOR
+
+
+def read_auxdata_geosc(filec_aux):
+
+    # Read spectrum database
+    fcid = Dataset(filec_aux, 'r')
+    lon = np.array(fcid.variables['lon'][:])
+    lat = np.array(fcid.variables['lat'][:])
+    C1 = np.array(fcid.variables['c1'][:,:])
+    finterpC = scipy.interpolate.RegularGridInterpolator((lon,lat),C1,bounds_error=False,fill_value=None)
+    return finterpC
+
+def read_auxdata_depth(filec_aux):
+
+    # Read spectrum database
+    fcid = Dataset(filec_aux, 'r')
+    lon = np.array(fcid.variables['lon'][:])
+    lat = np.array(fcid.variables['lat'][:])
+    DEPTH=np.array(fcid.variables['H'][:,:])
+    finterpDEPTH = scipy.interpolate.RegularGridInterpolator((lon,lat),DEPTH,bounds_error=False,fill_value=None)
+    return finterpDEPTH    
+
+def read_auxdata_varcit(file_aux):
+
+    # Read spectrum database
+    fcid = Dataset(file_aux, 'r')
+    lon = np.array(fcid.variables['lon'][:])
+    lat = np.array(fcid.variables['lat'][:])
+    VARIANCE=np.array(fcid.variables['variance'][:,:])
+    finterpVARIANCE = scipy.interpolate.RegularGridInterpolator((lon,lat),VARIANCE.T,bounds_error=False,fill_value=None)
+    return finterpVARIANCE   
+
+
+def read_auxdata_mdt(filemdt_aux,name_var):
+
+    # Read spectrum database
+    fcid = Dataset(filemdt_aux, 'r')
+    lon = np.array(fcid.variables[name_var['lon']][:])
+    lat = np.array(fcid.variables[name_var['lat']][:])
+    mdt = np.array(fcid.variables[name_var['mdt']]).squeeze()
+    if mdt.shape[1]==lon.size:
+        mdt = mdt.transpose()
+    if len(lon.shape)==1:
+        finterpMDT = scipy.interpolate.RegularGridInterpolator((lon,lat),mdt,bounds_error=False,fill_value=None)
+    else:
+        finterpMDT = scipy.interpolate.NearestNDInterpolator(list(zip(lon.ravel(),lat.ravel())),mdt.ravel())
+    return finterpMDT
+

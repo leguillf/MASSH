@@ -45,8 +45,7 @@ def bfn(config,dt_start,dt_end,one_time_step,State):
                         config.name_mod_var,
                         config.dist_scale,
                         pathsaveproj,
-                        'projections_' + config.name_domain + '_' +\
-                            '_'.join(config.satellite),
+                        'projections_' + '_'.join(config.satellite),
                         config.c,
                         config.flag_plot,
                         config.scalenudg)
@@ -66,8 +65,7 @@ def bfn(config,dt_start,dt_end,one_time_step,State):
                             config.N,
                             config.L0,
                             pathsaveproj,
-                            'projections_' + config.name_domain + '_' +\
-                                '_'.join(config.satellite),
+                            'projections_' + '_'.join(config.satellite),
                             config.flag_plot,
                             config.scalenudg)
     else:
