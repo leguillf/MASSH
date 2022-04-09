@@ -223,7 +223,19 @@ class RedBasis_IT:
                 Q = np.zeros((self.nbasis,)) 
                 # variance on He
                 Q[self.sliceHe] = self.sigma_B_He 
-                Q[self.slicebc] = self.sigma_B_bc 
+                if hasattr(self.sigma_B_bc,'__len__'):
+                    if len(self.sigma_B_bc)==len(self.w_it):
+                        # Different background values for each frequency
+                        nw = self.nbc//len(self.w_it)
+                        for iw in range(len(self.w_it)):
+                                slicew = slice(iw*nw,(iw+1)*nw)
+                                Q[self.slicebc][slicew] = self.sigma_B_bc[iw]
+                    else:
+                        # Not the right number of frequency prescribed in the config file 
+                        # --> we use only the first one
+                        Q[self.slicebc] = self.sigma_B_bc[0]
+                else:
+                    Q[self.slicebc] = self.sigma_B_bc
             else:
                 Q = None
             
