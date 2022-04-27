@@ -194,13 +194,13 @@ file_bc = None # netcdf file(s) in whihch the boundary conditions fields are sto
 
 name_var_bc = {'time':'','lon':'','lat':'','var':''} # name of the boundary conditions variable
 
-add_mdt_bc = False # Add mdt to boundary conditions. Useful only if we only have boundary conditions on sla
+add_mdt_bc = False # Add mdt to boundary conditions. Useful only if boundary conditions are on sla
 
 use_bc_on_coast = True # use boundary conditions on coast. Useful only if MDT or a mask is provided 
 
 bc_mindepth = None # minimal depth below which boundary conditions are used  
 
-file_depth = None # netcdf file(s) in whihch the topography is stored
+file_depth = None # netcdf file(s) in which the topography is stored
 
 name_var_depth = {'time':'','lon':'','lat':'','var':''} # name of the topography variable
 
@@ -317,11 +317,11 @@ tmeso = 20 # Largest mesoscale time of decorrelation
 
 sloptdec = -1.28 # Slope such as tdec = lambda^slope where lamda is the wavelength
 
-factdec= 0.5 # factor to be multiplied to the computed time of decorrelation 
+factdec = 0.5 # factor to be multiplied to the computed time of decorrelation 
 
-tdecmin= 2.5 # minimum time of decorrelation 
+tdecmin = 2.5 # minimum time of decorrelation 
 
-tdecmax= 40. # maximum time of decorrelation 
+tdecmax = 40. # maximum time of decorrelation 
 
 facQ= 1 # factor to be multiplied to the estimated Q
 
