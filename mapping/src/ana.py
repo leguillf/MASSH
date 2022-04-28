@@ -35,6 +35,9 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     if config.name_analysis is None: 
         return ana_forward(config,State,Model)
     
+    elif config.name_analysis=='OI':
+        return ana_oi(config,State,dict_obs)
+    
     elif config.name_analysis=='BFN':
         return ana_bfn(config,State,Model,dict_obs)
     
@@ -56,11 +59,20 @@ def ana(config, State, Model, dict_obs=None, *args, **kwargs):
 
 def ana_forward(config,State,Model):
     
+    """
+    NAME
+        ana_forward
+
+    DESCRIPTION
+        Run a model forward integration  
+    
+    """
+    
     present_date = config.init_date
     State.save_output(present_date)
     nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
     while present_date < config.final_date :
-        print(present_date)
+
         # Propagation
         Model.step(State,nstep)
         # Time increment
@@ -75,7 +87,70 @@ def ana_forward(config,State,Model):
     return
 
          
+def ana_oi(config,State,dict_obs):
+    
+    """
+    NAME
+        ana_oi
 
+    DESCRIPTION
+        Run an optimal interpolation experiment 
+    
+    """
+    
+    from . import obs
+    
+    
+    
+    box = [State.lon.min(),State.lon.max(),State.lat.min(),State.lat.max(),
+           None, None]
+    
+    ndays = (config.final_date-config.init_date).total_seconds()/3600/24
+    
+    dt = config.saveoutput_time_step.total_seconds()/3600/24
+    times = np.arange(0, ndays + dt, dt)
+    lon1d = State.lon.flatten()
+    lat1d = State.lat.flatten()
+    
+    State0 = State.free()
+    
+    # Time loop
+    for i,t in enumerate(times):
+        
+        box[4] = config.init_date + timedelta(days=t-config.oi_Lt)
+        box[5] = config.init_date + timedelta(days=t+config.oi_Lt)
+        
+        obs_val, obs_coords, obs_coords_att = obs.get_obs(dict_obs,box,config.init_date)
+        
+        obs_lon = obs_coords[0]
+        obs_lat = obs_coords[1]
+        obs_time = obs_coords[2]
+        
+        BHt = np.exp(-((t - obs_time[np.newaxis,:])/config.oi_Lt)**2 - 
+                    ((lon1d[:,np.newaxis] - obs_lon[np.newaxis,:])/config.oi_Lx)**2 - 
+                    ((lat1d[:,np.newaxis] - obs_lat[np.newaxis,:])/config.oi_Ly)**2)
+        
+        
+        HBHt = np.exp(-((obs_time[np.newaxis,:] - obs_time[:,np.newaxis])/config.oi_Lt)**2 -
+                    ((obs_lon[np.newaxis,:] - obs_lon[:,np.newaxis])/config.oi_Lx)**2 -
+                    ((obs_lat[np.newaxis,:] - obs_lat[:,np.newaxis])/config.oi_Ly)**2)
+            
+            
+            
+        R = np.diag(np.full((len(obs_val)), config.oi_noise**2))
+
+        Coo = HBHt + R
+        Mi = np.linalg.inv(Coo)
+    
+        sol = np.dot(np.dot(BHt, Mi), obs_val).reshape((State.ny,State.nx))
+        
+        # Save output
+        State0.setvar(sol,ind=0)
+        date = config.init_date + timedelta(days=t)
+        State0.save_output(date)
+
+    return
+    
         
 def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     """
@@ -83,7 +158,7 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
         ana_bfn
 
     DESCRIPTION
-        Perform a BFN experiment on altimetric data and save the results on output directory
+        Run a Back and Forth Nudging experiment 
     
     """
     

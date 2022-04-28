@@ -162,6 +162,20 @@ He_data = None # He external data that will be used as apriori for the inversion
 
 name_analysis = 'BFN'
 
+
+###################################
+###   OI-specific parameters    ### 
+################################### 
+
+oi_Lt = 7 # days
+
+oi_Lx = 1 # degreee
+
+oi_Ly = 1 # degree
+
+oi_noise = 5e-2 # meters
+
+
 ###################################
 ###   BFN-specific parameters   ### 
 ################################### 

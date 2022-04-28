@@ -336,15 +336,15 @@ def detrend_obs(dict_obs):
             
     
 
-def get_obs(dict_obs,box,subsampling=1):
+def get_obs(dict_obs,box,time_init,subsampling=1):
 
         lon0 = box[0]
         lon1 = box[1]
         lat0 = box[2]
         lat1 = box[3]
         
-        time0 = datetime(2003,1,1) + timedelta(days=box[4]-19358)
-        time1 = datetime(2003,1,1) + timedelta(days=box[5]-19358)
+        time0 = box[4]
+        time1 = box[5]
 
         lon= np.array([])
         lat= np.array([])
@@ -367,7 +367,7 @@ def get_obs(dict_obs,box,subsampling=1):
                         ds = ds.where((lon0<=lon_obs) & (lon1>=lon_obs) & 
                   (lat0<=lat_obs) & (lat1>=lat_obs), drop=True)
                         time_obs = ds[_sat.name_obs_time].values
-                        time_obs = (time_obs-np.datetime64(time0))/np.timedelta64(1, 'D')
+                        time_obs = (time_obs-np.datetime64(time_init))/np.timedelta64(1, 'D')
 
                         if _sat.kind=='fullSSH':
                             if len(ds[_sat.name_obs_lon].shape)==1:
