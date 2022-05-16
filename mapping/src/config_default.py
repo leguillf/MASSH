@@ -208,6 +208,8 @@ file_bc = None # netcdf file(s) in whihch the boundary conditions fields are sto
 
 name_var_bc = {'time':'','lon':'','lat':'','var':''} # name of the boundary conditions variable
 
+bfn_use_bc_as_init = False
+
 add_mdt_bc = False # Add mdt to boundary conditions. Useful only if boundary conditions are on sla
 
 use_bc_on_coast = True # use boundary conditions on coast. Useful only if MDT or a mask is provided 

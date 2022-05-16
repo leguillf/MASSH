@@ -244,6 +244,11 @@ def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
                     mdt[np.isnan(mdt)] = 0
                     bc_field += mdt
                 except : print('Warning : unable to add MDT to boundary field')
+            
+            if bfn_first_window and config.bfn_use_bc_as_init:
+                print('use boundary conditions as initialization')
+                State.setvar(bc_field[0],ind=0)
+                
         else:
             bc_field = bc_weight = bc_field_t = None
 
