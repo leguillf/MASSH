@@ -165,6 +165,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
     var_bc_interpTime = np.zeros((NT,ny,nx))
 
     try:
+
         if file_bc is not None:
             #####################
             # Read file
@@ -280,9 +281,11 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
                     print('Warning: impossible to interpolate boundary conditions')
         else:
             print('Warning: no boundary conditions provided')
-    except:
+    except Exception as e:
+        
         print('Warning: an error occured in the boundary condition processing.')
         print('We set to 0')
+        print('Code crashed because:',e)
         
     if NT == 1:
         var_bc_interpTime = var_bc_interpTime[0]
