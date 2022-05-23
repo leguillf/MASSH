@@ -253,11 +253,23 @@ class State:
             
         for i, var in enumerate(self.name_var):
             if i==0:
+                # U
                 self.var[var] = np.zeros((self.ny,self.nx-1))
             elif i==1:
+                # V
                 self.var[var] = np.zeros((self.ny-1,self.nx))
             else:
-                self.var[var] = np.zeros((self.ny,self.nx))
+                # SSH
+                if (config.name_init == 'from_file') and (config.name_init_var is not None):
+                    dsin = xr.open_dataset(config.name_init_grid)
+                    var_init = dsin[config.name_init_var]
+                    if len(var_init.shape)==3:
+                        var_init = var_init[0,:,:]
+                    self.var[var] = var_init.values
+                    dsin.close()
+                    del dsin
+                else:
+                    self.var[var] = np.zeros((self.ny,self.nx))
                 
     def ini_var_sw1lm(self,config):
         """

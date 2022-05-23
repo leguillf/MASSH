@@ -36,6 +36,9 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
+    if config.satellite is None or len(config.satellite)==0:
+        return {}
+    
     if config.time_obs_min is not None:
         time_obs_min = config.time_obs_min
     else:

@@ -668,7 +668,8 @@ class Model_sw1l:
             hbcx = State.params[self.slicehbcx].reshape(self.shapehbcx)
             hbcy = State.params[self.slicehbcy].reshape(self.shapehbcy)
         else:
-            He = hbcx = hbcy = None
+            hbcx = hbcy = None
+            He = self.Heb * np.ones((State.ny,State.nx))
         
         # Time propagation
         for i in range(nstep):

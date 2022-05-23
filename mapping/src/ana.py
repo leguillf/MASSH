@@ -72,9 +72,11 @@ def ana_forward(config,State,Model):
     State.save_output(present_date)
     nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
     while present_date < config.final_date :
-
+        
+        t = (present_date - config.init_date).total_seconds()
+        
         # Propagation
-        Model.step(State,nstep)
+        Model.step(t,State,nstep)
         # Time increment
         present_date += timedelta(seconds=nstep*Model.dt)
         # Save
