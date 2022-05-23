@@ -1,38 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-Created on Wed Jan  6 19:20:42 2021
 
-@author: leguillou
-"""
-
-##########################################
-##########################################
-##                                      ##
-##      Example 4 - Parameters          ##
-##                                      ##
-##              SWOT DA                 ##
-##                                      ## 
-##            with model QG             ## 
-##    and a Back and Forth Nudging      ## 
-##          in OSMOSIS region           ## 
-##     from 10/01/2012 to 10/10/2012    ## 
-##                                      ## 
-##########################################
-# Settings:                              #
-# - experimental parameters              #
-# - global libraries                     #
-# - initialization parameters            #
-# - time parameters                      #
-# - model parameters                     #
-# - analysis parameters                  #
-# - observation parameters               #
-# - outputs parameters                   #
-# - temporary DA parameters              #
-##########################################
-##########################################
  
-
 #################################################################################################################################
 # EXPERIMENTAL PARAMETERS
 #################################################################################################################################
@@ -41,7 +10,6 @@ Created on Wed Jan  6 19:20:42 2021
 #################################################################################################################################
 
 name_experiment = 'Example0' 
-name_domain = 'GULFSTREAM'
 
 #################################################################################################################################
 # Global libraries     
@@ -101,9 +69,9 @@ saveoutput_time_step = timedelta(hours=1)
 # Both name_mod_lon and name_mod_lat are used in the output files.
 #################################################################################################################################
        
-name_model = 'QG1L'           
+name_model = 'SW1L'           
     
-name_mod_var = ["ssh"]  
+name_mod_var = ["u","v","ssh"]  
 
 n_mod_var = len(name_mod_var)             
 
@@ -132,6 +100,9 @@ dtmodel = 60
 
 name_analysis = None
 
+#################################################################################################################################
+# Observation parameters
+#################################################################################################################################
 
 satellite = None
 
@@ -150,18 +121,16 @@ name_exp_save = name_experiment
 
 path_save = '../outputs/' + name_exp_save + '/'
 
-flag_plot = 0
+flag_plot = 1
     
 #################################################################################################################################
 # Temporary DA parameters
 #################################################################################################################################
 # - tmp_DA_path: temporary data assimilation directory path
-# - name_grd: name used for saving the QG grid to avoid calculating it every time.
 #################################################################################################################################
         
 tmp_DA_path = "../scratch/" +  name_exp_save + '/'
- 
-name_grd = tmp_DA_path + 'QGgrid'
+
 
 
 
