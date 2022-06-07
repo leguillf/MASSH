@@ -74,7 +74,7 @@ class State:
         
         #  Initialize state variables
         self.var = pd.Series(dtype=np.float64)
-        if config.name_model is None or config.name_model=='QG1L':
+        if config.name_model is None or config.name_model in ['QG1L','JAX-QG1L']:
             self.ini_var_qg1l(config)
         elif config.name_model=='SW1L':
             self.ini_var_sw1l(config)

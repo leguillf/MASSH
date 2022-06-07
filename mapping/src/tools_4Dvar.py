@@ -49,7 +49,7 @@ class Obsopt:
         self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)
         
-        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1L_SW1L'] or \
+        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','JAX-QG1L'] or \
              hasattr(config.name_model,'__len__') and len(config.name_model)==2:
             for t in Model.timestamps:
                 if self.isobserved(t):
@@ -85,10 +85,11 @@ class Obsopt:
                 np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
                 ))
             
-        elif State.config['name_model']=='QG1L' or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
-            if State.config['name_model']=='QG1L': mask = Model.qgm.mask
+        elif State.config['name_model'] in ['QG1L','JAX-QG1L'] or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+            if State.config['name_model'] in ['QG1L','JAX-QG1L'] : mask = Model.qgm.mask
             else: mask = Model.Model_BM.qgm.mask
-            coords_geo_bc = np.column_stack((State.lon[mask<2].ravel(),State.lat[mask<2].ravel()))
+            coords_geo_bc = np.column_stack((State.lon[np.where(mask<2)].ravel(),
+                                             State.lat[np.where(mask<2)].ravel()))
         
         self.ind_bc = []
         for i in range(coords_geo.shape[0]):
@@ -384,6 +385,7 @@ class Cov :
         return self.sigma**0.5 * X
     
     
+
 class Variational:
     
     def __init__(self, 
@@ -424,7 +426,7 @@ class Variational:
         # Grad test
         if config.compute_test:
             print('Gradient test:')
-            X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
+            X = 1e-2*(np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
             
             
@@ -468,7 +470,7 @@ class Variational:
                         'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
 
             # 3. Run forward model
-            self.M.step(t, State, nstep=nstep)
+            self.M.step(t=t,State=State,nstep=nstep)
             
         if self.H.isobs[-1]:
             timestamp = self.M.timestamps[self.H.checkpoint[-1]]
@@ -528,7 +530,7 @@ class Variational:
                 self.basis.operg(dX,t/3600/24,State=dState)
                 
             # 3. Run forward model
-            self.M.step_tgl(t, dState, State, nstep=nstep)
+            self.M.step_tgl(t=t, dState=dState, State=State, nstep=nstep)
             
         if self.H.isobs[-1]:
             timestamp = self.M.timestamps[self.H.checkpoint[-1]]
@@ -590,7 +592,7 @@ class Variational:
                        'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
             
             # 3. Run adjoint model 
-            self.M.step_adj(t, adState, State, nstep=nstep) # i+1 --> i
+            self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
             
             # 2. Reduced basis
             if self.H.checkpoint[i]%self.dtbasis==0:
@@ -614,10 +616,7 @@ class Variational:
         
         return g 
     
-    
-    
-    
-    
+
     def dgrad(self,dX0): 
                 
         dX = +dX0 

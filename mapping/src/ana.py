@@ -72,7 +72,9 @@ def ana_forward(config,State,Model):
     State.save_output(present_date)
     nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
     while present_date < config.final_date :
-
+        
+        State.plot(present_date)
+        
         # Propagation
         Model.step(State,nstep)
         # Time increment
@@ -80,8 +82,7 @@ def ana_forward(config,State,Model):
         # Save
         if config.saveoutputs:
             State.save_output(present_date)
-        if config.flag_plot>0:
-            State.plot(present_date)
+        
         
         
     return
@@ -517,7 +518,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     
     print('\n*** Reduced basis ***\n')
     
-    if config.name_model=='QG1L':
+    if config.name_model in ['QG1L','JAX-QG1L']:
         from .tools_reduced_basis import RedBasis_BM as RedBasis
     elif config.name_model=='SW1L':
         from .tools_reduced_basis import RedBasis_IT as RedBasis
@@ -628,6 +629,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
 
     # Forward propagation
     while date<config.final_date:
+        
         # current time in secondes
         t = (date - config.init_date).total_seconds()
         
@@ -637,7 +639,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         # Forward
         for j in range(config.checkpoint):
             
-            Model.step(t+j*config.dtmodel,State0,nstep=1)
+            Model.step(t=t+j*config.dtmodel,State=State0,nstep=1)
     
             date += timedelta(seconds=config.dtmodel)
             
