@@ -645,7 +645,7 @@ if __name__ == "__main__":
     
     c = 2.5
     
-    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,qgiter=10)
+    qgm = Qgm_adj(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH,mdt=np.random.random((ny,nx)),qgiter=10)
     
     plt.figure()
     plt.pcolormesh(qgm.mask)
