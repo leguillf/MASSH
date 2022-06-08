@@ -518,7 +518,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     
     print('\n*** Reduced basis ***\n')
     
-    if config.name_model in ['QG1L','JAX-QG1L']:
+    if config.name_model in ['Diffusion','QG1L','JAX-QG1L']:
         from .tools_reduced_basis import RedBasis_BM as RedBasis
     elif config.name_model=='SW1L':
         from .tools_reduced_basis import RedBasis_IT as RedBasis

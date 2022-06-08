@@ -90,7 +90,12 @@ class Obsopt:
             else: mask = Model.Model_BM.qgm.mask
             coords_geo_bc = np.column_stack((State.lon[np.where(mask<2)].ravel(),
                                              State.lat[np.where(mask<2)].ravel()))
-        
+            
+        elif State.config['name_model'] in ['Diffusion'] or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+            mask = Model.mask
+            coords_geo_bc = np.column_stack((State.lon[np.where(mask<2)].ravel(),
+                                             State.lat[np.where(mask<2)].ravel()))
+            
         self.ind_bc = []
         for i in range(coords_geo.shape[0]):
             if np.any(np.all(np.isclose(coords_geo_bc,coords_geo[i]), axis=1)):
