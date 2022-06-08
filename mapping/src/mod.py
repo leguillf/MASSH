@@ -191,6 +191,12 @@ variable are SLAs!')
                                          name_var_mdt,
                                          State.lon,
                                          State.lat)
+                
+                self.mdt[np.isnan(self.mdt)] = 0
+                
+                plt.figure()
+                plt.pcolormesh(self.mdt)
+                plt.show()
             else:
                 sys.exit('Warning: wrong variable name for mdt')
             if 'mdu' in config.name_var_mdt and config.name_var_mdt['mdu'] in ds \
@@ -519,7 +525,7 @@ variable are SLAs!')
         self.step_adj(0,adState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         adX = adState.getvar(vect=True)
         
-        mask = np.isnan(dX+adX+dY+adY)
+        mask = np.isnan(dX+adX+dY+adY) 
         ps1 = np.inner(dX[~mask],adX[~mask]) + np.inner(dState.params.flatten()[~mask],adState.params.flatten()[~mask])
         ps2 = np.inner(dY[~mask],adY[~mask]) + np.inner(dState.params.flatten(),adState.params.flatten()*0)
         
