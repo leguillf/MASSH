@@ -35,6 +35,8 @@ def Model(config,State):
         return Model_diffusion(config,State)
     elif config.name_model=='QG1L':
         return Model_qg1l(config,State)
+    elif config.name_model=='JAX-QG1L':
+        return Model_jaxqg1l(config,State)
     elif config.name_model=='SW1L':
         return Model_sw1l(config,State)
     elif config.name_model=='SW1LM':
@@ -42,7 +44,7 @@ def Model(config,State):
     elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
         return Model_BM_IT(config,State)
     else:
-        sys.exit(config.name_analysis + ' not implemented yet')
+        sys.exit(config.name_model + ' not implemented yet')
         
         
 class Model_diffusion:
@@ -142,8 +144,309 @@ class Model_diffusion:
         ps2 = np.inner(Y,adY)
         
         print('Adjoint test:',ps1/ps2)
+        
     
+class Model_jaxqg1l:
+
+    def __init__(self,config,State):
+        # Model specific libraries
+        if config.dir_model is None:
+            dir_model = os.path.realpath(
+                os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             '..','models','model_qg1l'))
+        else:
+            dir_model = config.dir_model  
+        SourceFileLoader("qgm",dir_model + "/jqgm.py").load_module() 
+
+        # Time parameters
+        self.dt = config.dtmodel
+        self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
+        self.T = np.arange(self.nt) * self.dt
+        self.ny = State.ny
+        self.nx = State.nx
+        
+        # Construct timestamps
+        self.timestamps = [] 
+        t = config.init_date
+        while t<=config.final_date:
+            self.timestamps.append(t)
+            t += timedelta(seconds=self.dt)
+        self.timestamps = np.asarray(self.timestamps)
+        
+        # Open MDT map if provided
+        if config.Reynolds and config.path_mdt is not None and os.path.exists(config.path_mdt):
+            print('MDT is prescribed, thus the QGPV will be expressed thanks \
+to Reynolds decomposition. However, be sure that observed and boundary \
+variable are SLAs!')
+                      
+            ds = xr.open_dataset(config.path_mdt).squeeze()
+            ds.load()
+            
+            name_var_mdt = {}
+            name_var_mdt['lon'] = config.name_var_mdt['lon']
+            name_var_mdt['lat'] = config.name_var_mdt['lat']
+            
+            
+            
+            if 'mdt' in config.name_var_mdt and config.name_var_mdt['mdt'] in ds:
+                name_var_mdt['var'] = config.name_var_mdt['mdt']
+                self.mdt = grid.interp2d(ds,
+                                         name_var_mdt,
+                                         State.lon,
+                                         State.lat)
+            else:
+                sys.exit('Warning: wrong variable name for mdt')
+            if 'mdu' in config.name_var_mdt and config.name_var_mdt['mdu'] in ds \
+                and 'mdv' in config.name_var_mdt and config.name_var_mdt['mdv'] in ds:
+                name_var_mdt['var'] = config.name_var_mdt['mdu']
+                self.mdu = grid.interp2d(ds,
+                                         name_var_mdt,
+                                         State.lon,
+                                         State.lat)
+                name_var_mdt['var'] = config.name_var_mdt['mdv']
+                self.mdv = grid.interp2d(ds,
+                                         name_var_mdt,
+                                         State.lon,
+                                         State.lat)
+            else:
+                self.mdu = self.mdv = None
+                
+        else:
+            self.mdt = self.mdu = self.mdv = None
     
+        
+        # Open Rossby Radius if provided
+        if self.mdt is not None and config.filec_aux is not None and os.path.exists(config.filec_aux):
+            
+            print('Rossby Radius is prescribed, be sure to have provided MDT as well')
+
+            ds = xr.open_dataset(config.filec_aux)
+            
+            self.c = grid.interp2d(ds,
+                                   config.name_var_c,
+                                   State.lon,
+                                   State.lat)
+            
+            if config.cmin is not None:
+                self.c[self.c<config.cmin] = config.cmin
+            
+            if config.cmax is not None:
+                self.c[self.c>config.cmax] = config.cmax
+                
+        else:
+            self.c = config.c0 * np.ones((State.ny,State.nx))
+            
+        
+        if config.flag_plot>1:
+            plt.figure()
+            plt.pcolormesh(self.c)
+            plt.colorbar()
+            plt.show()
+            
+            
+        # Model Parameters (Flux)
+        self.nparams = State.ny*State.nx
+        self.sliceparams = slice(0,self.nparams)
+        
+        
+        # Model initialization
+        qgm = SourceFileLoader("qgm", dir_model + "/jqgm.py").load_module() 
+        model = qgm.Qgm
+        
+        self.qgm = model(dx=State.DX,
+                         dy=State.DY,
+                         dt=self.dt,
+                         SSH=State.getvar(ind=0),
+                         c=self.c,
+                         upwind=config.upwind,
+                         g=State.g,
+                         f=State.f,
+                         qgiter=config.qgiter,
+                         diff=config.only_diffusion,
+                         snu=config.cdiffus,
+                         mdt=self.mdt,
+                         mdv=self.mdv,
+                         mdu=self.mdu)
+        
+        if config.name_analysis=='4Dvar' and config.compute_test:
+            print('Tangent test:')
+            self.tangent_test(State,10,config.flag_use_bc)
+            print('Adjoint test:')
+            self.adjoint_test(State,10,config.flag_use_bc)
+        
+
+    def step(self,State,nstep=1,Hbc=None,Wbc=None,ind=0,t=None):
+        
+        # Get state variable
+        SSH0 = State.getvar(ind=ind)
+        
+        # init
+        SSH1 = +SSH0
+        
+        # Boundary condition
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
+        
+        # Time propagation
+        for i in range(nstep):
+            SSH1 = self.qgm.step_jit(SSH1,way=1)
+        
+        # Update state
+        if State.params is not None:
+            params = State.params[self.sliceparams].reshape((State.ny,State.nx))
+            SSH1 += nstep*self.dt/(3600*24) * params
+        State.setvar(SSH1, ind=ind)
+
+
+    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None,ind=0,t=None):
+        
+        # Get state variable
+        dSSH0 = dState.getvar(ind=ind)
+        SSH0 = State.getvar(ind=ind)
+        
+        # init
+        dSSH1 = +dSSH0
+        SSH1 = +SSH0
+        
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            dSSH1 = (1-Wbc)*dSSH1
+            SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
+        
+        # Time propagation
+        for i in range(nstep):
+            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1)
+            SSH1 = self.qgm.step(h0=SSH1)
+        
+        # Update state
+        if dState.params is not None:
+            dparams = dState.params[self.sliceparams].reshape((State.ny,State.nx))
+            dSSH1 += nstep*self.dt/(3600*24) * dparams
+        dState.setvar(dSSH1,ind=ind)
+        
+        
+    def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None,ind=0,t=None):
+        
+        # Get state variable
+        adSSH0 = adState.getvar(ind=ind)
+        SSH0 = State.getvar(ind=ind)
+        
+        # Init
+        adSSH1 = +adSSH0
+        SSH1 = +SSH0
+        
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
+
+        # Current trajectory
+        traj = [SSH1]
+        if nstep>1:
+            for i in range(nstep):
+                SSH1 = self.qgm.step(SSH1)
+                traj.append(SSH1)
+        
+        # Time propagation
+        for i in reversed(range(nstep)):
+            SSH1 = traj[i]
+            adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
+        
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            adSSH1 = (1-Wbc)*adSSH1
+        
+        # Update state  and parameters
+        if adState.params is not None:
+            adState.params[self.sliceparams] += nstep*self.dt/(3600*24) * adSSH0.flatten()
+            
+        adSSH1 = adSSH1.at[np.isnan(adSSH1)].set(0)
+        adState.setvar(adSSH1,ind=ind)
+        
+        
+    def tangent_test(self,State,nstep,bc=False):
+    
+        State0 = State.random(1e-2)
+        dState = State.random(1e-2)
+        
+        State0.params = np.random.random((self.ny*self.nx))
+        dState.params = np.random.random((self.ny*self.nx))
+        
+        if bc:
+            Hbc = np.random.random((State.ny,State.nx))
+            Wbc = np.random.random((State.ny,State.nx))
+        else:
+            Hbc = Wbc = None
+        
+        State0_tmp = State0.copy()
+        self.step(State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        X2 = State0_tmp.getvar(vect=True)
+
+        for p in range(10):
+            
+            lambd = 10**(-p)
+            
+            State1 = dState.copy()
+            State1.scalar(lambd)
+            State1.Sum(State0)
+            self.step(State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+            X1 = State1.getvar(vect=True)
+            
+            dState1 = dState.copy()
+            dState1.scalar(lambd)
+            self.step_tgl(dState1,State0,
+                          nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+            dX = dState1.getvar(vect=True)
+            
+            mask = np.isnan(X1+X2+dX)
+            ps = np.linalg.norm(X1[~mask]-X2[~mask]-dX[~mask])/np.linalg.norm(dX[~mask])
+
+            print('%.E' % lambd,'%.E' % ps)
+         
+            
+    def adjoint_test(self,State,nstep,bc=False):
+        
+        # Current trajectory
+        State0 = State.random()
+        
+        # Perturbation
+        dState = State.random()
+        dState.params = np.random.random((self.ny,self.nx))
+        dX = dState.getvar(vect=True)
+        
+        # Adjoint
+        adState = State.random()
+        adY = adState.getvar(vect=True)
+        adState.params = np.zeros((State.ny*State.nx,))
+        
+        if bc:
+            Hbc = np.random.random((State.ny,State.nx))
+            Wbc = np.random.random((State.ny,State.nx))
+        else:
+            Hbc = Wbc = None
+        
+        # Run TLM
+        self.step_tgl(dState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        dY = dState.getvar(vect=True)
+        
+        # Run ADJ
+        self.step_adj(adState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        adX = adState.getvar(vect=True)
+        
+        mask = np.isnan(dX+adX+dY+adY)
+        ps1 = np.inner(dX[~mask],adX[~mask]) + np.inner(dState.params.flatten()[~mask],adState.params.flatten()[~mask])
+        ps2 = np.inner(dY[~mask],adY[~mask]) + np.inner(dState.params.flatten(),adState.params.flatten()*0)
+        
+        print(ps1/ps2)
+        
+        
 class Model_qg1l:
 
     def __init__(self,config,State):
@@ -178,6 +481,7 @@ to Reynolds decomposition. However, be sure that observed and boundary \
 variable are SLAs!')
                       
             ds = xr.open_dataset(config.path_mdt).squeeze()
+            ds.load()
             
             name_var_mdt = {}
             name_var_mdt['lon'] = config.name_var_mdt['lon']
@@ -291,7 +595,7 @@ variable are SLAs!')
             print('Adjoint test:')
             self.adjoint_test(State,10,config.flag_use_boundary_conditions)
 
-    def step(self,t,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step(self,State,nstep=1,Hbc=None,Wbc=None,ind=0,t=None):
         
         # Get state variable
         SSH0 = State.getvar(ind=ind)
@@ -317,7 +621,7 @@ variable are SLAs!')
 
     
             
-    def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None):
+    def step_nudging(self,State,tint,Hbc=None,Wbc=None,Nudging_term=None,t=None):
     
         # Read state variable
         ssh_0 = State.getvar(0)
@@ -378,7 +682,7 @@ variable are SLAs!')
             State.setvar(pv_1,1)
         
         
-    def step_tgl(self,t,dState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step_tgl(self,dState,State,nstep=1,Hbc=None,Wbc=None,ind=0,t=None):
         
         # Get state variable
         dSSH0 = dState.getvar(ind=ind)
@@ -407,7 +711,7 @@ variable are SLAs!')
         dState.setvar(dSSH1,ind=ind)
         
         
-    def step_adj(self,t,adState,State,nstep=1,Hbc=None,Wbc=None,ind=0):
+    def step_adj(self,adState,State,nstep=1,Hbc=None,Wbc=None,ind=0,t=None):
         
         # Get state variable
         adSSH0 = adState.getvar(ind=ind)
@@ -465,7 +769,7 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         State0_tmp = State0.copy()
-        self.step(0,State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        self.step(State0_tmp,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -475,12 +779,12 @@ variable are SLAs!')
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(0,State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+            self.step(State1,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(0,dState1,State0,
+            self.step_tgl(dState1,State0,
                           nstep=nstep,Hbc=Hbc,Wbc=Wbc)
             dX = dState1.getvar(vect=True)
             
@@ -512,11 +816,11 @@ variable are SLAs!')
             Hbc = Wbc = None
         
         # Run TLM
-        self.step_tgl(0,dState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        self.step_tgl(dState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         dY = dState.getvar(vect=True)
         
         # Run ADJ
-        self.step_adj(0,adState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
+        self.step_adj(adState,State0,nstep=nstep,Hbc=Hbc,Wbc=Wbc)
         adX = adState.getvar(vect=True)
         
         mask = np.isnan(dX+adX+dY+adY)
@@ -647,7 +951,7 @@ class Model_sw1l:
         self.mdt = None
         
         # Tests
-        if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='SW1L':
+        if config.name_analysis==-'4Dvar' and config.compute_test and config.name_model=='SW1L':
             print('tangent test:')
             self.tangent_test(State,self.T[-1],nstep=1)
             print('adjoint test:')

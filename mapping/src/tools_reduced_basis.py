@@ -213,7 +213,7 @@ class RedBasis_IT:
         self.slicehbcy_phys = slice(np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys),
                                np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys)+np.prod(self.shapehbcy_phys))
         
-        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}')
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
     
         #self.test_operg()
         
@@ -464,7 +464,7 @@ class RedBasis_BM:
             print(1/ff[iff],Q[iwave-_nwave])
             
         nwave = iwave
-        Q=Q[:nwave]
+        Q = Q[:nwave]
         
         self.lon1d = lon1d
         self.lat1d = lat1d
@@ -483,7 +483,7 @@ class RedBasis_BM:
         self.tdec=tdec
         
         
-        print('nbasis=',self.nbasis)
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
 
 
         if return_q:

@@ -36,6 +36,10 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
+    if config.satellite is None:
+        print('None observation has been provided')
+        return {}
+    
     if config.time_obs_min is not None:
         time_obs_min = config.time_obs_min
     else:
@@ -49,6 +53,7 @@ def obs(config, State, *args, **kwargs):
     date1 = time_obs_min.strftime('%Y%m%d')
     date2 = time_obs_max.strftime('%Y%m%d')
     box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
+    
     name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic'
     
     # Check if previous *dict_obs* has been computed
@@ -74,10 +79,6 @@ def obs(config, State, *args, **kwargs):
        
     # Compute output observation dictionnary
     dict_obs = {}
-    
-    if config.satellite is None:
-        print('None observation has been provided')
-        return dict_obs
     
     assim_dates = []
     date = time_obs_min
