@@ -541,9 +541,19 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         R = Cov(config.sigma_R)
         
     print('\n*** Variational ***\n')
-    from .tools_4Dvar import Variational
     # backgroud state 
     Xb = np.zeros((basis.nbasis,))
+    
+    from .tools_4Dvar import background
+    
+    if config.prescribe_background and config.name_model!='Diffusion' :
+        Xb_prescribed = background(config, State, basis.nbasis)
+        Xb[basis.slicebm] = Xb_prescribed
+        if config.largescale_error_ratio!=1 :  
+            Q = np.where(Q==np.sqrt(config.Qmax),Q*config.largescale_error_ratio,Q)  
+         
+        
+    from .tools_4Dvar import Variational
     # Cost and Grad functions
     var = Variational(
         config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)

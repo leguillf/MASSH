@@ -1308,3 +1308,88 @@ def plot_grad_test(L) :
     plt.show()
 
 
+def background(config,State,nbasis):
+    '''
+    if prescribe background files exist: read and return them
+    else create them using an the 4Dvar with identity model (diffusion with snu=0) on the large scale basis components
+    '''
+      
+    
+    if config.path_background is not None and os.path.exists(config.path_background): 
+        
+        print('Background available at path_background')
+        
+        ds = xr.open_dataset(config.path_background)
+         
+        
+        Xb = ds[config.name_bkg_var] 
+        
+        ds.close()
+         
+        
+        
+    else: 
+        print('Background not available, creating one with 4Dvar and identity model')
+        
+        original_name_model = config.name_model
+        original_name_mod_var = config.name_mod_var
+        original_maxiter = config.maxiter
+        original_maxiter_inner = config.maxiter_inner
+        original_largescale_error_ratio = config.largescale_error_ratio
+        original_snu = config.snu
+        
+        # Modify appropriate config params to perform 4Dvar-Identity
+        config.name_model = 'Diffusion'
+        config.name_mod_var = ['ssh']
+        config.maxiter = config.bkg_maxiter
+        config.maxiter_inner = config.bkg_maxiter_inner
+        config.largescale_error_ratio = 1.
+        config.snu = config.bkg_snu
+        
+        # Perform 4Dvar-Identity
+        from src import state as state
+        State = state.State(config) 
+        from src import mod as mod
+        Model = mod.Model(config,State) 
+        from src import obs as obs
+        dict_obs = obs.obs(config,State) 
+        from src import ana as ana
+        ana.ana(config,State,Model,dict_obs=dict_obs)
+         
+        
+        
+        # Reset original config params 
+        config.name_model = original_name_model
+        config.name_mod_var = original_name_mod_var
+        config.maxiter = original_maxiter
+        config.maxiter_inner = original_maxiter_inner
+        config.largescale_error_ratio = original_largescale_error_ratio
+        config.snu = original_snu
+        
+        scratch_xini = config.tmp_DA_path+'Xini.nc'
+        os.system('cp '+scratch_xini +' '+ config.path_background)
+        os.system('rm '+scratch_xini)
+        
+        ds = xr.open_mfdataset(config.path_background, combine='nested', concat_dim='time', parallel=True)
+         
+        Xb = ds[config.name_bkg_var] 
+                
+        ds.close()
+        
+        
+        if not config.save_background:
+            os.system('rm '+config.path_background)
+        
+        
+    return Xb
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        
+        

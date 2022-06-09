@@ -997,7 +997,7 @@ class Model_sw1l:
         self.mdt = None
         
         # Tests
-        if config.name_analysis==-'4Dvar' and config.compute_test and config.name_model=='SW1L':
+        if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='SW1L':
             print('tangent test:')
             self.tangent_test(State,self.T[-1],nstep=1)
             print('adjoint test:')
@@ -1510,10 +1510,10 @@ class Model_BM_IT:
         
         h = 0
 
-        self.Model_BM.step(t,State,nstep=nstep,Hbc=Hbc,Wbc=Wbc,ind=0)
+        self.Model_BM.step(t=t,State=State,nstep=nstep,Hbc=Hbc,Wbc=Wbc,ind=0)
         h += State.getvar(ind=0)
         
-        self.Model_IT.step(t,State,nstep=nstep,t0=t0,ind=self.indit)
+        self.Model_IT.step(t=t,State=State,nstep=nstep,t0=t0,ind=self.indit)
         h += State.getvar(ind=-2)
         
         State.setvar(h,ind=-1)
@@ -1523,10 +1523,10 @@ class Model_BM_IT:
         
         dh = 0
         
-        self.Model_BM.step_tgl(t,dState,State,nstep=nstep,ind=0)
+        self.Model_BM.step_tgl(t=t,dState=dState,State=State,nstep=nstep,ind=0)
         dh += dState.getvar(ind=0)
         
-        self.Model_IT.step_tgl(t,dState,State,nstep=nstep,
+        self.Model_IT.step_tgl(t=t,dState=dState,State=State,nstep=nstep,
                                t0=t0,ind=self.indit)
         dh += dState.getvar(ind=-2)
 
@@ -1538,11 +1538,11 @@ class Model_BM_IT:
         
         _adh = adState.getvar(ind=0) 
         adState.setvar(adh+_adh,ind=0)
-        self.Model_BM.step_adj(t,adState,State,nstep=nstep,ind=0,Hbc=Hbc,Wbc=Wbc)
+        self.Model_BM.step_adj(t=t,adState=adState,State=State,nstep=nstep,ind=0,Hbc=Hbc,Wbc=Wbc)
     
         _adh = adState.getvar(ind=-2) 
         adState.setvar(adh+_adh,ind=-2)
-        self.Model_IT.step_adj(t,adState,State,nstep=nstep,t0=t0,ind=self.indit)
+        self.Model_IT.step_adj(t=t,adState=adState,State=State,nstep=nstep,t0=t0,ind=self.indit)
         adh += adState.getvar(ind=-2)
 
         adState.setvar(0*adh,ind=-1)
@@ -1558,7 +1558,7 @@ class Model_BM_IT:
         dState.params =  np.random.random((self.nparams,))
         
         State0_tmp = State0.copy()
-        self.step(t0,State0_tmp,nstep=nstep)
+        self.step(t=t0,State=State0_tmp,nstep=nstep)
         X2 = State0_tmp.getvar(vect=True)
 
         for p in range(10):
@@ -1568,12 +1568,12 @@ class Model_BM_IT:
             State1 = dState.copy()
             State1.scalar(lambd)
             State1.Sum(State0)
-            self.step(t0,State1,nstep=nstep)
+            self.step(t=t0,State=State1,nstep=nstep)
             X1 = State1.getvar(vect=True)
             
             dState1 = dState.copy()
             dState1.scalar(lambd)
-            self.step_tgl(t0,dState1,State0,nstep=nstep)
+            self.step_tgl(t=t0,dState=dState1,State=State0,nstep=nstep)
             dX = dState1.getvar(vect=True)
             
             mask = np.isnan(X1+X2+dX)
@@ -1600,11 +1600,11 @@ class Model_BM_IT:
         adState.params = +adparams
         
         # Run TLM
-        self.step_tgl(t0,dState,State0,nstep=nstep)
+        self.step_tgl(t=t0,dState=dState,State=State0,nstep=nstep)
         TLM = dState.getvar(vect=True)
         
         # Run ADJ
-        self.step_adj(t0,adState,State0,nstep=nstep)
+        self.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
         ADM = adState.getvar(vect=True)
 
         ps1 = np.inner(TLM,adX) + np.inner(dState.params,adparams) 
