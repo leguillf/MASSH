@@ -424,6 +424,12 @@ variable are SLAs!')
                                          name_var_mdt,
                                          State.lon,
                                          State.lat)
+                
+                self.mdt[np.isnan(self.mdt)] = 0
+                
+                plt.figure()
+                plt.pcolormesh(self.mdt)
+                plt.show()
             else:
                 sys.exit('Warning: wrong variable name for mdt')
             if 'mdu' in config.name_var_mdt and config.name_var_mdt['mdu'] in ds \
@@ -868,10 +874,7 @@ variable are SLAs!')
         dState.setvar(dSSHls1, ind=0)
         dState.setvar(dSSHss1, ind=1)
         dState.setvar(dSSHls1+dSSHss1,ind=2)
-        
-    
-    
-        
+  
         
     def step_adj(self,adState,State,nstep=1,t=None):
         

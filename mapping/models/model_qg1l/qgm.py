@@ -253,35 +253,6 @@ class Qgm:
     
         return q
     
-    def h2pv_2(self,h):
-        """ SSH to Q
-    
-        Args:
-            h (2D array): SSH field.
-            grd (Grid() object): check modgrid.py
-    
-        Returns:
-            q: Potential Vorticity field  
-        """
-        g=self.g
-        
-        q=- g*self.f0/(self.c**2) *h 
-    
-        q[1:-1,1:-1] = g/self.f0[1:-1,1:-1]*((h[2:,1:-1]+h[:-2,1:-1]-2*h[1:-1,1:-1])/self.dy[1:-1,1:-1]**2 \
-                                          + (h[1:-1,2:]+h[1:-1,:-2]-2*h[1:-1,1:-1])/self.dx[1:-1,1:-1]**2) \
-                                          - g*self.f0[1:-1,1:-1]/(self.c[1:-1,1:-1]**2) *h[1:-1,1:-1]
-        
-        ind=np.where((self.mask==1))
-        
-        q[ind]=- g*self.f0[ind]/(self.c[ind]**2) *h[ind]
-    
-        qtemp=- g*self.f0/(self.c**2) *h
-        q[np.where((np.isnan(q)))]=qtemp[np.where((np.isnan(q)))]
-        ind=np.where((self.mask==0))
-        
-        q[ind]=0
-    
-        return q
     
     def huv2pv(self,h,u,v,c=None):
         
