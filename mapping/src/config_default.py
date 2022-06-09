@@ -363,7 +363,7 @@ tdecmax = 40. # maximum time of decorrelation
 
 facQ= 1 # factor to be multiplied to the estimated Q
 
-Qmax = 100 # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+Qmax = 1e-3 # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
 slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
 
