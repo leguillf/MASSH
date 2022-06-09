@@ -382,7 +382,7 @@ class RedBasis_BM:
         # Ensemble of pseudo-frequencies for the wavelets (spatial)
         logff = np.arange(
             np.log(1./self.lmin),
-            np.log(1. / self.lmax) - np.log(1 + self.facpsp / self.npsp),
+            np.log(1. / self.lmax),
             -np.log(1 + self.facpsp / self.npsp))[::-1]
         ff = np.exp(logff)
         dff = ff[1:] - ff[:-1]
@@ -407,10 +407,15 @@ class RedBasis_BM:
         DXG = DX / self.facns # distance (km) between the wavelets grid in space
         NP = np.empty(nf, dtype='int16') # Nomber of spatial wavelet locations for a given frequency
         nwave = 0
+        self.nwavemeso = 0
         lonmax = LON_MAX
         if (LON_MAX<LON_MIN): lonmax = LON_MAX+360.
             
         for iff in range(nf):
+            
+            if 1/ff[iff]<self.lmeso:
+                self.nwavemeso = nwave
+                
             ENSLON[iff]=[]
             ENSLAT[iff]=[]
             ENSLAT1 = np.arange(
@@ -443,7 +448,7 @@ class RedBasis_BM:
                 enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
                 nwave += ntheta*2*len(enst[iff][P])
                 
-            print(iff,P,1/ff[iff],tdec[-1][-1])
+            
                 
                 
         # Fill the Q diagonal matrix (expected variance for each wavelet)            
@@ -461,7 +466,10 @@ class RedBasis_BM:
                     Q[iwave:iwave+_nwave] = self.Qmax * self.lmeso**self.slopQ * ff[iff]**self.slopQ
                 iwave += _nwave
                 
-            print(1/ff[iff],Q[iwave-_nwave])
+            print(f'lambda = {1/ff[iff]:.1E}',
+                  f'nlocs = {P:.1E}',
+                  f'tdec = {tdec[iff][-1]:.1E}',
+                  f'Q = {Q[iwave-_nwave]:.1E}')
             
         nwave = iwave
         Q = Q[:nwave]
@@ -611,10 +619,11 @@ class RedBasis_BM:
             if t==0:
                 if self.wavelet_init:
                     State.setvar(phi.reshape((State.ny,State.nx)),ind=0)
-                State.params = np.zeros_like(phi)
+                    State.params = np.zeros_like(phi)
+                else:
+                    State.params = phi
             else:
                 State.params = phi
-        
         else:
             return phi
         
@@ -625,12 +634,16 @@ class RedBasis_BM:
             Project to reduced space
         """
         
-        if t==0 and self.wavelet_init:
-            adX += self.operg(adState.getvar(ind=0).flatten(), 0, transpose=True)
+        if t==0:
+            if self.wavelet_init:
+                adX += self.operg(adState.getvar(ind=0).flatten(), t, transpose=True)
+            else:
+                adX += self.operg(adState.params, t, transpose=True)
         else:
             if adState.params is None:
                 adState.params = np.zeros((self.nphys,))
             adX += self.operg(adState.params, t, transpose=True)
+        
             
 
 class RedBasis_BM_IT:
@@ -680,9 +693,12 @@ class RedBasis_BM_IT:
         
         if State is not None:
             if t==0:
-                State.setvar(phi_bm.reshape((State.ny,State.nx)),ind=0)
-                State.params[self.slicebm_phys] = np.zeros_like(phi_bm)
-                State.params[self.sliceit_phys] = phi_it
+                if self.RedBasis_BM.wavelet_init:
+                    State.setvar(phi_bm.reshape((State.ny,State.nx)),ind=0)
+                    State.params[self.slicebm_phys] = np.zeros_like(phi_bm)
+                    State.params[self.sliceit_phys] = phi_it
+                else:
+                    State.params = phi
             else:
                 State.params = phi
         
@@ -697,7 +713,109 @@ class RedBasis_BM_IT:
         
         self.RedBasis_BM.operg_transpose(adState,adX[self.slicebm],t)
         self.RedBasis_IT.operg_transpose(adState,adX[self.sliceit],t)
+        
+
+class RedBasis_BM_2scales:
+   
+    def __init__(self,config):
+        
+        lmin = config.lmin
+        lmax = config.lmax
+        # Large scales
+        config_ls = config
+        config_ls.lmin = config.lmeso
+        self.RedBasis_ls = RedBasis_BM(config_ls)
+        # Small scales
+        config_ss = config
+        config_ss.lmin = lmin
+        config_ss.lmax = config.lmeso
+        self.RedBasis_ss = RedBasis_BM(config_ss)
+        config.lmax = lmax
+        
+        self.wavelet_init = config.wavelet_init
+        
+        
+        
+    def set_basis(self,time,lon,lat,return_q=False):
+        
+        print('* Reduced basis for large scales:')
+        Qls = self.RedBasis_ls.set_basis(time,lon,lat,return_q=return_q)
+        
+        print('* Reduced basis for small scales:')
+        Qss = self.RedBasis_ss.set_basis(time,lon,lat,return_q=return_q)
+        
+        self.nbasis = self.RedBasis_ls.nbasis + self.RedBasis_ss.nbasis
+        self.nphys = self.RedBasis_ls.nphys + self.RedBasis_ss.nphys
+        self.slice_ls = slice(0,self.RedBasis_ls.nbasis)
+        self.slice_ss = slice(self.RedBasis_ls.nbasis,
+                             self.RedBasis_ls.nbasis + self.RedBasis_ss.nbasis)
+        self.slice_ls_phys = slice(0,self.RedBasis_ls.nphys)
+        self.slice_ss_phys = slice(self.RedBasis_ls.nphys,
+                                  self.RedBasis_ss.nphys + self.RedBasis_ss.nphys)
+        
+        # print("Test operg:")
+        # for t in time:
+        #     self.test_operg(t)
             
+        if return_q:
+            return np.concatenate((Qls,Qss))
+        
+        
+        
+    def operg(self, X, t, transpose=False,State=None):
+        
+        """
+            Project to physicial space
+        """
+        
+        if transpose:
+            phi_ls = self.RedBasis_ls.operg(X[self.slice_ls_phys],t,transpose=True)
+            phi_ss = self.RedBasis_ss.operg(X[self.slice_ss_phys],t,transpose=True)
+        else:
+            phi_ls = self.RedBasis_ls.operg(X[self.slice_ls],t)
+            phi_ss = self.RedBasis_ss.operg(X[self.slice_ss],t)
+
+        phi = np.concatenate((phi_ls,phi_ss))
+        
+        if State is not None:
+            if t==0 :
+                if self.wavelet_init:
+                    State.setvar(phi_ls.reshape((State.ny,State.nx)),ind=0)
+                    State.setvar(phi_ss.reshape((State.ny,State.nx)),ind=1)
+                    State.params = np.zeros(self.nphys)
+                else:
+                    State.params = phi
+            else:
+                State.params = phi
+        
+        else:
+            return phi
+        
+    def operg_transpose(self, adState, adX, t):
+        
+        """
+            Project to reduced space
+        """
+        
+        if t==0:
+            if self.wavelet_init:
+                adX += self.operg(adState.getvar(ind=[0,1],vect=True), t, transpose=True)
+            else:
+                adX += self.operg(adState.params, t, transpose=True)
+        else:
+            if adState.params is None:
+                adState.params = np.zeros((self.nphys,))
+            adX += self.operg(adState.params, t, transpose=True)
+    
+    def test_operg(self,t=0):
+        
+        psi = np.random.random((self.nbasis,))
+        phi = np.random.random((self.nphys,))
+        
+        ps1 = np.inner(psi,self.operg(phi,t,transpose=True))
+        ps2 = np.inner(self.operg(psi,t),phi)
+            
+        print(f'test G[{t}]:', ps1/ps2)
     
 class RedBasis_BM_2:
    

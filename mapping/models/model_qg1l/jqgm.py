@@ -182,11 +182,7 @@ class Qgm:
         
         # Spatial scheme
         self.upwind = upwind
-        if upwind_adj is None:
-            self.upwind_adj = upwind
-        else:
-            self.upwind_adj = upwind_adj
-        
+
         # Diffusion 
         self.diff = diff
         self.snu = snu
@@ -195,10 +191,28 @@ class Qgm:
         
         # Nb of iterations for elliptical inversion
         self.qgiter = qgiter
-        if qgiter_adj is not None:
-            self.qgiter_adj = qgiter_adj
-        else:
-            self.qgiter_adj = qgiter
+            
+        
+        self.hbc = np.zeros((self.ny,self.nx))
+            
+        
+        # JIT compiling functions
+        self.h2uv_jit = jit(self.h2uv)
+        self.h2pv_jit = jit(self.h2pv)
+        self.h2pv_1d_jit = jit(self.h2pv_1d)
+        self.alpha_jit = jit(self.alpha)
+        self.pv2h_jit = jit(self.pv2h)
+        self.qrhs_jit = jit(self.qrhs)
+        self._rq_jit = jit(self._rq)
+        self._rq1_jit = jit(self._rq1)
+        self._rq2_jit = jit(self._rq2)
+        self._rq3_jit = jit(self._rq3)
+        self.step_jit = jit(self.step)
+        self.step_tgl_jit = jit(self.step_tgl)
+        self.step_adj_jit = jit(self.step_adj)
+        self.step_mean_jit = jit(self.step_mean)
+        self.step_mean_tgl_jit = jit(self.step_mean_tgl)
+        self.step_mean_adj_jit = jit(self.step_mean_adj)
         
         
         # MDT
@@ -221,28 +235,6 @@ class Qgm:
             self.uminusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
             self.vplusbar  = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-            
-        
-        self.hbc = np.zeros((self.ny,self.nx))
-            
-        
-        # JIT compiling functions
-        self.h2uv_jit = jit(self.h2uv)
-        self.h2pv_jit = jit(self.h2pv)
-        self.h2pv_1d_jit = jit(self.h2pv_1d)
-        self.alpha_jit = jit(self.alpha)
-        self.pv2h_jit = jit(self.pv2h)
-        self.qrhs_jit = jit(self.qrhs)
-        self._rq_jit = jit(self._rq)
-        self._rq1_jit = jit(self._rq1)
-        self._rq2_jit = jit(self._rq2)
-        self._rq3_jit = jit(self._rq3)
-        self.step_jit = jit(self.step)
-        self.step_tgl_jit = jit(self.step_tgl)
-        self.step_adj_jit = jit(self.step_adj)
-        
-        
-        
         
     
     def h2uv(self,h,ubc=None,vbc=None):
@@ -470,7 +462,7 @@ class Qgm:
         return h
 
     
-    def qrhs(self,u,v,q,way):
+    def qrhs(self,u,v,q,uls=None,vls=None,qls=None,way=1):
 
         """ PV increment, upwind scheme
     
@@ -508,17 +500,50 @@ class Qgm:
             if self.mdt is not None:
                 
                 uplusbar = way*self.uplusbar
-                uplusbar[np.where((uplusbar<0))] = 0
+                #uplusbar[np.where((uplusbar<0))] = 0
+                uplusbar = np.where(uplusbar<0, 0, uplusbar)
                 vplusbar = way*self.vplusbar
-                vplusbar[np.where((vplusbar<0))] = 0
+                #vplusbar[np.where((vplusbar<0))] = 0
+                vplusbar = np.where(vplusbar<0, 0, vplusbar)
                 uminusbar = way*self.uminusbar
-                uminusbar[np.where((uminusbar>0))] = 0
+                #uminusbar[np.where((uminusbar>0))] = 0
+                uminusbar = np.where(uminusbar>0, 0, uminusbar)
                 vminusbar = way*self.vminusbar
-                vminusbar[np.where((vminusbar>0))] = 0
+                #vminusbar[np.where((vminusbar>0))] = 0
+                vminusbar = np.where(vminusbar>0, 0, vminusbar)
                 
-                rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq_jit(
-                    uplusbar,vplusbar,uminusbar,vminusbar,q)
-                rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,self.qbar)
+                # rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq_jit(
+                #     uplusbar,vplusbar,uminusbar,vminusbar,q)
+                rq = rq.at[2:-2,2:-2].set(
+                    rq[2:-2,2:-2] + self._rq_jit(uplusbar,vplusbar,uminusbar,vminusbar,q))
+                # rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,self.qbar)
+                rq = rq.at[2:-2,2:-2].set(
+                    rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,self.qbar))
+                
+            if uls is not None:
+
+                uplusls  = way * 0.5*(uls[2:-2,2:-2]+uls[2:-2,3:-1])
+                uminusls = way * 0.5*(uls[2:-2,2:-2]+uls[2:-2,3:-1])
+                vplusls  = way * 0.5*(vls[2:-2,2:-2]+vls[3:-1,2:-2])
+                vminusls = way * 0.5*(vls[2:-2,2:-2]+vls[3:-1,2:-2])
+            
+                # uplusls[np.where((uplusls<0))] = 0
+                uplusls = np.where(uplusls<0, 0, uplusls)
+                # vplusls[np.where((vplusls<0))] = 0
+                vplusls = np.where(vplusls<0, 0, vplusls)
+                # uminusls[np.where((uminusls>0))] = 0
+                uminusls = np.where(uminusls>0, 0, uminusls)
+                # vminusls[np.where((vminusls>0))] = 0
+                vminusls = np.where(vminusls>0, 0, vminusls)
+                
+                # rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(
+                #     uplusls,vplusls,uminusls,vminusls,q)
+                rq = rq.at[2:-2,2:-2].set(
+                    rq[2:-2,2:-2] + self._rq_jit(uplusls,vplusls,uminusls,vminusls,q))
+                # rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq(
+                #     uplus,vplus,uminus,vminus,qls)
+                rq = rq.at[2:-2,2:-2].set(
+                    rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,qls))
                 
             # rq[2:-2,2:-2] = rq[2:-2,2:-2] - way*\
             #     (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
@@ -607,7 +632,7 @@ class Qgm:
         return res
             
     
-    def step(self,h0,q0=None,dphidt=None,way=1):
+    def step(self,h0,way=1):
         
         """ Propagation 
     
@@ -621,14 +646,47 @@ class Qgm:
             q1 (2D array): propagated PV (if q0 is provided)
     
         """
+        qb0 = self.h2pv_jit(h0)
         
-   
-        # 1/ h-->q
-        if q0 is None:
-            qb0 = self.h2pv_jit(h0)
-        else:
-            qb0 = +q0
+        # 2/ h-->(u,v)
+        u,v = self.h2uv_jit(h0)
+        #u[np.isnan(u)] = 0
+        u = np.where(np.isnan(u),0,u)
+        #v[np.isnan(v)] = 0
+        v = np.where(np.isnan(v),0,v)
+    
+        
+        # 3/ (u,v,q)-->rq
+        rq = self.qrhs_jit(u,v,qb0,way=way)
+        
+        # 4/ increment integration 
+        q1 = qb0 + self.dt*rq
 
+        # 5/ q-->h
+        h1 = self.pv2h_jit(q1,h0)
+        
+        return h1
+    
+    def step_mean(self,h0,way=1):
+        
+        """ Propagation 
+    
+        Args:
+            h0 (2D array): initial SSH
+            q0 (2D array, optional): initial PV
+            way: forward (+1) or backward (-1)
+    
+        Returns:
+            h1 (2D array): propagated SSH
+            q1 (2D array): propagated PV (if q0 is provided)
+    
+        """
+        hls = +h0[:self.ny*self.nx].reshape((self.ny,self.nx))
+        h0 = +h0[self.ny*self.nx:].reshape((self.ny,self.nx))
+            
+   
+        qb0 = self.h2pv_jit(h0)
+        
         # 2/ h-->(u,v)
         u,v = self.h2uv_jit(h0)
         #u[np.isnan(u)] = 0
@@ -636,33 +694,49 @@ class Qgm:
         #v[np.isnan(v)] = 0
         v = np.where(np.isnan(v),0,v)
         
+        qls = self.h2pv(hls)
+        uls,vls = self.h2uv(hls)
+        uls = np.where(np.isnan(uls),0,uls)
+        vls = np.where(np.isnan(vls),0,vls)
+
         # 3/ (u,v,q)-->rq
-        rq = self.qrhs_jit(u,v,qb0,way)
+        rq = self.qrhs_jit(u,v,qb0,uls=uls,vls=vls,qls=qls,way=way)
         
         # 4/ increment integration 
         q1 = qb0 + self.dt*rq
 
-        
         # 5/ q-->h
         h1 = self.pv2h_jit(q1,h0)
         
-        if q0 is None:
-            return h1
-        else:
-            return h1,q1
-        
+        return np.concatenate((hls.flatten(),h1.flatten()))
     
+        
     def step_tgl(self,dh0,h0):
         
         _,dh1 = jvp(self.step_jit, (h0,), (dh0,))
         
         return dh1
     
-    def step_adj(self,adh0,h0):
+    def step_adj(self,adh0,h0,adhls=None,hls=None):
         
         _, adf = vjp(self.step_jit, h0)
         
         return adf(adh0)[0]
+    
+    def step_mean_tgl(self,dh0,h0):
+        
+        _,dh1 = jvp(self.step_mean_jit, (h0,), (dh0,))
+        
+        return dh1
+    
+    def step_mean_adj(self,adh0,h0):
+        
+        _, adf = vjp(self.step_mean_jit, h0,)
+        
+        adh1 = adf(adh0)[0]
+        adh1 = np.where(np.isnan(adh1),0,adh1)
+        
+        return adh1
         
 
 if __name__ == "__main__":  
@@ -673,40 +747,42 @@ if __name__ == "__main__":
     dt = 300
     
     SSH0 = numpy.random.random((ny,nx))#random.uniform(key,shape=(ny,nx))    
+    MDT = numpy.random.random((ny,nx))
     
     c = 2.5
     
-    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH0,qgiter=10)
+    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH0,qgiter=1)
     
     # Current trajectory
-    SSH0 = np.array(1e-2*numpy.random.random((ny,nx)))
-
+    SSH0 = np.array(1e-2*numpy.random.random((2*ny*nx)))
+    
     # Perturbation
-    dSSH = np.array(1e-2*numpy.random.random((ny,nx)))
+    dSSH = np.array(1e-2*numpy.random.random((2*ny*nx)))
 
     # Adjoint
-    adSSH0 = np.array(1e-2*numpy.random.random((ny,nx)))
+    adSSH0 = np.array(1e-2*numpy.random.random((2*ny*nx)))
+
     
-    # Tangent test        
-    SSH2 = qgm.step_jit(SSH0)
+    # # Tangent test        
+    SSH2 = qgm.step_mean_jit(SSH0)
     print('Tangent test:')
     for p in range(10):
         
         lambd = 10**(-p)
         
-        SSH1 = qgm.step(SSH0+lambd*dSSH)
+        SSH1 = qgm.step_mean_jit(SSH0+lambd*dSSH)
         
-        dSSH1 = qgm.step_tgl_jit(dh0=lambd*dSSH,h0=SSH0)
+        dSSH1 = qgm.step_mean_tgl_jit(dh0=lambd*dSSH,h0=SSH0)
         
         ps = np.linalg.norm(SSH1-SSH2-dSSH1)/np.linalg.norm(dSSH1)
 
         print('%.E' % lambd,'%.E' % ps)
     
     # Adjoint test
-    dSSH1 = qgm.step_tgl_jit(dh0=dSSH,h0=SSH0)
-    adSSH1 = qgm.step_adj_jit(adSSH0,SSH0)
+    dSSH1 = qgm.step_mean_tgl_jit(dh0=dSSH,h0=SSH0)
+    adSSH1 = qgm.step_mean_adj_jit(adSSH0,SSH0)
     
-    ps1 = np.inner(dSSH1[qgm.mask>0].ravel(),adSSH0[qgm.mask>0].ravel())
-    ps2 = np.inner(dSSH[qgm.mask>0].ravel(),adSSH1[qgm.mask>0].ravel())
+    ps1 = np.inner(dSSH1,adSSH0)
+    ps2 = np.inner(dSSH,adSSH1)
         
     print('\nAdjoint test:',ps1/ps2)
