@@ -357,6 +357,8 @@ class RedBasis_BM:
         self.tmeso = config.tmeso
         self.save_wave_basis = config.save_wave_basis
         self.wavelet_init = config.wavelet_init
+        self.prescribe_background = config.prescribe_background
+        self.largescale_error_ratio = config.largescale_error_ratio
 
         # Dictionnaries to save wave coefficients and indexes for repeated runs
         self.path_save_tmp = config.tmp_DA_path
@@ -454,14 +456,14 @@ class RedBasis_BM:
         # Fill the Q diagonal matrix (expected variance for each wavelet)            
         Q = np.zeros((nwave))
         iwave = 0
-        # Loop on all wavelets of given pseudo-period
+        # Loop on all wavelets of given pseudo-period 
         for iff in range(nf):
             for P in range(NP[iff]):
                 
                 _nwave = 2*len(enst[iff][P])*ntheta
                 
                 if 1/ff[iff]>self.lmeso:
-                    Q[iwave:iwave+_nwave] = self.Qmax   
+                    Q[iwave:iwave+_nwave] = self.Qmax 
                 else:
                     Q[iwave:iwave+_nwave] = self.Qmax * self.lmeso**self.slopQ * ff[iff]**self.slopQ
                 iwave += _nwave

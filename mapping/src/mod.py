@@ -66,11 +66,51 @@ class Model_diffusion:
         self.dx = State.DX
         self.dy = State.DY
         
-        self.mdt = None
+        # Model Parameters (Flux)
+        self.nparams = State.ny*State.nx
+        self.sliceparams = slice(0,self.nparams)
+        
+        # Mask array
+        mask = np.zeros((State.ny,State.nx))+2
+        mask[:2,:] = 1
+        mask[:,:2] = 1
+        mask[-2:,:] = 1
+        mask[:,-2:] = 1
+        
+        
+        SSH = State.getvar(0)
+        
+        mdt = None
+        self.mdt = mdt
+        
+    
+        if SSH is not None and mdt is not None:
+            isNAN = np.isnan(SSH) | np.isnan(mdt)
+        elif SSH is not None:
+            isNAN = np.isnan(SSH)
+        elif mdt is not None:
+            isNAN = np.isnan(mdt)
+        else:
+            isNAN = None
+            
+        if isNAN is not None: 
+            mask[isNAN] = 0
+            indNan = np.argwhere(isNAN)
+            for i,j in indNan:
+                for p1 in [-1,0,1]:
+                    for p2 in [-1,0,1]:
+                      itest=i+p1
+                      jtest=j+p2
+                      if ((itest>=0) & (itest<=State.ny-1) & (jtest>=0) & (jtest<=State.nx-1)):
+                          if mask[itest,jtest]==2:
+                              mask[itest,jtest] = 1
+         
+        self.mask = mask
+        
         
         self.adjoint_test(State,nstep=1)
         
-    def step(self,State,nstep=1,ind=0):
+    def step(self,State,nstep=1,ind=0,t=None):
         # Get state variable
         SSH0 = State.getvar(ind=ind)
         
@@ -85,7 +125,7 @@ class Model_diffusion:
         # Update state
         State.setvar(SSH1,ind=ind)
         
-    def step_tgl(self,dState,State,nstep=1,ind=0):
+    def step_tgl(self,dState,State,nstep=1,ind=0,t=None):
         # Get state variable
         SSH0 = dState.getvar(ind=ind)
         
@@ -101,7 +141,7 @@ class Model_diffusion:
         dState.setvar(SSH1,ind=ind)
         
     
-    def step_adj(self,adState,State,nstep=1,ind=0):
+    def step_adj(self,adState,State,nstep=1,ind=0,t=None):
         # Get state variable
         adSSH0 = adState.getvar(ind=ind)
         
@@ -1425,11 +1465,11 @@ class Model_BM_IT:
     def step_tgl(self,t,dState,State,Hbc=None,Wbc=None,nstep=1,t0=0):
         
         dh = 0
-        
+          
         self.Model_BM.step_tgl(t=t,State=State,dState=dState,nstep=nstep,ind=0)
         dh += dState.getvar(ind=0)
         
-        self.Model_IT.step_tgl(t=t,State=State,dState=dState,nstep=nstep,
+        self.Model_IT.step_tgl(t=t,State=State,dState=dState,nstep=nstep, 
                                t0=t0,ind=self.indit)
         dh += dState.getvar(ind=-2)
 
@@ -1451,13 +1491,7 @@ class Model_BM_IT:
         adState.setvar(0*adh,ind=-1)
 
     
-    
-
-        
-    
-        
-    
-    
+     
     
     
     
@@ -1474,8 +1508,8 @@ def tangent_test(M,State,tint,t0=0,nstep=1):
     State0_tmp = State0.copy()
     
     M.step(t=t0,State=State0_tmp,nstep=nstep)
-    X2 = State0_tmp.getvar(vect=True)
-
+    X2 = State0_tmp.getvar(vect=True) 
+    
     for p in range(10):
         
         lambd = 10**(-p)
@@ -1491,10 +1525,19 @@ def tangent_test(M,State,tint,t0=0,nstep=1):
         dState1.scalar(lambd)
         M.step_tgl(t=t0,dState=dState1,State=State0,nstep=nstep)
         dX = dState1.getvar(vect=True)
+         
+        # Run TLM
+        self.step_tgl(t=t0,dState=dState,State=State0,nstep=nstep)
+        TLM = dState.getvar(vect=True)
+        
+        # Run ADJ
+        self.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
+        ADM = adState.getvar(vect=True)
         
         mask = np.isnan(X1+X2+dX)
         
         ps = np.linalg.norm(X1[~mask]-X2[~mask]-dX[~mask])/np.linalg.norm(dX[~mask])
+        
 
         print('%.E' % lambd,'%.E' % ps)
         

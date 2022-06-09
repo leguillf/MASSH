@@ -518,7 +518,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     
     print('\n*** Reduced basis ***\n')
     
-    if config.name_model in ['QG1L','JAX-QG1L']:
+    if config.name_model in ['Diffusion','QG1L','JAX-QG1L']:
         from .tools_reduced_basis import RedBasis_BM as RedBasis
     elif config.name_model=='QG1LM':
         from .tools_reduced_basis import RedBasis_BM_2scales as RedBasis
@@ -543,9 +543,19 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         R = Cov(config.sigma_R)
         
     print('\n*** Variational ***\n')
-    from .tools_4Dvar import Variational
     # backgroud state 
     Xb = np.zeros((basis.nbasis,))
+    
+    from .tools_4Dvar import background
+    
+    if config.prescribe_background and config.name_model!='Diffusion' :
+        Xb_prescribed = background(config, State, basis.nbasis)
+        Xb[basis.slicebm] = Xb_prescribed
+        if config.largescale_error_ratio!=1 :  
+            Q = np.where(Q==np.sqrt(config.Qmax),Q*config.largescale_error_ratio,Q)  
+         
+        
+    from .tools_4Dvar import Variational
     # Cost and Grad functions
     var = Variational(
         config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
