@@ -76,10 +76,16 @@ class State:
         self.var = pd.Series(dtype=np.float64)
         if config.name_model is None or config.name_model in ['QG1L','JAX-QG1L']:
             self.ini_var_qg1l(config)
+            
+        elif config.name_model in ['QG1LM','JAX-QG1LM']:
+            self.ini_var_qg1lm(config)
+            
         elif config.name_model=='SW1L':
             self.ini_var_sw1l(config)
+            
         elif config.name_model=='SW1LM':
             self.ini_var_sw1lm(config)
+            
         elif hasattr(config.name_model,'__len__') and len(config.name_model)==2 :
             self.ini_var_bm_it(config)
         else:
@@ -213,7 +219,7 @@ class State:
             ini_var_qg1l
     
         DESCRIPTION
-            Initialize QG1L state variables. First one is SSH, 
+            Initialize QG1L model state variables. First one is SSH, 
             second one (optional) is Potential Voriticy 
             and third one (optional) is f/c where f is the Coriolis frequency
             and c the phase velocity of the first baroclinic Rossby Radius.
@@ -231,7 +237,27 @@ class State:
                 del dsin
             else:
                 self.var[var] = np.zeros((self.ny,self.nx))
-            
+        
+    def ini_var_qg1lm(self,config):
+        """
+        NAME
+            ini_var_qg1lm
+    
+        DESCRIPTION
+            Initialize QG1LM model state variables. First one is large scale SSH, 
+            second one is small scale SSH 
+        """
+        
+        if len(self.name_var) != 3:
+            if self.first:
+                print('Warning: For QG1LM: wrong number variable names')
+            self.name_var = ['hls','hss','h']
+        if self.first:
+            print(self.name_var)
+        
+        self.var[self.name_var[0]] = np.zeros((self.ny,self.nx))
+        self.var[self.name_var[1]] = np.zeros((self.ny,self.nx))
+        self.var[self.name_var[2]] = np.zeros((self.ny,self.nx))
 
     def ini_var_sw1l(self,config):
         """
@@ -239,7 +265,7 @@ class State:
             ini_var_sw1l
     
         DESCRIPTION
-            Initialize SW1LM state variables. First one is zonal velocity, 
+            Initialize SW1L model state variables. First one is zonal velocity, 
             second one is meridional velocity 
             and third one is SSH
         """
@@ -554,12 +580,14 @@ class State:
             if hasattr(ind,'__len__'):
                 res = []
                 for i in ind:
-                    res.append(self.var.values[i])
+                    if vect:
+                        res = np.concatenate((res,self.var.values[i].ravel()))
+                    else:
+                        res.append(self.var.values[i])
             else:
                 res = self.var.values[ind]
-            
-            if vect:
-                res = res.ravel()
+                if vect:
+                    res = res.ravel()
         else:
             res = []
             for i in range(len(self.name_var)):
@@ -627,6 +655,8 @@ class State:
         '''
         if self.config['name_model']=='QG1L' :
             return 0
+        elif self.config['name_model']=='QG1LM' :
+            return 2
         elif self.config['name_model']=='SW1L' :
             return 2
         elif self.config['name_model']=='SW1LM' :
@@ -642,6 +672,8 @@ class State:
         '''
         if self.config['name_model'] is None or self.config['name_model']=='QG1L' :
             return 0
+        elif self.config['name_model']=='QG1LM' :
+            return 2
         elif self.config['name_model']=='SW1L' :
             return 2
         elif self.config['name_model']=='SW1LM' :

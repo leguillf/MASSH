@@ -49,7 +49,7 @@ class Obsopt:
         self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)
         
-        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','JAX-QG1L'] or \
+        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1LM','JAX-QG1L'] or \
              hasattr(config.name_model,'__len__') and len(config.name_model)==2:
             for t in Model.timestamps:
                 if self.isobserved(t):
@@ -85,8 +85,8 @@ class Obsopt:
                 np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
                 ))
             
-        elif State.config['name_model'] in ['QG1L','JAX-QG1L'] or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
-            if State.config['name_model'] in ['QG1L','JAX-QG1L'] : mask = Model.qgm.mask
+        elif State.config['name_model'] in ['QG1L','JAX-QG1L','QG1LM'] or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+            if State.config['name_model'] in ['QG1L','JAX-QG1L','QG1LM'] : mask = Model.qgm.mask
             else: mask = Model.Model_BM.qgm.mask
             coords_geo_bc = np.column_stack((State.lon[np.where(mask<2)].ravel(),
                                              State.lat[np.where(mask<2)].ravel()))
@@ -326,14 +326,14 @@ class Obsopt:
         inv_noise2 = noise**(-2)
         
         # Save misfit
-        with open(os.path.join(self.tmp_DA_path,f'misfit_{t}.pic'),'wb') as f:
+        with open(os.path.join(self.tmp_DA_path,f"misfit_{t}.pic"),'wb') as f:
             pickle.dump((res,inv_noise2),f)
 
         return res,inv_noise2
     
     def load_misfit(self,t):
         
-        with open(os.path.join(self.tmp_DA_path,f'misfit_{t}.pic'),'rb') as f:
+        with open(os.path.join(self.tmp_DA_path,f"misfit_{t}.pic"),'rb') as f:
             res,inv_noise2 = pickle.load(f)
         
         return res,inv_noise2
@@ -426,7 +426,7 @@ class Variational:
         # Grad test
         if config.compute_test:
             print('Gradient test:')
-            X = 1e-2*(np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
+            X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
             grad_test(self.cost,self.grad,X)
             
             
@@ -573,7 +573,7 @@ class Variational:
         adState = self.State.free()
         adState.params = np.zeros((self.M.nparams,))
         adX = X*0
-        
+
         # Last timestamp
         if self.H.isobs[-1]:
             timestamp = self.M.timestamps[self.H.checkpoint[-1]]
@@ -586,7 +586,7 @@ class Variational:
             nstep = self.H.checkpoint[i+1] - self.H.checkpoint[i]
             timestamp = self.M.timestamps[self.H.checkpoint[i]]
             t = self.M.T[self.H.checkpoint[i]]
- 
+            
             # Read model state
             State.load(os.path.join(self.tmp_DA_path,
                        'model_state_' + str(self.H.checkpoint[i]) + '.nc'))
@@ -598,7 +598,7 @@ class Variational:
             if self.H.checkpoint[i]%self.dtbasis==0:
                 self.basis.operg_transpose(adState,adX,t/3600/24)
                 adState.params *= 0
-                
+            
             # 1. Misfit 
             if self.H.isobs[i]:
                 misfit,inv_noise2 = self.H.load_misfit(timestamp)
@@ -609,7 +609,7 @@ class Variational:
         
         g = adX + gb  # total gradient
         
-        adState.plot()
+        adState.plot(title='end of grad function evaluation')
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))
