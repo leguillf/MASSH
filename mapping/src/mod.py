@@ -218,6 +218,14 @@ variable are SLAs!')
                                          name_var_mdt,
                                          State.lon,
                                          State.lat)
+                self.mdt[np.isnan(self.mdt)] = 0
+                
+                if config.flag_plot>1:
+                    plt.figure()
+                    plt.title('mdt')
+                    plt.pcolormesh(self.mdt)
+                    plt.colorbar()
+                    plt.show()
             else:
                 sys.exit('Warning: wrong variable name for mdt')
             if 'mdu' in config.name_var_mdt and config.name_var_mdt['mdu'] in ds \
@@ -232,6 +240,20 @@ variable are SLAs!')
                                          name_var_mdt,
                                          State.lon,
                                          State.lat)
+                if config.flag_plot>1:
+                    plt.figure()
+                    plt.title('mdu')
+                    plt.pcolormesh(self.mdu)
+                    plt.colorbar()
+                    plt.show()
+                    
+                if config.flag_plot>1:
+                    plt.figure()
+                    plt.title('mdv')
+                    plt.pcolormesh(self.mdv)
+                    plt.colorbar()
+                    plt.show()
+                    
             else:
                 self.mdu = self.mdv = None
                 
@@ -263,6 +285,7 @@ variable are SLAs!')
         
         if config.flag_plot>1:
             plt.figure()
+            plt.title('c')
             plt.pcolormesh(self.c)
             plt.colorbar()
             plt.show()
@@ -447,11 +470,11 @@ variable are SLAs!')
                                          State.lon,
                                          State.lat)
                 
-                self.mdt[np.isnan(self.mdt)] = 0
-                
-                plt.figure()
-                plt.pcolormesh(self.mdt)
-                plt.show()
+                #self.mdt[np.isnan(self.mdt)] = 0
+                if config.flag_plot>0:
+                    plt.figure()
+                    plt.pcolormesh(self.mdt)
+                    plt.show()
             else:
                 sys.exit('Warning: wrong variable name for mdt')
             if 'mdu' in config.name_var_mdt and config.name_var_mdt['mdu'] in ds \

@@ -71,7 +71,7 @@ class Qgm:
                       jtest=j+p2
                       if ((itest>=0) & (itest<=ny-1) & (jtest>=0) & (jtest<=nx-1)):
                           if mask[itest,jtest]==2:
-                              mask[itest,jtest] = 1
+                              mask = mask.at[itest,jtest].set(1)
         
                               
 
@@ -654,8 +654,7 @@ class Qgm:
         u = np.where(np.isnan(u),0,u)
         #v[np.isnan(v)] = 0
         v = np.where(np.isnan(v),0,v)
-    
-        
+
         # 3/ (u,v,q)-->rq
         rq = self.qrhs_jit(u,v,qb0,way=way)
         
@@ -748,11 +747,53 @@ if __name__ == "__main__":
     
     SSH0 = numpy.random.random((ny,nx))#random.uniform(key,shape=(ny,nx))    
     MDT = numpy.random.random((ny,nx))
-    
+    SSH0[:5,:5] = np.nan
+    MDT[:5,:5] = np.nan
     c = 2.5
     
-    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH0,qgiter=1)
+    qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH0,qgiter=1,mdt=MDT)
     
+    
+    
+    # Current trajectory
+    SSH0 = np.array(1e-2*numpy.random.random((ny,nx)))
+    
+    # Perturbation
+    dSSH = np.array(1e-2*numpy.random.random((ny,nx)))
+
+    # Adjoint
+    adSSH0 = np.array(1e-2*numpy.random.random((ny,nx)))
+
+    # Tangent test        
+    SSH2 = qgm.step_jit(SSH0)
+    print('Tangent test:')
+    for p in range(10):
+        
+        lambd = 10**(-p)
+        
+        SSH1 = qgm.step_jit(SSH0+lambd*dSSH)
+        
+        dSSH1 = qgm.step_tgl_jit(dh0=lambd*dSSH,h0=SSH0)
+        
+        mask = np.isnan(SSH1-SSH2-dSSH1)
+        ps = np.linalg.norm((SSH1-SSH2-dSSH1)[~mask].flatten())/np.linalg.norm(dSSH1[~mask])
+
+        print('%.E' % lambd,'%.E' % ps)
+    
+    # Adjoint test
+    dSSH1 = qgm.step_tgl_jit(dh0=dSSH,h0=SSH0)
+    adSSH1 = qgm.step_adj_jit(adSSH0,SSH0)
+    mask = np.isnan(dSSH1+adSSH1+SSH0+dSSH)
+    
+    ps1 = np.inner(dSSH1[~mask].flatten(),adSSH0[~mask].flatten())
+    ps2 = np.inner(dSSH[~mask].flatten(),adSSH1[~mask].flatten())
+        
+    print('\nAdjoint test:',ps1/ps2)
+
+
+
+
+
     # Current trajectory
     SSH0 = np.array(1e-2*numpy.random.random((2*ny*nx)))
     
