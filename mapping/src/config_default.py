@@ -291,13 +291,13 @@ filter_name = None # name of filter used in preconditionning
 
 filter_order = None # order of the filter
 
-mask_coast = False
+H_mask_coast = False
 
-dist_coast = 100 # km
+H_dist_coast = 100 # km
   
 prescribe_background = False # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
 
-path_background = '' # Path to the precribed background on BM basis
+path_background = None # Path to the precribed background on BM basis
   
 bkg_snu = 0. # 0 diffusion to perform the 4Dvar-Identity model 
 
@@ -308,9 +308,6 @@ bkg_maxiter = 30 # 4Dvar-Identity model maximal number of iterations for the min
 bkg_maxiter_inner = 10 # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
 
 largescale_error_ratio = 1 # Ratio to reduce BM basis background error over lmeso wavelenghts
-
-save_background = True # Flag to save BM basis background at path_background
-
  
 ####################################
 ###   MIOST-specific parameters  ### 

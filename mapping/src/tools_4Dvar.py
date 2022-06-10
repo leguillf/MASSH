@@ -46,11 +46,14 @@ class Obsopt:
         date2 = time_obs_max.strftime('%Y%m%d')
         
         box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
-        self.name_H = f'H_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
+        if type(config.name_model)==list: 
+            name_model = "_".join(config.name_model)
+        else:
+            name_model = config.name_model
+        self.name_H = f'H_{name_model}_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)
         
-        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1LM','JAX-QG1L'] or \
-             hasattr(config.name_model,'__len__') and len(config.name_model)==2:
+        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1LM','JAX-QG1L'] or type(config.name_model)==list:
             for t in Model.timestamps:
                 if self.isobserved(t):
                     delta_t = [(t - tobs).total_seconds() 
@@ -78,32 +81,34 @@ class Obsopt:
         self.Npix = config.Npix_H
         coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(coords_geo)
-
-        if State.config['name_model'] in ['SW1L','SW1LM']:
-            coords_geo_bc = np.column_stack((
-                np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
-                np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
-                ))
-            
-        elif State.config['name_model'] in ['QG1L','JAX-QG1L','QG1LM'] or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
-            if State.config['name_model'] in ['QG1L','JAX-QG1L','QG1LM'] : mask = Model.qgm.mask
-            else: mask = Model.Model_BM.qgm.mask
-            coords_geo_bc = np.column_stack((State.lon[np.where(mask<2)].ravel(),
-                                             State.lat[np.where(mask<2)].ravel()))
-            
-        elif State.config['name_model'] in ['Diffusion'] or hasattr(config.name_model,'__len__') and len(config.name_model)==2:
-            mask = Model.mask
-            coords_geo_bc = np.column_stack((State.lon[np.where(mask<2)].ravel(),
-                                             State.lat[np.where(mask<2)].ravel()))
-            
+        
+        # Mask boundary pixels
+        if config.H_mask_borders:
+            if State.config['name_model'] in ['SW1L','SW1LM']:
+                coords_geo_bc = np.column_stack((
+                    np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
+                    np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
+                    ))
+            elif State.config['name_model'] in ['QG1L','JAX-QG1L','QG1LM'] or type(config.name_model)==list:
+                if State.config['name_model'] in ['QG1L','JAX-QG1L','QG1LM'] : 
+                    mask = Model.qgm.mask
+                else: 
+                    mask = Model.Model_BM.qgm.mask
+                coords_geo_bc = np.column_stack((State.lon[np.where(mask<2)].ravel(),
+                                                  State.lat[np.where(mask<2)].ravel()))
+            else:
+                coords_geo_bc = []
+        else:
+            coords_geo_bc = []
         self.ind_bc = []
-        for i in range(coords_geo.shape[0]):
-            if np.any(np.all(np.isclose(coords_geo_bc,coords_geo[i]), axis=1)):
-                self.ind_bc.append(i)
+        if len(coords_geo_bc)>0:
+            for i in range(coords_geo.shape[0]):
+                if np.any(np.all(np.isclose(coords_geo_bc,coords_geo[i]), axis=1)):
+                    self.ind_bc.append(i)
         
         # Mask coast pixels
-        self.dist_coast = config.dist_coast
-        if config.mask_coast and self.dist_coast is not None and State.mask is not None and np.any(State.mask):
+        self.dist_coast = config.H_dist_coast
+        if config.H_mask_coast and self.dist_coast is not None and State.mask is not None and np.any(State.mask):
             self.flag_mask_coast = True
             lon_land = State.lon[State.mask].ravel()
             lat_land = State.lat[State.mask].ravel()
@@ -141,10 +146,10 @@ class Obsopt:
             
     def process_obs(self,t):
 
-        if self.read_H and not self.compute_H:
+        if self.read_H:
             file_H = os.path.join(
                 self.path_H,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
-            if os.path.exists(file_H):
+            if os.path.exists(file_H) and not self.compute_H:
                 new_file_H = os.path.join(
                     self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
                 os.system(f"cp {file_H} {new_file_H}")
@@ -209,10 +214,10 @@ class Obsopt:
                 encoding={'indexes': {'dtype': 'int16'}})
             
             if self.read_H:
-                    new_file_H = os.path.join(
-                        self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
-                    if file_H!=new_file_H:
-                        os.system(f"cp {file_H} {new_file_H}")
+                new_file_H = os.path.join(
+                    self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
+                if file_H!=new_file_H:
+                    os.system(f"cp {file_H} {new_file_H}")
                         
         self.obs_sparse[t] = obs_sparse
         
@@ -1308,7 +1313,7 @@ def plot_grad_test(L) :
     plt.show()
 
 
-def background(config,State,nbasis):
+def background(config,State):
     '''
     if prescribe background files exist: read and return them
     else create them using an the 4Dvar with identity model (diffusion with snu=0) on the large scale basis components
@@ -1329,7 +1334,7 @@ def background(config,State,nbasis):
         
         
     else: 
-        print('Background not available, creating one with 4Dvar and identity model')
+        print('Background not available, creating one with 4Dvar and Diffusion model')
         
         original_name_model = config.name_model
         original_name_mod_var = config.name_mod_var
@@ -1338,13 +1343,14 @@ def background(config,State,nbasis):
         original_largescale_error_ratio = config.largescale_error_ratio
         original_snu = config.snu
         
-        # Modify appropriate config params to perform 4Dvar-Identity
+        # Modify appropriate config params to perform 4Dvar-Diffusion
         config.name_model = 'Diffusion'
         config.name_mod_var = ['ssh']
         config.maxiter = config.bkg_maxiter
         config.maxiter_inner = config.bkg_maxiter_inner
         config.largescale_error_ratio = 1.
         config.snu = config.bkg_snu
+        
         
         # Perform 4Dvar-Identity
         from src import state as state
@@ -1366,20 +1372,21 @@ def background(config,State,nbasis):
         config.largescale_error_ratio = original_largescale_error_ratio
         config.snu = original_snu
         
-        scratch_xini = config.tmp_DA_path+'Xini.nc'
-        os.system('cp '+scratch_xini +' '+ config.path_background)
-        os.system('rm '+scratch_xini)
         
-        ds = xr.open_mfdataset(config.path_background, combine='nested', concat_dim='time', parallel=True)
-         
-        Xb = ds[config.name_bkg_var] 
-                
+        # Open background state 
+        if config.path_background is None:
+            path_save = f'{config.tmp_DA_path}/Xini.nc'
+        else:
+            path_save = config.path_background
+            os.system(f'cp {config.tmp_DA_path}/Xini.nc {path_save}')
+        
+        ds = xr.open_mfdataset(path_save)
+        Xb = ds[config.name_bkg_var].values 
         ds.close()
         
-        
-        if not config.save_background:
-            os.system('rm '+config.path_background)
-        
+        # Delete temporary file 
+        if config.path_background is None:
+            os.system(f'rm {config.tmp_DA_path}/Xini.nc')
         
     return Xb
         

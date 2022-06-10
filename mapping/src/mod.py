@@ -107,9 +107,13 @@ class Model_diffusion:
          
         self.mask = mask
         
-        
-        self.adjoint_test(State,nstep=1)
-        
+        if config.name_analysis=='4Dvar' and config.compute_test:
+            print('Tangent test:')
+            tangent_test(self,State,10,config.flag_use_bc)
+            print('Adjoint test:')
+            adjoint_test(self,State,10,config.flag_use_bc)
+            
+            
     def step(self,State,nstep=1,ind=0,t=None):
         # Get state variable
         SSH0 = State.getvar(ind=ind)
@@ -164,29 +168,7 @@ class Model_diffusion:
         adState.setvar(adSSH1,ind=ind)
         
     
-    def adjoint_test(self,State,nstep):
-        
-        # Current trajectory
-        State0 = State.random()
-        X = State0.getvar(0).ravel()
-        
-        # Adjoint
-        adState0 = State.random()
-        adY = adState0.getvar(0).ravel()
-        
-        # Run TLM
-        self.step(State0,nstep=nstep)
-        Y = State0.getvar(0).ravel()
-        
-        # Run ADJ
-        self.step_adj(adState0,State0,nstep=nstep)
-        adX = adState0.getvar(0).ravel()
-        
-        ps1 = np.inner(X,adX)
-        ps2 = np.inner(Y,adY)
-        
-        print('Adjoint test:',ps1/ps2)
-        
+    
     
 class Model_jaxqg1l:
 
@@ -1525,14 +1507,6 @@ def tangent_test(M,State,tint,t0=0,nstep=1):
         dState1.scalar(lambd)
         M.step_tgl(t=t0,dState=dState1,State=State0,nstep=nstep)
         dX = dState1.getvar(vect=True)
-         
-        # Run TLM
-        self.step_tgl(t=t0,dState=dState,State=State0,nstep=nstep)
-        TLM = dState.getvar(vect=True)
-        
-        # Run ADJ
-        self.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
-        ADM = adState.getvar(vect=True)
         
         mask = np.isnan(X1+X2+dX)
         
