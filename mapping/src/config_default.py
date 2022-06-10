@@ -297,6 +297,8 @@ H_dist_coast = 100 # km
   
 prescribe_background = False # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
 
+bkg_satellite = None # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
+
 path_background = None # Path to the precribed background on BM basis
   
 bkg_snu = 0. # 0 diffusion to perform the 4Dvar-Identity model 
@@ -385,9 +387,6 @@ T_bc = 20 # Time scale of gaussian decomposition for boundary conditions (in day
 #################################################################################################################################
 
 satellite = ['swot']
- 
-
-bkg_satellite = satellite # Default satellite constellation for 4Dvar-Identity model background if prescribe_background = True
 
 time_obs_min = None 
 

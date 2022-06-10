@@ -1351,7 +1351,8 @@ def background(config,State):
         config.maxiter_inner = config.bkg_maxiter_inner
         config.largescale_error_ratio = 1.
         config.snu = config.bkg_snu
-        config.satellite = config.bkg_satellite
+        if config.bkg_satellite is not None:
+            config.satellite = config.bkg_satellite
         
         
         # Perform 4Dvar-Identity
@@ -1373,7 +1374,8 @@ def background(config,State):
         config.maxiter_inner = original_maxiter_inner
         config.largescale_error_ratio = original_largescale_error_ratio
         config.snu = original_snu
-        config.satellite = original_satellite
+        if config.bkg_satellite is not None:
+            config.satellite = original_satellite
         
         
         # Open background state 
