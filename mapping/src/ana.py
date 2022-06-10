@@ -525,29 +525,15 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         from .tools_reduced_basis import RedBasis_IT as RedBasis
     elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
         from .tools_reduced_basis import RedBasis_BM_IT as RedBasis
-        
     basis = RedBasis(config)
     time_basis = H.checkpoint * Model.dt / (24*3600)
     Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
 
-    print('\n*** Covariances ***\n')
-    from .tools_4Dvar import Cov
-    # Covariance matrix
-    if config.sigma_B is not None:          
-        # Least squares
-        B = Cov(config.sigma_B)
-        R = Cov(config.sigma_R)
-    else:
-        B = Cov(Q)
-        R = Cov(config.sigma_R)
-        
-    print('\n*** Variational ***\n')
+    print('\n*** 4Dvar ***\n')
     # backgroud state 
     Xb = np.zeros((basis.nbasis,))
-    
     if config.prescribe_background and config.name_model!='Diffusion' :
         from .tools_4Dvar import background
-        
         Xb_prescribed = background(config, State)
         if config.name_model in ['QG1L','JAX-QG1L','QG1LM']: 
             Xb = +Xb_prescribed
@@ -555,7 +541,17 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
             Xb[basis.slicebm] = +Xb_prescribed
         if config.largescale_error_ratio!=1 :  
             Q = np.where(Q==np.sqrt(config.Qmax),Q*config.largescale_error_ratio,Q)  
-         
+            
+    # Covariance matrix
+    from .tools_4Dvar import Cov
+    if config.sigma_B is not None:     
+        print('Warning: sigma_B is prescribed --> ignore Q of the reduced basis')
+        # Least squares
+        B = Cov(config.sigma_B)
+        R = Cov(config.sigma_R)
+    else:
+        B = Cov(Q)
+        R = Cov(config.sigma_R)
         
     from .tools_4Dvar import Variational
     # Cost and Grad functions
