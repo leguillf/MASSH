@@ -385,6 +385,9 @@ T_bc = 20 # Time scale of gaussian decomposition for boundary conditions (in day
 #################################################################################################################################
 
 satellite = ['swot']
+ 
+
+bkg_satellite = satellite # Default satellite constellation for 4Dvar-Identity model background if prescribe_background = True
 
 time_obs_min = None 
 
