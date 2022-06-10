@@ -86,7 +86,7 @@ class State:
         elif config.name_model=='SW1LM':
             self.ini_var_sw1lm(config)
             
-        elif hasattr(config.name_model,'__len__') and len(config.name_model)==2 :
+        elif type(config.name_model)==list:
             self.ini_var_bm_it(config)
         else:
             sys.exit("Model '" + config.name_model + "' not implemented yet")
@@ -421,7 +421,7 @@ class State:
             self.mask = mask_interp.copy()
                             
         # Apply to state variable (SSH only)
-        if config.name_model=='QG1L' or (hasattr(config.name_model,'__len__') and len(config.name_model)==2):
+        if config.name_model=='QG1L' or type(config.name_model)==list:
             self.var[0][self.mask] = np.nan
             
 
@@ -442,7 +442,7 @@ class State:
         coords['time'] = (('time'), [pd.to_datetime(date)],)
         
         indsave = self.get_indsave()
-        if hasattr(indsave,'__len__'):
+        if type(indsave)==list:
             names_var = [self.name_var[i] for i in indsave]
             vars_to_save = self.getvar(ind=indsave)
         else:
@@ -577,7 +577,7 @@ class State:
     
     def getvar(self,ind=None,vect=False):
         if ind is not None:
-            if hasattr(ind,'__len__'):
+            if type(ind)==list:
                 res = []
                 for i in ind:
                     if vect:
@@ -602,7 +602,7 @@ class State:
             for i in range(len(self.name_var)):
                 self.var.values[i] = deepcopy(var[i])
         else:
-            if hasattr(ind,'__len__'):
+            if type(ind)==list:
                 for i,_ind in enumerate(ind):
                     self.var.values[_ind] = deepcopy(var[i])
             else:
@@ -661,7 +661,7 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return 2 + (self.config.Nmodes)*3
-        elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
+        elif type(self.config['name_model'])==list: 
             return -1
         else :
             return 0
@@ -678,7 +678,7 @@ class State:
             return 2
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]
-        elif hasattr(self.config['name_model'],'__len__') and len(self.config['name_model'])==2 :
+        elif type(self.config['name_model'])==list: 
             ind = [i*3 for i in range(self.config.Nmodes+1)]
             ind.append(-1)
             return ind

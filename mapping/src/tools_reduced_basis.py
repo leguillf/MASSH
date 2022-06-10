@@ -384,7 +384,7 @@ class RedBasis_BM:
         # Ensemble of pseudo-frequencies for the wavelets (spatial)
         logff = np.arange(
             np.log(1./self.lmin),
-            np.log(1. / self.lmax),
+            np.log(1. / self.lmax) - np.log(1 + self.facpsp / self.npsp),
             -np.log(1 + self.facpsp / self.npsp))[::-1]
         ff = np.exp(logff)
         dff = ff[1:] - ff[:-1]
@@ -468,10 +468,10 @@ class RedBasis_BM:
                     Q[iwave:iwave+_nwave] = self.Qmax * self.lmeso**self.slopQ * ff[iff]**self.slopQ
                 iwave += _nwave
                 
-            print(f'lambda = {1/ff[iff]:.1E}',
-                  f'nlocs = {P:.1E}',
-                  f'tdec = {tdec[iff][-1]:.1E}',
-                  f'Q = {Q[iwave-_nwave]:.1E}')
+            print(f'lambda={1/ff[iff]:.1E}',
+                  f'nlocs={P:.1E}',
+                  f'tdec={tdec[iff][-1]:.1E}',
+                  f'Q={Q[iwave-_nwave]:.1E}')
             
         nwave = iwave
         Q = Q[:nwave]
@@ -723,14 +723,25 @@ class RedBasis_BM_2scales:
         
         lmin = config.lmin
         lmax = config.lmax
+        
+        # Ensemble of pseudo-frequencies for the wavelets (spatial)
+        logff = np.arange(
+            np.log(1./config.lmin),
+            np.log(1. / config.lmax) - np.log(1 + config.facpsp / config.npsp),
+            -np.log(1 + config.facpsp / config.npsp))[::-1]
+        ff = np.exp(logff)
+        
+        ind_ls = np.where((1/ff>=config.lmeso))[0]
+        ind_ss = np.where((1/ff<config.lmeso))[0]
+    
         # Large scales
         config_ls = config
-        config_ls.lmin = config.lmeso
+        config_ls.lmin = 1/ff[ind_ls[-1]]
         self.RedBasis_ls = RedBasis_BM(config_ls)
         # Small scales
         config_ss = config
         config_ss.lmin = lmin
-        config_ss.lmax = config.lmeso
+        config_ss.lmax = 1/ff[ind_ss[1]]
         self.RedBasis_ss = RedBasis_BM(config_ss)
         config.lmax = lmax
         
