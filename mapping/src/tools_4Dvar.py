@@ -1327,7 +1327,7 @@ def background(config,State):
         ds = xr.open_dataset(config.path_background)
          
         
-        Xb = ds[config.name_bkg_var] 
+        Xb = ds[config.name_bkg_var].values 
         
         ds.close()
          
