@@ -127,7 +127,10 @@ class Model_diffusion:
                 (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
         
         # Update state
-        State.setvar(SSH1,ind=ind)
+        if State.params is not None:
+            params = State.params[self.sliceparams].reshape((State.ny,State.nx))
+            SSH1 += nstep*self.dt/(3600*24) * params
+        State.setvar(SSH1, ind=ind)
         
     def step_tgl(self,dState,State,nstep=1,ind=0,t=None):
         # Get state variable
@@ -142,6 +145,9 @@ class Model_diffusion:
                 (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
         
         # Update state
+        if dState.params is not None:
+            params = dState.params[self.sliceparams].reshape((State.ny,State.nx))
+            SSH1 += nstep*self.dt/(3600*24) * params
         dState.setvar(SSH1,ind=ind)
         
     
@@ -164,7 +170,11 @@ class Model_diffusion:
             
             adSSH0 = +adSSH1
             
-        # Update state
+        # Update state and parameters
+        if adState.params is not None:
+            adState.params[self.sliceparams] += nstep*self.dt/(3600*24) * adSSH0.flatten()
+            
+        adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)
         
     
