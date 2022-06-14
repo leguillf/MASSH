@@ -13,5 +13,3 @@ Contents
    da
    examples
    api
-   development
-   whats-new

@@ -490,7 +490,7 @@ class Qgm:
         return res
             
     
-    def step(self,h0,q0=None,dphidt=None,way=1):
+    def step(self,h0,q0=None,way=1):
         
         """ Propagation 
     
@@ -505,11 +505,10 @@ class Qgm:
     
         """
         
-        if dphidt is None and np.all(h0==0):
-            if q0 is None:
-                return h0
-            else:
-                return h0,q0
+        if q0 is None:
+            return h0
+        else:
+            return h0,q0
    
         # 1/ h-->q
         if q0 is None:
@@ -527,9 +526,6 @@ class Qgm:
         
         # 4/ increment integration 
         q1 = qb0 + self.dt*rq
-
-        if dphidt is not None:
-            q1 += self.dt*dphidt
         
         # 5/ q-->h
         h1 = self.pv2h(q1,+h0)

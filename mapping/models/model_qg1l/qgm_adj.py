@@ -577,11 +577,11 @@ class Qgm_adj(Qgm_tgl):
         
         
         
-    def step_adj(self,adh1,h0,addphidt=None,dphidt=None,way=1):
+    def step_adj(self,adh1,h0,way=1):
         
         azeros = +adh1*0
         
-        if addphidt is None and np.all(h0[self.mask>=1]==0):
+        if np.all(h0[self.mask>=1]==0):
             return adh1
         
         # Tangent trajectory
@@ -594,9 +594,7 @@ class Qgm_adj(Qgm_tgl):
         
         rq = self.qrhs(u,v,qb0,way)
         q1 = qb0 + self.dt*rq
-        if dphidt is not None:
-            q1 += self.dt*dphidt
-            
+        
         # 5/ q-->h
         adq1,adh0 = self.pv2h_adj(adh1,q1,+h0)
         adh1 = +azeros
@@ -604,10 +602,7 @@ class Qgm_adj(Qgm_tgl):
         # 4/ Time increment
         adq0 = +adq1
         adrq = self.dt * adq1
-        if addphidt is not None:
-            addphidt += self.dt * adq1
-        adq1 = +azeros
-         
+        
         # 3/ (u,v,q)-->rq
         adu0,adv0,adq_tmp = self.qrhs_adj(adrq,u,v,qb0,way)
         adq0 += adq_tmp
@@ -622,7 +617,6 @@ class Qgm_adj(Qgm_tgl):
             
         # 1/ h-->q
         adh0 += self.h2pv_adj(adq0)
-        
         
         return adh0
     

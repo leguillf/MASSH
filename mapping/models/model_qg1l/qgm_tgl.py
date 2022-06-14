@@ -299,7 +299,7 @@ class Qgm_tgl(Qgm):
         return dh
     
     
-    def step_tgl(self,dh0,h0,ddphidt=None,dphidt=None,way=1):
+    def step_tgl(self,dh0,h0,way=1):
         
         if np.all(h0==0):
             return dh0
@@ -313,8 +313,7 @@ class Qgm_tgl(Qgm):
         v[indNan_v] = 0
         rq = self.qrhs(u,v,qb0,way)
         q1 = qb0 + self.dt*rq
-        if dphidt is not None:
-            q1 += self.dt*dphidt
+
         # 1/ h-->q
         dq0 = self.h2pv(dh0)
 
@@ -329,8 +328,6 @@ class Qgm_tgl(Qgm):
         # 4/ Time increment
         dq1 = +dq0
         dq1 += self.dt * drq
-        if ddphidt is not None:
-            dq1 += self.dt*ddphidt
         
         # 5/ q-->h
         dh1 = self.pv2h_tgl(dq1,dh0,q1,h0)
