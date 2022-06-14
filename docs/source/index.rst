@@ -1,20 +1,16 @@
-.. MASSH documentation master file, created by
-   sphinx-quickstart on Mon Jun 13 17:37:58 2022.
-   You can adapt this file completely to your liking, but it should at least
-   contain the root `toctree` directive.
+MASSH: MApping Sea Surface Height
+===================================
+MASSH is a python package designed to perform space-time dynamical interpolation of sparse altimetric data to generate gridded SSH maps. SSH maps are useful for a wide range of applications, such as the tracking of ocean eddies, regional quantification of sea level rise, operational motinotoring of marine environment and 3D reconstuction of the ocean dynamics. 
 
-Welcome to MASSH's documentation!
-=================================
-
+Contents
+--------
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
+   :maxdepth: 1
 
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+   installation
+   dynamical models    
+   data assimilation techniques
+   examples
+   api
+   development
+   whats-new
