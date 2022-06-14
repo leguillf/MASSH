@@ -12,9 +12,9 @@ import numpy as np
 class Qgm_tgl(Qgm):
     
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
-                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
+                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,Kdiffus=None,
                  mdt=None,mdu=None,mdv=None):
-        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,snu,mdt,mdu,mdv)
+        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,Kdiffus,mdt,mdu,mdv)
     
     
     def qrhs_tgl(self,du,dv,dq,u,v,q,way):
@@ -68,11 +68,11 @@ class Qgm_tgl(Qgm):
                     (2*self.dy[2:-2,2:-2])*way*0.5*(dv[2:-2,2:-2]+dv[3:-1,2:-2]) 
     
         #diffusion
-        if self.snu is not None:
+        if self.Kdiffus is not None:
             drq[2:-2,2:-2] = drq[2:-2,2:-2] +\
-                self.snu/(self.dx[2:-2,2:-2]**2)*\
+                self.Kdiffus/(self.dx[2:-2,2:-2]**2)*\
                     (dq[2:-2,3:-1]+dq[2:-2,1:-3]-2*dq[2:-2,2:-2]) +\
-                self.snu/(self.dy[2:-2,2:-2]**2)*\
+                self.Kdiffus/(self.dy[2:-2,2:-2]**2)*\
                     (dq[3:-1,2:-2]+dq[1:-3,2:-2]-2*dq[2:-2,2:-2])
     
         drq[np.where((self.mask<=1))] = 0

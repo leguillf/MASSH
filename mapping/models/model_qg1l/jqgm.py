@@ -13,7 +13,7 @@ class Qgm:
     #                             Initialization                              #
     ###########################################################################
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
-                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
+                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,Kdiffus=None,
                  mdt=None,mdu=None,mdv=None):
         
         # Grid spacing
@@ -185,9 +185,9 @@ class Qgm:
 
         # Diffusion 
         self.diff = diff
-        self.snu = snu
-        if snu is not None and snu==0:
-            self.snu = None
+        self.Kdiffus = Kdiffus
+        if Kdiffus is not None and Kdiffus==0:
+            self.Kdiffus = None
         
         # Nb of iterations for elliptical inversion
         self.qgiter = qgiter
@@ -554,11 +554,11 @@ class Qgm:
                          *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2]))
     
         #diffusion
-        if self.snu is not None:
+        if self.Kdiffus is not None:
             rq[2:-2,2:-2] = rq[2:-2,2:-2] +\
-                self.snu/(self.dx[2:-2,2:-2]**2)*\
+                self.Kdiffus/(self.dx[2:-2,2:-2]**2)*\
                     (q[2:-2,3:-1]+q[2:-2,1:-3]-2*q[2:-2,2:-2]) +\
-                self.snu/(self.dy[2:-2,2:-2]**2)*\
+                self.Kdiffus/(self.dy[2:-2,2:-2]**2)*\
                     (q[3:-1,2:-2]+q[1:-3,2:-2]-2*q[2:-2,2:-2])
             
         #rq[np.where((self.mask<=1))] = 0

@@ -62,7 +62,7 @@ class Model_diffusion:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
         
-        self.snu = config.snu
+        self.Kdiffus = config.Kdiffus
         self.dx = State.DX
         self.dy = State.DY
         
@@ -122,7 +122,7 @@ class Model_diffusion:
         SSH1 = +SSH0
         
         for step in range(nstep):
-            SSH1[1:-1,1:-1] += self.dt*self.snu*(\
+            SSH1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
                 (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
                 (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
         
@@ -137,7 +137,7 @@ class Model_diffusion:
         SSH1 = +SSH0
         
         for step in range(nstep):
-            SSH1[1:-1,1:-1] += self.dt*self.snu*(\
+            SSH1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
                 (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
                 (SSH1[2:,1:-1]+SSH1[:-2,1:-1]-2*SSH1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
         
@@ -154,13 +154,13 @@ class Model_diffusion:
         
         for step in range(nstep):
             
-            adSSH1[1:-1,2:] += self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
-            adSSH1[1:-1,:-2] += self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
-            adSSH1[1:-1,1:-1] += -2*self.dt*self.snu/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,2:] += self.dt*self.Kdiffus/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,:-2] += self.dt*self.Kdiffus/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,1:-1] += -2*self.dt*self.Kdiffus/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
             
-            adSSH1[2:,1:-1] += self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
-            adSSH1[:-2,1:-1] += self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
-            adSSH1[1:-1,1:-1] += -2*self.dt*self.snu/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[2:,1:-1] += self.dt*self.Kdiffus/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[:-2,1:-1] += self.dt*self.Kdiffus/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
+            adSSH1[1:-1,1:-1] += -2*self.dt*self.Kdiffus/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
             
             adSSH0 = +adSSH1
             
@@ -310,7 +310,7 @@ variable are SLAs!')
                          f=State.f,
                          qgiter=config.qgiter,
                          diff=config.only_diffusion,
-                         snu=config.cdiffus,
+                         Kdiffus=config.Kdiffus,
                          mdt=self.mdt,
                          mdv=self.mdv,
                          mdu=self.mdu)
@@ -557,7 +557,7 @@ variable are SLAs!')
                          qgiter=config.qgiter,
                          qgiter_adj=config.qgiter_adj,
                          diff=config.only_diffusion,
-                         snu=config.cdiffus,
+                         Kdiffus=config.Kdiffus,
                          mdt=self.mdt,
                          mdv=self.mdv,
                          mdu=self.mdu)
@@ -857,7 +857,7 @@ variable are SLAs!')
                          qgiter=config.qgiter,
                          qgiter_adj=config.qgiter_adj,
                          diff=config.only_diffusion,
-                         snu=config.cdiffus,
+                         Kdiffus=config.Kdiffus,
                          mdt=self.mdt,
                          mdv=self.mdv,
                          mdu=self.mdu)

@@ -11,9 +11,9 @@ import numpy as np
 class Qgm_adj(Qgm_tgl):
     
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
-                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,snu=None,
+                 g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,Kdiffus=None,
                  mdt=None,mdu=None,mdv=None):
-        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,snu,mdt,mdu,mdv)
+        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,Kdiffus,mdt,mdu,mdv)
     
     def qrhs_adj(self,adrq,u,v,q,way):
 
@@ -81,13 +81,13 @@ class Qgm_adj(Qgm_tgl):
             adv[3:-1,2:-2]=adv[3:-1,2:-2]-(self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])*way*0.5*(adrq[2:-2,2:-2])
         
         #diffusion
-        if self.snu is not None:
-            adq[2:-2,3:-1] += self.snu/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
-            adq[2:-2,1:-3] += self.snu/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
-            adq[2:-2,2:-2] += -2*self.snu/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
-            adq[3:-1,2:-2] += self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
-            adq[1:-3,2:-2] += self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
-            adq[2:-2,2:-2] += -2*self.snu/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+        if self.Kdiffus is not None:
+            adq[2:-2,3:-1] += self.Kdiffus/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[2:-2,1:-3] += self.Kdiffus/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[2:-2,2:-2] += -2*self.Kdiffus/(self.dx[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[3:-1,2:-2] += self.Kdiffus/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[1:-3,2:-2] += self.Kdiffus/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
+            adq[2:-2,2:-2] += -2*self.Kdiffus/(self.dy[2:-2,2:-2]**2)*adrq[2:-2,2:-2]
             
         return adu, adv, adq
     

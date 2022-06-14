@@ -111,6 +111,9 @@ name_mod_lat = "lat"
 
 dtmodel = 300   # model timestep
 
+# - parameters specific to Diffusion model
+
+Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
 
 # - parameters specific to QG model
 
@@ -301,7 +304,7 @@ bkg_satellite = None # satellite constellation for 4Dvar-Identity model backgrou
 
 path_background = None # Path to the precribed background on BM basis
   
-bkg_snu = 0. # 0 diffusion to perform the 4Dvar-Identity model 
+bkg_Kdiffus = 0. # 0 diffusion to perform the 4Dvar-Identity model 
 
 name_bkg_var = 'res' # Default name of the BM basis variable the prescribed or computed background 
 

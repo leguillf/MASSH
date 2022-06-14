@@ -1316,7 +1316,7 @@ def plot_grad_test(L) :
 def background(config,State):
     '''
     if prescribe background files exist: read and return them
-    else create them using an the 4Dvar with identity model (diffusion with snu=0) on the large scale basis components
+    else create them using an the 4Dvar with identity model (diffusion with Kdiffus=0) on the large scale basis components
     '''
       
     
@@ -1341,7 +1341,7 @@ def background(config,State):
         original_maxiter = config.maxiter
         original_maxiter_inner = config.maxiter_inner
         original_largescale_error_ratio = config.largescale_error_ratio
-        original_snu = config.snu
+        original_Kdiffus = config.Kdiffus
         original_satellite = config.satellite
         
         # Modify appropriate config params to perform 4Dvar-Diffusion
@@ -1350,10 +1350,9 @@ def background(config,State):
         config.maxiter = config.bkg_maxiter
         config.maxiter_inner = config.bkg_maxiter_inner
         config.largescale_error_ratio = 1.
-        config.snu = config.bkg_snu
+        config.Kdiffus = config.bkg_Kdiffus
         if config.bkg_satellite is not None:
             config.satellite = config.bkg_satellite
-        
         
         # Perform 4Dvar-Identity
         from src import state as state
@@ -1373,7 +1372,7 @@ def background(config,State):
         config.maxiter = original_maxiter
         config.maxiter_inner = original_maxiter_inner
         config.largescale_error_ratio = original_largescale_error_ratio
-        config.snu = original_snu
+        config.Kdiffus = original_Kdiffus
         if config.bkg_satellite is not None:
             config.satellite = original_satellite
         
