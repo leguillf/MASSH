@@ -6,7 +6,7 @@ This package allows running various mapping tools, most of them based on Data As
 Contents
 --------
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
    installation
    dynamical models    
