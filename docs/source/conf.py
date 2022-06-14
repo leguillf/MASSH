@@ -36,7 +36,7 @@ extensions = ['myst_parser']
 templates_path = ['_templates']
 
 # The root document.
-root_doc = 'index.rst'
+root_doc = 'index'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
