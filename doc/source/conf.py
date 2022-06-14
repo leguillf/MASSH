@@ -35,8 +35,14 @@ extensions = ['myst_parser']
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
-# The root document.
-root_doc = 'index'
+# The suffix of source filenames.
+source_suffix = '.rst'
+
+# The encoding of source files.
+#source_encoding = 'utf-8-sig'
+
+# The master toctree document.
+master_doc = 'index'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
