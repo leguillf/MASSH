@@ -1,34 +1,3 @@
-Skip to content
-Search or jump to…
-Pull requests
-Issues
-Marketplace
-Explore
- 
-@leguillf 
-SWOTsimulator
-/
-swotsimulator
-Public
-Code
-Issues
-3
-Pull requests
-Actions
-Projects
-Wiki
-Security
-Insights
-swotsimulator/doc/Makefile
-@lgaultier
-lgaultier updating documentation with new orbit files
-Latest commit f4a39bc on 16 Dec 2016
- History
- 2 contributors
-@lgaultier@SWOTsimulator
-Executable File  177 lines (149 sloc)  6.6 KB
-
-
 # Makefile for Sphinx documentation
 #
 
@@ -206,16 +175,3 @@ pseudoxml:
 	$(SPHINXBUILD) -b pseudoxml $(ALLSPHINXOPTS) $(BUILDDIR)/pseudoxml
 	@echo
 	@echo "Build finished. The pseudo-XML files are in $(BUILDDIR)/pseudoxml."
-© 2022 GitHub, Inc.
-Terms
-Privacy
-Security
-Status
-Docs
-Contact GitHub
-Pricing
-API
-Training
-Blog
-About
-Loading complete
