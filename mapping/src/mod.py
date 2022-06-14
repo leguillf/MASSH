@@ -889,7 +889,7 @@ variable are SLAs!')
         
         # Time propagation
         for i in range(nstep):
-            SSH1 = self.qgm.step_mean_jit(SSH1)
+            SSH1 = self.qgm.step_multiscales_jit(SSH1)
 
 
         # Update state
@@ -917,8 +917,8 @@ variable are SLAs!')
         
         # Time propagation
         for i in range(nstep):
-            dSSH1 = self.qgm.step_mean_tgl_jit(dSSH1,SSH1)
-            SSH1 = self.qgm.step_mean_jit(SSH1)
+            dSSH1 = self.qgm.stepmultiscales_tgl_jit(dSSH1,SSH1)
+            SSH1 = self.qgm.step_multiscales_jit(SSH1)
 
         # Update state
         if dState.params is not None:
@@ -948,13 +948,13 @@ variable are SLAs!')
         traj = [SSH1]
         if nstep>1:
             for i in range(nstep):
-                SSH1 = self.qgm.step_mean_jit(SSH1)
+                SSH1 = self.qgm.step_multiscales_jit(SSH1)
                 traj.append(SSH1)
         
         # Time propagation
         for i in reversed(range(nstep)):
             SSH1 = traj[i]
-            adSSH1 = self.qgm.step_mean_adj_jit(adSSH1,SSH1)
+            adSSH1 = self.qgm.step_multiscales_adj_jit(adSSH1,SSH1)
         
         # Update state  and parameters
         if adState.params is not None:

@@ -210,9 +210,9 @@ class Qgm:
         self.step_jit = jit(self.step)
         self.step_tgl_jit = jit(self.step_tgl)
         self.step_adj_jit = jit(self.step_adj)
-        self.step_mean_jit = jit(self.step_mean)
-        self.step_mean_tgl_jit = jit(self.step_mean_tgl)
-        self.step_mean_adj_jit = jit(self.step_mean_adj)
+        self.step_multiscales_jit = jit(self.step_multiscales)
+        self.step_multiscales_tgl_jit = jit(self.step_multiscales_tgl)
+        self.step_multiscales_adj_jit = jit(self.step_multiscales_adj)
         
         
         # MDT
@@ -666,7 +666,7 @@ class Qgm:
         
         return h1
     
-    def step_mean(self,h0,way=1):
+    def step_multiscales(self,h0,way=1):
         
         """ Propagation 
     
@@ -722,15 +722,15 @@ class Qgm:
         
         return adf(adh0)[0]
     
-    def step_mean_tgl(self,dh0,h0):
+    def step_multiscales_tgl(self,dh0,h0):
         
-        _,dh1 = jvp(self.step_mean_jit, (h0,), (dh0,))
+        _,dh1 = jvp(self.step_multiscales_jit, (h0,), (dh0,))
         
         return dh1
     
-    def step_mean_adj(self,adh0,h0):
+    def step_multiscales_adj(self,adh0,h0):
         
-        _, adf = vjp(self.step_mean_jit, h0,)
+        _, adf = vjp(self.step_multiscales_jit, h0,)
         
         adh1 = adf(adh0)[0]
         adh1 = np.where(np.isnan(adh1),0,adh1)
@@ -747,8 +747,6 @@ if __name__ == "__main__":
     
     SSH0 = numpy.random.random((ny,nx))#random.uniform(key,shape=(ny,nx))    
     MDT = numpy.random.random((ny,nx))
-    SSH0[:5,:5] = np.nan
-    MDT[:5,:5] = np.nan
     c = 2.5
     
     qgm = Qgm(dx=dx,dy=dy,dt=dt,c=c,SSH=SSH0,qgiter=1,mdt=MDT)
@@ -805,23 +803,23 @@ if __name__ == "__main__":
 
     
     # # Tangent test        
-    SSH2 = qgm.step_mean_jit(SSH0)
+    SSH2 = qgm.step_multiscales_jit(SSH0)
     print('Tangent test:')
     for p in range(10):
         
         lambd = 10**(-p)
         
-        SSH1 = qgm.step_mean_jit(SSH0+lambd*dSSH)
+        SSH1 = qgm.step_multiscales_jit(SSH0+lambd*dSSH)
         
-        dSSH1 = qgm.step_mean_tgl_jit(dh0=lambd*dSSH,h0=SSH0)
+        dSSH1 = qgm.step_multiscales_tgl_jit(dh0=lambd*dSSH,h0=SSH0)
         
         ps = np.linalg.norm(SSH1-SSH2-dSSH1)/np.linalg.norm(dSSH1)
 
         print('%.E' % lambd,'%.E' % ps)
     
     # Adjoint test
-    dSSH1 = qgm.step_mean_tgl_jit(dh0=dSSH,h0=SSH0)
-    adSSH1 = qgm.step_mean_adj_jit(adSSH0,SSH0)
+    dSSH1 = qgm.step_multiscales_tgl_jit(dh0=dSSH,h0=SSH0)
+    adSSH1 = qgm.step_multiscales_adj_jit(adSSH0,SSH0)
     
     ps1 = np.inner(dSSH1,adSSH0)
     ps2 = np.inner(dSSH,adSSH1)
