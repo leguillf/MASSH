@@ -35,8 +35,14 @@ extensions = ['myst_parser']
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
-# The root document.
-root_doc = 'index'
+# The suffix of source filenames.
+source_suffix = '.rst'
+
+# The encoding of source files.
+#source_encoding = 'utf-8-sig'
+
+# The master toctree document.
+master_doc = 'index'
 
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
@@ -54,4 +60,4 @@ html_theme = 'alabaster'
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['build/html/_static/']
+html_static_path = ['_static']
