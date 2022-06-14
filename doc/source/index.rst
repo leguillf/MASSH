@@ -9,8 +9,8 @@ Contents
    :maxdepth: 2
 
    installation
-   dynamical models    
-   data assimilation techniques
+   models    
+   da
    examples
    api
    development
