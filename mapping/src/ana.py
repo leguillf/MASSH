@@ -521,7 +521,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         from .tools_reduced_basis import RedBasis_BM as RedBasis
     elif config.name_model=='QG1LM':
         from .tools_reduced_basis import RedBasis_BM_2scales as RedBasis
-    elif config.name_model=='SW1L':
+    elif config.name_model in ['SW1L','JAX-SW1L']:
         from .tools_reduced_basis import RedBasis_IT as RedBasis
     elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
         from .tools_reduced_basis import RedBasis_BM_IT as RedBasis

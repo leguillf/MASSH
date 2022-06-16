@@ -53,7 +53,7 @@ class Obsopt:
         self.name_H = f'H_{name_model}_{"_".join(config.satellite)}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.Npix_H}'
         print(self.name_H)
         
-        if State.config['name_model'] in ['Diffusion','SW1L','SW1LM','QG1L','QG1LM','JAX-QG1L'] or type(config.name_model)==list:
+        if State.config['name_model'] in ['Diffusion','SW1L','JAX-SW1L','SW1LM','QG1L','QG1LM','JAX-QG1L'] or type(config.name_model)==list:
             for t in Model.timestamps:
                 if self.isobserved(t):
                     delta_t = [(t - tobs).total_seconds() 
@@ -84,7 +84,7 @@ class Obsopt:
         
         # Mask boundary pixels
         if config.H_mask_borders:
-            if State.config['name_model'] in ['SW1L','SW1LM']:
+            if State.config['name_model'] in ['SW1L','JAX-SW1L','SW1LM']:
                 coords_geo_bc = np.column_stack((
                     np.concatenate((State.lon[0,:],State.lon[1:-1,-1],State.lon[-1,:],State.lon[:,0])),
                     np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
@@ -437,6 +437,7 @@ class Variational:
         if config.compute_test:
             print('Gradient test:')
             X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
+            print(X)
             grad_test(self.cost,self.grad,X)
             
             
