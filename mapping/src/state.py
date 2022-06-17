@@ -80,7 +80,7 @@ class State:
         elif config.name_model in ['QG1LM','JAX-QG1LM']:
             self.ini_var_qg1lm(config)
             
-        elif config.name_model=='SW1L':
+        elif config.name_model in ['SW1L','JAX-SW1L']:
             self.ini_var_sw1l(config)
             
         elif config.name_model=='SW1LM':
@@ -657,11 +657,11 @@ class State:
         '''
         Return the indice of the observed variable, SSH
         '''
-        if self.config['name_model']=='QG1L' :
+        if self.config['name_model'] in ['QG1L','JAX-QG1L'] :
             return 0
         elif self.config['name_model']=='QG1LM' :
             return 2
-        elif self.config['name_model']=='SW1L' :
+        elif self.config['name_model'] in ['SW1L','JAX-SW1L'] :
             return 2
         elif self.config['name_model']=='SW1LM' :
             return 2 + (self.config.Nmodes)*3
@@ -674,11 +674,11 @@ class State:
         '''
         Return the indice of the variable to save, SSH
         '''
-        if self.config['name_model'] is None or self.config['name_model']=='QG1L' :
+        if self.config['name_model'] in ['QG1L','JAX-QG1L'] :
             return 0
         elif self.config['name_model']=='QG1LM' :
             return 2
-        elif self.config['name_model']=='SW1L' :
+        elif self.config['name_model'] in ['SW1L','JAX-SW1L'] :
             return 2
         elif self.config['name_model']=='SW1LM' :
             return [2 + i*3 for i in range(self.config.Nmodes+1)]

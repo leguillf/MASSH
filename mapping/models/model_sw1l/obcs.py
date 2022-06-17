@@ -187,6 +187,7 @@ def obcs(M,t,u,v,h,u0,v0,h0,He,hbcx,hbcy):
             kx = np.sin(theta) * k
             ky = np.cos(theta) * k
             kxy = kx*M.Xv[0,:] + ky*M.Yv[0,:]
+            
             h_ext = hbcx[j,0,0,i]* np.cos(w*t-kxy)  +\
                     hbcx[j,0,1,i]* np.sin(w*t-kxy) 
             v_ext = M.g/(w**2-fS**2)*( \
@@ -197,6 +198,7 @@ def obcs(M,t,u,v,h,u0,v0,h0,He,hbcx,hbcy):
                             + fS*kx*np.cos(w*t-kxy)
                                 )
                     )
+        
             _w1_ext = v_ext + np.sqrt(M.g/HeS) * h_ext
             w1_ext += _w1_ext
     
@@ -270,6 +272,7 @@ def obcs(M,t,u,v,h,u0,v0,h0,He,hbcx,hbcy):
                     )
             _w1_ext = v_ext - np.sqrt(M.g/HeN) * h_ext
             w1_ext += _w1_ext
+    
     if M.bc=='1d':
         w1N = w1_ext
     elif M.bc=='2d':
