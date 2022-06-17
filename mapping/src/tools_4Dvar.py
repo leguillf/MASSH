@@ -437,7 +437,6 @@ class Variational:
         if config.compute_test:
             print('Gradient test:')
             X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
-            print(X)
             grad_test(self.cost,self.grad,X)
             
             
@@ -463,7 +462,7 @@ class Variational:
         # Observational cost function evaluation
         Jo = 0.
         for i in range(len(self.H.checkpoint)-1):
-
+            
             timestamp = self.M.timestamps[self.H.checkpoint[i]]
             t = self.M.T[self.H.checkpoint[i]]
             nstep = self.H.checkpoint[i+1] - self.H.checkpoint[i]

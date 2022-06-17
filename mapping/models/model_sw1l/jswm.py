@@ -1,4 +1,4 @@
-import jax.numpy as np 
+import jax.numpy as jnp 
 from jax import jit
 from jax import jvp,vjp
 from jax.config import config
@@ -26,12 +26,12 @@ class Swm:
         if hasattr(f, "__len__") and f.shape==self.X.shape:
             self.f = f
         else: 
-            self.f = f * np.ones_like(self.X)
+            self.f = f * jnp.ones_like(self.X)
         
         if hasattr(Heb, "__len__") and f.shape==self.X.shape:
             self.Heb = Heb
         else: 
-            self.Heb = Heb * np.ones_like(self.X)
+            self.Heb = Heb * jnp.ones_like(self.X)
         
         self.ny,self.nx = self.X.shape
                 
@@ -109,7 +109,7 @@ class Swm:
     
     def rhs_u(self,vm,h):
         
-        rhs_u = np.zeros_like(self.Xu)
+        rhs_u = jnp.zeros(self.Xu.shape)
         
         rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
             self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
@@ -118,7 +118,7 @@ class Swm:
 
     def rhs_v(self,um,h):
         
-        rhs_v = np.zeros_like(self.Xv)
+        rhs_v = jnp.zeros_like(self.Xv)
         
         rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
             self.g * (h[2:-1,1:-1] - h[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
@@ -126,7 +126,7 @@ class Swm:
         return rhs_v
     
     def rhs_h(self,u,v,He):
-        rhs_h = np.zeros_like(self.X)
+        rhs_h = jnp.zeros_like(self.X)
         rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
                 (u[1:-1,1:] - u[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
                 (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1])))
@@ -146,7 +146,7 @@ class Swm:
         # South
         #######################################################################
         HeS = (He[0,:]+He[1,:])/2
-        cS = np.sqrt(g*HeS)
+        cS = jnp.sqrt(g*HeS)
         if self.bc_kind=='1d':
             cS *= self.dt/(self.Y[1,:]-self.Y[0,:])
       
@@ -157,12 +157,12 @@ class Swm:
             w1S = w1extS
         elif self.bc_kind=='2d':
             # dw1dy0
-            w10  = v0[0,:] + np.sqrt(g/HeS)* (h0[0,:]+h0[1,:])/2
-            w10_ = (v0[0,:]+v0[1,:])/2 + np.sqrt(g/HeS)* h0[1,:]
+            w10  = v0[0,:] + jnp.sqrt(g/HeS)* (h0[0,:]+h0[1,:])/2
+            w10_ = (v0[0,:]+v0[1,:])/2 + jnp.sqrt(g/HeS)* h0[1,:]
             _w10 = w1extS
             dw1dy0 = (w10_ - _w10)/self.dy
             # dudx0
-            dudx0 = np.zeros(self.nx)
+            dudx0 = jnp.zeros(self.nx)
             dudx0[1:-1] = ((u0[0,1:] + u0[1,1:] - u0[0,:-1] - u0[1,:-1])/2)/self.dx
             dudx0[0] = dudx0[1]
             dudx0[-1] = dudx0[-2]
@@ -181,24 +181,24 @@ class Swm:
         if self.bc_kind=='1d':
             _vS = (1-3/2*cS)* v0[0,:] + cS/2* (4*v0[1,:] - v0[2,:])
             _hS = (1/2+cS)* h0[1,:] + (1/2-cS)* h0[0,:]
-            w3S = _vS - np.sqrt(g/HeS) * _hS
+            w3S = _vS - jnp.sqrt(g/HeS) * _hS
         elif self.bc_kind=='2d':
-            w30   = v0[0,:] - np.sqrt(g/HeS)* (h0[0,:]+h0[1,:])/2
-            w30_  = (v0[0,:]+v0[1,:])/2  - np.sqrt(g/HeS)* h0[1,:]
-            w30__ = v0[1,:] - np.sqrt(g/HeS)* (h0[1,:]+h0[2,:])/2
+            w30   = v0[0,:] - jnp.sqrt(g/HeS)* (h0[0,:]+h0[1,:])/2
+            w30_  = (v0[0,:]+v0[1,:])/2  - jnp.sqrt(g/HeS)* h0[1,:]
+            w30__ = v0[1,:] - jnp.sqrt(g/HeS)* (h0[1,:]+h0[2,:])/2
             dw3dy0 =  -(3*w30 - 4*w30_ + w30__)/(self.dy/2)
             w3S = w30 + self.dt*cS* (dw3dy0 + dudx0) 
 
         # 4. Values on BC
         uS = w2S
         vS = (w1S + w3S)/2 
-        hS = np.sqrt(HeS/g) *(w1S - w3S)/2
+        hS = jnp.sqrt(HeS/g) *(w1S - w3S)/2
         
         #######################################################################
         # North
         #######################################################################
         HeN = (He[-1,:]+He[-2,:])/2
-        cN = np.sqrt(g*HeN)
+        cN = jnp.sqrt(g*HeN)
         if self.bc_kind=='1d':
             cN *= self.dt/(self.Y[-1,:]-self.Y[-2,:])
 
@@ -208,11 +208,11 @@ class Swm:
         if self.bc_kind=='1d':
             w1N = w1extN
         elif self.bc_kind=='2d':
-            w10  = v0[-1,:] - np.sqrt(g/HeN)* (h0[-1,:]+h0[-2,:])/2
-            w10_ = (v0[-1,:]+v0[-2,:])/2 - np.sqrt(g/HeN)* h0[-2,:]
+            w10  = v0[-1,:] - jnp.sqrt(g/HeN)* (h0[-1,:]+h0[-2,:])/2
+            w10_ = (v0[-1,:]+v0[-2,:])/2 - jnp.sqrt(g/HeN)* h0[-2,:]
             _w10 = w1extN
             dw1dy0 = (_w10 - w10_)/self.dy
-            dudx0 = np.zeros(self.nx)
+            dudx0 = jnp.zeros(self.nx)
             dudx0[1:-1] = ((u0[-1,1:] + u0[-2,1:] - u0[-1,:-1] - u0[-2,:-1])/2)/self.dx
             dudx0[0] = dudx0[1]
             dudx0[-1] = dudx0[-2]
@@ -229,24 +229,24 @@ class Swm:
         if self.bc_kind=='1d':   
             _vN = (1-3/2*cN)* v0[-1,:] + cN/2* (4*v0[-2,:] - v0[-3,:])
             _hN = (1/2+cN)* h0[-2,:] + (1/2-cN)* h0[-1,:]
-            w3N = _vN + np.sqrt(g/HeN) * _hN
+            w3N = _vN + jnp.sqrt(g/HeN) * _hN
         elif self.bc_kind=='2d':
-            w30   = v0[-1,:] + np.sqrt(g/HeN)* (h0[-1,:]+h0[-2,:])/2
-            w30_  = (v0[-1,:]+v0[-2,:])/2 + np.sqrt(g/HeN)* h0[-2,:]
-            w30__ = v0[-2,:] + np.sqrt(g/HeN)* (h0[-2,:]+h0[-3,:])/2
+            w30   = v0[-1,:] + jnp.sqrt(g/HeN)* (h0[-1,:]+h0[-2,:])/2
+            w30_  = (v0[-1,:]+v0[-2,:])/2 + jnp.sqrt(g/HeN)* h0[-2,:]
+            w30__ = v0[-2,:] + jnp.sqrt(g/HeN)* (h0[-2,:]+h0[-3,:])/2
             dw3dy0 =  (3*w30 - 4*w30_ + w30__)/(self.dy/2)
             w3N = w30 - self.dt*cN* (dw3dy0 + dudx0) 
         
         # 4. Values on BC
         uN = w2N
         vN = (w1N + w3N)/2 
-        hN = np.sqrt(HeN/g) *(w3N - w1N)/2
+        hN = jnp.sqrt(HeN/g) *(w3N - w1N)/2
         
         #######################################################################
         # West
         #######################################################################
         HeW = (He[:,0]+He[:,1])/2
-        cW = np.sqrt(g*HeW)
+        cW = jnp.sqrt(g*HeW)
         if self.bc_kind=='1d':
             cW *= self.dt/(self.X[:,1]-self.X[:,0])
         
@@ -256,11 +256,11 @@ class Swm:
         if self.bc_kind=='1d':   
             w1W = w1extW
         elif self.bc_kind=='2d':
-            w10  = u0[:,0] + np.sqrt(g/HeW)* (h0[:,0]+h0[:,1])/2
-            w10_ = (u0[:,0]+u0[:,1])/2 + np.sqrt(g/HeW)* h0[:,1]
+            w10  = u0[:,0] + jnp.sqrt(g/HeW)* (h0[:,0]+h0[:,1])/2
+            w10_ = (u0[:,0]+u0[:,1])/2 + jnp.sqrt(g/HeW)* h0[:,1]
             _w10 = w1extW
             dw1dx0 = (w10_ - _w10)/self.dx
-            dvdy0 = np.zeros(self.ny)
+            dvdy0 = jnp.zeros(self.ny)
             dvdy0[1:-1] = ((v0[1:,0] + v0[1:,1] - v0[:-1,0] - v0[:-1,1])/2)/self.dy
             dvdy0[0] = dvdy0[1]
             dvdy0[-1] = dvdy0[-2]
@@ -278,24 +278,24 @@ class Swm:
         if self.bc_kind=='1d':   
             _uW = (1-3/2*cW)* u0[:,0] + cW/2* (4*u0[:,1]-u0[:,2]) 
             _hW = (1/2+cW)*h0[:,1] + (1/2-cW)*h0[:,0]
-            w3W = _uW - np.sqrt(g/HeW)* _hW
+            w3W = _uW - jnp.sqrt(g/HeW)* _hW
         elif self.bc_kind=='2d':
-            w30   = u0[:,0] - np.sqrt(g/HeW)* (h0[:,0]+h0[:,1])/2
-            w30_  = (u0[:,0]+u0[:,1])/2 - np.sqrt(g/HeW)* h0[:,1]
-            w30__ = u0[:,1] - np.sqrt(g/HeW)* (h0[:,1]+h0[:,2])/2
+            w30   = u0[:,0] - jnp.sqrt(g/HeW)* (h0[:,0]+h0[:,1])/2
+            w30_  = (u0[:,0]+u0[:,1])/2 - jnp.sqrt(g/HeW)* h0[:,1]
+            w30__ = u0[:,1] - jnp.sqrt(g/HeW)* (h0[:,1]+h0[:,2])/2
             dw3dx0 = -(3*w30 - 4*w30_ + w30__)/(self.dx/2)
             w3W = w30 + self.dt*cW* (dw3dx0 + dvdy0)
             
         # 4. Values on BC
         uW = (w1W + w3W)/2 
         vW = w2W
-        hW = np.sqrt(HeW/g)*(w1W - w3W)/2
+        hW = jnp.sqrt(HeW/g)*(w1W - w3W)/2
         
         #######################################################################
         # East
         #######################################################################
         HeE = (He[:,-1]+He[:,-2])/2
-        cE = np.sqrt(g*HeE)
+        cE = jnp.sqrt(g*HeE)
         if self.bc_kind=='1d':
             cE *= self.dt/(self.X[:,-1]-self.X[:,-2])
         
@@ -305,11 +305,11 @@ class Swm:
         if self.bc_kind=='1d':   
             w1E = w1extE
         elif self.bc_kind=='2d':
-            w10  = u0[:,-1] - np.sqrt(g/HeE)* (h0[:,-1]+h0[:,-2])/2
-            w10_ = (u0[:,-1]+u0[:,-2])/2 - np.sqrt(g/HeE)* h0[:,-2]
+            w10  = u0[:,-1] - jnp.sqrt(g/HeE)* (h0[:,-1]+h0[:,-2])/2
+            w10_ = (u0[:,-1]+u0[:,-2])/2 - jnp.sqrt(g/HeE)* h0[:,-2]
             _w10 = w1extE
             dw1dx0 = (_w10 - w10_)/self.dx
-            dvdy0 = np.zeros(self.ny)
+            dvdy0 = jnp.zeros(self.ny)
             dvdy0[1:-1] = ((v0[1:,-1] + v0[1:,-2] - v0[:-1,-1] - v0[:-1,-2])/2)/self.dy
             dvdy0[0] = dvdy0[1]
             dvdy0[-1] = dvdy0[-2]
@@ -326,18 +326,18 @@ class Swm:
         if self.bc_kind=='1d':   
             _uE = (1-3/2*cE)* u0[:,-1] + cE/2* (4*u0[:,-2]-u0[:,-3])
             _hE = ((1/2+cE)*h0[:,-2] + (1/2-cE)*h0[:,-1])
-            w3E = _uE + np.sqrt(g/HeE)* _hE 
+            w3E = _uE + jnp.sqrt(g/HeE)* _hE 
         elif self.bc_kind=='2d':
-            w30   = u0[:,-1] + np.sqrt(g/HeE)* (h0[:,-1]+h0[:,-2])/2
-            w30_  = (u0[:,-1]+u0[:,-2])/2 + np.sqrt(g/HeE)* h0[:,-2]
-            w30__ = u0[:,-2] + np.sqrt(g/HeE)* (h0[:,-2]+h0[:,-3])/2
+            w30   = u0[:,-1] + jnp.sqrt(g/HeE)* (h0[:,-1]+h0[:,-2])/2
+            w30_  = (u0[:,-1]+u0[:,-2])/2 + jnp.sqrt(g/HeE)* h0[:,-2]
+            w30__ = u0[:,-2] + jnp.sqrt(g/HeE)* (h0[:,-2]+h0[:,-3])/2
             dw3dx0 =  (3*w30 - 4*w30_ + w30__)/(self.dx/2)
             w3E = w30 - self.dt*cE* (dw3dx0 + dvdy0) 
             
         # 4. Values on BC
         uE = (w1E + w3E)/2 
         vE = w2E
-        hE = np.sqrt(HeE/g)*(w3E - w1E)/2
+        hE = jnp.sqrt(HeE/g)*(w3E - w1E)/2
         
         #######################################################################
         # Update border pixels 
@@ -434,15 +434,18 @@ class Swm:
         #######################
         #      Flattening     #
         #######################
-        X1 = np.concatenate((u.flatten(),v.flatten(),h.flatten()))
+        X1 = jnp.concatenate((u.flatten(),v.flatten(),h.flatten()))
         
         if X0.size==(self.nstates+self.nparams):
-            X1 = np.concatenate((X1,He.flatten(),Bc))
+            X1 = jnp.concatenate((X1,He.flatten(),Bc))
         
         return X1
     
 
     def step_rk4(self,X0):
+        
+        
+        X0 = jnp.asarray(X0)
         
         #######################
         #       Reshaping     #
@@ -468,6 +471,7 @@ class Swm:
         u1 = +u0
         v1 = +v0
         h1 = +h0
+        
                     
         #######################
         #  Right hand sides   #
@@ -506,10 +510,11 @@ class Swm:
         #######################
         #      Flattening     #
         #######################
-        X1 = np.concatenate((u.flatten(),v.flatten(),h.flatten()))
+        X1 = jnp.concatenate((u.flatten(),v.flatten(),h.flatten()))
         
         if X0.size==(self.nstates+self.nparams):
-            X1 = np.concatenate((X1,He.flatten(),Bc))
+            X1 = jnp.concatenate((X1,He.flatten(),Bc))
+        
         
         return X1
     
@@ -557,6 +562,16 @@ if __name__ == "__main__":
 
     N = swm.nstates + swm.nparams
     
+    X0 = numpy.zeros((N,))
+    
+    X0[swm.sliceHe] = 0.7
+    X0[swm.sliceBc][:swm.nx] = 0.02
+    
+    for i in range(100):
+        X0 = swm.step_rk4(X0)
+    
+    
+    
     X0 = numpy.random.random((N,))
     dX0 = numpy.random.random((N,))
     adX0 = numpy.random.random((N,))
@@ -571,7 +586,7 @@ if __name__ == "__main__":
         
         dX1 = swm.step_rk4_tgl_jit(dX0=lambd*dX0,X0=X0)
         
-        ps = numpy.linalg.norm(X1-X2-dX1)/np.linalg.norm(dX1)
+        ps = numpy.linalg.norm(X1-X2-dX1)/jnp.linalg.norm(dX1)
 
         print('%.E' % lambd,'%.E' % ps)
     

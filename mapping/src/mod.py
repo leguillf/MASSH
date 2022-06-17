@@ -19,7 +19,7 @@ import jax.numpy as jnp
 from jax import jit
 from jax import jvp,vjp
 from jax.config import config
-config.update("jax_enable_x64", True)
+#config.update("jax_enable_x64", True)
 
 from . import tools, grid
 
@@ -1100,7 +1100,7 @@ class Model_sw1l:
             adjoint_test(self,State,self.T[-1],nstep=1)
        
             
-    def step(self,State,nstep=1,t0=0,ind=[0,1,2],t=None):
+    def step(self,State,nstep=1,t0=0,ind=[0,1,2],t=0):
 
         # Init
         u0,v0,h0 = State.getvar(ind)
@@ -1128,7 +1128,7 @@ class Model_sw1l:
         State.setvar([u,v,h],ind=ind)
         
     
-    def step_tgl(self,dState,State,nstep=1,t0=0,ind=[0,1,2],t=None):
+    def step_tgl(self,dState,State,nstep=1,t0=0,ind=[0,1,2],t=0):
         
         # Get state variables and model parameters
         du0,dv0,dh0 = dState.getvar(ind=ind)
@@ -1182,7 +1182,7 @@ class Model_sw1l:
         dState.setvar([du,dv,dh],ind=ind)
         
 
-    def step_adj(self,adState, State, nstep=1, t0=0,ind=None,t=None):
+    def step_adj(self,adState, State, nstep=1, t0=0,ind=None,t=0):
         
         # Get variables
         adu0,adv0,adh0 = adState.getvar(ind=ind)
@@ -1236,7 +1236,7 @@ class Model_sw1l:
         adState.setvar([adu,adv,adh],ind=ind)
         
         # Update parameters
-        adState.params[self.sliceparams] += np.concatenate((adHe.flatten(), adhbcx.flatten(), adhbcy.flatten()))
+        adState.params += np.concatenate((adHe.flatten(), adhbcx.flatten(), adhbcy.flatten()))
         
 class Model_jaxsw1l:
     
@@ -1281,6 +1281,13 @@ class Model_jaxsw1l:
         # Constants
         self.f = State.f
         self.g = State.g
+        
+        # Grid
+        self.ny = State.ny
+        self.nx = State.nx
+        self.X = State.X
+        self.Y = State.Y
+        self.nstates = State.getvar(vect=True).size
         
         # Time parameters
         self.dt = config.dtmodel
@@ -1337,7 +1344,7 @@ class Model_jaxsw1l:
         self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
                                np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
         self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
-        self.sliceparams = slice(0,self.nparams)
+        self.sliceparams = slice(self.nstates,self.nstates+self.nparams)
         
         # Model initialization
         self.swm = swm.Swm(X=State.X,
@@ -1363,15 +1370,15 @@ class Model_jaxsw1l:
         # Tests
         self._jstep_jit = jit(self._jstep)
         if config.name_analysis=='4Dvar':
-            #
+            self._compute_w1_IT_jit = jit(self._compute_w1_IT)
             self._jstep_tgl_jit = jit(self._jstep_tgl)
             self._jstep_adj_jit = jit(self._jstep_adj)
-            
+
             if config.compute_test:
                 print('tangent test:')
-               # tangent_test(self,State,self.T[-1],nstep=1)
+                tangent_test(self,State,self.T[-1],nstep=10)
                 print('adjoint test:')
-               # adjoint_test(self,State,self.T[-1],nstep=1)
+                adjoint_test(self,State,self.T[-1],nstep=10)
        
             
     def step(self,State,nstep=1,t0=0,ind=[0,1,2],t=None):
@@ -1385,11 +1392,16 @@ class Model_jaxsw1l:
         # Init
         
         X1 = +X0
+        # Add time in control vector (for JAX)
+        X1 = np.append(t,X1)
         # Time stepping
         for i in range(nstep):
-            self._t = t+i*self.dt
-            X1 = self._jstep(X1)
-            
+            # One time step
+            X1 = self._jstep_jit(X1)
+        
+        # Remove time in control vector
+        X1 = X1[1:]
+        
         # Reshaping
         u1 = X1[self.swm.sliceu].reshape(self.swm.shapeu)
         v1 = X1[self.swm.slicev].reshape(self.swm.shapev)
@@ -1397,11 +1409,9 @@ class Model_jaxsw1l:
         
         State.setvar([u1,v1,h1],ind=ind)
         
-        
     def _jstep(self,X0):
         
-        #t,X1 = +X0[0],+X0[1:]
-        X1 = +X0
+        t,X1 = X0[0],jnp.asarray(+X0[1:])
         
         # Get He,obcs parameters
         params = None
@@ -1410,19 +1420,32 @@ class Model_jaxsw1l:
             He = +params[self.sliceHe].reshape(self.shapeHe)+self.Heb
             hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
             hbcy = +params[self.slicehbcy].reshape(self.shapehbcy)        
-
+        
         # Time propagation
+        _X1 = +X1[:self.swm.nstates]
         if params is not None:
             # First characteristic variables w1 from external data
             if self.bc_kind=='1d':
-                tbc = self._t + self.dt
+                tbc = t + self.dt
             else:
-                tbc = self._t
-            w1ext = self._compute_w1_IT(tbc,He,hbcx,hbcy)
-            X1 = jnp.concatenate((X1[:self.swm.nstates],He.flatten(),w1ext))
+                tbc = t
+
+            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
+            
+            w1ext = jnp.concatenate((w1S,w1N,w1W,w1E))
+            _X1 = jnp.concatenate((_X1, # State variables
+                                   He.flatten(),w1ext)) # Model parameters 
         # One forward step
-        X1 = self.swm_step(X1)
+        _X1 = self.swm_step(_X1)
         
+        # Retrieve inital form
+        X1 = X1.at[:self.swm.nstates].set(_X1[:self.swm.nstates])
+        
+        if params is not None:
+            X1 = X1.at[self.swm.nstates:].set(params)
+        
+        X1 = jnp.append(jnp.array(t+self.dt),X1)
+    
         return X1
         
         
@@ -1441,12 +1464,18 @@ class Model_jaxsw1l:
         # Init
         dX1 = +dX0
         X1 = +X0
-
+        # Add time in control vector (for JAX)
+        dX1 = np.append(t,dX1)
+        X1 = np.append(t,X1)
         # Time stepping
         for i in range(nstep):
-            self._t = t+i*self.dt
+            # One timestep
             dX1 = self._jstep_tgl_jit(dX1,X1)
-            X1 = self._jstep_jit(X1)
+            if i<nstep-1:
+                X1 = self._jstep_jit(X1)
+                
+        # Remove time in control vector
+        dX1 = dX1[1:]
         
         # Reshaping
         du1 = dX1[self.swm.sliceu].reshape(self.swm.shapeu)
@@ -1469,23 +1498,36 @@ class Model_jaxsw1l:
         
         if State.params is not None:
             X0 = np.concatenate((X0,State.params))     
+
+        # Get params in physical space
+        if adState.params is not None:
+            adX0 = np.concatenate((adX0,+adState.params))
         
         # Init
         adX1 = +adX0
         X1 = +X0
         
-        # Time propagation
         # Current trajectory
-        traj = []
-        for i in range(nstep):
-            self._t = t+i*self.dt
-            X1 = self._jstep_jit(X1)
-            traj.append(X1)
+        # Add time in control vector (for JAX)
+        X1 = np.append(t,X1)
+        traj = [X1]
+        if nstep>1:
+            for i in range(nstep):
+                # One timestep
+                X1 = self._jstep_jit(X1)
+                if i<nstep-1:
+                    traj.append(+X1)
             
+        # Reversed time propagation
+        # Add time in control vector (for JAX)
+        adX1 = np.append(traj[-1][0],adX1)
         for i in reversed(range(nstep)):
-            self._t = t+i*self.dt
             X1 = traj[i]
+            # One timestep
             adX1 = self._jstep_adj_jit(adX1,X1)
+        
+        # Remove time in control vector
+        adX1 = adX1[1:]
         
         # Reshaping
         adu1 = adX1[self.swm.sliceu].reshape(self.swm.shapeu)
@@ -1497,16 +1539,16 @@ class Model_jaxsw1l:
         adState.setvar([adu1,adv1,adh1],ind=ind)
         
         # Update parameters
-        adState.params[self.sliceparams] += adparams
+        adState.params = adparams
     
     def _jstep_adj(self,adX0,X0):
         
         _, adf = vjp(self._jstep_jit, X0)
         
         return adf(adX0)[0]
-        
+
     
-    def _compute_w1_IT(self,t,He,data_ext_SN,data_ext_WE):
+    def _compute_w1_IT(self,t,He,h_SN,h_WE):
         """
         Compute first characteristic variable w1 for internal tides from external 
         data
@@ -1516,10 +1558,10 @@ class Model_jaxsw1l:
         t : float 
             time in seconds
         He : 2D array
-        data_ext_SN : ND array
-            external data for southern/northern borders
-        data_ext_WE : ND array
-            external data for western/eastern borders
+        h_SN : ND array
+            amplitude of SSH for southern/northern borders
+        h_WE : ND array
+            amplitude of SSH for western/eastern borders
 
         Returns
         -------
@@ -1530,70 +1572,99 @@ class Model_jaxsw1l:
         # South
         HeS = (He[0,:]+He[1,:])/2
         fS = (self.f[0,:]+self.f[1,:])/2
-        xS = self.swm.Xv[0,:]
-        yS = self.swm.Yv[0,:]
-        hcosS = data_ext_SN[:,0,0,:]
-        hsinS = data_ext_SN[:,0,1,:]
-        VnS,hS = self.__compute_Vn_h_IT_B(t,HeS,fS,xS,yS,hcosS,hsinS)
-        w1S = VnS + jnp.sqrt(self.g/HeS) * hS
-        
+        w1S = jnp.zeros(self.nx)
+        for j,w in enumerate(self.omegas):
+            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
+            for i,theta in enumerate(self.bc_theta):
+                kx = jnp.sin(theta) * k
+                ky = jnp.cos(theta) * k
+                kxy = kx*self.swm.Xv[0,:] + ky*self.swm.Yv[0,:]
+                
+                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
+                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
+                v = self.g/(w**2-fS**2)*( \
+                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
+                                - fS*kx*jnp.sin(w*t-kxy)
+                                    ) +\
+                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
+                                + fS*kx*jnp.cos(w*t-kxy)
+                                    )
+                        )
+                
+                
+                
+                w1S += v + jnp.sqrt(self.g/HeS) * h
+         
         # North
-        HeN = (He[-1,:]+He[-2,:])/2
         fN = (self.f[-1,:]+self.f[-2,:])/2
-        xN = self.swm.Xv[-1,:]
-        yN = self.swm.Yv[-1,:]
-        hcosN = data_ext_SN[:,1,0,:]
-        hsinN = data_ext_SN[:,1,1,:]
-        VnN,hN = self.__compute_Vn_h_IT_B(t,HeN,fN,xN,yN,hcosN,hsinN)
-        w1N = VnN - jnp.sqrt(self.g/HeN) * hN
-        
+        HeN = (He[-1,:]+He[-2,:])/2
+        w1N = jnp.zeros(self.nx)
+        for j,w in enumerate(self.omegas):
+            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
+            for i,theta in enumerate(self.bc_theta):
+                kx = jnp.sin(theta) * k
+                ky = -jnp.cos(theta) * k
+                kxy = kx*self.swm.Xv[-1,:] + ky*self.swm.Yv[-1,:]
+                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
+                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
+                v = self.g/(w**2-fN**2)*(\
+                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
+                                - fN*kx*jnp.sin(w*t-kxy)
+                                    ) +\
+                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
+                                + fN*kx*jnp.cos(w*t-kxy)
+                                    )
+                        )
+                w1N += v - jnp.sqrt(self.g/HeN) * h
+
         # West
-        HeW = (He[:,0]+He[:,1])/2
         fW = (self.f[:,0]+self.f[:,1])/2
-        xW = self.swm.Xu[:,0]
-        yW = self.swm.Yu[:,0]
-        hcosW = data_ext_WE[:,0,0,:]
-        hsinW = data_ext_WE[:,0,1,:]
-        VnW,hW = self.__compute_Vn_h_IT_B(t,HeW,fW,xW,yW,hcosW,hsinW)
-        w1W = VnW + jnp.sqrt(self.g/HeW) * hW
+        HeW = (He[:,0]+He[:,1])/2
+        w1W = jnp.zeros(self.ny)
+        for j,w in enumerate(self.omegas):
+            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
+            for i,theta in enumerate(self.bc_theta):
+                kx = jnp.cos(theta)* k
+                ky = jnp.sin(theta)* k
+                kxy = kx*self.swm.Xu[:,0] + ky*self.swm.Yu[:,0]
+                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
+                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
+                u = self.g/(w**2-fW**2)*(\
+                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
+                              + fW*ky*jnp.sin(w*t-kxy)
+                                  ) +\
+                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
+                              - fW*ky*jnp.cos(w*t-kxy)
+                                  )
+                        )
+                w1W += u + jnp.sqrt(self.g/HeW) * h
+
         
         # East
         HeE = (He[:,-1]+He[:,-2])/2
         fE = (self.f[:,-1]+self.f[:,-2])/2
-        xE = self.swm.Xu[:,-1]
-        yE = self.swm.Yu[:,-1]
-        hcosE = data_ext_WE[:,1,0,:]
-        hsinE = data_ext_WE[:,1,1,:]
-        VnE,hE = self.__compute_Vn_h_IT_B(t,HeE,fE,xE,yE,hcosE,hsinE)
-        w1E = VnE - jnp.sqrt(self.g/HeE) * hE
-        
-        return jnp.concatenate((w1S,w1N,w1W,w1E))
-    
-    def __compute_Vn_h_IT_B(self,t,HeB,fB,xB,yB,hcosB,hsinB):
-        
-        g = self.g
-        VnB = 0
-        hB = 0
+        w1E = jnp.zeros(self.ny)
         for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fB**2)/(self.g*HeB))
+            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
             for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = jnp.cos(theta) * k
-                kxy = kx*xB + ky*yB
-                hB += hcosB[j,i]* jnp.cos(w*t-kxy)  +\
-                        hsinB[j,i]* jnp.sin(w*t-kxy) 
-                VnB += g/(w**2-fB**2)*( \
-                    hcosB[j,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fB*kx*jnp.sin(w*t-kxy)
+                kx = -jnp.cos(theta)* k
+                ky = jnp.sin(theta)* k
+                kxy = kx*self.swm.Xu[:,-1] + ky*self.swm.Yu[:,-1]
+                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
+                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
+                u = self.g/(w**2-fE**2)*(\
+                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
+                                + fE*ky*jnp.sin(w*t-kxy)
                                     ) +\
-                    hsinB[j,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fB*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )              
-                    
-        return VnB,hB
-
-
+                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
+                              - fE*ky*jnp.cos(w*t-kxy)
+                                  )
+                        )
+                w1E += u - jnp.sqrt(self.g/HeE) * h
+        
+        return w1S,w1N,w1W,w1E
+    
+    
         
 class Model_sw1lm:
     
@@ -1917,26 +1988,26 @@ def adjoint_test(M,State,tint,t0=0,nstep=1):
     
     # Perturbation
     dState = State.random()
-    dX = dState.getvar(vect=True)
     dState.params = np.random.random((M.nparams,))
+    dX0 = np.concatenate((dState.getvar(vect=True),dState.params))
     
     # Adjoint
     adState = State.random()
-    adState.params = np.zeros((M.nparams,))
-    adX = adState.getvar(vect=True)
+    adState.params = np.random.random((M.nparams,))
+    adX0 = np.concatenate((adState.getvar(vect=True),adState.params))
     
     # Run TLM
     M.step_tgl(t=t0,dState=dState,State=State0,nstep=nstep)
-    TLM = dState.getvar(vect=True)
+    dX1 = np.concatenate((dState.getvar(vect=True),dState.params))
     
     # Run ADJ
     M.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
-    ADM = adState.getvar(vect=True)
+    adX1 = np.concatenate((adState.getvar(vect=True),adState.params))
     
-    mask = np.isnan(TLM+adX+dX)
+    mask = np.isnan(adX0+dX0)
     
-    ps1 = np.inner(TLM[~mask],adX[~mask]) + np.inner(dState.params,adState.params*0) 
-    ps2 = np.inner(dX[~mask],ADM[~mask]) + np.inner(dState.params,adState.params) 
+    ps1 = np.inner(dX1[~mask],adX0[~mask])
+    ps2 = np.inner(dX0[~mask],adX1[~mask]) 
     
     print(ps1/ps2)
 
