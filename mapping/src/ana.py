@@ -538,8 +538,12 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         if config.name_model in ['QG1L','JAX-QG1L','QG1LM']: 
             Xb = +Xb_prescribed
         elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
-            Xb[basis.slicebm] = +Xb_prescribed
-        if config.largescale_error_ratio!=1 :  
+            Xb[basis.slicebm] = +Xb_prescribed 
+            
+        if config.only_largescale :   
+            Xb = np.where(Q==np.sqrt(config.Qmax),Xb,0.)  
+            
+        if config.largescale_error_ratio!=1 :   
             Q = np.where(Q==np.sqrt(config.Qmax),Q*config.largescale_error_ratio,Q)  
             
     # Covariance matrix
