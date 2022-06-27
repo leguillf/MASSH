@@ -505,10 +505,11 @@ class Qgm:
     
         """
         
-        if q0 is None:
-            return h0
-        else:
-            return h0,q0
+        if np.all(h0==0):
+            if q0 is None:
+                return h0
+            else:
+                return h0,q0
    
         # 1/ h-->q
         if q0 is None:
