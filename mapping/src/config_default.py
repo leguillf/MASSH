@@ -313,6 +313,8 @@ bkg_maxiter = 30 # 4Dvar-Identity model maximal number of iterations for the min
 bkg_maxiter_inner = 10 # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
 
 largescale_error_ratio = 1 # Ratio to reduce BM basis background error over lmeso wavelenghts
+
+only_largescale = False # Flag to prescribe only BM basis background error over lmeso wavelenghts
  
 ####################################
 ###   MIOST-specific parameters  ### 

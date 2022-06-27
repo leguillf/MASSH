@@ -255,7 +255,7 @@ class RedBasis_IT:
         X_bcW = X[self.slicebcW].reshape(self.shapehbcW)
         
         # Project to physical space
-        indt = np.argwhere(self.time==t)[0,0]        
+        indt = np.argmin(np.abs(self.time-t))        
         He = np.tensordot(
             np.tensordot(X_He,self.He_xy_gauss,(1,0)),
                                 self.He_t_gauss[:,indt],(0,0))
@@ -297,7 +297,7 @@ class RedBasis_IT:
         hbcy = adState.params[self.slicehbcy_phys].reshape(self.shapehbcy_phys)
         
         # Project to reduced space
-        indt = np.argwhere(self.time==t)[0,0]
+        indt = np.argmin(np.abs(self.time-t))   
         
         adX_He = np.tensordot(
             He[:,:,np.newaxis]*self.He_t_gauss[:,indt],

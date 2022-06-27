@@ -1,6 +1,7 @@
 from obcs import init_bc,obcs
 import numpy as np 
 from copy import deepcopy
+import matplotlib.pylab as plt
 
 class Swm: 
     
@@ -8,7 +9,7 @@ class Swm:
     #                             Initialization                              #
     ###########################################################################
     
-    def __init__(self,X=None,Y=None,dt=None,bc=None,omegas=None,bc_theta=None,g=9.81,f=1e-4):
+    def __init__(self,X=None,Y=None,dt=None,bc=None,omegas=None,bc_theta=None,g=9.81,f=1e-4,Heb=0.9):
         
         self.X = X
         self.Y = Y
@@ -25,6 +26,11 @@ class Swm:
             self.f = f
         else: 
             self.f = f * np.ones_like(self.X)
+            
+        if hasattr(Heb, "__len__") and f.shape==self.X.shape:
+            self.Heb = Heb
+        else: 
+            self.Heb = Heb * np.ones_like(self.X)
         
         self.ny,self.nx = self.X.shape
         
@@ -195,12 +201,17 @@ class Swm:
         u1 = deepcopy(u0)
         v1 = deepcopy(v0)
         h1 = deepcopy(h0)
+
         
+        if He is None:
+            He = self.Heb
+            
         #######################
         #       Init bc       #
         #######################
-        if first:
+        if first and hbcx is not None and hbcy is not None:
             init_bc(self,u1,v1,h1,He,hbcx,hbcy,t0=t)
+            
             
         #######################
         #  Right hand sides   #
@@ -235,7 +246,6 @@ class Swm:
         #######################
         if hbcx is not None and hbcy is not None:
             obcs(self,t,u,v,h,u1,v1,h1,He,hbcx,hbcy)
-        
+
         return u,v,h
-    
-            
+
