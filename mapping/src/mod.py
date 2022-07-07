@@ -529,6 +529,7 @@ class Model_jaxqg1l:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
         self.timestamps = np.asarray(self.timestamps)
+        print('time scheme:', config.qg_time_scheme)
         
         # Open MDT map if provided
         if config.Reynolds and config.path_mdt is not None and os.path.exists(config.path_mdt):
@@ -644,7 +645,8 @@ variable are SLAs!')
                          Kdiffus=config.Kdiffus,
                          mdt=self.mdt,
                          mdv=self.mdv,
-                         mdu=self.mdu)
+                         mdu=self.mdu,
+                         time_scheme=config.qg_time_scheme)
         
         if config.name_analysis=='4Dvar' and config.compute_test:
             print('Tangent test:')

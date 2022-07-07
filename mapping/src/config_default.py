@@ -117,6 +117,8 @@ Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
 
 # - parameters specific to QG model
 
+qg_time_scheme = 'Euler' # Time scheme of the model (e.g. Euler,rk4)
+
 upwind = 3 # Order of the upwind scheme for PV advection (either 1,2 or 3)
 
 upwind_adj = None # idem but for the adjoint loop
@@ -144,7 +146,7 @@ name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''}
 
 # - parameters specific to SW model
 
-sw_time_scheme = 'lf' # Time scheme of the model (e.g. Euler,rk4,lf)
+sw_time_scheme = 'rk4' # Time scheme of the model (e.g. Euler,rk4)
 
 sw_in = 0 # Length of the boundary band to ignore  
 

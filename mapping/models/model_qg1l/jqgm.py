@@ -14,7 +14,7 @@ class Qgm:
     ###########################################################################
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
                  g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,Kdiffus=None,
-                 mdt=None,mdu=None,mdv=None):
+                 mdt=None,mdu=None,mdv=None,time_scheme='Euler'):
         
         # Grid spacing
         self.dx = dx
@@ -182,6 +182,9 @@ class Qgm:
         
         # Spatial scheme
         self.upwind = upwind
+        
+        # Time scheme 
+        self.time_scheme = time_scheme
 
         # Diffusion 
         self.diff = diff
@@ -659,7 +662,37 @@ class Qgm:
         rq = self.qrhs_jit(u,v,qb0,way=way)
         
         # 4/ increment integration 
-        q1 = qb0 + self.dt*rq
+        if self.time_scheme == 'Euler':
+            q1 = qb0 + self.dt*rq
+        elif self.time_scheme == 'rk4':
+            # k1
+            k1 = rq*self.dt
+            # k2
+            q2 = qb0 + 0.5*k1
+            h2 = self.pv2h_jit(q2,+h0)
+            u2,v2 = self.h2uv_jit(h2)
+            u2 = np.where(np.isnan(u2),0,u2)
+            v2 = np.where(np.isnan(v2),0,v2)
+            rq2 = self.qrhs_jit(u2,v2,q2,way=way)
+            k2 = rq2*self.dt
+            # k3
+            q3 = qb0 + 0.5*k2
+            h3 = self.pv2h_jit(q3,+h2)
+            u3,v3 = self.h2uv_jit(h3)
+            u3 = np.where(np.isnan(u3),0,u3)
+            v3 = np.where(np.isnan(v3),0,v3)
+            rq3 = self.qrhs_jit(u3,v3,q3,way=way)
+            k3 = rq3*self.dt
+            # k4
+            q4 = qb0 + k2
+            h4 = self.pv2h_jit(q4,+h3)
+            u4,v4 = self.h2uv_jit(h4)
+            u4 = np.where(np.isnan(u4),0,u4)
+            v4 = np.where(np.isnan(v4),0,v4)
+            rq4 = self.qrhs_jit(u4,v4,q4,way=way)
+            k4 = rq4*self.dt
+            # q increment
+            q1 = qb0 + (k1+2*k2+2*k3+k4)/6.
 
         # 5/ q-->h
         h1 = self.pv2h_jit(q1,h0)
