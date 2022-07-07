@@ -502,6 +502,7 @@ variable are SLAs!')
         adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)
         
+        
 class Model_jaxqg1l:
 
     def __init__(self,config,State):
@@ -746,6 +747,7 @@ variable are SLAs!')
             
         adSSH1 = adSSH1.at[np.isnan(adSSH1)].set(0)
         adState.setvar(adSSH1,ind=ind)      
+        
         
 class Model_qg1lm:
 
@@ -1110,9 +1112,10 @@ class Model_sw1l:
         
         # Get params in physical space
         if State.params is not None:
-            He = State.params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = State.params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = State.params[self.slicehbcy].reshape(self.shapehbcy)
+            params = State.params[self.sliceparams]
+            He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
+            hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
+            hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
         else:
             He = hbcx = hbcy = None
         
@@ -1135,16 +1138,18 @@ class Model_sw1l:
         u0,v0,h0 = State.getvar(ind=ind)
         
         if State.params is not None:
-            He = State.params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = State.params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = State.params[self.slicehbcy].reshape(self.shapehbcy)
+            params = State.params[self.sliceparams]
+            He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
+            hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
+            hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
         else:
             He = hbcx = hbcy = None
             
         if dState.params is not None:
-            dHe = dState.params[self.sliceHe].reshape(self.shapeHe)
-            dhbcx = dState.params[self.slicehbcx].reshape(self.shapehbcx)
-            dhbcy = dState.params[self.slicehbcy].reshape(self.shapehbcy)
+            dparams = dState.params[self.sliceparams]
+            dHe = dparams[self.sliceHe].reshape(self.shapeHe)
+            dhbcx = dparams[self.slicehbcx].reshape(self.shapehbcx)
+            dhbcy = dparams[self.slicehbcy].reshape(self.shapehbcy)
         else:
             dHe = dhbcx = dhbcy = None
     
@@ -1189,9 +1194,10 @@ class Model_sw1l:
         u0,v0,h0 = State.getvar(ind=ind)
         
         if State.params is not None:
-            He = State.params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = State.params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = State.params[self.slicehbcy].reshape(self.shapehbcy)
+            params = State.params[self.sliceparams]
+            He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
+            hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
+            hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
         else:
             He = hbcx = hbcy = None
         
@@ -1236,7 +1242,10 @@ class Model_sw1l:
         adState.setvar([adu,adv,adh],ind=ind)
         
         # Update parameters
-        adState.params += np.concatenate((adHe.flatten(), adhbcx.flatten(), adhbcy.flatten()))
+        adState.params[self.sliceparams] += np.concatenate((adHe.flatten(), 
+                                                            adhbcx.flatten(), 
+                                                            adhbcy.flatten()))
+  
         
 class Model_jaxsw1l:
     
@@ -1287,7 +1296,7 @@ class Model_jaxsw1l:
         self.nx = State.nx
         self.X = State.X
         self.Y = State.Y
-        self.nstates = State.getvar(vect=True).size
+        self.nstates = self.nx*self.ny + (self.nx-1)*self.ny + (self.ny-1)*self.nx
         
         # Time parameters
         self.dt = config.dtmodel
@@ -1344,7 +1353,7 @@ class Model_jaxsw1l:
         self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
                                np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
         self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
-        self.sliceparams = slice(self.nstates,self.nstates+self.nparams)
+        self.sliceparams = slice(0,self.nparams)
         
         # Model initialization
         self.swm = swm.Swm(X=State.X,
@@ -1374,7 +1383,7 @@ class Model_jaxsw1l:
             self._jstep_tgl_jit = jit(self._jstep_tgl)
             self._jstep_adj_jit = jit(self._jstep_adj)
 
-            if config.compute_test:
+            if config.compute_test and config.name_model=='JAX-SW1L':
                 print('tangent test:')
                 tangent_test(self,State,self.T[-1],nstep=10)
                 print('adjoint test:')
@@ -1388,7 +1397,8 @@ class Model_jaxsw1l:
         
         # Get params in physical space
         if State.params is not None:
-            X0 = np.concatenate((X0,+State.params))
+            params = State.params[self.sliceparams]
+            X0 = np.concatenate((X0,params))
         # Init
         
         X1 = +X0
@@ -1458,8 +1468,8 @@ class Model_jaxsw1l:
         
         # Get params in physical space
         if State.params is not None:
-            dX0 = np.concatenate((dX0,dState.params))
-            X0 = np.concatenate((X0,State.params))         
+            dX0 = np.concatenate((dX0,dState.params[self.sliceparams]))
+            X0 = np.concatenate((X0,State.params[self.sliceparams]))         
 
         # Init
         dX1 = +dX0
@@ -1497,11 +1507,11 @@ class Model_jaxsw1l:
         X0 = State.getvar(ind=ind,vect=True)
         
         if State.params is not None:
-            X0 = np.concatenate((X0,State.params))     
+            X0 = np.concatenate((X0,+State.params[self.sliceparams]))     
 
         # Get params in physical space
         if adState.params is not None:
-            adX0 = np.concatenate((adX0,+adState.params))
+            adX0 = np.concatenate((adX0,+adState.params[self.sliceparams]))
         
         # Init
         adX1 = +adX0
@@ -1533,13 +1543,13 @@ class Model_jaxsw1l:
         adu1 = adX1[self.swm.sliceu].reshape(self.swm.shapeu)
         adv1 = adX1[self.swm.slicev].reshape(self.swm.shapev)
         adh1 = adX1[self.swm.sliceh].reshape(self.swm.shapeh)
-        adparams = adX1[self.sliceparams]
+        adparams = adX1[self.nstates:]
         
         # Update state
         adState.setvar([adu1,adv1,adh1],ind=ind)
         
         # Update parameters
-        adState.params = adparams
+        adState.params[self.sliceparams] = adparams
     
     def _jstep_adj(self,adX0,X0):
         
@@ -1665,7 +1675,6 @@ class Model_jaxsw1l:
         return w1S,w1N,w1W,w1E
     
     
-        
 class Model_sw1lm:
     
     def __init__(self,config,State):
@@ -1847,11 +1856,14 @@ class Model_sw1lm:
         return adparams
     
     
-        
+###############################################################################
+#                             Multi-models                                    #
+###############################################################################      
             
 class Model_BM_IT:
     
     def __init__(self,config,State):
+        
         print('\n* BM Model')
         if config.name_model[0]=='Diffusion':
             self.Model_BM = Model_diffusion(config,State)
@@ -1865,25 +1877,25 @@ class Model_BM_IT:
             self.Model_IT = Model_sw1l(config,State)
         elif config.name_model[1]=='SW1LM':
             self.Model_IT = Model_sw1lm(config,State)
+        elif config.name_model[1]=='JAX-SW1L':
+            self.Model_IT = Model_jaxsw1l(config,State)
+        
+        print()
         
         self.timestamps = self.Model_BM.timestamps
         self.dt = self.Model_BM.dt
         self.T = self.Model_BM.T
         
         self.mdt = self.Model_BM.mdt
-    
-        if config.name_model[1]=='SW1L':
+        
+        # Indexes for state variables
+        self.indbm = 0
+        if config.name_model[1] in ['SW1L','JAX-SW1L']:
             self.indit = [1,2,3]
         elif config.name_model[1]=='SW1LM':
             self.indit = None
         
         # Model parameters slices (first slices for BM, the others for IT)
-        self.Model_IT.sliceHe = slice(self.Model_BM.nparams,
-                                      self.Model_BM.nparams + np.prod(self.Model_IT.shapeHe))
-        self.Model_IT.slicehbcx = slice(self.Model_BM.nparams + np.prod(self.Model_IT.shapeHe),
-                               self.Model_BM.nparams+ np.prod(self.Model_IT.shapeHe)+np.prod(self.Model_IT.shapehbcx))
-        self.Model_IT.slicehbcy = slice(self.Model_BM.nparams + np.prod(self.Model_IT.shapeHe)+np.prod(self.Model_IT.shapehbcx),
-                               self.Model_BM.nparams + np.prod(self.Model_IT.shapeHe)+np.prod(self.Model_IT.shapehbcx)+np.prod(self.Model_IT.shapehbcy))
         self.Model_IT.sliceparams = slice(self.Model_BM.nparams,
                                           self.Model_BM.nparams + self.Model_IT.nparams)
         self.nparams = self.Model_BM.nparams + self.Model_IT.nparams
@@ -1927,7 +1939,7 @@ class Model_BM_IT:
         
         _adh = adState.getvar(ind=0) 
         adState.setvar(adh+_adh,ind=0)
-        self.Model_BM.step_adj(t=t,adState=adState,State=State,nstep=nstep,ind=0,Hbc=Hbc,Wbc=Wbc)
+        self.Model_BM.step_adj(t=t,adState=adState,State=State,nstep=nstep,ind=self.indbm,Hbc=Hbc,Wbc=Wbc)
     
         _adh = adState.getvar(ind=-2) 
         adState.setvar(adh+_adh,ind=-2)
@@ -1937,10 +1949,9 @@ class Model_BM_IT:
         adState.setvar(0*adh,ind=-1)
 
     
-     
-    
-    
-    
+###############################################################################
+#                       Tangent and Adjoint tests                             #
+###############################################################################     
     
     
 def tangent_test(M,State,tint,t0=0,nstep=1):
