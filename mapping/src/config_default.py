@@ -98,8 +98,19 @@ plot_time_step = timedelta(days=1)  #  time step at which the states are plotted
 #################################################################################################################################
 # Model parameters
 #################################################################################################################################
-       
+# - Diffusion
+# - QG1L
+# - JAX-QG1L
+# - QG1LM
+# - SW1L
+# - JAX-SW1L
+# - SW1LM
+
 name_model = 'QG1L'     
+
+# - common parameters
+
+dir_model = None
     
 name_mod_var = ["ssh"]  
 
@@ -111,11 +122,17 @@ name_mod_lat = "lat"
 
 dtmodel = 300   # model timestep
 
-# - parameters specific to Diffusion model
+
+##########################################
+###   Diffusion-specific parameters    ### 
+########################################## 
 
 Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
 
-# - parameters specific to QG model
+
+###################################
+###   QG-specific parameters    ### 
+################################### 
 
 qg_time_scheme = 'Euler' # Time scheme of the model (e.g. Euler,rk4)
 
@@ -131,34 +148,57 @@ qgiter_adj = None # idem for the adjoint loop
 
 c0 = 2.7 # If not None, fixed value for phase velocity 
 
-filec_aux = '' # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+filec_aux = None # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
 
 name_var_c = {'lon':'','lat':'','var':''} # Variable names for the phase velocity auxilliary file 
 
 only_diffusion = False # If True, use only diffusion in the QG propagation
-
-cdiffus = 0. # Coefficient for the diffusion 
 
 path_mdt = None # If provided, QGPV will be expressed thanks to the Reynolds decompositon
 
 name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''} 
 
 
-# - parameters specific to SW model
+###################################
+###   SW-specific parameters    ### 
+################################### 
 
 sw_time_scheme = 'rk4' # Time scheme of the model (e.g. Euler,rk4)
-
-sw_in = 0 # Length of the boundary band to ignore  
 
 bc_kind = '1d' # Either 1d or 2d
 
 w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
 
-Nmodes = 1
+Nmodes = 1 # Number of spatial modes 
 
 He_init = 0.9 # Mean height (in m)
 
 He_data = None # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+
+Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
+
+
+#########################################
+###   External boundary conditions    ### 
+#########################################
+
+flag_use_bc = False # set or not boundary conditions
+
+lenght_bc = 50 # lenght (in km) of the peripherical band for which the boundary conditions are applied
+
+file_bc = None # netcdf file(s) in whihch the boundary conditions fields are stored
+
+name_var_bc = {'time':'','lon':'','lat':'','var':''} # name of the boundary conditions variable
+
+add_mdt_bc = False # Add mdt to boundary conditions. Useful only if boundary conditions are on sla
+
+use_bc_on_coast = True # use boundary conditions on coast. Useful only if MDT or a mask is provided 
+
+file_depth = None # netcdf file(s) in which the topography is stored
+
+name_var_depth = {'time':'','lon':'','lat':'','var':''} # name of the topography variable
+
+bc_mindepth = None # minimal depth below which boundary conditions are used  
 
 
 #################################################################################################################################
@@ -171,8 +211,7 @@ He_data = None # He external data that will be used as apriori for the inversion
 # - OI
 # - MIOST
 
-name_analysis = 'BFN'
-
+name_analysis = None
 
 ###################################
 ###   OI-specific parameters    ### 
@@ -211,29 +250,10 @@ save_obs_proj = False # save or not the projected observation as pickle format. 
 
 path_save_proj = None # path to save projected observations
 
-flag_use_bc = False # set or not boundary conditions
-
-lenght_bc = 50 # lenght (in km) of the peripherical band for which the boundary conditions are applied
-
-file_bc = None # netcdf file(s) in whihch the boundary conditions fields are stored
-
-name_var_bc = {'time':'','lon':'','lat':'','var':''} # name of the boundary conditions variable
-
-bfn_use_bc_as_init = False
-
-add_mdt_bc = False # Add mdt to boundary conditions. Useful only if boundary conditions are on sla
-
-use_bc_on_coast = True # use boundary conditions on coast. Useful only if MDT or a mask is provided 
-
-bc_mindepth = None # minimal depth below which boundary conditions are used  
-
-file_depth = None # netcdf file(s) in which the topography is stored
-
-name_var_depth = {'time':'','lon':'','lat':'','var':''} # name of the topography variable
+bfn_use_bc_as_init = False # Whether to use boundary conditions as initialization for the first temporal window
 
 scalenudg = None 
 
-Knudg = None
 
 
 ####################################
@@ -374,8 +394,6 @@ Qmax = 1e-3 # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavele
 slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
 
 # - For IT 
-
-Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
 
 facgauss = 3.5  # factor for gaussian spacing= both space/time
 

@@ -24,6 +24,46 @@ from jax.config import config
 from . import tools, grid
 
 
+DIFF_PARAMS = ['name_model',
+         'dir_model',
+         'dtmodel',
+         'Kdiffus']
+
+QG_PARAMS = ['name_model',
+         'dir_model',
+         'dtmodel',
+         'qg_time_scheme',
+         'upwind',
+         'upwind_adj',
+         'qgiter',
+         'qgiter_adj',
+         'c0',
+         'filec_aux',
+         'name_var_c',
+         'Reynolds',
+         'path_mdt',
+         'name_var_mdt',
+         'Kdiffus',
+         'only_diffusion']
+
+SW_PARAMS = ['name_model',
+         'dir_model',
+         'dtmodel',
+         'sw_time_scheme',
+         'bc_kind',
+         'w_igws',
+         'Nmodes',
+         'He_init',
+         'He_data',
+         'Ntheta'
+         ]
+
+
+def print_model_params(config,params):
+    for param in params:
+        print(param,'=',config[param])
+    print()
+
 
 def Model(config,State):
     """
@@ -62,6 +102,9 @@ def Model(config,State):
 class Model_diffusion:
     
     def __init__(self,config,State):
+
+        print_model_params(config, DIFF_PARAMS)
+
         # Time parameters
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
@@ -124,13 +167,21 @@ class Model_diffusion:
             adjoint_test(self,State,10,config.flag_use_bc)
             
             
-    def step(self,State,nstep=1,ind=0,t=None):
+    def step(self,State,nstep=1,Hbc=None,Wbc=None,ind=0,t=None):
+
         # Get state variable
         SSH0 = State.getvar(ind=ind)
         
         # init
         SSH1 = +SSH0
+
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
         
+        # Time propagation
         for step in range(nstep):
             SSH1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
                 (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
@@ -142,13 +193,20 @@ class Model_diffusion:
             SSH1 += nstep*self.dt/(3600*24) * params
         State.setvar(SSH1, ind=ind)
         
-    def step_tgl(self,dState,State,nstep=1,ind=0,t=None):
+    def step_tgl(self,dState,State,Hbc=None,Wbc=None,nstep=1,ind=0,t=None):
         # Get state variable
         SSH0 = dState.getvar(ind=ind)
         
         # init
         SSH1 = +SSH0
+
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            SSH1 = (1-Wbc)*SSH1
         
+        # Time propagation
         for step in range(nstep):
             SSH1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
                 (SSH1[1:-1,2:]+SSH1[1:-1,:-2]-2*SSH1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
@@ -161,13 +219,14 @@ class Model_diffusion:
         dState.setvar(SSH1,ind=ind)
         
     
-    def step_adj(self,adState,State,nstep=1,ind=0,t=None):
+    def step_adj(self,adState,State,Hbc=None,Wbc=None,nstep=1,ind=0,t=None):
         # Get state variable
         adSSH0 = adState.getvar(ind=ind)
         
         # init
         adSSH1 = +adSSH0
         
+        # Time propagation
         for step in range(nstep):
             
             adSSH1[1:-1,2:] += self.dt*self.Kdiffus/(self.dx[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
@@ -179,6 +238,12 @@ class Model_diffusion:
             adSSH1[1:-1,1:-1] += -2*self.dt*self.Kdiffus/(self.dy[1:-1,1:-1]**2) * adSSH0[1:-1,1:-1]
             
             adSSH0 = +adSSH1
+
+        # Boundary conditions
+        if Wbc is None:
+            Wbc = np.zeros((State.ny,State.nx))
+        if Hbc is not None:
+            adSSH1 = (1-Wbc)*adSSH1
             
         # Update state and parameters
         if adState.params is not None:
@@ -194,6 +259,9 @@ class Model_diffusion:
 class Model_qg1l:
 
     def __init__(self,config,State):
+
+        print_model_params(config, QG_PARAMS)
+
         # Model specific libraries
         if config.dir_model is None:
             dir_model = os.path.realpath(
@@ -331,12 +399,6 @@ variable are SLAs!')
                          mdt=self.mdt,
                          mdv=self.mdv,
                          mdu=self.mdu)
-        
-        print('qgiter:',self.qgm.qgiter)
-        print('qgiter_adj:',self.qgm.qgiter_adj)
-        print('upwind:',self.qgm.upwind)
-        print('upwind_adj:',self.qgm.upwind_adj)
-        
         
         
         if config.name_analysis=='4Dvar' and config.compute_test and config.name_model=='QG1L':
@@ -506,6 +568,9 @@ variable are SLAs!')
 class Model_jaxqg1l:
 
     def __init__(self,config,State):
+
+        print_model_params(config, QG_PARAMS)
+
         # Model specific libraries
         if config.dir_model is None:
             dir_model = os.path.realpath(
@@ -754,6 +819,9 @@ variable are SLAs!')
 class Model_qg1lm:
 
     def __init__(self,config,State):
+
+        print_model_params(config, QG_PARAMS)
+
         # Model specific libraries
         if config.dir_model is None:
             dir_model = os.path.realpath(
@@ -978,7 +1046,11 @@ variable are SLAs!')
 
 class Model_sw1l:
     def __init__(self,config,State,
-                 He_init=None,D_He=None,T_He=None,D_bc=None,T_bc=None):
+                 He_init=None,D_He=None,T_He=None,D_bc=None,T_bc=None,print_params=True):
+
+        if print_params:
+            print_model_params(config, SW_PARAMS)
+
         self.config = config
         # Model specific libraries
         if config.dir_model is None:
@@ -1002,25 +1074,11 @@ class Model_sw1l:
         swm_adj = SourceFileLoader("swm_adj", 
                                  dir_model + "/swm_adj.py").load_module() 
         
-        # Model grid 
-        self.sw_in = config.sw_in # Avoding boundary pixels
-        print('Length of the boundary band to ignore:',self.sw_in)
-        self.nyin,self.nxin = State.ny -2*self.sw_in, State.nx -2*self.sw_in
-        if self.sw_in>0:
-            self.Xin = State.X[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            self.Yin = State.Y[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-            self.fin = State.f[self.sw_in:-self.sw_in,self.sw_in:-self.sw_in]
-        else:
-            self.Xin = +State.X
-            self.Yin = +State.Y
-            self.fin = +State.f
-            
         # Time parameters
         self.dt = config.dtmodel
         self.nt = 1 + int((config.final_date - config.init_date).total_seconds()//self.dt)
         self.T = np.arange(self.nt) * self.dt
         self.time_scheme = config.sw_time_scheme
-        print('time scheme:',self.time_scheme)
         
         # Construct timestamps
         self.timestamps = [] 
@@ -1038,12 +1096,10 @@ class Model_sw1l:
                 self.Heb = config.He_init
             else:
                 self.Heb = He_init
-            print('Heb:',self.Heb)
             
         if config.Ntheta>0:
             theta_p = np.arange(0,pi/2+pi/2/config.Ntheta,pi/2/config.Ntheta)
             self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-            print(self.bc_theta)
         else:
             self.bc_theta = np.array([0])
             
@@ -1073,13 +1129,13 @@ class Model_sw1l:
         self.sliceparams = slice(0,self.nparams)
         
         # Model initialization
-        self.swm = swm_adj.Swm_adj(X=self.Xin,
-                                   Y=self.Yin,
+        self.swm = swm_adj.Swm_adj(X=State.X,
+                                   Y=State.Y,
                                    dt=self.dt,
                                    bc=self.bc_kind,
                                    omegas=self.omegas,
                                    bc_theta=self.bc_theta,
-                                   f=self.fin)
+                                   f=State.f)
         
         if self.time_scheme=='Euler':
             self.swm_step = self.swm.step_euler
@@ -1252,7 +1308,7 @@ class Model_sw1l:
 class Model_jaxsw1l:
     
     def __init__(self,config,State,
-                 He_init=None,D_He=None,T_He=None,D_bc=None,T_bc=None):
+                 He_init=None,D_He=None,T_He=None,D_bc=None,T_bc=None, print_params=True):
         """
         
 
@@ -1279,6 +1335,9 @@ class Model_jaxsw1l:
 
         """
         
+        if print_params:
+            print_model_params(config, SW_PARAMS)
+
         # Model specific libraries
         if config.dir_model is None:
             dir_model = os.path.realpath(
@@ -1323,12 +1382,10 @@ class Model_jaxsw1l:
                 self.Heb = config.He_init
             else:
                 self.Heb = He_init
-            print('Heb:',self.Heb)
             
         if config.Ntheta>0:
             theta_p = np.arange(0,pi/2+pi/2/config.Ntheta,pi/2/config.Ntheta)
             self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-            print(self.bc_theta)
         else:
             self.bc_theta = np.array([0])
             
@@ -1680,8 +1737,9 @@ class Model_jaxsw1l:
 class Model_sw1lm:
     
     def __init__(self,config,State):
-        #if config.Nmodes==1:
-        #    sys.exit('Error: *Nmodes has to be >1 for SW1LM model')
+
+        print_model_params(config, SW_PARAMS)
+
         self.Nmodes = config.Nmodes
         He_init = self.check_param(config,'He_init')
         D_He = self.check_param(config,'D_He')
@@ -1690,7 +1748,7 @@ class Model_sw1lm:
         T_bc = self.check_param(config,'T_bc')
         
         self.Models = []
-        self.nParams = 0
+        self.nparams = 0
         self.sliceHe = np.array([],dtype=int)
         self.slicehbcx = np.array([],dtype=int)
         self.slicehbcy = np.array([],dtype=int)
@@ -1698,18 +1756,18 @@ class Model_sw1lm:
         self.ind = []
         for i in range(self.Nmodes):
             print(f'* Mode {i+1}')
-            M = Model_sw1l(config,State,He_init[i],D_He[i],T_He[i],D_bc[i],T_bc[i])
+            M = Model_sw1l(config,State,He_init[i],D_He[i],T_He[i],D_bc[i],T_bc[i],print_params=False)
             self.Models.append(M)
             self.sliceHe = np.append(self.sliceHe,
-                                     self.nParams+\
+                                     self.nparams+\
                                          np.arange(M.sliceHe.start,M.sliceHe.stop))
             self.slicehbcx = np.append(self.slicehbcx,
-                                       self.nParams+\
+                                       self.nparams+\
                                            np.arange(M.slicehbcx.start,M.slicehbcx.stop))
             self.slicehbcy = np.append(self.slicehbcy,
-                                       self.nParams+\
+                                       self.nparams+\
                                          np.arange(M.slicehbcy.start,M.slicehbcy.stop))
-            self.nParams += M.nParams
+            self.nparams += M.nparams
             
             indi = np.arange(3*i,3*(i+1)) # Indexes for state variables relative to mode i 
             if hasattr(config['name_model'],'__len__') and len(config['name_model'])==2:
@@ -1763,8 +1821,8 @@ class Model_sw1lm:
         i0 = 0
         if imode>0:
             for i in range(imode):
-                i0 += self.Models[i].nParams
-        return slice(i0,i0+self.Models[imode].nParams)
+                i0 += self.Models[i].nparams
+        return slice(i0,i0+self.Models[imode].nparams)
     
     def step(self,t,State,params,nstep=1,t0=0,ind=None):
         u = 0
@@ -2026,6 +2084,7 @@ def adjoint_test(M,State,tint,t0=0,nstep=1):
 
     
     
+
     
     
     

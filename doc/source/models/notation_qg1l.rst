@@ -64,4 +64,65 @@ The advection can be performed either with first, second, or third upwind spatia
 
 Both ``numpy`` and ``jax`` implementations allow Reynolds decomposition, with the prescription of a mean field such as the one provided by the MDT CMEMS products (see Example ???). In addition, ``jax`` impelmentation allows to consider multiscale QG formulation, closed to the SLA formulation, but with a time-variable 'mean' flow, that we can associate to the large spatial scales (see ``jqgm.Qgm.step_multiscales`` function). This will be useful for providing background data in data assimilation experiments (see Example ???). 
 
+Configuration parameters
+------------------------
+Here are the parameters specific to the model to be prescribed in the configuration file. If some are not prescribed, then the default values shown hereafter will be used.
+
+.. code-block:: python
+
+   # Name of the model. Either:
+   # 'QG1L': numpy implementation of the model
+   # 'JAX-QG1L': JAX implementation of the model
+   # 'QG1LM': JAX implementation of the multiscale model
+   name_model = 'QG1L'
+
+   # Time scheme of the model (e.g. Euler,rk4)
+   qg_time_scheme = 'Euler' 
+
+   # Order of the upwind scheme for PV advection (either 1,2 or 3)
+   upwind = 3 
+
+   # Order of the upwind scheme for adjoint PV advection (either 1,2 or 3).
+   # Only relevent for 4Dvar assimilation scheme.
+   # If None, default value is set equal to upwind. 
+   upwind_adj = None 
+
+   # Number of iterations to perform the gradient conjugate algorithm in the QG elliptical equation 
+   qgiter = 20 
+
+   # Number of iterations to perform the gradient conjugate algorithm in the adjoint QG elliptical equation 
+   # Only relevent for 4Dvar assimilation scheme.
+   # If None, default value is set equal to qgiter. 
+   qgiter_adj = None 
+
+   # First baroclinic phase velocity
+   c0 = 2.7 
+
+   # Path of the auxilliary file to be used as phase velocity field. 
+   # Spatial interpolation is handled inline
+   # c0 has to be set to None
+   filec_aux = None 
+
+   # Variable names for the phase velocity auxilliary file 
+   name_var_c = {'lon':'','lat':'','var':''} 
+
+   # Whether to use Reynolds decomposition or not (True or False). 
+   # Observed variable has to be SLA and MDT has to be provided
+   Reynolds = False 
+
+   # Path of the auxilliary file to be used as MDT
+   # Spatial interpolation is handled inline
+   path_mdt = None 
+
+   # Variable names for the MDT auxilliary file 
+   # If 'mdu' and 'mdv' are None, the mean currents will be computed thanks to MDT and the geostrophy assumption
+   name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':None,'mdv':None} 
+
+   # Diffusion coefficient
+   # Note: here the diffusion is done on PV (instead of SSH in the Diffusion model, previous section)
+   Kdiffus = 0
+
+   # Whether to use only diffusion or not.
+   # Useful for quick tests
+   only_diffusion = False
 

@@ -13,7 +13,7 @@ The equations of the linear Shallow-Water (SW) model are:
     \partial_t{\eta} &= - H_e \left( \partial_x{u} + \partial_y{v} \right)
    \end{aligned}
 
-where :math:`(u,v)` are the velocity components, :math:`\eta` is the SSH, :math:`f` is the Coriolis frequency, and :math:`H_e` the equivalent depth that determines the baroclinic deformation radius (through the relation :math:`R_d=\sqrt{gH_e}/f`).
+where :math:`(u,v)` are the velocity components, :math:`\eta` is the SSH, :math:`f` is the Coriolis frequency, and :math:`H_e` the equivalent depth that determines the baroclinic deformation radius (through the relation :math:`R_d=\sqrt{gH_e}/f`). :math:`H_e` determines the spatial structure of the baroclinic mode considered.
 
 
 Open boundary conditions 
@@ -139,3 +139,39 @@ In the similar way, in order to consider the gradient along the border in the tr
 
 which allows to get :math:`{w_2}^{n+1}_{i,\frac{1}{2}}` and then :math:`{v}^{n+1}_{i,0}`
 
+Configuration parameters
+------------------------
+Here are the parameters specific to the model to be prescribed in the configuration file. If some are not prescribed, then the default values shown hereafter will be used.
+
+.. code-block:: python
+
+   # Name of the model. Either:
+   # 'SW1L': numpy implementation of the model
+   # 'JAX-SW1L': JAX implementation of the model
+   # 'SW1LM': Merging of multiple SW1L models, each specific to one spatial mode (see Nmodes parameter)
+   name_model = 'SW1L'
+
+   # Time scheme of the model (e.g. Euler, lf, rk4)
+   sw_time_scheme = 'rk4' 
+
+    # Boundary conditions type. 
+    # '1d' means that only the normal component of the velocity is taken into account
+    # '2d' means that the gradient of the tangential velocity is added to the OBC equation
+    bc_kind = '1d' 
+
+    # List of tidal frequencies (in rad/s). For each tidal fr
+    w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
+
+    # Number of spatial modes 
+    Nmodes = 1
+
+    # Initialization value of the equivalent height (in m)
+    # If Nmodes = 1, just set a scalar
+    # otherwise, select a list of scalars of lenght Nmodes
+    He_init = 0.9 
+
+    # path to He external data 
+    He_data = None 
+
+    # Number of angles (computed from the normal of the border) of external incoming monochromatic waves
+    Ntheta = 1 

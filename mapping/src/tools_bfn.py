@@ -493,80 +493,6 @@ def bfn_select_obs_temporal_window(dict_obs, dt_start, dt_end,
 
 
 
-
-def bfn_select_observations_in_temporal_window(dict_obs, dt_start,
-                                               dt_end, time_step):
-    """
-    NAME
-        bfn_select_observations_in_temporal_window
-
-    DESCRIPTION
-        Select the observations that fall in a given BFN time window.
-        Gather observations according to the nudging parameters (sigma,Tau)
-        Create and fill dictionary for each nudging variable.
-
-        Args:
-            dict_obs (dictionary): dictionary listing observations
-            dt_start (datetime): begining of the BFN time window
-            dt_end (datetime): end of the BFN time window
-            propagation_time_step (timedelta): propagation time step
-
-        Param:
-
-        Returns:
-             obs_projected (masked array) : observations projected on the model grid
-             nudging_coeff_projected (masked array) : nudging coefficient projected on the model grid
-    """
-    dict_obs_ssh = {}
-    dict_obs_relvort = {}
-
-    present_date0 = dt_start
-    
-    while present_date0 < dt_end:
-        if pd.to_datetime(present_date0) in dict_obs:
-            sat_info_list = dict_obs[present_date0]['satellite']
-            obs_file_list = dict_obs[present_date0]['obs_name']
-            # Loop on each satellite
-            for sat_info, obs_file in zip(sat_info_list,obs_file_list):
-                if sat_info.nudging_params_stretching is not None and\
-                sat_info.nudging_params_stretching['K']>0:
-                    # Get nudging parameters relative to stretching
-                    K = sat_info.nudging_params_stretching['K']
-                    Tau = sat_info.nudging_params_stretching['Tau']
-                    sigma = sat_info.nudging_params_stretching['sigma']
-                    if present_date0 in dict_obs_ssh:
-                        if (sigma,Tau) in dict_obs_ssh[present_date0]:
-                            dict_obs_ssh[present_date0][(sigma,Tau)]['sat_info'].append(sat_info)
-                            dict_obs_ssh[present_date0][(sigma,Tau)]['obs_name'].append(obs_file)
-                            dict_obs_ssh[present_date0][(sigma,Tau)]['K'].append(K)
-                        else:
-                            dict_obs_ssh[present_date0][(sigma,Tau)] = {'sat_info':[sat_info],'obs_name':[obs_file],'K':[K]}
-                    else:
-                        dict_obs_ssh[present_date0] = {}
-                        dict_obs_ssh[present_date0][(sigma,Tau)] = {'sat_info':[sat_info],'obs_name':[obs_file],'K':[K]}
-                if sat_info.nudging_params_relvort is not None and\
-                sat_info.nudging_params_relvort['K']>0:
-                    # Get nudging parameters relative to relative vorticity
-                    K = sat_info.nudging_params_relvort['K']
-                    Tau = sat_info.nudging_params_relvort['Tau']
-                    sigma = sat_info.nudging_params_relvort['sigma']
-                    if present_date0 in dict_obs_relvort:
-                        if (sigma,Tau) in dict_obs_relvort[present_date0]:
-                            dict_obs_relvort[present_date0][(sigma,Tau)]['sat_info'].append(sat_info)
-                            dict_obs_relvort[present_date0][(sigma,Tau)]['obs_name'].append(obs_file)
-                            dict_obs_relvort[present_date0][(sigma,Tau)]['K'].append(K)
-                        else:
-                            dict_obs_relvort[present_date0][(sigma,Tau)] = {'sat_info':[sat_info],'obs_name':[obs_file],'K':[K]}
-                    else:
-                        dict_obs_relvort[present_date0] = {}
-                        dict_obs_relvort[present_date0][(sigma,Tau)] = {'sat_info':[sat_info],'obs_name':[obs_file],'K':[K]}
-
-        present_date0 += time_step
-
-    return dict_obs_ssh, dict_obs_relvort
-
-
-
 #########################################################################
 # Funcs related to the projection of observations on state grid
 #########################################################################
@@ -1001,7 +927,6 @@ def bfn_nudge_smoothing(timestamps, smooth_function, halfwindow):
 #########################################################################
 # Func to group all the data needed to perform one Nudging/BFN forecast
 #########################################################################
-
 
 def bfn_get_data_at_t(date_t, dict_projections):
     obs_t = []

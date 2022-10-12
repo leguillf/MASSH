@@ -71,6 +71,7 @@ def ana_forward(config,State,Model):
     present_date = config.init_date
     State.save_output(present_date)
     nstep = int(config.saveoutput_time_step.total_seconds()//Model.dt)
+
     while present_date < config.final_date :
         
         State.plot(present_date)
@@ -152,7 +153,7 @@ def ana_oi(config,State,dict_obs):
 
     return
     
-        
+
 def ana_bfn(config,State,Model,dict_obs=None, *args, **kwargs):
     """
     NAME

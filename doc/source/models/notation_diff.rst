@@ -16,5 +16,18 @@ Note that setting :math:`K_{diffus}=0` gives the identity model, which can be us
 
 Numerical implementation
 ------------------------
-As the numerical implementation is straightforward, the code is located directly in the class :code:`Diffusion` in the ``mapping/src/mod.py`` directory. The discretization is done with a forward Euler scheme and a first order central spatial scheme.
+As the numerical implementation is straightforward, the code is located directly in the class :code:`Diffusion` in the ``mapping/src/mod.py`` directory. 
+The discretization is done with a forward Euler scheme and a first order central spatial scheme.
+
+Configuration parameters
+------------------------
+Here are the parameters specific to the model to be prescribed in the configuration file. If some are not prescribed, then the default values shown hereafter will be used.
+
+.. code-block:: python
+
+   # Name of the model
+   name_model = 'Diffusion'
+
+   # Diffusion coefficient
+   Kdiffus = 0
 
