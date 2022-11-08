@@ -19,7 +19,7 @@ import jax.numpy as jnp
 from jax import jit
 from jax import jvp,vjp
 from jax.config import config
-#config.update("jax_enable_x64", True)
+config.update("jax_enable_x64", True)
 
 from . import tools, grid
 
@@ -68,7 +68,7 @@ def print_model_params(config,params):
 def Model(config,State):
     """
     NAME
-        main class
+        Model
 
     DESCRIPTION
         Main function calling subclass for specific models
@@ -594,7 +594,6 @@ class Model_jaxqg1l:
             self.timestamps.append(t)
             t += timedelta(seconds=self.dt)
         self.timestamps = np.asarray(self.timestamps)
-        print('time scheme:', config.qg_time_scheme)
         
         # Open MDT map if provided
         if config.Reynolds and config.path_mdt is not None and os.path.exists(config.path_mdt):
@@ -734,10 +733,16 @@ variable are SLAs!')
         if Hbc is not None:
             SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
         
+        # To JAX
+        SSH1 = jnp.array(SSH1)
+
         # Time propagation
         for i in range(nstep):
             SSH1 = self.qgm.step_jit(SSH1,way=1)
         
+        # Back to numpy
+        SSH1 = np.array(SSH1)
+
         # Update state
         if State.params is not None:
             params = State.params[self.sliceparams].reshape((State.ny,State.nx))
@@ -762,11 +767,19 @@ variable are SLAs!')
             dSSH1 = (1-Wbc)*dSSH1
             SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
         
+        # To JAX
+        dSSH1 = np.array(dSSH1)
+        SSH1 = jnp.array(SSH1)
+        
         # Time propagation
         for i in range(nstep):
             dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1)
             SSH1 = self.qgm.step(h0=SSH1)
         
+        # Back to numpy
+        dSSH1 = np.array(dSSH1)
+        SSH1 = np.array(SSH1)
+
         # Update state
         if dState.params is not None:
             dparams = dState.params[self.sliceparams].reshape((State.ny,State.nx))
@@ -789,6 +802,10 @@ variable are SLAs!')
             Wbc = np.zeros((State.ny,State.nx))
         if Hbc is not None:
             SSH1 = Wbc*Hbc + (1-Wbc)*SSH1
+        
+        # To JAX
+        adSSH1 = jnp.array(adSSH1)
+        SSH1 = jnp.array(SSH1)
 
         # Current trajectory
         traj = [SSH1]
@@ -802,6 +819,9 @@ variable are SLAs!')
             SSH1 = traj[i]
             adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
         
+        # Back to numpy
+        adSSH1 = np.array(adSSH1)
+
         # Boundary conditions
         if Wbc is None:
             Wbc = np.zeros((State.ny,State.nx))
@@ -812,7 +832,7 @@ variable are SLAs!')
         if adState.params is not None:
             adState.params[self.sliceparams] += nstep*self.dt/(3600*24) * adSSH0.flatten()
             
-        adSSH1 = adSSH1.at[np.isnan(adSSH1)].set(0)
+        adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,ind=ind)      
         
         

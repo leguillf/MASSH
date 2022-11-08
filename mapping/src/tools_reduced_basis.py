@@ -11,7 +11,8 @@ import numpy as np
 import logging
 import pickle 
 import matplotlib.pylab as plt
-
+import xarray as xr
+import scipy
 
 class RedBasis_IT:
    
@@ -338,7 +339,7 @@ class RedBasis_BM:
 
         self.km2deg=1./110
         
-        
+        self.flux = config.flux
         self.facns = config.facns # factor for wavelet spacing= space
         self.facnlt = config.facnlt
         self.npsp = config.npsp # Defines the wavelet shape (nb de pseudopériode)
@@ -352,22 +353,18 @@ class RedBasis_BM:
         self.Qmax = config.Qmax
         self.facQ = config.facQ
         self.slopQ = config.slopQ
-        self.gsize_max = config.gsize_max
         self.lmeso = config.lmeso
         self.tmeso = config.tmeso
         self.save_wave_basis = config.save_wave_basis
         self.wavelet_init = config.wavelet_init
-        self.prescribe_background = config.prescribe_background
-        self.largescale_error_ratio = config.largescale_error_ratio
+
+        for param in ['flux','facns','facnlt','lmin','lmax','tdecmin','tdecmax','factdec','sloptdec','Qmax','facQ','slopQ','lmeso','tmeso']:
+            print(param,'=',config[param])
 
         # Dictionnaries to save wave coefficients and indexes for repeated runs
         self.path_save_tmp = config.tmp_DA_path
         self.indx = {}
         self.facG = {}
-
-
-        
-     
 
     def set_basis(self,time,lon,lat,return_q=False):
         
@@ -492,16 +489,12 @@ class RedBasis_BM:
         self.k = 2 * np.pi * ff
         self.tdec=tdec
         
-        
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
 
-
         if return_q:
-            return np.sqrt(Q)
+            return Q
         
-        
-        
-        
+
     def operg(self, X, t, transpose=False,State=None):
         
         """
@@ -531,7 +524,7 @@ class RedBasis_BM:
             
         # Compute basis components
         if compute_basis:
-            
+
             facG = {}
             indx = {}
             
@@ -561,8 +554,13 @@ class RedBasis_BM:
                             dt = t - enstloc[it]
                             try:
                                 if abs(dt) < self.tdec[iff][P]:
-                                    fact = mywindow(dt / self.tdec[iff][P])
-                                    if t>0 or not self.wavelet_init: # time normalization except for first timestamp
+                                    if t==0 and self.wavelet_init:
+                                        fact = mywindow(dt / self.tdec[iff][P])
+                                    else:
+                                        if self.flux:
+                                            fact = mywindow_flux(dt / self.tdec[iff][P])
+                                        else:
+                                            fact = mywindow(dt / self.tdec[iff][P])
                                         tt = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
                                         I =  np.sum(mywindow(tt/self.tdec[iff][P]))*(tt[1]-tt[0])
                                         fact /= I 
@@ -575,11 +573,8 @@ class RedBasis_BM:
                                         facG[(iff,P)][it][itheta][0] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy))
                                         facG[(iff,P)][it][itheta][1] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
                             except:
-                                print()
+                                print(f'Warning: an error occured at t={t}, iff={iff}, P={P}, enstloc={enstloc[it]}')
 
-
-                
-                    
             if self.save_wave_basis:
                 if not os.path.exists(name_facG):
                     with open(name_facG, 'wb') as f:
@@ -646,8 +641,391 @@ class RedBasis_BM:
                 adState.params = np.zeros((self.nphys,))
             adX += self.operg(adState.params, t, transpose=True)
         
-            
+class RedBasis_BMaux:
+   
+    def __init__(self,config):
 
+        self.km2deg=1./110
+        
+        self.flux = config.flux
+        self.facns = config.facns # factor for wavelet spacing= space
+        self.facnlt = config.facnlt
+        self.npsp = config.npsp # Defines the wavelet shape (nb de pseudopériode)
+        self.facpsp = config.facpsp # 1.5 # factor to fix df between wavelets 
+        self.lmin = config.lmin 
+        self.lmax = config.lmax
+        self.tdecmin = config.tdecmin
+        self.tdecmax = config.tdecmax
+        self.factdec = config.factdec
+        self.facQ = config.facQ
+        self.save_wave_basis = config.save_wave_basis
+        self.wavelet_init = config.wavelet_init
+        self.file_aux = config.file_aux
+        self.filec_aux = config.filec_aux
+        self.Romax = config.Romax
+        self.facRo = config.facRo
+        self.cutRo = config.cutRo
+        self.tssr = config.tssr
+        self.distortion_eq = config.distortion_eq
+        self.distortion_eq_law = config.distortion_eq_law
+        self.lat_distortion_eq = config.lat_distortion_eq
+
+        # Dictionnaries to save wave coefficients and indexes for repeated runs
+        self.path_save_tmp = config.tmp_DA_path
+        self.indx = {}
+        self.facG = {}
+
+    def set_basis(self,time,lon,lat,return_q=False):
+        
+        TIME_MIN = time.min()
+        TIME_MAX = time.max()
+        LON_MIN = lon.min()
+        LON_MAX = lon.max()
+        LAT_MIN = lat.min()
+        LAT_MAX = lat.max()
+        if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
+        lon1d = lon.flatten()
+        lat1d = lat.flatten()
+
+        lat_tmp = np.arange(-90,90,0.1)
+        alpha = (self.distortion_eq-1)*np.sin(self.lat_distortion_eq*np.pi/180)**self.distortion_eq_law
+        finterpdist = scipy.interpolate.interp1d(
+            lat_tmp, 1+alpha/(np.sin(np.maximum(self.lat_distortion_eq,np.abs(lat_tmp))*np.pi/180)**self.distortion_eq_law))
+        
+        # Ensemble of pseudo-frequencies for the wavelets (spatial)
+        logff = np.arange(
+            np.log(1./self.lmin),
+            np.log(1. / self.lmax) - np.log(1 + self.facpsp / self.npsp),
+            -np.log(1 + self.facpsp / self.npsp))[::-1]
+        ff = np.exp(logff)
+        dff = ff[1:] - ff[:-1]
+        
+        # Ensemble of directions for the wavelets (2D plane)
+        theta = np.linspace(0, np.pi, int(np.pi * ff[0] / dff[0] * self.facpsp))[:-1]
+        ntheta = len(theta)
+        nf = len(ff)
+        logging.info('spatial normalized wavelengths: %s', 1./np.exp(logff))
+        logging.info('ntheta: %s', ntheta)
+
+        # Global time window
+        deltat = TIME_MAX - TIME_MIN
+
+        # Read aux data
+        aux = xr.open_dataset(self.file_aux)
+        daPSDS = aux['PSDS']
+        daTdec = aux['tdec']
+        auxc = xr.open_dataset(self.filec_aux)
+        daC = auxc['c1']
+
+        # Wavelet space-time coordinates
+        ENSLON = [None]*nf # Ensemble of longitudes of the center of each wavelets
+        ENSLAT = [None]*nf # Ensemble of latitudes of the center of each wavelets
+        enst = list() #  Ensemble of times of the center of each wavelets
+        tdec = list() # Ensemble of equivalent decorrelation times. Used to define enst.
+        Cb1 = list() # First baroclinic phase speed
+        
+        DX = 1./ff*self.npsp * 0.5 # wavelet extension
+        DXG = DX / self.facns # distance (km) between the wavelets grid in space
+        NP = np.empty(nf, dtype='int16') # Nomber of spatial wavelet locations for a given frequency
+        nwave = 0
+        self.nwavemeso = 0
+        lonmax = LON_MAX
+        if (LON_MAX<LON_MIN): lonmax = LON_MAX+360.
+            
+        for iff in range(nf):
+                
+            ENSLON[iff]=[]
+            ENSLAT[iff]=[]
+            ENSLAT1 = np.arange(
+                LAT_MIN - (DX[iff]-DXG[iff])*self.km2deg,
+                LAT_MAX + DX[iff]*self.km2deg,
+                DXG[iff]*self.km2deg)
+            for I in range(len(ENSLAT1)):
+                ENSLON1 = np.mod(
+                    np.arange(
+                        LON_MIN - (DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
+                        lonmax+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
+                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I])),
+                    360)
+                ENSLAT[iff]=np.concatenate(([ENSLAT[iff],np.repeat(ENSLAT1[I],len(ENSLON1))]))
+                ENSLON[iff]=np.concatenate(([ENSLON[iff],ENSLON1]))
+            
+            NP[iff] = len(ENSLON[iff])
+            enst.append(list())
+            tdec.append(list())
+            Cb1.append(list())
+            for P in range(NP[iff]):
+                enst[-1].append(list())
+                tdec[-1].append(list()) 
+                Cb1[-1].append(list())
+
+                # First baroclinic phase speed
+                dlon = DX[iff]*self.km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)*finterpdist(ENSLAT[iff][P])
+                dlat = DX[iff]*self.km2deg
+                elon = np.linspace(ENSLON[iff][P]-dlon,ENSLON[iff][P]+dlon,10)
+                elat = np.linspace(ENSLAT[iff][P]-dlat,ENSLAT[iff][P]+dlat,10)
+                elon2,elat2 = np.meshgrid(elon,elat)
+                Ctmp = daC.interp(lon=elon2.flatten(),lat=elat2.flatten()).values
+                Ctmp = Ctmp[np.isnan(Ctmp)==False]
+                if len(Ctmp)>0:
+                    C = np.nanmean(Ctmp)
+                else: 
+                    C = np.nan
+                if np.isnan(C): 
+                    C=0.
+                Cb1[-1][-1] = C
+
+                # Decorrelation time
+                fc = 2*2*np.pi/86164 * np.sin(ENSLAT[iff][P]*np.pi/180.)
+                Ro = C / np.abs(fc) /1000. # Rossby radius (km)
+                if Ro>self.Romax: 
+                    Ro = self.Romax
+                if C>0: 
+                    td1 = self.factdec / (1./(self.facRo*Ro)*C/1000*86400)
+                else: 
+                    td1 = np.nan
+                PSDS = daPSDS.interp(f=ff[iff],lat=ENSLAT[iff][P],lon=ENSLON[iff][P]).values
+                if Ro>0: 
+                    PSDSR = daPSDS.interp(f=1./(self.facRo*Ro),lat=ENSLAT[iff][P],lon=ENSLON[iff][P]).values
+                else: 
+                    PSDSR = np.nan
+                if PSDS<=PSDSR: 
+                    tdec[-1][-1] = td1 * (PSDS/PSDSR)**self.tssr
+                else: 
+                    tdec[-1][-1] = td1
+                if tdec[-1][-1]>self.tdecmax: 
+                    tdec[-1][-1] = self.tdecmax
+                cp = 1./(2*2*np.pi/86164*np.sin(max(10,np.abs(ENSLAT[iff][P]))*np.pi/180.))/300000
+                tdecp = (1./ff[iff])*1000/cp/86400/4
+                if tdecp<tdec[-1][-1]: 
+                    tdec[-1][-1] = tdecp
+
+                enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
+                nwave += ntheta*2*len(enst[iff][P])
+                
+        # Fill the Q diagonal matrix (expected variance for each wavelet)            
+        Q = np.zeros((nwave))
+        self.wavetest=[None]*nf
+        iwave = 0
+        # Loop on all wavelets of given pseudo-period 
+        iwave=-1 
+        self.iff_wavebounds = [None]*(nf+1)
+        self.P_wavebounds = [None]*(nf+1)
+        for iff in range(nf):
+            self.iff_wavebounds[iff] = iwave+1
+            self.P_wavebounds[iff] = [None]*(NP[iff]+1)
+            self.wavetest[iff] = np.ones((NP[iff]), dtype=bool)
+            for P in range(NP[iff]):
+                self.P_wavebounds[iff][P] = iwave+1
+                PSDLOC = abs(daPSDS.interp(f=ff[iff],lat=ENSLAT[iff][P],lon=ENSLON[iff][P]).values)
+                C = Cb1[iff][P]
+                fc = (2*2*np.pi/86164*np.sin(ENSLAT[iff][P]*np.pi/180.))
+                if fc==0: 
+                    Ro=self.Romax
+                else:
+                    Ro = C / np.abs(fc) /1000.  # Rossby radius (km)
+                    if Ro>self.Romax: 
+                        Ro=self.Romax
+                # Tests
+                if ((1./ff[iff] < self.cutRo * Ro)): 
+                    self.wavetest[iff][P]=False
+                if tdec[iff][P]<self.tdecmin: 
+                    self.wavetest[iff][P]=False
+                if np.isnan(PSDLOC): 
+                    self.wavetest[iff][P]=False
+                if ((np.isnan(Cb1[iff][P]))|(Cb1[iff][P]==0)): 
+                    self.wavetest[iff][P]=False
+
+                if self.wavetest[iff][P]==True:
+                    for it in range(len(enst[iff][P])):
+                        for itheta in range(len(theta)):
+                            iwave += 1
+                            Q[iwave] = (PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3))**.5
+                            iwave += 1
+                            Q[iwave] = (PSDLOC*ff[iff]**2 * self.facQ* np.exp(-3*(self.cutRo * Ro*ff[iff])**3))**.5
+                
+            print(f'lambda={1/ff[iff]:.1E}',
+                  f'nlocs={P:.1E}',
+                  f'tdec={np.nanmean(tdec[iff]):.1E}',
+                  f'Q={np.nanmean(Q[self.iff_wavebounds[iff]:iwave+1]):.1E}')
+                  
+            self.P_wavebounds[iff][P+1] = iwave +1
+        self.iff_wavebounds[iff+1] = iwave +1
+            
+        nwave = iwave+1
+        Q = Q[:nwave]
+        
+        self.lon1d = lon1d
+        self.lat1d = lat1d
+        self.DX=DX
+        self.ENSLON=ENSLON
+        self.ENSLAT=ENSLAT
+        self.NP=NP
+        self.enst=enst
+        self.nbasis=nwave
+        self.nphys= lon1d.size
+        self.nf=nf
+        self.theta=theta
+        self.ntheta=ntheta
+        self.ff=ff
+        self.k = 2 * np.pi * ff
+        self.tdec=tdec
+        
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
+        
+        if return_q:
+            return Q
+        
+
+    def operg(self, X, t, transpose=False,State=None):
+        
+        """
+            Project to physicial space
+        """
+        
+        compute_basis = False
+        # Load basis components if already computed
+        if self.save_wave_basis:
+            # Offline
+            name_facG = os.path.join(self.path_save_tmp,f'facG_{t}.pic')
+            name_indx = os.path.join(self.path_save_tmp,'indx.pic')
+            if os.path.exists(name_facG) and os.path.exists(name_indx):
+                with open(name_facG, 'rb') as f:
+                    facG = pickle.load(f)
+                with open(name_indx, 'rb') as f:
+                    indx = pickle.load(f)
+            else: 
+                compute_basis = True
+        
+        elif (t in self.facG) and (self.indx!={}):
+            # Inline
+            facG = self.facG[t]
+            indx = self.indx
+        else: 
+            compute_basis = True
+            
+        # Compute basis components
+        if compute_basis:
+
+            facG = {}
+            indx = {}
+            
+            for iff in range(self.nf):
+                for P in range(self.NP[iff]):
+
+                    if self.wavetest[iff][P]:
+                    
+                        facG[(iff,P)] = {}
+                        
+                        # Obs selection around point P
+                        iobs = np.where(
+                            (np.abs((np.mod(self.lon1d - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
+                            (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
+                            )[0]
+                        xx = (np.mod(self.lon1d[iobs] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
+                        yy = (self.lat1d[iobs] - self.ENSLAT[iff][P]) / self.km2deg
+    
+                        
+                        # facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
+                        facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff])
+                        
+                        indx[(iff,P)] = iobs
+
+                        enstloc = self.enst[iff][P]
+                        
+                        if iobs.shape[0] > 0:
+                            for it in range(len(enstloc)):
+                                dt = t - enstloc[it]
+                                try:
+                                    if abs(dt) < self.tdec[iff][P]:
+                                        if t==0 and self.wavelet_init:
+                                            fact = mywindow(dt / self.tdec[iff][P])
+                                        else:
+                                            if self.flux:
+                                                fact = mywindow_flux(dt / self.tdec[iff][P])
+                                            else:
+                                                fact = mywindow(dt / self.tdec[iff][P])
+                                            tt = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
+                                            I =  np.sum(mywindow(tt/self.tdec[iff][P]))*(tt[1]-tt[0])
+                                            fact /= I 
+                                            
+                                        facG[(iff,P)][it] = [None,]*self.ntheta
+                                        for itheta in range(self.ntheta):
+                                            facG[(iff,P)][it][itheta] = [[],[]]
+                                            kx = self.k[iff] * np.cos(self.theta[itheta])
+                                            ky = self.k[iff] * np.sin(self.theta[itheta])
+                                            facG[(iff,P)][it][itheta][0] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy))
+                                            facG[(iff,P)][it][itheta][1] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
+                                except:
+                                    print(f'Warning: an error occured at t={t}, iff={iff}, P={P}, enstloc={enstloc[it]}')
+
+            if self.save_wave_basis:
+                if not os.path.exists(name_facG):
+                    with open(name_facG, 'wb') as f:
+                        pickle.dump(facG,f)  
+                if not os.path.exists(name_indx):
+                    with open(name_indx, 'wb') as f:
+                        pickle.dump(indx,f)     
+            else:
+                self.facG[t] = facG
+                self.indx = indx
+        
+        # Projection
+        if transpose:
+            phi = np.zeros((self.nbasis,))
+        else:
+            phi = np.zeros((self.lon1d.size,))
+        
+        iwave = 0
+        for iff in range(self.nf):
+            for P in range(self.NP[iff]):
+                if self.wavetest[iff][P]:
+                    enstloc = self.enst[iff][P]
+                    iobs = indx[(iff,P)]
+                    if iobs.shape[0] > 0:
+                        for it in range(len(enstloc)):
+                
+                            if it not in facG[(iff,P)]:
+                                iwave += 2*self.ntheta
+                            else:
+                                for itheta in range(self.ntheta):
+                                    for iphase in range(2):
+                                        if transpose:
+                                            phi[iwave] = np.sum(X[iobs] * facG[(iff,P)][it][itheta][iphase])
+                                        else:
+                                            phi[iobs] += X[iwave] * facG[(iff,P)][it][itheta][iphase]
+                                
+                                        iwave += 1
+        
+        if State is not None:
+            if t==0:
+                if self.wavelet_init:
+                    State.setvar(phi.reshape((State.ny,State.nx)),ind=0)
+                    State.params = np.zeros_like(phi)
+                else:
+                    State.params = phi
+            else:
+                State.params = phi
+        else:
+            return phi
+        
+    
+    def operg_transpose(self, adState, adX, t):
+        
+        """
+            Project to reduced space
+        """
+        
+        if t==0:
+            if self.wavelet_init:
+                adX += self.operg(adState.getvar(ind=0).flatten(), t, transpose=True)
+            else:
+                adX += self.operg(adState.params, t, transpose=True)
+        else:
+            if adState.params is None:
+                adState.params = np.zeros((self.nphys,))
+            adX += self.operg(adState.params, t, transpose=True)
+                   
 class RedBasis_BM_IT:
    
     def __init__(self,config):
@@ -715,8 +1093,7 @@ class RedBasis_BM_IT:
         
         self.RedBasis_BM.operg_transpose(adState,adX[self.slicebm],t)
         self.RedBasis_IT.operg_transpose(adState,adX[self.sliceit],t)
-        
-
+    
 class RedBasis_BM_2scales:
    
     def __init__(self,config):
@@ -830,219 +1207,13 @@ class RedBasis_BM_2scales:
             
         print(f'test G[{t}]:', ps1/ps2)
     
-class RedBasis_BM_2:
-   
-    def __init__(self,config):
-
-        self.km2deg=1./110
         
-        
-        self.facns = config.facns # factor for wavelet spacing= space
-        self.facnlt = config.facnlt
-        self.npsp = config.npsp # Defines the wavelet shape (nb de pseudopériode)
-        self.facpsp = config.facpsp # 1.5 # factor to fix df between wavelets 
-        self.lmin = config.lmin 
-        self.lmax = config.lmax
-        self.tdecmin = config.tdecmin
-        self.tdecmax = config.tdecmax
-        self.factdec = config.factdec
-        self.sloptdec = config.sloptdec
-        self.Qmax = config.Qmax
-        self.facQ = config.facQ
-        self.slopQ = config.slopQ
-        self.gsize_max = config.gsize_max
-        self.lmeso = config.lmeso
-        self.tmeso = config.tmeso        
-     
-
-    def set_basis(self,time,lon,lat,return_q=False):
-        
-        TIME_MIN = time.min()
-        TIME_MAX = time.max()
-        LON_MIN = lon.min()
-        LON_MAX = lon.max()
-        LAT_MIN = lat.min()
-        LAT_MAX = lat.max()
-        if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
-        lon1d = lon.flatten()
-        lat1d = lat.flatten()
-        
-        # Ensemble of pseudo-frequencies for the wavelets (spatial)
-        logff = np.arange(
-            np.log(1./self.lmin),
-            np.log(1. / self.lmax) - np.log(1 + self.facpsp / self.npsp),
-           -np.log(1 + self.facpsp / self.npsp))[::-1]
-        ff = np.exp(logff)
-        dff = ff[1:] - ff[:-1]
-        
-        # Ensemble of directions for the wavelets (2D plane)
-        theta = np.linspace(0, np.pi, int(np.pi * ff[0] / dff[0] * self.facpsp))[:-1]
-        ntheta = len(theta)
-        nf = len(ff)
-        logging.info('spatial normalized wavelengths: %s', 1./np.exp(logff))
-        logging.info('ntheta: %s', ntheta)
-
-        # Global time window
-        deltat = TIME_MAX - TIME_MIN
-
-        # Wavelet space-time coordinates     
-        self.wave_xy = [None,]*nf
-        self.wave_t_norm = [None,]*nf
-        self.wave_t = [None,]*nf
-        self.slicef = [None,]*nf
-        NT = np.empty(nf, dtype='int32') # Nomber of time locations for a given frequency
-        NS = np.empty(nf, dtype='int32') # Nomber of spatial wavelet locations for a given frequency
-        
-        DX = 1./ff*self.npsp * 0.5 # wavelet extension
-        DXG = DX / self.facns # distance (km) between the wavelets grid in space
-        
-        nbasis = 0        
-        for iff in range(nf):
-            
-            # Coordinates in space
-            ENSLON = []
-            ENSLAT = []
-            ENSLAT1 = np.arange(
-                LAT_MIN - (DX[iff]-DXG[iff])*self.km2deg,
-                LAT_MAX + DX[iff]*self.km2deg,
-                DXG[iff]*self.km2deg)
-            for I in range(len(ENSLAT1)):
-                ENSLON1 = np.mod(
-                    np.arange(
-                        LON_MIN - (DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                        LON_MAX+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
-                    360)
-                ENSLAT = np.concatenate(([ENSLAT,np.repeat(ENSLAT1[I],len(ENSLON1))]))
-                ENSLON = np.concatenate(([ENSLON,ENSLON1]))
-            
-            # Coordinates in time 
-            tdec = self.tmeso*self.lmeso**(self.sloptdec) * ff[iff]**self.sloptdec
-            if tdec<self.tdecmin:
-                tdec = self.tdecmin
-            if tdec>self.tdecmax:
-                tdec = self.tdecmax
-            tdec *= self.factdec
-            ENST = np.arange(-tdec*(1-1./self.facnlt),deltat+tdec/self.facnlt , tdec/self.facnlt)
-            print(iff,1/ff[iff],tdec)
-            
-            NT[iff] = len(ENST)
-            NS[iff] = 2*ntheta * len(ENSLAT)
-            self.slicef[iff] = slice(nbasis,nbasis + NT[iff]*NS[iff])
-            nbasis += NT[iff] * NS[iff]
-            
-            # Wavelet shape in space
-            wave_xy_f = np.zeros((ENSLAT.size,2*ntheta,lon1d.size))
-            for i,(lat0,lon0) in enumerate(zip(ENSLAT,ENSLON)):
-                iobs = np.where(
-                        (np.abs((np.mod(lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= DX[iff]) &
-                        (np.abs((lat1d - lat0) / self.km2deg) <= DX[iff])
-                        )[0]
-                xx = (np.mod(lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
-                yy = (lat1d[iobs] - lat0) / self.km2deg
-                facs = mywindow(xx / DX[iff]) * mywindow(yy / DX[iff])
-                for itheta in range(ntheta):
-                    kx = 2 * np.pi * ff[iff] * np.cos(theta[itheta])
-                    ky = 2 * np.pi * ff[iff] * np.sin(theta[itheta])
-                    wave_xy_f[i,2*itheta,iobs] = facs * np.cos(kx*(xx)+ky*(yy))
-                    wave_xy_f[i,2*itheta+1,iobs] = facs * np.cos(kx*(xx)+ky*(yy)-np.pi / 2)
-            self.wave_xy[iff] = wave_xy_f.reshape((ENSLAT.size*2*ntheta,lon1d.size))
-            
-            # Wavelet shape in time
-            wave_t_f = np.zeros((ENST.size,time.size))
-            for i,time0 in enumerate(ENST):
-                iobs = np.where(abs(time-time0) < tdec)
-                t = np.linspace(-tdec,tdec)
-                I =  np.sum(mywindow(t/tdec))*(t[1]-t[0])
-                wave_t_f[i,iobs] = mywindow(abs(time-time0)[iobs]/tdec)   
-            self.wave_t_norm[iff] = wave_t_f/I  
-            self.wave_t[iff] = wave_t_f
-
-        # Fill the Q diagonal matrix (expected variance for each wavelet)            
-        Q = np.zeros((nbasis,))
-        # Loop on all wavelets of given pseudo-period
-        for iff in range(nf):
-            if 1/ff[iff]>self.lmeso:
-                Q[self.slicef[iff]] = self.Qmax   
-            else:
-                Q[self.slicef[iff]] = self.Qmax * self.lmeso**self.slopQ * ff[iff]**self.slopQ
-
-
-        self.nf = nf
-        self.NS = NS
-        self.NT = NT
-        self.ntheta = ntheta
-        self.nbasis = nbasis
-        self.nphys = lon1d.size
-        
-        print('nbasis=',self.nbasis)
-
-        self.test_operg()
-        
-        if return_q:
-            return np.sqrt(Q)
-        
-    
-    def operg(self,psi,t,norm=True):
-        
-        """
-            Project to physicial space
-        """
-        
-        phi = np.zeros((self.nphys))
-        for iff in range(self.nf):
-            psi_f = psi[self.slicef[iff]]
-            psi_f = psi_f.reshape((self.NT[iff],self.NS[iff]))
-            if norm:
-                phi += np.tensordot(np.tensordot(psi_f,self.wave_xy[iff],(-1,0)),
-                                    self.wave_t_norm[iff][:,t],(0,0))
-            else:
-                phi += np.tensordot(np.tensordot(psi_f,self.wave_xy[iff],(-1,0)),
-                                    self.wave_t[iff][:,t],(0,0))
-        return phi
-    
-    def operg_transpose(self,phi,t,norm=True):
-        
-        """
-            Project to reduced space
-        """
-        
-        psi = np.zeros((self.nbasis,))
-        for iff in range(self.nf):
-            if norm:
-                psi[self.slicef[iff]] = np.tensordot(
-                    phi[:,np.newaxis]*self.wave_t_norm[iff][:,t],
-                                           self.wave_xy[iff],[0,1]).flatten() 
-            else:
-                psi[self.slicef[iff]] = np.tensordot(
-                    phi[:,np.newaxis]*self.wave_t[iff][:,t],
-                                           self.wave_xy[iff],[0,1]).flatten() 
-        return psi
-    
-    def test_operg(self,t=0):
-        psi = np.random.random((self.nbasis,))
-        phi = np.random.random((self.nphys,))
-        
-        ps1 = np.inner(psi,self.operg_transpose(phi,t))
-        ps2 = np.inner(self.operg(psi,t),phi)
-            
-        print(f'test G[{t}]:', ps1/ps2)
-        
-
-    
 
 def mywindow(x): #xloc must be between -1 and 1
      y  = np.cos(x*0.5*np.pi)**2
      return y
- 
-    
+  
 def mywindow_flux(x): #xloc must be between -1 and 1
      y = -np.pi*np.sin(x*0.5*np.pi)*np.cos(x*0.5*np.pi)
      return y
-
-
-
-
-
-
 

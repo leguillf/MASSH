@@ -822,9 +822,6 @@ if __name__ == "__main__":
     print('\nAdjoint test:',ps1/ps2)
 
 
-
-
-
     # Current trajectory
     SSH0 = np.array(1e-2*numpy.random.random((2*ny*nx)))
     

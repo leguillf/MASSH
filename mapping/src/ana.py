@@ -22,7 +22,6 @@ from importlib.machinery import SourceFileLoader
 from . import grid
 
 
-
 def ana(config, State, Model, dict_obs=None, *args, **kwargs):
     """
     NAME
@@ -512,6 +511,8 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     '''
     Run a 4Dvar analysis
     '''
+    for param in ['gtol','maxiter','Npix_H','sigma_R','prec','checkpoint']:
+        print(param,'=',config[param])
 
     print('\n*** Observation operator ***\n')
     from .tools_4Dvar import Obsopt
@@ -519,7 +520,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     
     print('\n*** Reduced basis ***\n')
     if config.name_model in ['Diffusion','QG1L','JAX-QG1L']:
-        from .tools_reduced_basis import RedBasis_BM as RedBasis
+        from .tools_reduced_basis import RedBasis_BMaux as RedBasis
     elif config.name_model=='QG1LM':
         from .tools_reduced_basis import RedBasis_BM_2scales as RedBasis
     elif config.name_model in ['SW1L','JAX-SW1L']:
@@ -528,7 +529,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         from .tools_reduced_basis import RedBasis_BM_IT as RedBasis
     basis = RedBasis(config)
     time_basis = H.checkpoint * Model.dt / (24*3600)
-    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
+    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
 
     print('\n*** 4Dvar ***\n')
     # backgroud state 
@@ -542,10 +543,10 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
             Xb[basis.slicebm] = +Xb_prescribed 
             
         if config.only_largescale :   
-            Xb = np.where(Q==np.sqrt(config.Qmax),Xb,0.)  
+            Xb = np.where(Q==config.Qmax,Xb,0.)  
             
         if config.largescale_error_ratio!=1 :   
-            Q = np.where(Q==np.sqrt(config.Qmax),Q*config.largescale_error_ratio,Q)  
+            Q = np.where(Q==config.Qmax,Q*config.largescale_error_ratio,Q)  
             
     # Covariance matrix
     from .tools_4Dvar import Cov
@@ -558,8 +559,8 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         B = Cov(Q)
         R = Cov(config.sigma_R)
         
-    from .tools_4Dvar import Variational
     # Cost and Grad functions
+    from .tools_4Dvar import Variational
     var = Variational(
         config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
     
@@ -589,6 +590,7 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
     # Minimization    #
     ###################
     print('\n*** Minimization ***\n')
+
     # Callback function called at every minimization iterations
     def callback(XX):
         now = datetime.now()
@@ -654,17 +656,21 @@ def ana_4Dvar(config,State,Model,dict_obs=None) :
         # Forward
         for j in range(config.checkpoint):
             
-            Model.step(t=t+j*config.dtmodel,State=State0,nstep=1)
-    
-            date += timedelta(seconds=config.dtmodel)
-            
             if (((date - config.init_date).total_seconds()
                  /config.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>config.init_date) & (date<=config.final_date) :
-                
+                & (date>=config.init_date) & (date<=config.final_date) :
                 # Save output
                 State0.save_output(date,mdt=Model.mdt)
 
+            # Forward propagation
+            Model.step(t=t+j*config.dtmodel,State=State0,nstep=1)
+            date += timedelta(seconds=config.dtmodel)
+
+    # Last timestep
+    if (((date - config.init_date).total_seconds()
+                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
+                & (date>config.init_date) & (date<=config.final_date) :
+        State0.save_output(date,mdt=Model.mdt)
         
     del State, State0, res, Xa, dict_obs, B, R
     gc.collect()
@@ -835,173 +841,6 @@ def ana_incr4Dvar(config,State,Model,dict_obs=None) :
     gc.collect()
     print()
     
-    
-def ana_4Dvar_QG_init(config,State,Model,dict_obs=None) :
-    '''
-    Run a 4Dvar analysis
-    '''
-    from .tools_4Dvar import Obsopt
-    
-    print('\n*** create and initialize State ***\n')
-    if config.path_init_4Dvar is not None :
-        with xr.open_dataset(config.path_init_4Dvar) as ds :
-            ssh_b = np.copy(ds.ssh)
-            State.setvar(ssh_b,State.get_indobs())
-    
-    print('\n*** Observation operator ***\n')
-    H = Obsopt(config,State,dict_obs,Model)
-    
-    print('\n*** 4Dvar analysis ***\n')
-    
-    date_ini = config.init_date # current date
-    window_length = config.window_length # size of the assimilation window
-    
-    i = 0
-    while date_ini<config.final_date :
-        date_end = date_ini + window_length # date at end of the assimilation window
-        print(f'\n*** window {i} from {date_ini} to {date_end} ***\n')
-        if i==0 :
-            first_assimilation = True
-        else :
-            first_assimilation = False
-        # minimization
-        res = window_4D(config,State,Model,dict_obs=dict_obs,H=H,date_ini=date_ini,\
-                        date_final=date_end,first=first_assimilation)
-        ssh0 = res.reshape(State.var.ssh.shape) # initial ssh field for the window from the 4Dvar analysis
-        State.setvar(ssh0,State.get_indobs())
-        
-        if config.flag_plot>=1:
-            State.plot(date_ini)
-        
-        print('\n*** Saving trajectory ***\n')
-        
-        date_save = date_ini
-        date_end_save = date_ini + config.window_save
-        if config.window_overlap:
-            date_end_save += config.window_save//2
-        
-        
-        dt_save = config.saveoutput_time_step # time step for saving
-        n_save = int((date_end_save - date_ini).total_seconds()/dt_save.total_seconds())+1 # number of save            
-        n_step = int(dt_save.total_seconds()/config.dtmodel) # number of model step between two save
-        
-        # Boundary conditiond
-        if config.flag_use_boundary_conditions:
-            timestamps = pd.date_range(date_ini,
-                                       date_end_save,
-                                       periods=n_save
-                                      )
-            bc_field, bc_weight = grid.boundary_conditions(config.file_boundary_conditions,
-                                                           config.lenght_bc,
-                                                           config.name_var_bc,
-                                                           timestamps,
-                                                           State.lon,
-                                                           State.lat,
-                                                           config.flag_plot,
-                                                           mask=np.copy(State.mask))
-
-        else: 
-            bc_field = np.array([None,]*n_save)
-            bc_weight = None
-        
-        
-        
-        t = 0
-        State_save = State.copy()
-        while date_save<=date_end_save:
-            
-            ssh_current = State.getvar(ind=State.get_indsave())
-            if config.window_overlap and not first_assimilation and\
-                date_save<=(date_ini+config.window_save//2):
-                    ds1 = State.load_output(date_save)
-                    ssh_prev = ds1[config.name_mod_var[State.get_indsave()]].data
-                    ds1.close()
-                    del ds1
-                    # weight coefficients
-                    W1 = max((date_ini + config.window_save//2 - date_save)  /\
-                             (config.window_save//2), 0)
-                    W2 = min((date_save - date_ini) / (config.window_save//2), 1)
-                    # Update state
-                    State_save.setvar(W1*ssh_prev+W2*ssh_current,ind=0)
-            else:
-                State_save.setvar(ssh_current,ind=0)
-
-            if date_save==date_ini + config.window_save:
-                ssh_next = State.getvar(ind=State.get_indsave())
-                
-            State_save.save_output(date_save)
-            Model.step(State,n_step,bc_field[t],bc_weight) # run forward the model
-            date_save += dt_save # update time
-            t += 1
-        
-        # Time update for next window
-        State.setvar(ssh_next,ind=0)
-        date_ini += config.window_save
-        i += 1
-                    
-        
-        print('\n*** final analysed state ***\n')
-        
-
-def window_4D(config,State,Model,dict_obs=None,H=None,date_ini=None,date_final=None,first=False) :
-    '''
-    run one assimilation on the window considered which start at time date_ini
-    '''
-    from .tools_4Dvar import Obsopt, Cov
-    from .tools_4Dvar import Variational_QG_init as Variational
-    
-    # create obsopt if not filled out
-    if H==None :
-        H = Obsopt(State,dict_obs,Model)
-    
-    # Covariance matrixes
-    if None in [config.sigma_R,config.sigma_B]:          
-            # Least squares
-            B = None
-            R = Cov(1.)
-    else:
-        sigma_B = config.sigma_B
-        sigma_R = config.sigma_R
-        R = Cov(sigma_R)
-        if first :
-            B = Cov(1.)
-        else :
-            B = Cov(sigma_B)
-    # background state
-    Xb = State.getvar(State.get_indobs()).ravel() # background term for analysis
-    
-    # Cost and Grad functions
-    var = Variational(
-        config=config, M=Model, H=H, State=State, B=B, R=R, Xb=Xb, 
-        tmp_DA_path=config.tmp_DA_path, date_ini=date_ini, date_final=date_final)
-   
-    Xopt = np.copy(Xb)
-    if config.prec :
-        Xopt = np.zeros_like(Xb)
-    
-    J0 = var.cost(Xopt)
-    g0 = var.grad(Xopt)
-    projg0 = np.max(np.abs(g0))
-        
-    def callback(XX,projg0=projg0):
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d_%H%M%S")
-        with open(os.path.join(config.tmp_DA_path,'X_it-'+current_time+'.pic'),'wb') as f:
-            pickle.dump(XX,f)
-
-    res = opt.minimize(var.cost,Xopt,
-                    method='L-BFGS-B',
-                    jac=var.grad,
-                    options={'disp': True, 'gtol': config.gtol*projg0, 'maxiter': config.maxiter},
-                    callback=callback)
-    Xout = res.x
-    if config.prec :
-        Xout = B.sqr(Xout) + Xb
-    
-    return Xout
-    
-    
-
 
 def ana_miost(config,State,dict_obs=None):
     
@@ -1069,95 +908,100 @@ def ana_miost(config,State,dict_obs=None):
         
             
         # CONFIG MIOST
+        PHYS_COMP = []
+        if config.miost_geo3ss6d:
+            PHYS_COMP.append(
+                comp_geo3.Comp_geo3ss6d(
+                    facns= 1., #factor for wavelet spacing= space
+                    facnlt= 2.,
+                    npsp= 3.5, # Defines the wavelet shape
+                    facpsp= 1.5, #1.5 # factor to fix df between wavelets
+                    lmin= config.lmin, # !!!
+                    lmax= config.lmax,
+                    cutRo= 1.6,
+                    factdec= 15,
+                    tdecmin= config.tdecmin, # !!!
+                    tdecmax= config.tdecmax,
+                    tssr= 0.5,
+                    facRo= 8.,
+                    Romax= 150.,
+                    facQ= config.facQ, # TO INCREASE ENERGY
+                    depth1= 0.,
+                    depth2= 30.,
+                    distortion_eq= 2.,
+                    lat_distortion_eq= 5.,
+                    distortion_eq_law= 2.,
+                    file_aux= config.file_aux,
+                    filec_aux= config.filec_aux,
+                    write= True,
+                    Hvarname= 'Hss')
+            )
+        
+        if config.miost_geo3ls:
+            PHYS_COMP.append(
+                comp_geo3.Comp_geo3ls(
+                    facnls= 3., #factor for large-scale wavelet spacing
+                    facnlt= 3.,
+                    tdec_lw= 25.,
+                    std_lw= 0.04,
+                    lambda_lw= 970, #768.05127036
+                    file_aux= config.file_aux,
+                    filec_aux= config.filec_aux,
+                    write= True,
+                    Hvarname= 'Hls')
+            )
+
         config_miost = dict(
         
-        RUN_NAME = '', # Set automatically with filename
-        PATH = dict(OUTPUT= config.tmp_DA_path),
-        
-        ALGO = dict(
-            USE_MPI= False,
-            store_gtranspose= False, # only if USE_MPI
-            INV_METHOD= 'PCG_INV',
-            NITER= 800  , # Maximum number of iterations in the variational loop
-            EPSPILLON_REST= 1.e-7,
-            gsize_max = 5000000000 ,
-            float_type= 'f8',
-            int_type= 'i8'),
-        
-        GRID = grid_miost.Grid_msit(
-            TEMPLATE_FILE= name_grd,
-            LON_NAME= 'lon',
-            LAT_NAME= 'lat',
-            MDT_NAME= 'mdt',
-            FLAG_MDT= flag_mdt,
-            DATE_MIN= init_miost_date.strftime("%Y-%m-%d"),
-            DATE_MAX= final_miost_date.strftime("%Y-%m-%d"),
-            TIME_STEP= config.saveoutput_time_step.total_seconds()/(24*3600),
-            NSTEPS_NC= int((24*3600)//config.saveoutput_time_step.total_seconds()),
-            TIME_STEP_LF= 10000., # For internal tides with seasons
-            LON_MIN= State.lon.min()-dlon,
-            LON_MAX= State.lon.max()+dlon,
-            LAT_MIN= State.lat.min()-dlat,
-            LAT_MAX= State.lat.max()+dlat,
-            tref_iw= 15340.),
-        
-        PHYS_COMP=[
-        
-            comp_geo3.Comp_geo3ss6d(
-                facns= 1., #factor for wavelet spacing= space
-                facnlt= 2.,
-                npsp= 3.5, # Defines the wavelet shape
-                facpsp= 1.5, #1.5 # factor to fix df between wavelets
-                lmin= config.lmin, # !!!
-                lmax= config.lmax,
-                cutRo= 1.6,
-                factdec= 15,
-                tdecmin= config.tdecmin, # !!!
-                tdecmax= config.tdecmax,
-                tssr= 0.5,
-                facRo= 8.,
-                Romax= 150.,
-                facQ= config.facQ, # TO INCREASE ENERGY
-                depth1= 0.,
-                depth2= 30.,
-                distortion_eq= 2.,
-                lat_distortion_eq= 5.,
-                distortion_eq_law= 2.,
-                file_aux= config.file_aux,
-                filec_aux= config.filec_aux,
-                write= True,
-                Hvarname= 'Hss'),
-        
-        
-            comp_geo3.Comp_geo3ls(
-                facnls= 3., #factor for large-scale wavelet spacing
-                facnlt= 3.,
-                tdec_lw= 25.,
-                std_lw= 0.04,
-                lambda_lw= 970, #768.05127036
-                file_aux= config.file_aux,
-                filec_aux= config.filec_aux,
-                write= True,
-                Hvarname= 'Hls'),
-            ],
-        
-        OBS_COMP=[
-        
-            ],
-        
-        
-        OBS=[
-        
-            obs.MASSH(
-                name=config.name_experiment,
-                dict_obs= dict_obs,
-                subsampling= config.subsampling,
-                noise=config.sigma_R
-                ),
+            RUN_NAME = '', # Set automatically with filename
+            PATH = dict(OUTPUT= config.tmp_DA_path),
             
-                ]
-        
-        )
+            ALGO = dict(
+                USE_MPI= False,
+                store_gtranspose= False, # only if USE_MPI
+                INV_METHOD= 'PCG_INV',
+                NITER= 800  , # Maximum number of iterations in the variational loop
+                EPSPILLON_REST= 1.e-7,
+                gsize_max = 5000000000 ,
+                float_type= 'f8',
+                int_type= 'i8'),
+            
+            GRID = grid_miost.Grid_msit(
+                TEMPLATE_FILE= name_grd,
+                LON_NAME= 'lon',
+                LAT_NAME= 'lat',
+                MDT_NAME= 'mdt',
+                FLAG_MDT= flag_mdt,
+                DATE_MIN= init_miost_date.strftime("%Y-%m-%d"),
+                DATE_MAX= final_miost_date.strftime("%Y-%m-%d"),
+                TIME_STEP= config.saveoutput_time_step.total_seconds()/(24*3600),
+                NSTEPS_NC= int((24*3600)//config.saveoutput_time_step.total_seconds()),
+                TIME_STEP_LF= 10000., # For internal tides with seasons
+                LON_MIN= State.lon.min()-dlon,
+                LON_MAX= State.lon.max()+dlon,
+                LAT_MIN= State.lat.min()-dlat,
+                LAT_MAX= State.lat.max()+dlat,
+                tref_iw= 15340.),
+            
+            PHYS_COMP=PHYS_COMP,
+            
+            OBS_COMP=[
+            
+                ],
+            
+            
+            OBS=[
+            
+                obs.MASSH(
+                    name=config.name_experiment,
+                    dict_obs= dict_obs,
+                    subsampling= config.subsampling,
+                    noise=config.sigma_R
+                    ),
+                
+                    ]
+            
+            )
         
         # RUN MIOST
         miost.run_miost(config_miost)
@@ -1165,8 +1009,13 @@ def ana_miost(config,State,dict_obs=None):
         # READ OUTPUTS AND REFORMAT
         ds = xr.open_mfdataset(os.path.join(config.tmp_DA_path,'_ms_analysis*.nc'),
                                combine='by_coords')
-        ssh = ds['Hss'] + ds['Hls']
-        
+        if config.miost_geo3ss6d and config.miost_geo3ls:              
+            ssh = ds['Hss'] + ds['Hls']
+        elif config.miost_geo3ss6d:
+            ssh = ds['Hss']
+        else:
+            ssh = ds['Hls']
+            
         # SAVE OUTPUTS 
         # Set the saving temporal window
         if miost_first_window:

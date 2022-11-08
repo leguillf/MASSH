@@ -22,6 +22,8 @@ name_exp_save = 'my_output_name' # name of output files
 
 path_save = 'outputs/' + name_exp_save + '/' # path of output files
 
+name_save_time = "time"
+
 flag_plot = 0 # between 0 and 4. 0 for none plot, 4 for full plot
     
 #################################################################################################################################
@@ -352,6 +354,10 @@ dir_miost = None
 
 obs_subsampling = 1
 
+miost_geo3ss6d = True # Wavelet basis for small scales
+
+miost_geo3ls = True # Wavelet basis for large scales
+
 
 #########################################
 ### Reduced basis specific parameters ### 
@@ -392,6 +398,28 @@ facQ= 1 # factor to be multiplied to the estimated Q
 Qmax = 1e-3 # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
 slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
+
+flux = False
+
+# For BMaux
+
+distortion_eq = 2.
+
+lat_distortion_eq = 5.
+
+distortion_eq_law = 2.
+
+file_aux = '/home/fleguillou/Dev/MASSH/mapping/aux/aux_reduced_basis_BM.nc'
+
+filec_aux = '/home/fleguillou/Dev/MASSH/mapping/aux/aux_first_baroclinic_speed.nc'
+
+tssr = 0.5
+
+facRo = 8.
+
+Romax = 150.
+
+cutRo =  1.6
 
 # - For IT 
 
@@ -444,8 +472,25 @@ nudging_params_stretching_swot = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)} # n
 nudging_params_relvort_swot = None # nudging parameters relative to the relative part of the PV (for nadir, set to None).
 
 
+#################################################################################################################################
+# Diagnostics
+#################################################################################################################################
+name_diag = None
 
-   
+OSSE = {
+    'time_min': None,
+    'time_max': None,
+    'lon_min': None,
+    'lon_max': None,
+    'lat_min': None,
+    'lat_max': None,
+    'name_ref':'',
+    'name_ref_time':'',
+    'name_ref_lon':'',
+    'name_ref_lat':'',
+    'name_ref_var':'',
+    'options_ref': None
+}
 
 
 

@@ -37,6 +37,7 @@ class State:
         self.first = first
         
         # Parameters
+        self.name_time = config.name_save_time
         self.name_lon = config.name_mod_lon
         self.name_lat = config.name_mod_lat
         self.name_var = config.name_mod_var
@@ -443,7 +444,7 @@ class State:
                 + str(date.minute).zfill(2) + '.nc')
         
         coords = {}
-        coords['time'] = (('time'), [pd.to_datetime(date)],)
+        coords[self.name_time] = ((self.name_time), [pd.to_datetime(date)],)
         
         indsave = self.get_indsave()
         if type(indsave)==list:

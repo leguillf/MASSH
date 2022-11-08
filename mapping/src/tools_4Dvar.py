@@ -72,9 +72,12 @@ class Obsopt:
             if not os.path.exists(self.path_H):
                 os.makedirs(self.path_H)
         else:
-            # We'll use temporary directory to save the files
+            # We'll use temporary directory to read/save the files
             self.path_H = self.tmp_DA_path
-            self.read_H = False
+            if self.compute_H:
+                self.read_H = False
+            else:
+                self.read_H = True
         self.obs_sparse = {}
         
         # For grid interpolation:
@@ -122,6 +125,7 @@ class Obsopt:
             
         # Compute checkpoints
         self.checkpoint = [0]
+        self.time_checkpoint = [Model.timestamps[0]]
         if self.isobserved(Model.timestamps[0]):
             self.isobs = [True]
         else:
@@ -130,6 +134,7 @@ class Obsopt:
         for i,t in enumerate(Model.timestamps[:-1]):
             if i>0 and (self.isobserved(t) or check==config.checkpoint):
                 self.checkpoint.append(i)
+                self.time_checkpoint.append(Model.timestamps[i])
                 if check==config.checkpoint:
                     check = 0
                 if self.isobserved(t):
@@ -142,7 +147,11 @@ class Obsopt:
         else:
             self.isobs.append(False)   
         self.checkpoint.append(len(Model.timestamps)-1) # last timestep
+        self.time_checkpoint.append(Model.timestamps[-1])
         self.checkpoint = np.asarray(self.checkpoint)
+        self.time_checkpoint = np.asarray(self.time_checkpoint)
+        print(self.checkpoint.size,'checkpoints occuring at:',self.time_checkpoint)
+
             
     def process_obs(self,t):
 
@@ -152,7 +161,8 @@ class Obsopt:
             if os.path.exists(file_H) and not self.compute_H:
                 new_file_H = os.path.join(
                     self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc'))
-                os.system(f"cp {file_H} {new_file_H}")
+                if new_file_H != file_H:
+                    os.system(f"cp {file_H} {new_file_H}")
                 self.obs_sparse[t] = True
                 return t
         else:
@@ -222,9 +232,7 @@ class Obsopt:
         self.obs_sparse[t] = obs_sparse
         
         return t
-                
-    
-            
+                      
     def isobserved(self,t):
         
         delta_t = [(t - tobs).total_seconds() for tobs in self.dict_obs.keys()]
@@ -233,8 +241,6 @@ class Obsopt:
         else: is_obs = False
         
         return is_obs
-    
-        
     
     def interpolator(self,lon_obs,lat_obs):
         
@@ -265,9 +271,7 @@ class Obsopt:
             weights.append(w)   
             
         return np.asarray(indexes),np.asarray(weights)
-    
-
-    
+     
     def H(self,t,X):
         
         if not self.obs_sparse[t] :
@@ -348,8 +352,6 @@ class Obsopt:
         
         return res,inv_noise2
 
-        
-
     def adj(self,t,adState,misfit):
         
         if not self.obs_sparse[t] :
@@ -392,7 +394,7 @@ class Cov :
         return 1/self.sigma**2 * X    
     
     def sqr(self,X):
-        return self.sigma**0.5 * X
+        return self.sigma * X
     
     
 

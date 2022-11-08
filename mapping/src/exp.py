@@ -55,5 +55,13 @@ def exp(path_config):
     # temp directory
     if not os.path.exists(config.tmp_DA_path):
         os.makedirs(config.tmp_DA_path)
+    cmd = f'cp {path_config} {config.tmp_DA_path}/config.py'
+    os.system(cmd)
+
+    # outptut directory
+    if not os.path.exists(config.path_save):
+        os.makedirs(config.path_save)
+    cmd = f'cp {path_config} {config.path_save}/config.py'
+    os.system(cmd)
 
     return config
