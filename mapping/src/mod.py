@@ -211,7 +211,7 @@ class Model_qg1l_np:
         else:
             dir_model = config.MOD.dir_model  
         if config.MOD.use_jax:
-            qgm = SourceFileLoader("qgm",dir_model + "/jqgm2.py").load_module() 
+            qgm = SourceFileLoader("qgm",dir_model + "/jqgm.py").load_module() 
             model = qgm.Qgm
         else:
             SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
@@ -539,7 +539,7 @@ class Model_qg1l_jax:
                              '..','models','model_qg1l'))
         else:
             dir_model = config.MOD.dir_model  
-        qgm = SourceFileLoader("qgm",dir_model + "/jqgm2.py").load_module() 
+        qgm = SourceFileLoader("qgm",dir_model + "/jqgm.py").load_module() 
         model = qgm.Qgm
     
         # Time parameters
