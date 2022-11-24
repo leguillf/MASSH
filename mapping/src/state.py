@@ -28,160 +28,158 @@ class State:
         Args:
             config (module): configuration module
     """
-    
-   # __slots__ = ('config','lon','lat','var','name_lon','name_lat','name_var','name_exp_save','path_save','ny','nx','f','g')
+
     
     def __init__(self,config,first=True):
+
+        if first:
+            print(config.GRID)
         
         self.config = config
-        self.first = first
         
         # Parameters
-        self.name_time = config.name_save_time
-        self.name_lon = config.name_mod_lon
-        self.name_lat = config.name_mod_lat
-        self.name_var = config.name_mod_var
-        self.name_exp_save = config.name_exp_save
-        self.path_save = config.path_save
+        self.name_time = config.EXP.name_time
+        self.name_lon = config.EXP.name_lon
+        self.name_lat = config.EXP.name_lat
+        self.name_exp_save = config.EXP.name_exp_save
+        self.path_save = config.EXP.path_save
         if not os.path.exists(self.path_save):
-            os.makedirs(self.path_save)
-        self.g = config.g
-        
-        # Initialize grid
-        self.geo_grid = False
-        if config.name_init == 'geo_grid':
-             self.ini_geo_grid(config)
-        elif config.name_init == 'from_file':
-             self.ini_grid_from_file(config)
-        elif config.name_init == 'restart':
-             self.ini_grid_restart()
-        else:
-            sys.exit("Initialization '" + config.name_init + "' not implemented yet")
-            
-        self.ny,self.nx = self.lon.shape
-        self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
-        
-        # Compute cartesian grid 
-        DX,DY = grid.lonlat2dxdy(self.lon,self.lat)
-        dx = np.mean(DX)
-        dy = np.mean(DY)
-        X,Y = grid.dxdy2xy(DX,DY)
-        self.DX = DX
-        self.DY = DY
-        self.X = X
-        self.Y = Y
-        self.dx = dx
-        self.dy = dy
-        
-        #  Initialize state variables
-        self.var = pd.Series(dtype=np.float64)
-        if config.name_model is None or config.name_model in ['Diffusion','QG1L','JAX-QG1L']:
-            self.ini_var_qg1l(config)
-            
-        elif config.name_model in ['QG1LM','JAX-QG1LM']:
-            self.ini_var_qg1lm(config)
-            
-        elif config.name_model in ['SW1L','JAX-SW1L']:
-            self.ini_var_sw1l(config)
-            
-        elif config.name_model=='SW1LM':
-            self.ini_var_sw1lm(config)
-            
-        elif type(config.name_model)==list:
-            self.ini_var_bm_it(config)
-        else:
-            sys.exit("Model '" + config.name_model + "' not implemented yet")
-        # Read output variable from previous run 
-        if config.name_init == 'restart':
-            self.ini_var_restart()
-        # Add mask if provided
-        if self.first:
-            try: self.ini_mask(config)
-            except: 
-                print('Warning: unable to compute mask')
-                self.mask = np.zeros((self.ny,self.nx),dtype='bool')
-        else:
-            self.mask = np.zeros((self.ny,self.nx),dtype='bool')   
-        if not os.path.exists(config.tmp_DA_path):
-            os.makedirs(config.tmp_DA_path)
-            
-        
-        self.mdt = None
-        self.depth = None
-        if first:
-            # MDT
-            if config.path_mdt is not None and os.path.exists(config.path_mdt):
-            
-                ds = xr.open_dataset(config.path_mdt).squeeze()
-                
-                name_var_mdt = {}
-                name_var_mdt['lon'] = config.name_var_mdt['lon']
-                name_var_mdt['lat'] = config.name_var_mdt['lat']
-                
-                
-                
-                if 'mdt' in config.name_var_mdt and config.name_var_mdt['mdt'] in ds:
-                    name_var_mdt['var'] = config.name_var_mdt['mdt']
-                    self.mdt = grid.interp2d(ds,
-                                             name_var_mdt,
-                                             self.lon,
-                                             self.lat)
-            # MDT
-            if config.file_depth is not None and os.path.exists(config.file_depth):
-                ds = xr.open_dataset(config.file_depth).squeeze()
-            
-                self.depth = grid.interp2d(ds,
-                                         config.name_var_depth,
-                                         self.lon,
-                                         self.lat)
-            
-        
-        # Model parameters
-        self.params = None
-        
-        
-        
-    def __str__(self):
-        message = ''
-        for name in self.name_var:
-            message += name + ':' + str(self.var[name].shape) + '\n'
-        return message
+            os.makedirs(self.EXP.path_save)
+        self.flag_plot = config.EXP.flag_plot
 
+        #  Initialize state variables
+        self.var = {}
+
+        # Initialize controle parameters
+        self.params = {}
+
+        # Initialize grid
+        if first:
+            self.geo_grid = False
+            self.mask = None
+            if config.GRID.super == 'GRID_GEO':
+                self.ini_geo_grid(config.GRID)
+            elif config.GRID.super == 'GRID_CAR':
+                self.ini_car_grid(config.GRID)
+            elif config.GRID.super == 'GRID_FROM_FILE':
+                self.ini_grid_from_file(config.GRID)
+            elif config.GRID.super == 'GRID_RESTART':
+                self.ini_grid_restart()
+            else:
+                sys.exit("Initialization '" + config.GRID.name_grid + "' not implemented yet")
+
+            
+
+            self.ny,self.nx = self.lon.shape
+
+            self.lon_min = np.nanmin(self.lon)
+            self.lon_max = np.nanmax(self.lon)
+            self.lat_min = np.nanmin(self.lat)
+            self.lat_max = np.nanmax(self.lat)
+
+            # Mask
+            self.ini_mask(config.GRID)
+
+            # Compute cartesian grid 
+            DX,DY = grid.lonlat2dxdy(self.lon,self.lat)
+            dx = np.nanmean(DX)
+            dy = np.nanmean(DY)
+            DX[np.isnan(DX)] = dx # For cartesian grid
+            DY[np.isnan(DY)] = dy # For cartesian grid
+            X,Y = grid.dxdy2xy(DX,DY)
+            self.DX = DX
+            self.DY = DY
+            self.X = X
+            self.Y = Y
+            self.dx = dx
+            self.dy = dy
+
+            # Coriolis
+            self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
+            
     def ini_geo_grid(self,config):
         """
         NAME
             ini_geo_grid
     
         DESCRIPTION
-            Create state grid, regular in (lon,lat) and save to init file
+            Create state grid, regular in (lon,lat) 
             Args:
                 config (module): configuration module
         """
         self.geo_grid = True
-        lon = np.arange(config.lon_min, config.lon_max + config.dx, config.dx) % 360
-        lat = np.arange(config.lat_min, config.lat_max + config.dy, config.dy) 
+        lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) % 360
+        lat = np.arange(config.lat_min, config.lat_max + config.dlat, config.dlat) 
         lon,lat = np.meshgrid(lon,lat)
         self.lon = lon % 360
         self.lat = lat
         self.present_date = config.init_date
     
+    def ini_car_grid(self,config):
+        """
+        NAME
+            ini_car_grid
+    
+        DESCRIPTION
+            Create state grid, regular in (x,y) 
+            Args:
+                config (module): configuration module
+        """
+
+        km2deg = 1./110
+
+        ENSLAT1 = np.arange(
+            config.lat_min,
+            config.lat_max + config.dx*km2deg,
+            config.dx*km2deg)
+
+        ENSLON1 = np.mod(
+                np.arange(
+                    config.lon_min,
+                    config.lon_max+config.dx/np.cos(ENSLAT1[0]*np.pi/180.)*km2deg,
+                    config.dx/np.cos(ENSLAT1[0]*np.pi/180.)*km2deg),
+                360)
+
+        lat2d = np.zeros((ENSLAT1.size,ENSLON1.size))*np.nan
+        lon2d = np.zeros((ENSLAT1.size,ENSLON1.size))*np.nan
+
+        for I in range(len(ENSLAT1)):
+            ENSLON1 = np.mod(
+                np.arange(
+                    config.lon_min,
+                    config.lon_max+config.dx/np.cos(ENSLAT1[I]*np.pi/180.)*km2deg,
+                    config.dx/np.cos(ENSLAT1[I]*np.pi/180.)*km2deg),
+                360)
+            lat2d[I,:ENSLON1.size] = np.repeat(ENSLAT1[I],len(ENSLON1)) 
+            lon2d[I,:ENSLON1.size] = ENSLON1
+        
+        self.lon = lon2d
+        self.lat = lat2d
+
     def ini_grid_from_file(self,config):
         """
         NAME
             ini_from_file
     
         DESCRIPTION
-            Copy state grid from existing file and save to init file
+            Copy state grid from existing file 
             Args:
                 config (module): configuration module
         """
         
-        dsin = xr.open_dataset(config.name_init_grid)
+        dsin = xr.open_dataset(config.path_init_grid)
+
         lon = dsin[config.name_init_lon].values
         lat = dsin[config.name_init_lat].values
+
         if len(lon.shape)==1:
             self.geo_grid = True
             lon,lat = np.meshgrid(lon,lat)
+
+        if config.subsampling is not None:
+            lon = lon[::config.subsampling,::config.subsampling]
+            lat = lat[::config.subsampling,::config.subsampling]
+            
         self.lon = lon % 360
         self.lat = lat
         self.present_date = config.init_date
@@ -212,148 +210,7 @@ class State:
             dsin.close()
             del dsin
             
-            
-        
-    def ini_var_qg1l(self,config):
-        """
-        NAME
-            ini_var_qg1l
-    
-        DESCRIPTION
-            Initialize QG1L model state variables. First one is SSH, 
-            second one (optional) is Potential Voriticy 
-            and third one (optional) is f/c where f is the Coriolis frequency
-            and c the phase velocity of the first baroclinic Rossby Radius.
-        """
-        if len(self.name_var) not in [1,2,3]:
-            sys.exit('For QG1L: wrong number variable names')
-        for i, var in enumerate(self.name_var):
-            if (config.name_init == 'from_file') and (config.name_init_var is not None) and (i==0):
-                dsin = xr.open_dataset(config.name_init_grid)
-                var_init = dsin[config.name_init_var]
-                if len(var_init.shape)==3:
-                    var_init = var_init[0,:,:]
-                self.var[var] = var_init.values
-                dsin.close()
-                del dsin
-            else:
-                self.var[var] = np.zeros((self.ny,self.nx))
-        
-    def ini_var_qg1lm(self,config):
-        """
-        NAME
-            ini_var_qg1lm
-    
-        DESCRIPTION
-            Initialize QG1LM model state variables. First one is large scale SSH, 
-            second one is small scale SSH 
-        """
-        
-        if len(self.name_var) != 3:
-            if self.first:
-                print('Warning: For QG1LM: wrong number variable names')
-            self.name_var = ['hls','hss','h']
-        if self.first:
-            print(self.name_var)
-        
-        self.var[self.name_var[0]] = np.zeros((self.ny,self.nx))
-        self.var[self.name_var[1]] = np.zeros((self.ny,self.nx))
-        self.var[self.name_var[2]] = np.zeros((self.ny,self.nx))
-
-    def ini_var_sw1l(self,config):
-        """
-        NAME
-            ini_var_sw1l
-    
-        DESCRIPTION
-            Initialize SW1L model state variables. First one is zonal velocity, 
-            second one is meridional velocity 
-            and third one is SSH
-        """
-        
-        if len(self.name_var) != 3:
-            if self.first:
-                print('Warning: For SW1L: wrong number variable names')
-            self.name_var = ['u','v','h']
-        if self.first:
-            print(self.name_var)
-            
-        for i, var in enumerate(self.name_var):
-            if i==0:
-                self.var[var] = np.zeros((self.ny,self.nx-1))
-            elif i==1:
-                self.var[var] = np.zeros((self.ny-1,self.nx))
-            else:
-                self.var[var] = np.zeros((self.ny,self.nx))
                 
-    def ini_var_sw1lm(self,config):
-        """
-        NAME
-            ini_var_sw1lm
-    
-        DESCRIPTION
-            Initialize SW1LM state variables. As many (u,v,h) as the 
-            number of modes
-        """
-        
-        if len(self.name_var) != 3*(config.Nmodes+1):
-            if self.first:
-                print('Warning: For SW1LM: wrong number variable names')
-            self.name_var = []
-            for i in range(config.Nmodes):
-                self.name_var.append('u'+str(i+1))
-                self.name_var.append('v'+str(i+1))
-                self.name_var.append('h'+str(i+1))
-            self.name_var.append('u')
-            self.name_var.append('v')
-            self.name_var.append('h')
-            if self.first:
-                print(self.name_var)
-            
-        for i, var in enumerate(self.name_var):
-            if i%3==0:
-                self.var[var] = np.zeros((self.ny,self.nx-1))
-            elif i%3==1:
-                self.var[var] = np.zeros((self.ny-1,self.nx))
-            else:
-                self.var[var] = np.zeros((self.ny,self.nx))
-        
-    def ini_var_bm_it(self,config):
-        if len(config.name_mod_var) != 1 + config.Nmodes*3 + 1:
-            if self.first:
-                print('Warning: For BM & IT: wrong number variable names')
-            self.name_var = ["h_bm"]
-            if config.Nmodes==1:
-                self.name_var += ["u_it","v_it","h_it","h"]
-            else:
-                for i in range(1,config.Nmodes+1):
-                    self.name_var += [f"u_it_{i}",f"v_it_{i}",f"h_it_{i}"]
-                self.name_var += ["u_it","v_it","h_it","h"]   
-        
-            if self.first:
-                print(self.name_var)
-                
-        for i, var in enumerate(self.name_var):
-            if i%3==0 or i==len(self.name_var)-1:
-                # SSH
-                self.var[var] = np.zeros((self.ny,self.nx))
-            elif i%3==1:
-                # U
-                self.var[var] = np.zeros((self.ny,self.nx-1))
-            elif i%3==2:
-                # V
-                self.var[var] = np.zeros((self.ny-1,self.nx))
-        
-            
-        
-    def ini_var_restart(self):
-        ds = self.load_output(self.present_date)
-        name = self.name_var[self.get_indsave()]
-        self.var[name] = ds[name].values
-        ds.close()
-        del ds
-        
-            
     
     def ini_mask(self,config):
         
@@ -365,28 +222,23 @@ class State:
             Read mask file, interpolate it to state grid, 
             and apply to state variable
         """
-        
+
         # Read mask
         if config.name_init_mask is not None and os.path.exists(config.name_init_mask):
             ds = xr.open_dataset(config.name_init_mask).squeeze()
             name_lon = config.name_var_mask['lon']
             name_lat = config.name_var_mask['lat']
             name_var = config.name_var_mask['var']
-        elif config.path_mdt is not None and os.path.exists(config.path_mdt):
-            ds = xr.open_dataset(config.path_mdt).squeeze()
-            name_lon = config.name_var_mdt['lon']
-            name_lat = config.name_var_mdt['lat']
-            name_var = config.name_var_mdt['mdt']
         else:
-            self.mask = np.zeros((self.ny,self.nx),dtype='bool')
+            self.mask = (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
             return
         
-        dlon =  (self.lon[:,1:] - self.lon[:,:-1]).max()
-        dlat =  (self.lat[1:,:] - self.lat[:-1,:]).max()
+        dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
+        dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
        
         ds = ds.sel(
-            {name_lon:slice(self.lon.min()-dlon,self.lon.max()+dlon),
-             name_lat:slice(self.lat.min()-dlat,self.lat.max()+dlat)})
+            {name_lon:slice(self.lon_min-dlon,self.lon_max),
+             name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
         
         lon = ds[name_lon].values
         lat = ds[name_lat].values
@@ -420,21 +272,10 @@ class State:
             self.mask[~ind_mask] = False
         else:
             self.mask = mask_interp.copy()
-                            
-        # Apply to state variable (SSH only)
-        if config.name_model in ['QG1L','JAX-QG1L','QG1LM'] or type(config.name_model)==list:
-            self.var[0][self.mask] = np.nan
-            if config.name_model=='QG1LM':
-                self.var[1][self.mask] = np.nan
-                self.var[2][self.mask] = np.nan
-            
-            
-
-    def save_output(self,date,mdt=None):
         
-        name_lon = self.name_lon 
-        name_lat = self.name_lat
-        
+        self.mask += (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
+            
+    def save_output(self,date,name_var=None):
         
         filename = os.path.join(self.path_save,self.name_exp_save\
                 + '_y' + str(date.year)\
@@ -445,39 +286,32 @@ class State:
         
         coords = {}
         coords[self.name_time] = ((self.name_time), [pd.to_datetime(date)],)
-        
-        indsave = self.get_indsave()
-        if type(indsave)==list:
-            names_var = [self.name_var[i] for i in indsave]
-            vars_to_save = self.getvar(ind=indsave)
+
+        if self.geo_grid:
+                coords[self.name_lon] = ((self.name_lon,), self.lon[0,:])
+                coords[self.name_lat] = ((self.name_lat,), self.lat[:,0])
+                dims = (self.name_time,self.name_lat,self.name_lon)
         else:
-            names_var = [self.name_var[indsave]]
-            vars_to_save = [self.getvar(ind=indsave)]
+            coords[self.name_lon] = (('y','x',), self.lon)
+            coords[self.name_lat] = (('y','x',), self.lat)
+            dims = ('time','y','x')
+
+        if name_var is None:
+            name_var = self.var.keys()
          
         var = {}              
-        for i,(name_var,var_to_save) in enumerate(zip(names_var,vars_to_save)):
+        for name in name_var:
+
+            var_to_save = +self.var[name]
+
             # Apply Mask
             if self.mask is not None:
                 var_to_save[self.mask] = np.nan
-                
+        
             if len(var_to_save.shape)==2:
                 var_to_save = var_to_save[np.newaxis,:,:]
-                
-            if self.geo_grid:
-                coords[name_lon] = ((name_lon,), self.lon[0,:])
-                coords[name_lat] = ((name_lat,), self.lat[:,0])
-                dims = ('time','lat','lon')
-                
-            else:
-                coords[name_lon] = (('y','x',), self.lon)
-                coords[name_lat] = (('y','x',), self.lat)
-                dims = ('time','y','x')
             
-            var[name_var] = (dims,var_to_save)
-        
-        
-        if mdt is not None:
-            var['mdt'] = (dims[1:],mdt)
+            var[name] = (dims,var_to_save)
             
         ds = xr.Dataset(var,coords=coords)
         ds.to_netcdf(filename,
@@ -487,8 +321,7 @@ class State:
         ds.close()
         del ds
         
-        return
-            
+        return 
 
     def save(self,filename=None):
         """
@@ -502,33 +335,46 @@ class State:
                 date (datetime): present date
                 """
         
+        
+        # Variables
         _namey = {}
         _namex = {}
         outvars = {}
         cy,cx = 1,1
-        for i, name in enumerate(self.name_var):
-            outvar = self.var.values[i]
-            y1,x1 = outvar.shape
+        for name,var in self.var.items():
+            y1,x1 = var.shape
             if y1 not in _namey:
                 _namey[y1] = 'y'+str(cy)
                 cy += 1
             if x1 not in _namex:
                 _namex[x1] = 'x'+str(cx)
                 cx += 1
-                    
-            outvars[name] = ((_namey[y1],_namex[x1],), outvar[:,:])
-            
-        if self.params is not None:
-            outvars['params'] = (('p',self.params.flatten()))
-            
+            outvars[name] = ((_namey[y1],_namex[x1],), var[:,:])
         ds = xr.Dataset(outvars)
-        ds.to_netcdf(filename)
+        ds.to_netcdf(filename,group='var')
         ds.close()
-        del ds
+        
+        # Parameters
+        _namey = {}
+        _namex = {}
+        outparams = {}
+        cy,cx = 1,1
+        for name,var in self.params.items():
+            y1,x1 = var.shape
+            if y1 not in _namey:
+                _namey[y1] = 'y'+str(cy)
+                cy += 1
+            if x1 not in _namex:
+                _namex[x1] = 'x'+str(cx)
+                cx += 1
+            outparams[name] = ((_namey[y1],_namex[x1],), var[:,:])
+        ds = xr.Dataset(outparams)
+        ds.to_netcdf(filename,group='params',mode='a')
+        ds.close()
         
         return
 
-    def load_output(self,date):
+    def load_output(self,date,name_var=None):
         filename = os.path.join(self.path_save,self.name_exp_save\
             + '_y' + str(date.year)\
             + 'm' + str(date.month).zfill(2)\
@@ -538,102 +384,172 @@ class State:
             
         ds = xr.open_dataset(filename)
         
-        ds1 = ds.copy()
+        ds1 = ds.copy().squeeze()
         
         ds.close()
         del ds
         
-        return ds1.squeeze()
+        if name_var is None:
+            return ds1
+        
+        else:
+            return np.array([ds1[name].values for name in name_var])
     
     def load(self,filename):
 
-        with xr.open_dataset(filename) as ds:
-            for i, name in enumerate(self.name_var):
-                self.var.values[i] = ds[name].values
-            if 'params' in ds:
-                self.params = ds.params.values
+        with xr.open_dataset(filename,group='var') as ds:
+            for name in self.var.keys():
+                self.var[name] = ds[name].values
+        
+        with xr.open_dataset(filename,group='params') as ds:
+            for name in self.params.keys():
+                self.params[name] = ds[name].values
+            
     
     def random(self,ampl=1):
-        other = self.free()
-        for i, name in enumerate(self.name_var):
-            other.var.values[i] = ampl * np.random.random(self.var[name].shape)
+        other = self.copy(free=True)
+        for name in self.var.keys():
+            other.var[name] = ampl * np.random.random(self.var[name].shape)
+        for name in self.params.keys():
+            other.params[name] = ampl * np.random.random(self.params[name].shape)
         return other
     
-    def free(self):
+    
+    def copy(self, free=False):
+
+        # Create new instance
         other = State(self.config,first=False)
+
+        # Copy all attributes
+        other.ny = self.ny
+        other.nx = self.nx
+        other.DX = self.DX
+        other.DY = self.DY
+        other.X = self.X
+        other.Y = self.Y
+        other.dx = self.dx
+        other.dy = self.dy
+        other.f = self.f
         other.mask = self.mask
-        other.params = self.params
-        other.mdt = self.mdt
-        other.depth = self.depth
+        other.lon = self.lon
+        other.lat = self.lat
+        other.geo_grid = self.geo_grid
+
+        # (deep)Copy model variables
+        for name in self.var.keys():
+            if free:
+                other.var[name] = np.zeros_like(self.var[name])
+            else:
+                other.var[name] = deepcopy(self.var[name])
         
+        # (deep)Copy model parameters
+        for name in self.params.keys():
+            if free:
+                other.params[name] = np.zeros_like(self.params[name])
+            else:
+                other.params[name] = deepcopy(self.params[name])
+
         return other
     
-    def copy(self):
-        other = State(self.config,first=False)
-        for i in range(len(self.name_var)):
-            other.var.values[i] = deepcopy(self.var.values[i])
-        other.mask = self.mask
-        other.mdt = self.mdt
-        other.depth = self.depth
-        if self.params is not None:
-            other.params = +self.params
-        
-        return other
-    
-    def getvar(self,ind=None,vect=False):
-        if ind is not None:
-            if type(ind)==list:
-                res = []
-                for i in ind:
+    def getvar(self,name_var=None,vect=False):
+        if name_var is not None:
+            if type(name_var) in (list,np.ndarray):
+                var_to_return = []
+                for name in name_var:
                     if vect:
-                        res = np.concatenate((res,self.var.values[i].ravel()))
+                        var_to_return = np.concatenate((var_to_return,self.var[name].ravel()))
                     else:
-                        res.append(self.var.values[i])
+                        var_to_return.append(self.var[name])
+                    
             else:
-                res = self.var.values[ind]
+                var_to_return = self.var[name_var]
                 if vect:
-                    res = res.ravel()
+                    var_to_return = var_to_return.ravel()
         else:
-            res = []
-            for i in range(len(self.name_var)):
+            var_to_return = []
+            for name in self.var.keys():
                 if vect:
-                    res = np.concatenate((res,self.var.values[i].ravel()))
+                    var_to_return = np.concatenate((var_to_return,self.var[name].ravel()))
                 else:
-                    res.append(self.var.values[i])
-        return deepcopy(res)
-    
-    def setvar(self,var,ind=None):
-        if ind is None:
-            for i in range(len(self.name_var)):
-                self.var.values[i] = deepcopy(var[i])
-        else:
-            if type(ind)==list:
-                for i,_ind in enumerate(ind):
-                    self.var.values[_ind] = deepcopy(var[i])
+                    var_to_return.append(self.var[name])
+
+        return deepcopy(np.asarray(var_to_return))
+
+    def getparams(self,name_params=None,vect=False):
+        if name_params is not None:
+            if type(name_params) in (list,np.ndarray):
+                params_to_return = []
+                for name in name_params:
+                    if vect:
+                        params_to_return = np.concatenate((params_to_return,self.params[name].ravel()))
+                    else:
+                        params_to_return.append(self.params[name])
+                    
             else:
-                self.var.values[ind] = deepcopy(var)
+                params_to_return = self.params[name_params]
+                if vect:
+                    params_to_return = params_to_return.ravel()
+        else:
+            params_to_return = []
+            for name in self.params:
+                if vect:
+                    params_to_return = np.concatenate((params_to_return,self.params[name].ravel()))
+                else:
+                    params_to_return.append(self.params[name])
+
+        return deepcopy(np.asarray(params_to_return))
+
+    def setvar(self,var,name_var=None):
+        if name_var is None:
+            for i,name in enumerate(self.var):
+                self.var[name] = deepcopy(var[i])
+        else:
+            if type(name_var) in (list,np.ndarray):
+                for i,name in enumerate(name_var):
+                    self.var[name] = deepcopy(var[i])
+            else:
+                self.var[name_var] = deepcopy(var)
     
-    def scalar(self,coeff):
-        for i, name in enumerate(self.name_var):
-            self.var.values[i] *= coeff
-        if self.params is not None:
-            self.params *= coeff
+    def scalar(self,coeff,copy=False):
+        if copy:
+            State1 = self.copy()
+            for name in self.var.keys():
+                State1.var[name] *= coeff
+            for name in self.params.keys():
+                State1.params[name] *= coeff
+            return State1
+        else:
+            for name in self.var.keys():
+                self.var[name] *= coeff
+            for name in self.params.keys():
+                self.params[name] *= coeff
         
-    def Sum(self,State1):
-        for i, name in enumerate(self.name_var):
-            self.var.values[i] += State1.var.values[i]
-        if self.params is not None and State1.params is not None:
-            self.params += State1.params
+    def Sum(self,State1,copy=False):
+        if copy:
+            State2 = self.copy()
+            for name in self.var.keys():
+                State2.var[name] += State1.var[name]
+            for name in self.params.keys():
+                State2.params[name] += State1.params[name]
+            return State2
+        else:
+            for name in self.var.keys():
+                self.var[name] += State1.var[name]
+            for name in self.params.keys():
+                self.params[name] += State1.params[name]
             
-    def plot(self,title=None,cmap='RdBu_r',ind=None):
+    def plot(self,title=None,cmap='RdBu_r',ind=None,params=False):
         
-        if self.config.flag_plot==0:
+        if self.flag_plot<1:
             return
         
         if ind is not None:
             indvar = ind
         else:
-            indvar = np.arange(0,len(self.name_var))
+            if not params:
+                indvar = np.arange(0,len(self.var.keys()))
+            else:
+                indvar = np.arange(0,len(self.params.keys()))
         nvar = len(indvar)
  
         fig,axs = plt.subplots(1,nvar,figsize=(nvar*7,5))
@@ -643,52 +559,24 @@ class State:
             
         if nvar==1:
             axs = [axs]
-            
-        for ax,i in zip(axs,indvar):
-            ax.set_title(self.name_var[i])
-            im = ax.pcolormesh(self.var.values[i],cmap=cmap,\
-                               shading='auto')
-            plt.colorbar(im,ax=ax)
+        
+        if not params:
+            for ax,name_var in zip(axs,self.var):
+                ax.set_title(name_var)
+                im = ax.pcolormesh(self.var[name_var],cmap=cmap,\
+                                shading='auto')
+                plt.colorbar(im,ax=ax)
+        else:
+            for ax,name_var in zip(axs,self.params):
+                ax.set_title(name_var)
+                im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
+                                shading='auto')
+                plt.colorbar(im,ax=ax)
         
         plt.show()
         
 
-    
-    def get_indobs(self) :
-        '''
-        Return the indice of the observed variable, SSH
-        '''
-        if self.config['name_model'] in ['QG1L','JAX-QG1L'] :
-            return 0
-        elif self.config['name_model']=='QG1LM' :
-            return 2
-        elif self.config['name_model'] in ['SW1L','JAX-SW1L'] :
-            return 2
-        elif self.config['name_model']=='SW1LM' :
-            return 2 + (self.config.Nmodes)*3
-        elif type(self.config['name_model'])==list: 
-            return -1
-        else :
-            return 0
-            
-    def get_indsave(self) :
-        '''
-        Return the indice of the variable to save, SSH
-        '''
-        if self.config['name_model'] in ['QG1L','JAX-QG1L'] :
-            return 0
-        elif self.config['name_model']=='QG1LM' :
-            return 2
-        elif self.config['name_model'] in ['SW1L','JAX-SW1L'] :
-            return 2
-        elif self.config['name_model']=='SW1LM' :
-            return [2 + i*3 for i in range(self.config.Nmodes+1)]
-        elif type(self.config['name_model'])==list: 
-            ind = [i*3 for i in range(self.config.Nmodes+1)]
-            ind.append(-1)
-            return ind
-        else :
-            return 0
+
 
 
     

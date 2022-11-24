@@ -6,19 +6,18 @@ Created on Wed Jan  6 20:15:09 2021
 @author: leguillou
 """
 import os 
-import pickle
+import pickle 
 import xarray as xr
 import numpy as np
-from datetime import datetime,timedelta
-from scipy import interpolate,signal
+
+import datetime 
+from scipy import signal
 import pandas as pd
 import glob 
-import matplotlib.pylab as plt
 
-from .sat import read_satellite_info
 from .tools import detrendn,read_auxdata_mdt
 
-def obs(config, State, *args, **kwargs):
+def Obs(config, State, *args, **kwargs):
     """
     NAME
         obs
@@ -36,46 +35,41 @@ def obs(config, State, *args, **kwargs):
             needed to assimilate these observations
     """
     
-    if config.satellite is None:
+    if config.OBS is None:
         print('None observation has been provided')
         return {}
     
-    if config.time_obs_min is not None:
-        time_obs_min = config.time_obs_min
+    if config.EXP.time_obs_min is not None:
+        time_obs_min = config.EXP.time_obs_min
     else:
-        time_obs_min = config.init_date
+        time_obs_min = config.EXP.init_date
     
-    if config.time_obs_max is not None:
-        time_obs_max = config.time_obs_max
+    if config.EXP.time_obs_max is not None:
+        time_obs_max = config.EXP.time_obs_max
     else:
-        time_obs_max = config.final_date
+        time_obs_max = config.EXP.final_date
         
     date1 = time_obs_min.strftime('%Y%m%d')
     date2 = time_obs_max.strftime('%Y%m%d')
-    box = f'{int(State.lon.min())}_{int(State.lon.max())}_{int(State.lat.min())}_{int(State.lat.max())}'
+    box = f'{int(State.lon_min)}_{int(State.lon_max)}_{int(State.lat_min)}_{int(State.lat_max)}'
     
-    name_dict_obs = f'dict_obs_{"_".join(config.satellite)}_{date1}_{date2}_{box}.pic'
+    name_dict_obs = f'dict_obs_{"_".join(config.OBS.keys())}_{date1}_{date2}_{box}.txt'
+    print('Observation information will be saved in',name_dict_obs)
     
     # Check if previous *dict_obs* has been computed
-    if config.path_obs is None:
-        path_save_obs = config.tmp_DA_path
+    if config.EXP.path_obs is None:
+        path_save_obs = config.EXP.tmp_DA_path
     else:
-        path_save_obs = config.path_obs
-    if config.write_obs and os.path.exists(os.path.join(path_save_obs,name_dict_obs)) and not config.compute_obs:
+        path_save_obs = config.EXP.path_obs
+    if config.EXP.write_obs and os.path.exists(os.path.join(path_save_obs,name_dict_obs)) and not config.EXP.compute_obs:
         print(f'Reading {name_dict_obs} from previous run')
         with open(os.path.join(path_save_obs,name_dict_obs), 'rb') as f:
-            dict_obs = pickle.load(f)
-            return _new_dict_obs(dict_obs,config.tmp_DA_path)
+            dict_obs = eval(f.read())
+            return _new_dict_obs(dict_obs,config.EXP.tmp_DA_path)
         
     # Read grid
-    lon = State.lon
-    lat = State.lat
-    bbox = [lon.min(),lon.max(),lat.min(),lat.max()]
+    bbox = [State.lon_min,State.lon_max,State.lat_min,State.lat_max]
     
-    # MDT
-    finterpmdt = None
-    if config.path_mdt is not None and os.path.exists(config.path_mdt):
-        finterpmdt = read_auxdata_mdt(config.path_mdt,config.name_var_mdt)
        
     # Compute output observation dictionnary
     dict_obs = {}
@@ -84,46 +78,53 @@ def obs(config, State, *args, **kwargs):
     date = time_obs_min
     while date<=time_obs_max:
         assim_dates.append(date)
-        date += config.assimilation_time_step
+        date += config.EXP.assimilation_time_step
         
-    for sat in config.satellite:
-        
-        print('* for sat',sat,':')
-        
-        # Read satellite info
-        sat_info = read_satellite_info(config,sat)
-        print(sat_info)
+    for name_obs, OBS in config.OBS.items():
+
+        print(f'\n{name_obs}:\n{OBS}')
         
         # Read observation
-        path_obs = os.path.join(sat_info.path,sat_info.name)
-        if '.nc' in path_obs:
-            ds = xr.open_dataset(path_obs)
+        if '.nc' in OBS.path and '*' not in OBS.path:
+            ds = xr.open_dataset(OBS.path)
         else:
-            files = glob.glob(os.path.join(sat_info.path,sat_info.name+'*.nc'))
-            # Get time dimension to concatenate
-            if len(files)==0:
-                continue
-            ds0 = xr.open_dataset(files[0])
-            name_time_dim = ds0[sat_info.name_obs_time].dims[0]
-            ds = xr.open_mfdataset(os.path.join(sat_info.path,sat_info.name+'*.nc'),
-                                   combine='nested',concat_dim=name_time_dim,lock=False)
+            try:
+                if '*' in OBS.path:
+                    ds = xr.open_mfdataset(f'{OBS.path}')
+                else:
+                    ds = xr.open_mfdataset(f'{OBS.path}*.nc')
+            except:
+                print('Warning: unable to properly open multiple netcdf files')
+                if '*' in OBS.path:
+                    files = glob.glob(f'{OBS.path}')
+                else:
+                    files = glob.glob(f'{OBS.path}*.nc')
+                # Get time dimension to concatenate
+                if len(files)==0:
+                    continue
+                ds0 = xr.open_dataset(files[0])
+                name_time_dim = ds0[OBS.name_time].dims[0]
+                ds = xr.open_mfdataset(f'{OBS.path}*.nc',
+                                    combine='nested',concat_dim=name_time_dim,lock=False)
             
         # Run subfunction specific to the kind of satellite
-        if sat_info.kind in ['swot_simulator','CMEMS']:
-            _obs_swot_simulator(ds, assim_dates, dict_obs, sat_info, 
-                                config.assimilation_time_step, 
-                                config.tmp_DA_path,bbox,finterpmdt)
-        elif sat_info.kind=='fullSSH':
-            _obs_fullSSH(ds, assim_dates,dict_obs, sat_info,
-                         config.assimilation_time_step,
-                         config.tmp_DA_path,bbox,finterpmdt)
+        if OBS.super in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
+            _obs_alti(ds, assim_dates, dict_obs, name_obs, OBS, 
+                                config.EXP.assimilation_time_step, 
+                                config.EXP.tmp_DA_path,bbox)
+        elif OBS.super=='OBS_MODEL':
+            _obs_model(ds, assim_dates,dict_obs, OBS,
+                         config.EXP.assimilation_time_step,
+                         config.EXP.tmp_DA_path,bbox)
     
     # Write *dict_obs* for next experiment
-    if config.write_obs:
+    if config.EXP.write_obs:
         if not os.path.exists(path_save_obs):
             os.makedirs(path_save_obs)
-        with open(os.path.join(path_save_obs,name_dict_obs), 'wb') as f:
-            pickle.dump(_new_dict_obs(dict_obs,path_save_obs),f)
+        new_dict_obs = _new_dict_obs(dict_obs,path_save_obs)
+        with open(os.path.join(path_save_obs,name_dict_obs), 'w') as f:
+            #pickle.dump(new_dict_obs,f)
+            f.write(str(new_dict_obs))
             
     return dict_obs
 
@@ -161,8 +162,7 @@ def _new_dict_obs(dict_obs,new_dir):
                     
     
 
-def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
-                        bbox=None,finterpmdt=None):
+def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, bbox=None):
     """
     NAME
         _obs_swot_simulator
@@ -171,91 +171,99 @@ def _obs_swot_simulator(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path,
         Subfunction handling observations generated from swotsimulator module
         
     """
-    ds = ds[sat_info.name_obs_grd + sat_info.name_obs_var]
-    
-    ds = ds.assign_coords({sat_info.name_obs_time:ds[sat_info.name_obs_time]})
 
-    ds = ds.rename({ds[sat_info.name_obs_time].dims[0]:sat_info.name_obs_time})
+    ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
+    ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
     
     # Select sub area
-    lon_obs = ds[sat_info.name_obs_lon] % 360
-    lat_obs = ds[sat_info.name_obs_lat]
+    lon_obs = ds[obs_attr.name_lon] % 360
+    lat_obs = ds[obs_attr.name_lat]
     ds = ds.where((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
                   (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs), drop=True)
+
+    # MDT 
+    if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:
+        finterpmdt = read_auxdata_mdt(obs_attr.path_mdt,obs_attr.name_var_mdt)
+    else:
+        finterpmdt = None
     
     # Time loop
+    count = 0
     for dt_curr in dt_list:
         
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
        
         try:
-            _ds = ds.sel({sat_info.name_obs_time:slice(dt1,dt2)})
+            _ds = ds.sel({obs_attr.name_time:slice(dt1,dt2)})
         except:
             try:
-                _ds = ds.where((ds[sat_info.name_obs_time]<dt2) &\
-                        (ds[sat_info.name_obs_time]>=dt1),drop=True)
+                _ds = ds.where((ds[obs_attr.name_time]<dt2) &\
+                        (ds[obs_attr.name_time]>=dt1),drop=True)
             except:
                 print(dt_curr,': Warning: impossible to select data for this time')
                 continue
         
 
-        lon = _ds[sat_info.name_obs_lon].values
-        lat = _ds[sat_info.name_obs_lat].values
+        lon = _ds[obs_attr.name_lon].values
+        lat = _ds[obs_attr.name_lat].values
         
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
                     
         if is_obs:
             # Save the selected dataset in a new nc file
             varobs = {}
-            for namevar in sat_info.name_obs_var:
-                varobs[namevar] = _ds[namevar]
-                if finterpmdt is not None and True in [sat_info.add_mdt,sat_info.substract_mdt]:
+            for name in obs_attr.name_var:
+                varobs[name] = _ds[obs_attr.name_var[name]]
+                if finterpmdt is not None:
                     mdt_on_obs = finterpmdt((lon,lat))
-                    if sat_info.add_mdt:
+                    if obs_attr.add_mdt:
                         sign = 1
                     else:
                         sign = -1
-                    varobs[namevar].data = varobs[namevar].data + sign*mdt_on_obs
+                    varobs[name].data = varobs[name].data + sign*mdt_on_obs
                     
-            coords = {sat_info.name_obs_time:_ds[sat_info.name_obs_time].values}
-            varobs[sat_info.name_obs_lon] = _ds[sat_info.name_obs_lon]
-            varobs[sat_info.name_obs_lat] = _ds[sat_info.name_obs_lat]
-            if sat_info.name_obs_xac is not None:
-                varobs[sat_info.name_obs_xac] = _ds[sat_info.name_obs_xac]
+            coords = {obs_attr.name_time:_ds[obs_attr.name_time].values}
+            varobs[obs_attr.name_lon] = _ds[obs_attr.name_lon]
+            varobs[obs_attr.name_lat] = _ds[obs_attr.name_lat]
+            if obs_attr.super=='OBS_SSH_SWATH' and obs_attr.name_xac is not None:
+                coords[obs_attr.name_xac] = _ds[obs_attr.name_xac] # Accross track distance 
             
             dsout = xr.Dataset(varobs,
                                coords=coords
                                )
             
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
-            path = os.path.join(out_path, 'obs_' + sat_info.satellite + '_' +\
-                '_'.join(sat_info.name_obs_var) + '_' + date)
+            path = os.path.join(out_path, 'obs_' + obs_name + '_' +\
+                '_'.join(obs_attr.name_var) + '_' + date)
             if finterpmdt is not None:
-                if sat_info.add_mdt:
+                if obs_attr.add_mdt:
                     path += '_addmdt'
-                elif sat_info.substract_mdt:
+                elif obs_attr.substract_mdt:
                     path += '_submdt'
             path += '.nc'
-            print(dt_curr,': '+path)
-            #dsout[sat_info.name_obs_time].encoding.pop("_FillValue", None)
-            dsout.to_netcdf(path, encoding={sat_info.name_obs_time: {'_FillValue': None},
-                                            sat_info.name_obs_lon: {'_FillValue': None},
-                                            sat_info.name_obs_lat: {'_FillValue': None}})
+
+            dsout.to_netcdf(path, encoding={obs_attr.name_time: {'_FillValue': None},
+                                            obs_attr.name_lon: {'_FillValue': None},
+                                            obs_attr.name_lat: {'_FillValue': None}})
             dsout.close()
             _ds.close()
             del dsout,_ds
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
-                    dict_obs[dt_curr]['satellite'].append(sat_info)
+                    dict_obs[dt_curr]['satellite'].append(obs_attr)
                     dict_obs[dt_curr]['obs_name'].append(path)
             else:
                 dict_obs[dt_curr] = {}
-                dict_obs[dt_curr]['satellite'] = [sat_info]
+                dict_obs[dt_curr]['satellite'] = [obs_attr]
                 dict_obs[dt_curr]['obs_name'] = [path]
+            
+            count +=1
+        
+    print(f'--> {count} tracks selected')
     
     
-def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None,finterpmdt=None):
+def _obs_model(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=None,finterpmdt=None):
     
     name_dim_time_obs = ds[sat_info.name_obs_time].dims[0]
     # read time variable
@@ -263,7 +271,7 @@ def _obs_fullSSH(ds, dt_list, dict_obs, sat_info, dt_timestep, out_path, bbox=No
     # convert to datetime objects
     ts = times_obs - np.datetime64('1970-01-01T00:00:00Z')
     ts /= np.timedelta64(1, 's')
-    dt_obs = np.asarray([datetime.utcfromtimestamp(t) for t in ts])
+    dt_obs = np.asarray([datetime.datetime.utcfromtimestamp(t) for t in ts])
     # time loop on model datetime
     for dt_curr in dt_list:
         # Get time interval for this spectific date
@@ -385,8 +393,6 @@ def get_obs(dict_obs,box,time_init,subsampling=1):
                             lon_obs = ds[_sat.name_obs_lon].values
                             lat_obs = ds[_sat.name_obs_lat].values
                             ssh_obs = ds[_sat.name_obs_var[0]].values
-                            if _sat.kind=='CMEMS' and len(_sat.name_obs_var)==2:
-                                ssh_obs += ds[_sat.name_obs_var[1]].values
                             if len(ssh_obs.shape)==2:
                                 # SWATH data
                                 if ssh_obs.shape[0]==time_obs.size:
