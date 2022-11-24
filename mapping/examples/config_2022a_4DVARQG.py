@@ -37,7 +37,7 @@ EXP = dict(
 
     saveoutput_time_step = timedelta(hours=12),  # time step at which the states are saved 
 
-    flag_plot = 1,
+    flag_plot = 0,
 
     write_obs = True, # the observation files are very low to process, so we decide to save the extracted informations in *path_obs* to read it for several experiments
 
@@ -56,13 +56,13 @@ myGRID = dict(
 
     lon_min = 230.,                                         # domain min longitude
 
-    lon_max = 239.5,                                         # domain max longitude
+    lon_max = 240,                                         # domain max longitude
 
     lat_min = 30.,                                          # domain min latitude
 
-    lat_max = 39.5,                                          # domain max latitude
+    lat_max = 40,                                          # domain max latitude
 
-    dx = 25.,                                           # zonal grid spatial step (in degree)
+    dx = 25.,                                               # grid spacing in km
 
     name_init_mask = '../aux/aux_mdt_cnes_cls18_global.nc',
 
@@ -73,7 +73,7 @@ myGRID = dict(
 #################################################################################################################################
 # Model parameters
 #################################################################################################################################
-NAME_MOD = 'myMOD2'
+NAME_MOD = 'myMOD1'
 
 myMOD1 = dict(
 
@@ -89,43 +89,11 @@ myMOD1 = dict(
     
 )
 
-myMOD2 = dict(
-
-    super = 'MOD_SW1L',
-
-    name_var = {'SSH':"ssh"},
-
-    name_init_var = {},
-
-    dtmodel = 3600, # model timestep
-
-    Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
-
-)
-
 
 #################################################################################################################################
 # BOUNDARY CONDITIONS
 #################################################################################################################################
-NAME_BC = 'myBC'
-
-myBC = dict(
-
-    super = 'BC_EXT',
-
-    file = '../../data/2022a_mapping_HFdynamic/mdt.nc', # netcdf file(s) in whihch the boundary conditions fields are stored
-
-    name_lon = 'lon',
-
-    name_lat = 'lat',
-
-    name_time = None,
-
-    name_var = {'SSH':'ssh'}, # name of the boundary conditions variable
-
-    name_mod_var = {'SSH':'ssh'},
-
-)
+NAME_BC = None
 
 
 #################################################################################################################################
@@ -199,81 +167,6 @@ myBASIS1 = dict(
 
 )
 
-myBASIS2 = dict(
-
-    super = 'BASIS_BMaux',
-
-    flux = True,
-
-    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
-
-    wavelet_init = True, # Estimate the initial state 
-
-    name_mod_var = 'ssh', # Name of the related model variable (only useful if wavelet_init==True)
-
-    facns = 1., #factor for wavelet spacing= space
-
-    facnlt = 2., #factor for wavelet spacing= time
-
-    npsp= 3.5, # Defines the wavelet shape
-
-    facpsp= 1.5, # factor to fix df between wavelets
-
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
-
-    factdec = 15, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 1, # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    distortion_eq = 2.,
-
-    lat_distortion_eq = 5.,
-
-    distortion_eq_law = 2.,
-
-    file_aux = '../aux/aux_reduced_basis_BM.nc',
-
-    filec_aux = '../aux/aux_first_baroclinic_speed.nc',
-
-    tssr = 0.5,
-
-    facRo = 8.,
-
-    Romax = 150.,
-
-    cutRo =  1.6
-
-)
-
-myBASIS3 = dict(
-
-    super = 'BASIS_LS',
-
-    flux = True,
-
-    wavelet_init = True,
-
-    name_mod_var = 'ssh',
-
-    facnls= 3., #factor for large-scale wavelet spacing
-        
-    facnlt= 3.,
-        
-    tdec_lw= 25.,
-        
-    std_lw= 0.04,
-        
-    lambda_lw= 970,
-
-    fcor = .5
-
-)
 
 #################################################################################################################################
 # Analysis parameters
@@ -288,7 +181,7 @@ myINV = dict(
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
-    maxiter = 0, # Maximal number of iterations for the minimization process
+    maxiter = 10, # Maximal number of iterations for the minimization process
 
     opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
 
@@ -299,8 +192,6 @@ myINV = dict(
     sigma_R = 1e-2, # Observational standard deviation
 
     prec = True, # preconditoning,
-
-    restart_4Dvar = True
  
 )
 
@@ -448,6 +339,18 @@ myDIAG = dict(
     super = 'DIAG_OSSE',
 
     name_ref = '../../data/2022a_mapping_HFdynamic/dc_ref_eval/2022a_SSH_mapping_CalXover_eval*.nc',
+
+    time_min = datetime(2012,2,10,0),
+
+    time_max = datetime(2012,2,25,0),
+
+    lon_min = 231,
+
+    lon_max = 238,
+
+    lat_min = 31,
+
+    lat_max = 38,
 
     name_ref_time = 'time',
 
