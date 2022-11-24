@@ -46,7 +46,6 @@ class Qgm:
         mask[:,:2] = 1
         mask[-2:,:] = 1
         mask[:,-2:] = 1
-        
     
         if SSH is not None and mdt is not None:
             isNAN = np.isnan(SSH) | np.isnan(mdt)
@@ -69,6 +68,13 @@ class Qgm:
                           if mask[itest,jtest]==2:
                               mask[itest,jtest] = 1
         self.mask = mask
+
+        # Parameter for the gradient conjugate descent
+        self.qgiter = qgiter # Nb of iterations 
+        if qgiter_adj is not None:
+            self.qgiter_adj = qgiter_adj
+        else:
+            self.qgiter_adj = qgiter
         _np = np.shape(np.where(mask>=1))[1]
         _np2 = np.shape(np.where(mask==2))[1]
         _np1 = np.shape(np.where(mask==1))[1]
@@ -101,46 +107,44 @@ class Qgm:
         
         p=-1
         for i in range(ny):
-          for j in range(nx):
-            if (mask[i,j]>=1):
-              p=p+1
-              self.mask1d[p]=mask[i,j]
-              self.H[p]=SSH[i,j]
-              self.dx1d[p]=dx[i,j]
-              self.dy1d[p]=dy[i,j]
-              self.f01d[p]=self.f0[i,j]
-              self.c1d[p]=self.c[i,j]
-              self.indi[p]=i
-              self.indj[p]=j
-              self.indp[i,j]=p
-     
-        
-        
+            for j in range(nx):
+                if (mask[i,j]>=1):
+                    p=p+1
+                    self.mask1d[p]=mask[i,j]
+                    self.H[p]=SSH[i,j]
+                    self.dx1d[p]=dx[i,j]
+                    self.dy1d[p]=dy[i,j]
+                    self.f01d[p]=self.f0[i,j]
+                    self.c1d[p]=self.c[i,j]
+                    self.indi[p]=i
+                    self.indj[p]=j
+                    self.indp[i,j]=p
+    
         p2=-1
         p1=-1
         for p in range(_np):
-          if (self.mask1d[p]==2):
-            p2=p2+1
-            i=self.indi[p]
-            j=self.indj[p]
-            self.vp2[p2]=p
-            self.vp2n[p2]=self.indp[i+1,j]
-            self.vp2nn[p2]=self.indp[i+2,j]
-            self.vp2s[p2]=self.indp[i-1,j]
-            self.vp2ss[p2]=self.indp[i-2,j]
-            self.vp2e[p2]=self.indp[i,j+1]
-            self.vp2ee[p2]=self.indp[i,j+2]
-            self.vp2w[p2]=self.indp[i,j-1]
-            self.vp2ww[p2]=self.indp[i,j-2]
-            self.vp2nw[p2]=self.indp[i+1,j-1]
-            self.vp2ne[p2]=self.indp[i+1,j+1]
-            self.vp2se[p2]=self.indp[i-1,j+1]
-            self.vp2sw[p2]=self.indp[i-1,j-1]
-          if (self.mask1d[p]==1):
-            p1=p1+1
-            i=self.indi[p]
-            j=self.indj[p]
-            self.vp1[p1]=p
+            if (self.mask1d[p]==2):
+                p2=p2+1
+                i=self.indi[p]
+                j=self.indj[p]
+                self.vp2[p2]=p
+                self.vp2n[p2]=self.indp[i+1,j]
+                self.vp2nn[p2]=self.indp[i+2,j]
+                self.vp2s[p2]=self.indp[i-1,j]
+                self.vp2ss[p2]=self.indp[i-2,j]
+                self.vp2e[p2]=self.indp[i,j+1]
+                self.vp2ee[p2]=self.indp[i,j+2]
+                self.vp2w[p2]=self.indp[i,j-1]
+                self.vp2ww[p2]=self.indp[i,j-2]
+                self.vp2nw[p2]=self.indp[i+1,j-1]
+                self.vp2ne[p2]=self.indp[i+1,j+1]
+                self.vp2se[p2]=self.indp[i-1,j+1]
+                self.vp2sw[p2]=self.indp[i-1,j-1]
+            if (self.mask1d[p]==1):
+                p1=p1+1
+                i=self.indi[p]
+                j=self.indj[p]
+                self.vp1[p1]=p
         
         self.aaa = self.g/self.f01d
         self.bbb = - self.g*self.f01d / self.c1d**2
@@ -161,14 +165,7 @@ class Qgm:
         if Kdiffus is not None and Kdiffus==0:
             self.Kdiffus = None
         
-        # Nb of iterations for elliptical inversion
-        self.qgiter = qgiter
-        if qgiter_adj is not None:
-            self.qgiter_adj = qgiter_adj
-        else:
-            self.qgiter_adj = qgiter
-        
-        
+
         # MDT
         self.mdt = mdt
         if self.mdt is not None:
@@ -189,9 +186,7 @@ class Qgm:
             self.uminusbar = 0.5*(self.ubar[2:-2,2:-2]+self.ubar[2:-2,3:-1])
             self.vplusbar  = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
-            
         
-        self.hbc = np.zeros((self.ny,self.nx))
             
         
 
@@ -246,7 +241,7 @@ class Qgm:
                 self.g*self.f0[1:-1,1:-1]/(c[1:-1,1:-1]**2) *h[1:-1,1:-1]
         
         ind = np.where((self.mask==1))
-        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]#self.hbc[ind]
+        q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]
             
         ind = np.where((self.mask==0))
         q[ind] = 0
@@ -292,7 +287,7 @@ class Qgm:
             ((h1d[self.vp2e]+h1d[self.vp2w]-2*h1d[self.vp2])/self.dx1d[self.vp2]**2 +\
              (h1d[self.vp2n]+h1d[self.vp2s]-2*h1d[self.vp2])/self.dy1d[self.vp2]**2) +\
                 self.bbb[self.vp2] * h1d[self.vp2]
-        q1d[self.vp1] = +h1d[self.vp1]
+        q1d[self.vp1] = self.bbb[self.vp1] * h1d[self.vp1]
     
         return q1d
 
@@ -302,7 +297,87 @@ class Qgm:
             return -np.dot(d,r)/tmp
         else: 
             return 1.
-    
+
+
+    def pv2h_old(self,q,hg):
+        ny,nx,=np.shape(hg)
+        g=self.g
+
+
+        x=hg[self.indi,self.indj]
+        q1d=q[self.indi,self.indj]
+
+        #aaa=g/grd.f01d
+        #bbb=-g*grd.f01d/grd.c1d**2
+        #ccc=q1d-grd.f01d
+        aaa=g/self.f0.ravel() 
+        bbb = - g*self.f0.ravel() / (self.c.ravel())**2
+        ccc=+q1d
+        #ccc=+q1d-grd.f01d  
+
+        aaa[self.vp1]=0
+        bbb[self.vp1]=1
+        ccc[self.vp1]=x[self.vp1]  ##boundary condition
+
+        vec=+x
+
+        avec,=self.compute_avec(vec,aaa,bbb)
+        gg=avec-ccc
+        p=-gg
+        #print 'test1', numpy.var(gg)
+
+        for itr in range(self.qgiter-1): 
+            vec=+p
+            avec,=self.compute_avec(vec,aaa,bbb)
+            tmp=np.dot(p,avec)
+            
+            if tmp!=0. : s=-np.dot(p,gg)/tmp
+            else: s=1.
+            
+            a1=np.dot(gg,gg)
+            x=x+s*p
+            vec=+x
+            avec,=self.compute_avec(vec,aaa,bbb)
+            gg=avec-ccc
+            #print 'test', numpy.var(gg)
+            a2=np.dot(gg,gg)
+            
+            if a1!=0: beta=a2/a1
+            else: beta=1.
+            
+            p=-gg+beta*p
+        
+        vec=+p
+        avec,=self.compute_avec(vec,aaa,bbb)
+        val1=-np.dot(p,gg)
+        val2=np.dot(p,avec)
+        if (val2==0.): 
+            s=1.
+        else: 
+            s=val1/val2
+        
+        #pdb.set_trace()
+        a1=np.dot(gg,gg)
+        x=x+s*p
+
+        # back to 2D
+        h=np.empty((ny,nx))
+        h[:,:]=np.NAN
+        h[self.indi,self.indj]=x[:]
+
+
+        return h
+
+    def compute_avec(self,vec,aaa,bbb):
+
+        avec=np.empty(self.np,) 
+        #avec[grd.vp2]=aaa[grd.vp2]*((vec[grd.vp2e]+vec[grd.vp2w]-2*vec[grd.vp2])/(grd.dx1d[grd.vp2]**2)+(vec[grd.vp2n]+vec[grd.vp2s]-2*vec[grd.vp2])/(grd.dy1d[grd.vp2]**2)) + bbb[grd.vp2]*vec[grd.vp2]
+        avec[self.vp2]=aaa[self.vp2]*((vec[self.vp2e]+vec[self.vp2w]-2*vec[self.vp2])/(self.dx1d[self.vp2]**2)+(vec[self.vp2n]+vec[self.vp2s]-2*vec[self.vp2])/(self.dy1d[self.vp2]**2)) + bbb[self.vp2]*vec[self.vp2]
+        avec[self.vp1]=vec[self.vp1]
+        
+        return avec,
+
+
 
     def pv2h(self,q,hg):
         """ Q to SSH
@@ -322,9 +397,10 @@ class Qgm:
         q1d = q[self.indi,self.indj]
     
         ccc = +q1d
-    
+        ccc[self.vp1] = x[self.vp1]
+
         r = self.h2pv_1d(x) - ccc
-        r[self.vp1] = 0 ## boundary condition     
+        
         
         d = -r
         
@@ -339,7 +415,7 @@ class Qgm:
                 
                 # Compute beta
                 rnew = self.h2pv_1d(xnew) - ccc
-                rnew[self.vp1] = 0 ## boundary condition     
+                
                 a1 = np.dot(r,r)
                 a2 = np.dot(rnew,rnew)
                 if a1!=0:
@@ -355,7 +431,6 @@ class Qgm:
                 # Update state
                 alpha = self.alpha(d,r)
                 xnew = x + alpha*d
-        
     
         # back to 2D
         h = np.empty((self.ny,self.nx))
@@ -364,7 +439,6 @@ class Qgm:
     
         return h
 
-    
     def qrhs(self,u,v,q,way):
 
         """ PV increment, upwind scheme
