@@ -1,4 +1,4 @@
-inv.py#!/usr/bin/env python3
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 Created on Wed Jan  6 16:59:11 2021
