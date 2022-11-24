@@ -72,8 +72,6 @@ GRID_FROM_FILE = dict(
 
     name_init_lat = '',
 
-    name_init_var = [None], # List of variables with same dimension of the model state variables. If one variable is None, it will be set to zero.
-
     subsampling = None,
 
 )
@@ -111,7 +109,7 @@ GRID_CAR = dict(
 
     lat_max = 43.,                                         # domain max latitude
 
-    dx = 25.,                                              # grid spacinng in km
+    dx = 25.,                                              # grid spacing in km
 
     name_init_mask = None,
 
