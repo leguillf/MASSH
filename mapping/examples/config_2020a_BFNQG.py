@@ -36,11 +36,7 @@ EXP = dict(
 
     saveoutput_time_step = timedelta(hours=6),  # time step at which the states are saved 
 
-    flag_plot = 1,
-
-    write_obs = True,
-
-    path_obs = f'../obs/2020a_BFNQG'
+    flag_plot = 0,
 
 )
     
@@ -61,9 +57,9 @@ myGRID = dict(
 
     lat_max = 43.,                                         # domain max latitude
 
-    dx = 1/4.,                                            # zonal grid spatial step (in degree)
+    dx = 1/10.,                                            # zonal grid spatial step (in degree)
 
-    dy = 1/4.,                                            # meridional grid spatial step (in degree)
+    dy = 1/10.,                                            # meridional grid spatial step (in degree)
 
 )
 
@@ -78,15 +74,11 @@ myMOD = dict(
 
     super = 'MOD_QG1L_NP',
 
-    use_jax = False,
-
     name_var = {'SSH':"ssh", "PV":"pv"},
 
     dtmodel = 1200, # model timestep
 
-    time_scheme = 'rk4',
-
-    c0 = 2.7
+    c0 = 2.7,
 
 )
 
@@ -112,33 +104,14 @@ myBC = dict(
 
     name_mod_var = {'SSH':'ssh'},
 
-    dist_sponge = 50
-
-)
-
-#################################################################################################################################
-# INVERSION
-#################################################################################################################################
-NAME_INV = 'myINV'
-
-myINV = dict(
-    
-    super = 'INV_BFN',
-
-    window_size = timedelta(days=7), # length of the bfn time window
-
-    window_output = timedelta(days=3), # length of the output time window, in the middle of the bfn window. (need to be smaller than *bfn_window_size*)
-
-    propagation_timestep = timedelta(hours=3), # propagation time step of the BFN, corresponding to the time step at which the nudging term is computed
-
-    max_iteration = 2, # maximal number of iterations if *bfn_criterion* is not met
+    dist_sponge = 50 # Peripherical band width (km) on which the boundary conditions are applied
 
 )
 
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
-NAME_OBS = ['J1']#,'EN','TPN','G2']
+NAME_OBS = ['J1','EN','TPN','G2']
 
 SWOT_KARIN = dict(
 
@@ -253,6 +226,25 @@ G2 = dict(
 )
 
 
+#################################################################################################################################
+# INVERSION
+#################################################################################################################################
+NAME_INV = 'myINV'
+
+myINV = dict(
+    
+    super = 'INV_BFN',
+
+    window_size = timedelta(days=7), # length of the bfn time window
+
+    window_output = timedelta(days=3), # length of the output time window, in the middle of the bfn window. (need to be smaller than *bfn_window_size*)
+
+    propagation_timestep = timedelta(hours=3), # propagation time step of the BFN, corresponding to the time step at which the nudging term is computed
+
+    max_iteration = 10, # maximal number of iterations if *bfn_criterion* is not met
+
+)
+
 
 #################################################################################################################################
 # Diagnostics
@@ -269,7 +261,7 @@ myDIAG = dict(
 
     time_max = datetime(2012,12,2,0),
 
-    name_ref = '../../2020a_SSH_mapping_NATL60/dc_ref/NATL60-CJM165_GULFSTREAM*.nc',
+    name_ref = '../../data/2020a_SSH_mapping_NATL60/dc_ref/NATL60-CJM165_GULFSTREAM*.nc',
 
     name_ref_time = 'time',
 
