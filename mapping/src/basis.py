@@ -43,46 +43,59 @@ def Basis(config, State, *args, **kwargs):
             return BASIS_LS(config, State)
         
         elif config.BASIS.super=='BASIS_IT':
-            return Basis_IT(config)
+            return Basis_IT(config, State)
     
         else:
             sys.exit(config.BASIS.super + ' not implemented yet')
 
 class Basis_IT:
    
-    def __init__(self,config):
-
+    def __init__(self,config, State):
         self.km2deg =1./110
     
-        self.facns = config.facgauss
-        self.facnlt = config.facgauss
-        self.D_He = config.D_He
-        self.T_He = config.T_He
-        self.D_bc = config.D_bc
-        self.T_bc = config.T_bc
+        self.facns = config.BASIS.facgauss
+        self.facnlt = config.BASIS.facgauss
+        self.D_He = config.BASIS.D_He
+        self.T_He = config.BASIS.T_He
+        self.D_bc = config.BASIS.D_bc
+        self.T_bc = config.BASIS.T_bc
         
-        self.sigma_B_He = config.sigma_B_He
-        self.sigma_B_bc = config.sigma_B_bc
+        self.sigma_B_He = config.BASIS.sigma_B_He
+        self.sigma_B_bc = config.BASIS.sigma_B_bc
         
-        
-        if config.Ntheta>0:
-            self.Ntheta = 2*(config.Ntheta-1)+3 # We add -pi/2,0,pi/2
+        if config.BASIS.Ntheta>0:
+            self.Ntheta = 2*(config.BASIS.Ntheta-1)+3 # We add -pi/2,0,pi/2
         else:
             self.Ntheta = 1 # Only angle 0°
             
-        self.w_it = config.w_igws
+        self.w_it = config.BASIS.w_it
+
+        # Grid params
+        self.nphys= State.lon.size
+        self.shape_phys = (State.ny,State.nx)
+        self.ny = State.ny
+        self.nx = State.nx
+        self.lon_min = State.lon_min
+        self.lon_max = State.lon_max
+        self.lat_min = State.lat_min
+        self.lat_max = State.lat_max
+        self.lon1d = State.lon.flatten()
+        self.lat1d = State.lat.flatten()
+        self.lonS = State.lon[0,:]
+        self.lonN = State.lon[-1,:]
+        self.latE = State.lat[:,0]
+        self.latW = State.lat[:,-1]
     
-    def set_basis(self,time,lon,lat,return_q=False):
+    def set_basis(self,time,return_q=False):
         
         TIME_MIN = time.min()
         TIME_MAX = time.max()
-        LON_MIN = lon.min()
-        LON_MAX = lon.max()
-        LAT_MIN = lat.min()
-        LAT_MAX = lat.max()
+        LON_MIN = self.lon_min
+        LON_MAX = self.lon_max
+        LAT_MIN = self.lat_min
+        LAT_MAX = self.lat_max
         if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
-        lon1d = lon.flatten()
-        lat1d = lat.flatten()
+
         self.time = time
         
         ##########################
@@ -111,18 +124,18 @@ class Basis_IT:
         
         
         # Gaussian functions in space
-        He_xy_gauss = np.zeros((ENSLAT_He.size,lon1d.size))
+        He_xy_gauss = np.zeros((ENSLAT_He.size,self.lon1d.size))
         for i,(lat0,lon0) in enumerate(zip(ENSLAT_He,ENSLON_He)):
             iobs = np.where(
-                    (np.abs((np.mod(lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_He) &
-                    (np.abs((lat1d - lat0) / self.km2deg) <= self.D_He)
+                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_He) &
+                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_He)
                     )[0]
-            xx = (np.mod(lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
-            yy = (lat1d[iobs] - lat0) / self.km2deg
+            xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+            yy = (self.lat1d[iobs] - lat0) / self.km2deg
             
             He_xy_gauss[i,iobs] = mywindow(xx / self.D_He) * mywindow(yy / self.D_He)
 
-        He_xy_gauss = He_xy_gauss.reshape((ENSLAT_He.size,lon.shape[0],lon.shape[1]))
+        He_xy_gauss = He_xy_gauss.reshape((ENSLAT_He.size,self.ny,self.nx))
         
         # Gaussian functions in time
         He_t_gauss = np.zeros((ENST_He.size,time.size))
@@ -153,10 +166,10 @@ class Basis_IT:
                     LON_MAX + 1.5*self.D_bc/self.facns/np.cos(LAT_MIN*np.pi/180.)*self.km2deg,
                     self.D_bc/self.facns/np.cos(LAT_MIN*np.pi/180.)*self.km2deg),
                 360)
-        bc_S_gauss = np.zeros((ENSLON_S.size,lon.shape[1]))
+        bc_S_gauss = np.zeros((ENSLON_S.size,self.nx))
         for i,lon0 in enumerate(ENSLON_S):
-            iobs = np.where((np.abs((np.mod(lon[0,:] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)) <= self.D_bc))[0] 
-            xx = (np.mod(lon[0,:][iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)     
+            iobs = np.where((np.abs((np.mod(self.lonS - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)) <= self.D_bc))[0] 
+            xx = (np.mod(self.lonS[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)     
             bc_S_gauss[i,iobs] = mywindow(xx / self.D_bc) 
         
         # North
@@ -166,27 +179,26 @@ class Basis_IT:
                     LON_MAX + 1.5*self.D_bc/self.facns/np.cos(LAT_MAX*np.pi/180.)*self.km2deg,
                     self.D_bc/self.facns/np.cos(LAT_MAX*np.pi/180.)*self.km2deg),
                 360)
-        bc_N_gauss = np.zeros((ENSLON_N.size,lon.shape[1]))
+        bc_N_gauss = np.zeros((ENSLON_N.size,self.nx))
+        for i,lon0 in enumerate(ENSLON_N):
+            iobs = np.where((np.abs((np.mod(self.lonN - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)) <= self.D_bc))[0] 
+            xx = (np.mod(self.lonN[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)     
+            bc_N_gauss[i,iobs] = mywindow(xx / self.D_bc) 
         
         # East
-        bc_E_gauss = np.zeros((ENSLAT.size,lon.shape[0]))
+        bc_E_gauss = np.zeros((ENSLAT.size,self.ny))
         for i,lat0 in enumerate(ENSLAT):
-            iobs = np.where(np.abs((lat[:,0] - lat0) / self.km2deg) <= self.D_bc)[0]
-            yy = (lat[:,0][iobs] - lat0) / self.km2deg
+            iobs = np.where(np.abs((self.latE - lat0) / self.km2deg) <= self.D_bc)[0]
+            yy = (self.latE[iobs] - lat0) / self.km2deg
             bc_E_gauss[i,iobs] = mywindow(yy / self.D_bc) 
 
         # West 
-        bc_W_gauss = np.zeros((ENSLAT.size,lon.shape[0]))
+        bc_W_gauss = np.zeros((ENSLAT.size,self.ny))
         for i,lat0 in enumerate(ENSLAT):
-            iobs = np.where(np.abs((lat[:,-1] - lat0) / self.km2deg) <= self.D_bc)[0]
-            yy = (lat[:,-1][iobs] - lat0) / self.km2deg
+            iobs = np.where(np.abs((self.latW - lat0) / self.km2deg) <= self.D_bc)[0]
+            yy = (self.latW[iobs] - lat0) / self.km2deg
             bc_W_gauss[i,iobs] = mywindow(yy / self.D_bc) 
 
-        
-        for i,lon0 in enumerate(ENSLON_N):
-            iobs = np.where((np.abs((np.mod(lon[-1,:] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)) <= self.D_bc))[0] 
-            xx = (np.mod(lon[-1,:][iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)     
-            bc_N_gauss[i,iobs] = mywindow(xx / self.D_bc) 
         
         self.bc_S_gauss = bc_S_gauss
         self.bc_N_gauss = bc_N_gauss
@@ -228,18 +240,18 @@ class Basis_IT:
         self.nbasis = self.nHe + self.nbc
         
         # OUTPUT SHAPES (physical space)
-        self.shapeHe_phys = lon.shape
+        self.shapeHe_phys = (self.ny,self.nx)
         self.shapehbcx_phys = [len(self.w_it), # tide frequencies
                           2, # North/South
                           2, # cos/sin
                           self.Ntheta, # Angles
-                          lon.shape[1] # NX
+                          self.nx # NX
                           ]
         self.shapehbcy_phys = [len(self.w_it), # tide frequencies
                           2, # North/South
                           2, # cos/sin
                           self.Ntheta, # Angles
-                          lon.shape[0] # NY
+                          self.ny # NY
                           ]
         self.nphys = np.prod(self.shapeHe_phys) + np.prod(self.shapehbcx_phys) + np.prod(self.shapehbcy_phys)
         self.sliceHe_phys = slice(0,np.prod(self.shapeHe_phys))
@@ -249,8 +261,6 @@ class Basis_IT:
                                np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys)+np.prod(self.shapehbcy_phys))
         
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
-    
-        #self.test_operg()
         
         # Fill Q matrix
         if return_q:
@@ -277,7 +287,7 @@ class Basis_IT:
             return Q
         
         
-    def operg(self,X,t,State=None):
+    def operg(self,t,X,State=None):
         """
             Project to physicial space
         """
@@ -311,24 +321,31 @@ class Basis_IT:
             np.tensordot(X_bcW,self.bc_W_gauss,(-1,0)),
                                  self.bc_t_gauss[:,indt],(-2,0))
         
-        phi = np.concatenate((He.flatten(),hbcx.flatten(),hbcy.flatten()))
-        
-        
         if State is not None:
-            State.params = phi
+            State.params['He'] = He
+            State.params['hbcx'] = hbcx
+            State.params['hbcy'] = hbcy
         else:
+            phi = np.concatenate((He.flatten(),hbcx.flatten(),hbcy.flatten()))
             return phi
 
 
-    def operg_transpose(self,adState, adX, t):
+    def operg_transpose(self,t,phi=None,adState=None):
         """
             Project to reduced space
         """
         
         # Get variable in physical space
-        He = adState.params[self.sliceHe_phys].reshape(self.shapeHe_phys)
-        hbcx = adState.params[self.slicehbcx_phys].reshape(self.shapehbcx_phys)
-        hbcy = adState.params[self.slicehbcy_phys].reshape(self.shapehbcy_phys)
+        if phi is not None:
+            He = phi[self.sliceHe_phys].reshape(self.shapeHe_phys)
+            hbcx = phi[self.slicehbcx_phys].reshape(self.shapehbcx_phys)
+            hbcy = phi[self.slicehbcy_phys].reshape(self.shapehbcy_phys)
+        elif adState is not None:
+            He = adState.params['He'].reshape(self.shapeHe_phys)
+            hbcx = adState.params['hbcx'].reshape(self.shapehbcx_phys)
+            hbcy = adState.params['hbcy'].reshape(self.shapehbcy_phys)
+        else:
+            sys.exit('Provide either phi or adState')
         
         # Project to reduced space
         indt = np.argmin(np.abs(self.time-t))   
@@ -349,20 +366,29 @@ class Basis_IT:
                hbcy[:,1,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
                                               self.bc_W_gauss,(-2,-1))
         
-        adX += np.concatenate((adX_He.flatten(),
+        adX = np.concatenate((adX_He.flatten(),
                               adX_bcS.flatten(),
                               adX_bcN.flatten(),
                               adX_bcE.flatten(),
                               adX_bcW.flatten()))
         
+        return adX
 
         
-    def test_operg(self,t=0):
-        psi = np.random.random((self.nbasis,))
-        phi = np.random.random((self.nphys,))
+    def test_operg(self, t, State):
+
+
+        State0 = State.random()
+        phi0 = np.random.random((self.nbasis,))
+        adState1 = State.random()
+        psi1 = adState1.getparams(vect=True)
+
+        phi1 = self.operg_transpose(t,adState=adState1)
+        self.operg(t,phi0,State=State0)
+        psi0 = State0.getparams(vect=True)
         
-        ps1 = np.inner(psi,self.operg_transpose(phi,t))
-        ps2 = np.inner(self.operg(psi,t),phi)
+        ps1 = np.inner(psi0,psi1)
+        ps2 = np.inner(phi0,phi1)
             
         print(f'test G[{t}]:', ps1/ps2)
         
@@ -609,7 +635,7 @@ class Basis_BM:
         if return_q:
             return Q
     
-    def operg(self, X, t, transpose=False,State=None):
+    def operg(self, t, X, transpose=False,State=None):
         
         """
             Project to physicial space
@@ -688,7 +714,7 @@ class Basis_BM:
             return phi
         
 
-    def operg_transpose(self, adState, t):
+    def operg_transpose(self, t, adState):
         
         """
             Project to reduced space
@@ -696,13 +722,13 @@ class Basis_BM:
         
         if t==0:
             if self.wavelet_init:
-                adX = self.operg(adState.getvar(self.name_mod_var), t, transpose=True)
+                adX = self.operg(t, adState.getvar(self.name_mod_var), transpose=True)
             else:
-                adX = self.operg(adState.params[self.name_mod_var], t, transpose=True)
+                adX = self.operg(t, adState.params[self.name_mod_var], transpose=True)
         else:
             if adState.params[self.name_mod_var] is None:
                 adState.params[self.name_mod_var] = np.zeros((self.nphys,))
-            adX = self.operg(adState.params[self.name_mod_var], t, transpose=True)
+            adX = self.operg(t, adState.params[self.name_mod_var], transpose=True)
         
         adState.params[self.name_mod_var] *= 0.
         
@@ -1202,7 +1228,7 @@ class BASIS_LS:
         if return_q:
             return Q
     
-    def operg(self, X, t, transpose=False,State=None):
+    def operg(self, t, X, transpose=False,State=None):
         
         """
             Project to physicial space
@@ -1262,20 +1288,20 @@ class BASIS_LS:
         else:
             return phi
         
-    def operg_transpose(self, adState, t):
+    def operg_transpose(self, t, adState):
         
         """
             Project to reduced space
         """
         
         if t==0:
-            adX = self.operg(adState.getvar(self.name_mod_var), t, transpose=True)
+            adX = self.operg(t, adState.getvar(self.name_mod_var), transpose=True)
         else:
             if adState.params is None:
                 adState.params[self.name_mod_var] = np.zeros((self.shape_phys))
-            adX = self.operg(adState.params[self.name_mod_var], t, transpose=True)
+            adX = self.operg(t, adState.params[self.name_mod_var], transpose=True)
         
-        adState.params[self.name_mod_var] *= 0.
+        adState.params[self.name_mod_var] = np.zeros((self.shape_phys))
         
         return adX
 
@@ -1314,7 +1340,7 @@ class Basis_multi:
         if return_q:
             return Q
 
-    def operg(self, X, t, transpose=False, State=None):
+    def operg(self, t, X, transpose=False, State=None):
         
         """
             Project to physicial space
@@ -1324,13 +1350,13 @@ class Basis_multi:
 
         for i,B in enumerate(self.Basis):
             _X = X[self.slice_basis[i]]
-            phi = np.append(phi,B.operg(_X,t,State=State,transpose=transpose))
+            phi = np.append(phi,B.operg(t, _X, State=State, transpose=transpose))
         
         if State is None:
             return phi
 
 
-    def operg_transpose(self, adState, t):
+    def operg_transpose(self, t, adState):
         
         """
             Project to reduced space
@@ -1338,7 +1364,7 @@ class Basis_multi:
         
         adX = np.array([])
         for B in self.Basis:
-            adX = np.concatenate((adX,B.operg_transpose(adState,t)))
+            adX = np.concatenate((adX,B.operg_transpose(t, adState)))
 
         return adX
 

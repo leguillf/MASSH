@@ -16,6 +16,7 @@ import pandas as pd
 import glob 
 
 from .tools import detrendn,read_auxdata_mdt
+from .exp import Config
 
 def Obs(config, State, *args, **kwargs):
     """
@@ -156,7 +157,7 @@ def _new_dict_obs(dict_obs,new_dir):
                 os.system(f'cp {obs} {new_obs}')
             # Update new dictionary 
             new_dict_obs[date]['obs_name'].append(new_obs)
-            new_dict_obs[date]['satellite'].append(sat)
+            new_dict_obs[date]['satellite'].append(Config(sat))
             
     return new_dict_obs
                     
@@ -254,11 +255,12 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     dict_obs[dt_curr]['satellite'].append(obs_attr)
                     dict_obs[dt_curr]['obs_name'].append(path)
             else:
-                dict_obs[dt_curr] = {}
+                dict_obs[dt_curr] = Config({})
                 dict_obs[dt_curr]['satellite'] = [obs_attr]
                 dict_obs[dt_curr]['obs_name'] = [path]
             
             count +=1
+
         
     print(f'--> {count} tracks selected')
     

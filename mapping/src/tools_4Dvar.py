@@ -109,16 +109,14 @@ class Variational:
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                self.basis.operg(X,t/3600/24,State=State)
+                self.basis.operg(t/3600/24, X, State=State)
         
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoints[i]) + '.nc'))
 
             # 3. Run forward model
-            self.M.step(t=t,State=State,nstep=nstep)
+            #self.M.step(t=t,State=State,nstep=nstep)
 
-            
-        
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if timestamp in self.H.date_obs:
             misfit, inv_noise2 = self.H.misfit(timestamp,State) # d=Hx-xobsx
@@ -174,11 +172,11 @@ class Variational:
                        'model_state_' + str(self.checkpoints[i]) + '.nc'))
             
             # 3. Run adjoint model 
-            self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
+            #self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                adX += self.basis.operg_transpose(adState,t/3600/24)
+                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
             
             # 1. Misfit 
             if timestamp in self.H.date_obs:

@@ -63,7 +63,7 @@ EXP = dict(
 #################################################################################################################################
 NAME_GRID = 'GRID_GEO'
 
-# From file
+# Read grid from file
 GRID_FROM_FILE = dict(
 
     path_init_grid = '', 
@@ -76,7 +76,7 @@ GRID_FROM_FILE = dict(
 
 )
 
-# Regular geographical grid
+# Regular geodetic grid
 GRID_GEO = dict(
 
     lon_min = 294.,                                        # domain min longitude
@@ -97,6 +97,7 @@ GRID_GEO = dict(
 
 )
 
+# Regular cartesian grid 
 GRID_CAR = dict(
 
     super = 'GRID_CAR',
@@ -210,7 +211,7 @@ MOD_DIFF = dict(
 
 )
 
-# 1.5-layer Quasi-Geostrophic model
+# 1.5-layer Quasi-Geostrophic models
 MOD_QG1L_NP = dict(
 
     name_var = {'SSH':"ssh"},
@@ -292,9 +293,9 @@ MOD_QG1L_JAX = dict(
 )
 
 # 1.5-layer Shallow-Water model
-MOD_SW1L = dict(
+MOD_SW1L_NP = dict(
 
-    name_var = ["u","v","ssh"],
+    name_var = {'U':'u','V':'v','SSH':'ssh'},
 
     name_init_var = [],
 
@@ -314,7 +315,9 @@ MOD_SW1L = dict(
 
     He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
 
-    Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    g = 9.81
 
 )
 
@@ -325,26 +328,6 @@ MOD_SW1L = dict(
 NAME_BC = None # For now, only BC_EXT is available
 
 # External boundary conditions
-BC_NUD = dict(
-
-    lenght_bc = 50, # lenght (in km) of the peripherical band for which the boundary conditions are applied
-
-    file_bc = None, # netcdf file(s) in whihch the boundary conditions fields are stored
-
-    name_var_bc = {'time':'','lon':'','lat':'','var':''}, # name of the boundary conditions variable
-
-    add_mdt_bc = False, # Add mdt to boundary conditions. Useful only if boundary conditions are on sla
-
-    use_bc_on_coast = True, # use boundary conditions on coast. Useful only if MDT or a mask is provided 
-
-    file_depth = None, # netcdf file(s) in which the topography is stored
-
-    name_var_depth = {'time':'','lon':'','lat':'','var':''}, # name of the topography variable
-
-    bc_mindepth = None # minimal depth below which boundary conditions are used  
-
-)
-
 BC_EXT = dict(
 
     file = None, # netcdf file(s) in whihch the boundary conditions fields are stored
@@ -617,6 +600,10 @@ BASIS_LS = dict(
 
 # Internal Tides
 BASIS_IT = dict(
+
+    w_it = [],
+
+    Ntheta = 0,
 
     sigma_B_He = 0.2, # Background variance for He
 

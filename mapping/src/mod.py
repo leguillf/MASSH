@@ -46,8 +46,8 @@ def Model(config,State):
             return Model_qg1l_np(config,State)
         elif config.MOD.super=='MOD_QG1L_JAX':
             return Model_qg1l_jax(config,State)
-        elif config.MOD.super=='MOD_SW1L':
-            return Model_sw1l(config,State)
+        elif config.MOD.super=='MOD_SW1L_NP':
+            return Model_sw1l_np(config,State)
         else:
             sys.exit(config.MOD.super + ' not implemented yet')
     else:
@@ -687,9 +687,9 @@ class Model_qg1l_jax:
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            tangent_test(self,State)
+            tangent_test(self,State,nstep=100)
             print('Adjoint test:')
-            adjoint_test(self,State)
+            adjoint_test(self,State,nstep=100)
         
 
     def set_bc(self,time_bc,var_bc):
@@ -698,7 +698,6 @@ class Model_qg1l_jax:
             if var in self.name_var['SSH']:
                 for i,t in enumerate(time_bc):
                     self.SSHb[t] = var_bc[var][i].flatten()
-
 
 
     def step(self,State,nstep=1,t=None):
@@ -1037,7 +1036,7 @@ variable are SLAs!')
 #                         Shallow Water Models                                #
 ###############################################################################
 
-class Model_sw1l:
+class Model_sw1l_np:
     def __init__(self,config,State):
 
         self.config = config
@@ -1074,6 +1073,10 @@ class Model_sw1l:
         self.nt = 1 + int((config.EXP.final_date - config.EXP.init_date).total_seconds()//self.dt)
         self.T = np.arange(self.nt) * self.dt
         self.time_scheme = config.MOD.time_scheme
+
+        # grid
+        self.ny = State.ny
+        self.nx = State.nx
         
         # Construct timestamps
         self.timestamps = [] 
@@ -1085,6 +1088,8 @@ class Model_sw1l:
 
         # Coriolis
         self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
+
+        self.g = config.MOD.g
              
         # Equivalent depth
         if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
@@ -1175,6 +1180,7 @@ class Model_sw1l:
             self._jstep_jit = jit(self._jstep)
             self._jstep_tgl_jit = jit(self._jstep_tgl)
             self._jstep_adj_jit = jit(self._jstep_adj)
+            self._compute_w1_IT_jit = jit(self._compute_w1_IT)
             # Functions related to time_scheme
             if self.time_scheme=='Euler':
                 self.swm_step = self.swm.step_euler_jit
@@ -1202,22 +1208,29 @@ class Model_sw1l:
             self.step = self.step_np
             self.step_tgl = self.step_tgl_np
             self.step_adj = self.step_adj_np
+        
+        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+            print('Tangent test:')
+            tangent_test(self,State,nstep=10)
+            print('Adjoint test:')
+            adjoint_test(self,State,nstep=10)
 
         
     def step_np(self,State,nstep=1,t0=0,t=0):
 
         # Init
-        u0,v0,h0 = State.getvar(self.name_var)
+        u0 = State.getvar(self.name_var['U'])
+        v0 = State.getvar(self.name_var['V'])
+        h0 = State.getvar(self.name_var['SSH'])
         u = +u0
         v = +v0
         h = +h0
         
         # Get params in physical space
         if State.params is not None:
-            params = State.params[self.sliceparams]
-            He = params[self.sliceHe].reshape(self.shapeHe) + self.Heb
-            hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
+            He = State.params['He'].reshape(self.shapeHe) + self.Heb
+            hbcx = State.params['hbcx'].reshape(self.shapehbcx)
+            hbcy = State.params['hbcy'].reshape(self.shapehbcy)
         else:
             He = hbcx = hbcy = None
         
@@ -1230,27 +1243,31 @@ class Model_sw1l:
                 t+i*self.dt,
                 u,v,h,He=He,hbcx=hbcx,hbcy=hbcy,first=first)
             
-        State.setvar([u,v,h],self.name_var)
+        State.setvar(u,self.name_var['U'])
+        State.setvar(v,self.name_var['V'])
+        State.setvar(h,self.name_var['SSH'])
         
     def step_tgl_np(self,dState,State,nstep=1,t0=0,t=0):
         
         # Get state variables and model parameters
-        du0,dv0,dh0 = dState.getvar(self.name_var)
-        u0,v0,h0 = State.getvar(self.name_var)
+        du0 = dState.getvar(self.name_var['U'])
+        dv0 = dState.getvar(self.name_var['V'])
+        dh0 = dState.getvar(self.name_var['SSH'])
+        u0 = State.getvar(self.name_var['U'])
+        v0 = State.getvar(self.name_var['V'])
+        h0 = State.getvar(self.name_var['SSH'])
         
         if State.params is not None:
-            params = State.params[self.sliceparams]
-            He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
+            He = State.params['He'].reshape(self.shapeHe) + self.Heb
+            hbcx = State.params['hbcx'].reshape(self.shapehbcx)
+            hbcy = State.params['hbcy'].reshape(self.shapehbcy)
         else:
             He = hbcx = hbcy = None
             
         if dState.params is not None:
-            dparams = dState.params[self.sliceparams]
-            dHe = dparams[self.sliceHe].reshape(self.shapeHe)
-            dhbcx = dparams[self.slicehbcx].reshape(self.shapehbcx)
-            dhbcy = dparams[self.slicehbcy].reshape(self.shapehbcy)
+            dHe = dState.params['He'].reshape(self.shapeHe) 
+            dhbcx = dState.params['hbcx'].reshape(self.shapehbcx)
+            dhbcy = dState.params['hbcy'].reshape(self.shapehbcy)
         else:
             dHe = dhbcx = dhbcy = None
     
@@ -1285,19 +1302,24 @@ class Model_sw1l:
                 dHe=dHe,He=He,
                 dhbcx=dhbcx,dhbcy=dhbcy,hbcx=hbcx,hbcy=hbcy,first=first)
             
-        dState.setvar([du,dv,dh],self.name_var)
+        dState.setvar(du,self.name_var['U'])
+        dState.setvar(dv,self.name_var['V'])
+        dState.setvar(dh,self.name_var['SSH'])
         
     def step_adj_np(self,adState, State, nstep=1, t0=0,t=0):
         
         # Get variables
-        adu0,adv0,adh0 = adState.getvar(self.name_var)
-        u0,v0,h0 = State.getvar(self.name_var)
+        adu0 = adState.getvar(self.name_var['U'])
+        adv0 = adState.getvar(self.name_var['V'])
+        adh0 = adState.getvar(self.name_var['SSH'])
+        u0 = State.getvar(self.name_var['U'])
+        v0 = State.getvar(self.name_var['V'])
+        h0 = State.getvar(self.name_var['SSH'])
         
         if State.params is not None:
-            params = State.params[self.sliceparams]
-            He = params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = params[self.slicehbcy].reshape(self.shapehbcy)
+            He = State.params['He'].reshape(self.shapeHe) + self.Heb
+            hbcx = State.params['hbcx'].reshape(self.shapehbcx)
+            hbcy = State.params['hbcy'].reshape(self.shapehbcy)
         else:
             He = hbcx = hbcy = None
         
@@ -1339,29 +1361,34 @@ class Model_sw1l:
             adhbcy += adhbcy_tmp
             
         # Update state
-        adState.setvar([adu,adv,adh],self.name_var)
+        adState.setvar(adu,self.name_var['U'])
+        adState.setvar(adv,self.name_var['V'])
+        adState.setvar(adh,self.name_var['SSH'])
         
         # Update parameters
-        adState.params[self.sliceparams] += np.concatenate((adHe.flatten(), 
-                                                            adhbcx.flatten(), 
-                                                            adhbcy.flatten()))
+        adState.params['He'] += adHe
+        adState.params['hbcx'] += adhbcx
+        adState.params['hbcy'] += adhbcy
     
     def step_jnp(self,State,nstep=1,t=0):
 
         # Get state variable
-        X0 = +State.getvar(self.name_var,vect=True)
+        X0 = +State.getvar(
+            [self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']],vect=True)
         
         # Get params in physical space
         if State.params is not None:
-            params = State.params[self.sliceparams]
+            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
             X0 = np.concatenate((X0,params))
+
         # Init
-        
         X1 = +X0
         # Add time in control vector (for JAX)
         X1 = np.append(t,X1)
         # Time stepping
-        for i in range(nstep):
+        for _ in range(nstep):
             # One time step
             X1 = self._jstep_jit(X1)
         
@@ -1373,7 +1400,10 @@ class Model_sw1l:
         v1 = X1[self.swm.slicev].reshape(self.swm.shapev)
         h1 = X1[self.swm.sliceh].reshape(self.swm.shapeh)
         
-        State.setvar([u1,v1,h1],self.name_var)
+        State.setvar([u1,v1,h1],[
+            self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']])
         
     def _jstep(self,X0):
         
@@ -1417,13 +1447,21 @@ class Model_sw1l:
     def step_tgl_jnp(self,dState,State,nstep=1,t=0):
         
         # Get state variable
-        dX0 = dState.getvar(self.name_var,vect=True)
-        X0 = State.getvar(self.name_var,vect=True)
+        dX0 = +dState.getvar(
+            [self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']],vect=True)
+        X0 = +State.getvar(
+            [self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']],vect=True)
         
         # Get params in physical space
         if State.params is not None:
-            dX0 = np.concatenate((dX0,dState.params[self.sliceparams]))
-            X0 = np.concatenate((X0,State.params[self.sliceparams]))         
+            dparams = +dState.getparams(['He','hbcx','hbcy'],vect=True)
+            dX0 = np.concatenate((dX0,dparams))
+            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
+            X0 = np.concatenate((X0,params))         
 
         # Init
         dX1 = +dX0
@@ -1446,7 +1484,10 @@ class Model_sw1l:
         dv1 = dX1[self.swm.slicev].reshape(self.swm.shapev)
         dh1 = dX1[self.swm.sliceh].reshape(self.swm.shapeh)
         
-        dState.setvar([du1,dv1,dh1],self.name_var)
+        dState.setvar([du1,dv1,dh1],[
+            self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']])
         
     def _jstep_tgl(self,dX0,X0):
         
@@ -1457,15 +1498,21 @@ class Model_sw1l:
     def step_adj_jnp(self,adState, State, nstep=1,t=0):
         
         # Get state variable
-        adX0 = adState.getvar(self.name_var,vect=True)
-        X0 = State.getvar(self.name_var,vect=True)
+        adX0 = +adState.getvar(
+            [self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']],vect=True)
+        X0 = +State.getvar(
+            [self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']],vect=True)
         
-        if State.params is not None:
-            X0 = np.concatenate((X0,+State.params[self.sliceparams]))     
-
         # Get params in physical space
-        if adState.params is not None:
-            adX0 = np.concatenate((adX0,+adState.params[self.sliceparams]))
+        if State.params is not None:
+            adparams = +adState.getparams(['He','hbcx','hbcy'],vect=True)
+            adX0 = np.concatenate((adX0,adparams))
+            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
+            X0 = np.concatenate((X0,params))         
         
         # Init
         adX1 = +adX0
@@ -1497,13 +1544,21 @@ class Model_sw1l:
         adu1 = adX1[self.swm.sliceu].reshape(self.swm.shapeu)
         adv1 = adX1[self.swm.slicev].reshape(self.swm.shapev)
         adh1 = adX1[self.swm.sliceh].reshape(self.swm.shapeh)
-        adparams = adX1[self.nstates:]
+        adparams = adX1[self.swm.nstates:]
+        adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
+        adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
+        adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
         
         # Update state
-        adState.setvar([adu1,adv1,adh1],self.name_var)
+        adState.setvar([adu1,adv1,adh1],[
+            self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']])
         
         # Update parameters
-        adState.params[self.sliceparams] = adparams
+        adState.params['He'] = adHe
+        adState.params['hbcx'] = adhbcx
+        adState.params['hbcy'] = adhbcy
     
     def _jstep_adj(self,adX0,X0):
         
@@ -1954,13 +2009,13 @@ def tangent_test(M,State,t0=0,nstep=1):
         dState1 = dState.copy()
         dState1.scalar(lambd)
         M.step_tgl(t=t0,dState=dState1,State=State0,nstep=nstep)
+
         dX = dState1.getvar(vect=True)
         
         mask = np.isnan(X1+X2+dX)
         
         ps = np.linalg.norm(X1[~mask]-X2[~mask]-dX[~mask])/np.linalg.norm(dX[~mask])
-        
-
+    
         print('%.E' % lambd,'%.E' % ps)
         
 def adjoint_test(M,State,t0=0,nstep=1):

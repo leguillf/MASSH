@@ -31,13 +31,13 @@ EXP = dict(
 
     init_date = datetime(2012,2,1,0), # initial date (yyyy,mm,dd,hh) 
 
-    final_date = datetime(2012,3,1,0),  # final date (yyyy,mm,dd,hh) 
+    final_date = datetime(2012,2,10,0),  # final date (yyyy,mm,dd,hh) 
 
     assimilation_time_step = timedelta(hours=1),  
 
     saveoutput_time_step = timedelta(hours=12),  # time step at which the states are saved 
 
-    flag_plot = 0,
+    flag_plot = 1,
 
     write_obs = True, # the observation files are very low to process, so we decide to save the extracted informations in *path_obs* to read it for several experiments
 
@@ -177,7 +177,7 @@ myINV = dict(
 
     super = 'INV_4DVAR',
 
-    compute_test = False, # TLM, ADJ & GRAD tests
+    compute_test = True, # TLM, ADJ & GRAD tests
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
@@ -199,7 +199,6 @@ myINV = dict(
 # Observation parameters
 #################################################################################################################################
 NAME_OBS = ['SWOT','ALG','C2','H2G','J2G','J2N','J3','S3A']
-
 
 SWOT = dict(
 
@@ -339,18 +338,6 @@ myDIAG = dict(
     super = 'DIAG_OSSE',
 
     name_ref = '../../data/2022a_mapping_HFdynamic/dc_ref_eval/2022a_SSH_mapping_CalXover_eval*.nc',
-
-    time_min = datetime(2012,2,10,0),
-
-    time_max = datetime(2012,2,25,0),
-
-    lon_min = 231,
-
-    lon_max = 238,
-
-    lat_min = 31,
-
-    lat_max = 38,
 
     name_ref_time = 'time',
 

@@ -357,17 +357,26 @@ class State:
         # Parameters
         _namey = {}
         _namex = {}
+        _namez = {}
         outparams = {}
-        cy,cx = 1,1
+        cy,cx,cz = 1,1,1
         for name,var in self.params.items():
-            y1,x1 = var.shape
-            if y1 not in _namey:
-                _namey[y1] = 'y'+str(cy)
-                cy += 1
-            if x1 not in _namex:
-                _namex[x1] = 'x'+str(cx)
-                cx += 1
-            outparams[name] = ((_namey[y1],_namex[x1],), var[:,:])
+            if len(var.shape)==2:
+                y1,x1 = var.shape
+                if y1 not in _namey:
+                    _namey[y1] = 'y'+str(cy)
+                    cy += 1
+                if x1 not in _namex:
+                    _namex[x1] = 'x'+str(cx)
+                    cx += 1
+                outparams[name] = ((_namey[y1],_namex[x1],), var[:,:])
+            else:
+                z1 = var.size
+                if z1 not in _namez:
+                    _namez[z1] = 'z'+str(cz)
+                    cz += 1
+                outparams[name] = ((_namez[z1],), var.flatten())
+
         ds = xr.Dataset(outparams)
         ds.to_netcdf(filename,group='params',mode='a')
         ds.close()

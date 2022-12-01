@@ -10,7 +10,7 @@ from obcs import init_bc
 
 class Swm_adj(Swm_tgl):
     
-    def __init__(self,X=None,Y=None,dt=None,bc=None,omegas=None,bc_theta=None,g=9.81,f=1e-4):
+    def __init__(self,X=None,Y=None,dt=None,bc=None,omegas=None,bc_theta=None,g=9.81,f=1e-4,**arr_kwargs):
         
         super().__init__(X,Y,dt,bc,omegas,bc_theta,g,f)
         

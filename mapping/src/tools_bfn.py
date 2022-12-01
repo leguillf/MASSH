@@ -254,28 +254,29 @@ def bfn_select_obs_temporal_window(dict_obs, dt_start, dt_end,
             obs_file_list = dict_obs[date]['obs_name']
             # Loop on each satellite
             for sat_info, obs_file in zip(sat_info_list,obs_file_list):
-                nudging_params = getattr(sat_info, nudging_name)
-                if nudging_params is not None and nudging_params['K']>0:
-                    # Get nudging parameters relative to stretching
-                    K = nudging_params['K']
-                    Tau = nudging_params['Tau']
-                    sigma = nudging_params['sigma']
-                    if date in dict_obs_sel:
-                        if (sigma,Tau) in dict_obs_sel[date]:
-                            dict_obs_sel[date][(sigma,Tau)]['sat_info'].append(sat_info)
-                            dict_obs_sel[date][(sigma,Tau)]['obs_name'].append(obs_file)
-                            dict_obs_sel[date][(sigma,Tau)]['K'].append(K)
+                if nudging_name in sat_info:
+                    nudging_params = sat_info[nudging_name]
+                    if nudging_params is not None and nudging_params['K']>0:
+                        # Get nudging parameters relative to stretching
+                        K = nudging_params['K']
+                        Tau = nudging_params['Tau']
+                        sigma = nudging_params['sigma']
+                        if date in dict_obs_sel:
+                            if (sigma,Tau) in dict_obs_sel[date]:
+                                dict_obs_sel[date][(sigma,Tau)]['sat_info'].append(sat_info)
+                                dict_obs_sel[date][(sigma,Tau)]['obs_name'].append(obs_file)
+                                dict_obs_sel[date][(sigma,Tau)]['K'].append(K)
+                            else:
+                                dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
+                                                                'obs_name':[obs_file],
+                                                                'K':[K]
+                                                                }
                         else:
+                            dict_obs_sel[date] = {}
                             dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
-                                                               'obs_name':[obs_file],
-                                                               'K':[K]
-                                                               }
-                    else:
-                        dict_obs_sel[date] = {}
-                        dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
-                                                           'obs_name':[obs_file],
-                                                           'K':[K]
-                                                           }
+                                                            'obs_name':[obs_file],
+                                                            'K':[K]
+                                                            }
         date += time_step
 
     return dict_obs_sel
@@ -393,7 +394,7 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                           nudging_coeff_list=None, dist_scale=None):
 
 
-    if len(sat_info_list)==1 and sat_info_list[0].super=='OBS_SSH_MODEL':
+    if len(sat_info_list)==1 and sat_info_list[0]['super']=='OBS_SSH_MODEL':
         # Full fields is provided, no need to compute tapering
         with xr.open_dataset(obs_file_list[0]) as ncin:
             lonobs = ncin[sat_info_list[0].name_lon].values % 360

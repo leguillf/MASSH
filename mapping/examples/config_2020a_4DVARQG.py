@@ -6,7 +6,7 @@ Created on Wed Jan  6 19:20:42 2021
 @author: leguillou
 """
 
-name_experiment = '2020a_4DVARQG_test'
+name_experiment = '2020a_4DVARQG_13'
 
 #################################################################################################################################
 # Global libraries     
@@ -44,27 +44,9 @@ EXP = dict(
 #################################################################################################################################
 # GRID parameters
 #################################################################################################################################
-NAME_GRID = 'myGRID2'
+NAME_GRID = 'myGRID'
 
-myGRID1 = dict(
-
-    super = 'GRID_GEO',
-
-    lon_min = 295.,                                        # domain min longitude
-
-    lon_max = 305.,                                        # domain max longitude
-
-    lat_min = 33.,                                         # domain min latitude
-
-    lat_max = 43.,                                         # domain max latitude
-
-    dlon = 1/4.,                                            # zonal grid spatial step (in degree)
-
-    dlat = 1/4.,                                            # meridional grid spatial step (in degree)
-
-)
-
-myGRID2 = dict(
+myGRID = dict(
 
     super = 'GRID_CAR',
 
@@ -76,43 +58,29 @@ myGRID2 = dict(
 
     lat_max = 43.,                                         # domain max latitude
 
-    dx = 25.,                                              # grid spacinng in km
+    dx = 10.,                                              # grid spacinng in km
 
 )
 
 #################################################################################################################################
 # Model parameters
 #################################################################################################################################
-NAME_MOD = 'myMOD1'
+NAME_MOD = 'myMOD'
 
-myMOD1 = dict(
+
+myMOD = dict(
 
     super = 'MOD_QG1L_JAX',
 
     name_var = {'SSH':'ssh'},
 
-    dtmodel = 1200, # model timestep
+    dtmodel = 600, # model timestep
 
-    time_scheme = 'Euler',
+    time_scheme = 'rk2',
 
     c0 = 2.7,
     
 )
-
-myMOD2 = dict(
-
-    super = 'MOD_DIFF',
-
-    name_var = {'SSH':"ssh"},
-
-    name_init_var = {},
-
-    dtmodel = 3600, # model timestep
-
-    Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
-
-)
-
 
 #################################################################################################################################
 # BOUNDARY CONDITIONS
@@ -162,9 +130,9 @@ myOBSOP = dict(
 # Reduced basis parameters
 #################################################################################################################################
 
-NAME_BASIS = 'myBASIS1'
+NAME_BASIS = 'myBASIS'
 
-myBASIS1 = dict(
+myBASIS = dict(
 
     super = 'BASIS_BM',
 
@@ -192,7 +160,7 @@ myBASIS1 = dict(
 
     tmeso = 10, # Largest mesoscale time of decorrelation 
 
-    sloptdec = -1.3, # Slope such as tdec = lambda^slope where lamda is the wavelength
+    sloptdec = -.5, # Slope such as tdec = lambda^slope where lamda is the wavelength
 
     factdec = .5, # factor to be multiplied to the computed time of decorrelation 
 
@@ -208,81 +176,6 @@ myBASIS1 = dict(
 
 )
 
-myBASIS2 = dict(
-
-    super = 'BASIS_BMaux',
-
-    flux = True,
-
-    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
-
-    wavelet_init = True, # Estimate the initial state 
-
-    name_mod_var = 'ssh', # Name of the related model variable (only useful if wavelet_init==True)
-
-    facns = 1., #factor for wavelet spacing= space
-
-    facnlt = 2., #factor for wavelet spacing= time
-
-    npsp= 3.5, # Defines the wavelet shape
-
-    facpsp= 1.5, # factor to fix df between wavelets
-
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
-
-    factdec = 15, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 1, # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    distortion_eq = 2.,
-
-    lat_distortion_eq = 5.,
-
-    distortion_eq_law = 2.,
-
-    file_aux = '../aux/aux_reduced_basis_BM.nc',
-
-    filec_aux = '../aux/aux_first_baroclinic_speed.nc',
-
-    tssr = 0.5,
-
-    facRo = 8.,
-
-    Romax = 150.,
-
-    cutRo =  1.6
-
-)
-
-myBASIS3 = dict(
-
-    super = 'BASIS_LS',
-
-    flux = True,
-
-    wavelet_init = True,
-
-    name_mod_var = 'ssh',
-
-    facnls= 3., #factor for large-scale wavelet spacing
-        
-    facnlt= 3.,
-        
-    tdec_lw= 25.,
-        
-    std_lw= 0.04,
-        
-    lambda_lw= 970,
-
-    fcor = .5
-
-)
 
 #################################################################################################################################
 # Analysis parameters
@@ -297,7 +190,7 @@ myINV = dict(
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
-    maxiter = 2, # Maximal number of iterations for the minimization process
+    maxiter = 2000, # Maximal number of iterations for the minimization process
 
     opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
 
@@ -307,14 +200,14 @@ myINV = dict(
 
     sigma_R = 1e-2, # Observational standard deviation
 
-    prec = False, # preconditoning
+    prec = True, # preconditoning
  
 )
 
 #################################################################################################################################
 # Observation parameters
 #################################################################################################################################
-NAME_OBS = ['J1','EN','TPN','G2']
+NAME_OBS = ['J1','EN','TPN','G2','SWOT']
 
 J1 = dict(
 

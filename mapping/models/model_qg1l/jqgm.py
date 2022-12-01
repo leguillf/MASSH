@@ -165,6 +165,9 @@ class Qgm:
         self._rq1_jit = jit(self._rq1)
         self._rq2_jit = jit(self._rq2)
         self._rq3_jit = jit(self._rq3)
+        self.euler_jit = jit(self.euler)
+        self.rk2_jit = jit(self.rk2)
+        self.rk4_jit = jit(self.rk4)
         self.step_jit = jit(self.step)
         self.step_tgl_jit = jit(self.step_tgl)
         self.step_adj_jit = jit(self.step_adj)
@@ -432,6 +435,57 @@ class Qgm:
 
         return hrec
 
+    def euler(self,q0,rq):
+
+        return q0 + self.dt*rq
+
+    def rk2(self,q0,rq,hb,way):
+
+        # k2
+        q12 = q0 + 0.5*rq*self.dt
+        h12 = self.pv2h_jit(q12,hb)
+        u12,v12 = self.h2uv_jit(h12)
+        u12 = jnp.where(jnp.isnan(u12),0,u12)
+        v12 = jnp.where(jnp.isnan(v12),0,v12)
+        rq12 = self.qrhs_jit(u12,v12,q12,way=way)
+
+        q1 = q0 + self.dt*rq12
+
+        return q1
+    
+    def rk4(self,q0,rq,hb,way):
+
+        # k1
+        k1 = rq*self.dt
+        # k2
+        q2 = q0 + 0.5*k1
+        h2 = self.pv2h_jit(q2,hb)
+        u2,v2 = self.h2uv_jit(h2)
+        u2 = jnp.where(jnp.isnan(u2),0,u2)
+        v2 = jnp.where(jnp.isnan(v2),0,v2)
+        rq2 = self.qrhs_jit(u2,v2,q2,way=way)
+        k2 = rq2*self.dt
+        # k3
+        q3 = q0 + 0.5*k2
+        h3 = self.pv2h_jit(q3,hb)
+        u3,v3 = self.h2uv_jit(h3)
+        u3 = jnp.where(jnp.isnan(u3),0,u3)
+        v3 = jnp.where(jnp.isnan(v3),0,v3)
+        rq3 = self.qrhs_jit(u3,v3,q3,way=way)
+        k3 = rq3*self.dt
+        # k4
+        q4 = q0 + k2
+        h4 = self.pv2h_jit(q4,hb)
+        u4,v4 = self.h2uv_jit(h4)
+        u4 = jnp.where(jnp.isnan(u4),0,u4)
+        v4 = jnp.where(jnp.isnan(v4),0,v4)
+        rq4 = self.qrhs_jit(u4,v4,q4,way=way)
+        k4 = rq4*self.dt
+        # q increment
+        q1 = q0 + (k1+2*k2+2*k3+k4)/6.
+
+        return q1
+
 
     def step(self,X0,way=1):
         
@@ -453,7 +507,7 @@ class Qgm:
         h0 = X0[self.ny*self.nx:].reshape((self.ny,self.nx))
 
         # 1/ h-->q
-        qb0 = self.h2pv_jit(h0,hb)
+        q0 = self.h2pv_jit(h0,hb)
         
         # 2/ h-->(u,v)
         u,v = self.h2uv_jit(h0)
@@ -463,41 +517,16 @@ class Qgm:
         v = jnp.where(jnp.isnan(v),0,v)
 
         # 3/ (u,v,q)-->rq
-        rq = self.qrhs_jit(u,v,qb0,way=way)
+        rq = self.qrhs_jit(u,v,q0,way=way)
         
         # 4/ increment integration 
         if self.time_scheme == 'Euler':
-            q1 = qb0 + self.dt*rq
+            q1 = self.euler_jit(q0,rq)
+        elif self.time_scheme == 'rk2':
+            q1 = self.rk2_jit(q0,rq,hb,way)
         elif self.time_scheme == 'rk4':
-            # k1
-            k1 = rq*self.dt
-            # k2
-            q2 = qb0 + 0.5*k1
-            h2 = self.pv2h_jit(q2)
-            u2,v2 = self.h2uv_jit(h2)
-            u2 = jnp.where(jnp.isnan(u2),0,u2)
-            v2 = jnp.where(jnp.isnan(v2),0,v2)
-            rq2 = self.qrhs_jit(u2,v2,q2,way=way)
-            k2 = rq2*self.dt
-            # k3
-            q3 = qb0 + 0.5*k2
-            h3 = self.pv2h_jit(q3)
-            u3,v3 = self.h2uv_jit(h3)
-            u3 = jnp.where(jnp.isnan(u3),0,u3)
-            v3 = jnp.where(jnp.isnan(v3),0,v3)
-            rq3 = self.qrhs_jit(u3,v3,q3,way=way)
-            k3 = rq3*self.dt
-            # k4
-            q4 = qb0 + k2
-            h4 = self.pv2h_jit(q4)
-            u4,v4 = self.h2uv_jit(h4)
-            u4 = jnp.where(jnp.isnan(u4),0,u4)
-            v4 = jnp.where(jnp.isnan(v4),0,v4)
-            rq4 = self.qrhs_jit(u4,v4,q4,way=way)
-            k4 = rq4*self.dt
-            # q increment
-            q1 = qb0 + (k1+2*k2+2*k3+k4)/6.
-
+            q1 = self.rk4_jit(q0,rq,hb,way)
+            
         # 5/ q-->h
         h1 = self.pv2h_jit(q1,hb)
 
@@ -525,8 +554,9 @@ class Qgm:
             q1 (2D array): propagated PV (if q0 is provided)
     
         """
-        hls = +h0[:self.ny*self.nx].reshape((self.ny,self.nx))
-        h0 = +h0[self.ny*self.nx:].reshape((self.ny,self.nx))
+        hb = +h0[:self.ny*self.nx].reshape((self.ny,self.nx))
+        hls = +h0[self.ny*self.nx:2*self.ny*self.nx].reshape((self.ny,self.nx))
+        h0 = +h0[2*self.ny*self.nx:].reshape((self.ny,self.nx))
             
    
         qb0 = self.h2pv_jit(h0)
@@ -550,9 +580,9 @@ class Qgm:
         q1 = qb0 + self.dt*rq
 
         # 5/ q-->h
-        h1 = self.pv2h_jit(q1,h0)
+        h1 = self.pv2h_jit(q1,hb)
         
-        return jnp.concatenate((hls.flatten(),h1.flatten()))
+        return jnp.concatenate((hb.flatten(),hls.flatten(),h1.flatten()))
     
         
     def step_tgl(self,dh0,h0):
