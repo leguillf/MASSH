@@ -322,9 +322,9 @@ class Basis_IT:
                                  self.bc_t_gauss[:,indt],(-2,0))
         
         if State is not None:
-            State.params['He'] = He
-            State.params['hbcx'] = hbcx
-            State.params['hbcy'] = hbcy
+            State.params['He'] = +He
+            State.params['hbcx'] = +hbcx
+            State.params['hbcy'] = +hbcy
         else:
             phi = np.concatenate((He.flatten(),hbcx.flatten(),hbcy.flatten()))
             return phi
@@ -341,9 +341,13 @@ class Basis_IT:
             hbcx = phi[self.slicehbcx_phys].reshape(self.shapehbcx_phys)
             hbcy = phi[self.slicehbcy_phys].reshape(self.shapehbcy_phys)
         elif adState is not None:
-            He = adState.params['He'].reshape(self.shapeHe_phys)
-            hbcx = adState.params['hbcx'].reshape(self.shapehbcx_phys)
-            hbcy = adState.params['hbcy'].reshape(self.shapehbcy_phys)
+            He = +adState.params['He'].reshape(self.shapeHe_phys)
+            hbcx = +adState.params['hbcx'].reshape(self.shapehbcx_phys)
+            hbcy = +adState.params['hbcy'].reshape(self.shapehbcy_phys)
+            adState.params['He'] *= 0
+            adState.params['hbcx'] *= 0
+            adState.params['hbcy'] *= 0
+
         else:
             sys.exit('Provide either phi or adState')
         
@@ -371,7 +375,7 @@ class Basis_IT:
                               adX_bcN.flatten(),
                               adX_bcE.flatten(),
                               adX_bcW.flatten()))
-        
+            
         return adX
 
         
