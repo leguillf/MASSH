@@ -34,21 +34,21 @@ def Basis(config, State, *args, **kwargs):
         print(config.BASIS)
 
         if config.BASIS.super=='BASIS_BM':
-            return Basis_BM(config, State)
+            return Basis_bm(config, State)
 
         elif config.BASIS.super=='BASIS_BMaux':
-            return Basis_BMaux(config)
+            return Basis_bmaux(config)
         
         elif config.BASIS.super=='BASIS_LS':
-            return BASIS_LS(config, State)
+            return BASIS_ls(config, State)
         
         elif config.BASIS.super=='BASIS_IT':
-            return Basis_IT(config, State)
+            return Basis_it(config, State)
     
         else:
             sys.exit(config.BASIS.super + ' not implemented yet')
 
-class Basis_IT:
+class Basis_it:
    
     def __init__(self,config, State):
         self.km2deg =1./110
@@ -68,7 +68,7 @@ class Basis_IT:
         else:
             self.Ntheta = 1 # Only angle 0°
             
-        self.w_it = config.BASIS.w_it
+        self.Nwaves = config.BASIS.Nwaves
 
         # Grid params
         self.nphys= State.lon.size
@@ -213,18 +213,18 @@ class Basis_IT:
             bc_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_bc)
         self.bc_t_gauss = bc_t_gauss
         
-        self.nbcS = len(self.w_it) * 2 * self.Ntheta * ENST_bc.size * bc_S_gauss.shape[0]
-        self.nbcN = len(self.w_it) * 2 * self.Ntheta * ENST_bc.size * bc_N_gauss.shape[0]
-        self.nbcE = len(self.w_it) * 2 * self.Ntheta * ENST_bc.size * bc_E_gauss.shape[0]
-        self.nbcW = len(self.w_it) * 2 * self.Ntheta * ENST_bc.size * bc_W_gauss.shape[0]
+        self.nbcS = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_S_gauss.shape[0]
+        self.nbcN = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_N_gauss.shape[0]
+        self.nbcE = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_E_gauss.shape[0]
+        self.nbcW = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_W_gauss.shape[0]
         self.nbc = self.nbcS + self.nbcN + self.nbcE + self.nbcW
         print('nbc:',self.nbc)
         
         
-        self.shapehbcS = [len(self.w_it), 2, self.Ntheta, ENST_bc.size, bc_S_gauss.shape[0]]
-        self.shapehbcN = [len(self.w_it), 2, self.Ntheta, ENST_bc.size, bc_N_gauss.shape[0]]
-        self.shapehbcE = [len(self.w_it), 2, self.Ntheta, ENST_bc.size, bc_E_gauss.shape[0]]
-        self.shapehbcW = [len(self.w_it), 2, self.Ntheta, ENST_bc.size, bc_W_gauss.shape[0]]
+        self.shapehbcS = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_S_gauss.shape[0]]
+        self.shapehbcN = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_N_gauss.shape[0]]
+        self.shapehbcE = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_E_gauss.shape[0]]
+        self.shapehbcW = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_W_gauss.shape[0]]
         
         self.slicebcS = slice(self.nHe,
                               self.nHe + self.nbcS)
@@ -241,13 +241,13 @@ class Basis_IT:
         
         # OUTPUT SHAPES (physical space)
         self.shapeHe_phys = (self.ny,self.nx)
-        self.shapehbcx_phys = [len(self.w_it), # tide frequencies
+        self.shapehbcx_phys = [self.Nwaves, # tide frequencies
                           2, # North/South
                           2, # cos/sin
                           self.Ntheta, # Angles
                           self.nx # NX
                           ]
-        self.shapehbcy_phys = [len(self.w_it), # tide frequencies
+        self.shapehbcy_phys = [self.Nwaves, # tide frequencies
                           2, # North/South
                           2, # cos/sin
                           self.Ntheta, # Angles
@@ -269,10 +269,10 @@ class Basis_IT:
                 # variance on He
                 Q[self.sliceHe] = self.sigma_B_He 
                 if hasattr(self.sigma_B_bc,'__len__'):
-                    if len(self.sigma_B_bc)==len(self.w_it):
+                    if len(self.sigma_B_bc)==self.Nwaves:
                         # Different background values for each frequency
-                        nw = self.nbc//len(self.w_it)
-                        for iw in range(len(self.w_it)):
+                        nw = self.nbc//self.Nwaves
+                        for iw in range(self.Nwaves):
                                 slicew = slice(iw*nw,(iw+1)*nw)
                                 Q[self.slicebc][slicew] = self.sigma_B_bc[iw]
                     else:
@@ -395,8 +395,9 @@ class Basis_IT:
         ps2 = np.inner(phi0,phi1)
             
         print(f'test G[{t}]:', ps1/ps2)
+
         
-class Basis_BM:
+class Basis_bm:
    
     def __init__(self,config,State):
 
@@ -738,7 +739,7 @@ class Basis_BM:
         
         return adX
         
-class Basis_BMaux:
+class Basis_bmaux:
    
     def __init__(self,config):
 
@@ -1139,7 +1140,7 @@ class Basis_BMaux:
         
         return adX
 
-class BASIS_LS:
+class BASIS_ls:
    
     def __init__(self,config,State):
 
@@ -1344,7 +1345,7 @@ class Basis_multi:
         if return_q:
             return Q
 
-    def operg(self, t, X, transpose=False, State=None):
+    def operg(self, t, X, State=None):
         
         """
             Project to physicial space
@@ -1354,7 +1355,7 @@ class Basis_multi:
 
         for i,B in enumerate(self.Basis):
             _X = X[self.slice_basis[i]]
-            phi = np.append(phi,B.operg(t, _X, State=State, transpose=transpose))
+            phi = np.append(phi,B.operg(t, _X, State=State))
         
         if State is None:
             return phi
@@ -1368,7 +1369,7 @@ class Basis_multi:
         
         adX = np.array([])
         for B in self.Basis:
-            adX = np.concatenate((adX,B.operg_transpose(t, adState)))
+            adX = np.concatenate((adX,B.operg_transpose(t, adState=adState)))
 
         return adX
 

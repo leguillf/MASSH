@@ -551,7 +551,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     
     # Initial State 
     if config.INV.path_init_4Dvar is None:
-        Xopt = Q*np.random.random(Xb.size)
+        Xopt = np.zeros((Xb.size,))
     else:
         # Read previous minimum 
         print('Read previous minimum:',config.INV.path_init_4Dvar)
@@ -641,7 +641,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
         t = (date - config.EXP.init_date).total_seconds()
         
         # Reduced basis
-        Basis.operg(Xa,t/3600/24,State=State0)
+        Basis.operg(t/3600/24,Xa,State=State0)
 
         # Boundary conditions
         if Bc is not None:

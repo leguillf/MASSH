@@ -48,6 +48,8 @@ def Model(config,State):
             return Model_qg1l_jax(config,State)
         elif config.MOD.super=='MOD_SW1L_NP':
             return Model_sw1l_np(config,State)
+        elif config.MOD.super=='MOD_SW1L_JAX':
+            return Model_sw1l_jax(config,State)
         else:
             sys.exit(config.MOD.super + ' not implemented yet')
     else:
@@ -527,7 +529,6 @@ class Model_qg1l_np:
         adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,self.name_var['SSH'])
 
-
 class Model_qg1l_jax:
 
     def __init__(self,config,State):
@@ -559,6 +560,8 @@ class Model_qg1l_jax:
 
         # Coriolis
         self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
+        f0 = np.nanmean(self.f)
+        self.f[np.isnan(self.f)] = f0
 
         # Gravity
         self.g = config.MOD.g
@@ -1031,7 +1034,6 @@ variable are SLAs!')
         adState.setvar(np.zeros((self.ny,self.nx)),ind=2)
     
 
-        
 ###############################################################################
 #                         Shallow Water Models                                #
 ###############################################################################
@@ -1048,25 +1050,20 @@ class Model_sw1l_np:
         else:
             dir_model = config.MOD.dir_model
         
-        if config.MOD.use_jax: 
-            swm = SourceFileLoader("swm", 
-                                 dir_model + "/jswm.py").load_module()
-            model = swm.Swm
-        else:
-            SourceFileLoader("obcs", 
-                                    dir_model+"/obcs.py").load_module() 
-            SourceFileLoader("obcs_tgl", 
-                                    dir_model + "/obcs_tgl.py").load_module() 
-            SourceFileLoader("obcs_adj", 
-                                    dir_model + "/obcs_adj.py").load_module() 
-            SourceFileLoader("swm", 
-                                    dir_model + "/swm.py").load_module() 
-            SourceFileLoader("swm_tgl", 
-                                    dir_model + "/swm_tgl.py").load_module() 
-            
-            swm = SourceFileLoader("swm_adj", 
-                                    dir_model + "/swm_adj.py").load_module() 
-            model = swm.Swm_adj
+        SourceFileLoader("obcs", 
+                                dir_model+"/obcs.py").load_module() 
+        SourceFileLoader("obcs_tgl", 
+                                dir_model + "/obcs_tgl.py").load_module() 
+        SourceFileLoader("obcs_adj", 
+                                dir_model + "/obcs_adj.py").load_module() 
+        SourceFileLoader("swm", 
+                                dir_model + "/swm.py").load_module() 
+        SourceFileLoader("swm_tgl", 
+                                dir_model + "/swm_tgl.py").load_module() 
+        
+        swm = SourceFileLoader("swm_adj", 
+                                dir_model + "/swm_adj.py").load_module() 
+        model = swm.Swm_adj
         
         # Time parameters
         self.dt = config.MOD.dtmodel
@@ -1089,6 +1086,7 @@ class Model_sw1l_np:
         # Coriolis
         self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
 
+        # Gravity
         self.g = config.MOD.g
              
         # Equivalent depth
@@ -1105,7 +1103,7 @@ class Model_sw1l_np:
         else:
             self.bc_theta = np.array([0])
             
-        self.omegas = np.asarray(config.MOD.w_igws)
+        self.omegas = np.asarray(config.MOD.w_waves)
         self.bc_kind = config.MOD.bc_kind
 
         
@@ -1175,39 +1173,16 @@ class Model_sw1l_np:
                         bc_theta=self.bc_theta,
                         f=self.f)
         
-        if config.MOD.use_jax:
-            # Compile jax-related functions
-            self._jstep_jit = jit(self._jstep)
-            self._jstep_tgl_jit = jit(self._jstep_tgl)
-            self._jstep_adj_jit = jit(self._jstep_adj)
-            self._compute_w1_IT_jit = jit(self._compute_w1_IT)
-            # Functions related to time_scheme
-            if self.time_scheme=='Euler':
-                self.swm_step = self.swm.step_euler_jit
-                self.swm_step_tgl = self.swm.step_euler_tgl_jit
-                self.swm_step_adj = self.swm.step_euler_adj_jit
-            elif self.time_scheme=='rk4':
-                self.swm_step = self.swm.step_rk4_jit
-                self.swm_step_tgl = self.swm.step_rk4_tgl_jit
-                self.swm_step_adj = self.swm.step_rk4_adj_jit
-            # Main step functions
-            self.step = self.step_jnp
-            self.step_tgl = self.step_tgl_jnp
-            self.step_adj = self.step_adj_jnp
-        else:
-            # Functions related to time_scheme
-            if self.time_scheme=='Euler':
-                self.swm_step = self.swm.step_euler
-                self.swm_step_tgl = self.swm.step_euler_tgl
-                self.swm_step_adj = self.swm.step_euler_adj
-            elif self.time_scheme=='rk4':
-                self.swm_step = self.swm.step_rk4
-                self.swm_step_tgl = self.swm.step_rk4_tgl
-                self.swm_step_adj = self.swm.step_rk4_adj
-            # Main step functions
-            self.step = self.step_np
-            self.step_tgl = self.step_tgl_np
-            self.step_adj = self.step_adj_np
+        # Functions related to time_scheme
+        if self.time_scheme=='Euler':
+            self.swm_step = self.swm.step_euler
+            self.swm_step_tgl = self.swm.step_euler_tgl
+            self.swm_step_adj = self.swm.step_euler_adj
+        elif self.time_scheme=='rk4':
+            self.swm_step = self.swm.step_rk4
+            self.swm_step_tgl = self.swm.step_rk4_tgl
+            self.swm_step_adj = self.swm.step_rk4_adj
+
         
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
@@ -1216,7 +1191,7 @@ class Model_sw1l_np:
             adjoint_test(self,State,nstep=10)
 
         
-    def step_np(self,State,nstep=1,t0=0,t=0):
+    def step(self,State,nstep=1,t0=0,t=0):
 
         # Init
         u0 = State.getvar(self.name_var['U'])
@@ -1247,7 +1222,7 @@ class Model_sw1l_np:
         State.setvar(v,self.name_var['V'])
         State.setvar(h,self.name_var['SSH'])
         
-    def step_tgl_np(self,dState,State,nstep=1,t0=0,t=0):
+    def step_tgl(self,dState,State,nstep=1,t0=0,t=0):
         
         # Get state variables and model parameters
         du0 = dState.getvar(self.name_var['U'])
@@ -1306,7 +1281,7 @@ class Model_sw1l_np:
         dState.setvar(dv,self.name_var['V'])
         dState.setvar(dh,self.name_var['SSH'])
         
-    def step_adj_np(self,adState, State, nstep=1, t0=0,t=0):
+    def step_adj(self,adState, State, nstep=1, t0=0,t=0):
         
         # Get variables
         adu0 = adState.getvar(self.name_var['U'])
@@ -1370,7 +1345,156 @@ class Model_sw1l_np:
         adState.params['hbcx'] += adhbcx
         adState.params['hbcy'] += adhbcy
     
-    def step_jnp(self,State,nstep=1,t=0):
+class Model_sw1l_jax:
+    def __init__(self,config,State):
+
+        self.config = config
+        # Model specific libraries
+        if config.MOD.dir_model is None:
+            dir_model = os.path.realpath(
+                os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             '..','models','model_sw1l'))
+        else:
+            dir_model = config.MOD.dir_model
+        
+        swm = SourceFileLoader("swm", 
+                                dir_model + "/jswm.py").load_module()
+        model = swm.Swm
+        
+        # Time parameters
+        self.dt = config.MOD.dtmodel
+        self.nt = 1 + int((config.EXP.final_date - config.EXP.init_date).total_seconds()//self.dt)
+        self.T = np.arange(self.nt) * self.dt
+        self.time_scheme = config.MOD.time_scheme
+
+        # grid
+        self.ny = State.ny
+        self.nx = State.nx
+        
+        # Construct timestamps
+        self.timestamps = [] 
+        t = config.EXP.init_date
+        while t<=config.EXP.final_date:
+            self.timestamps.append(t)
+            t += timedelta(seconds=self.dt)
+        self.timestamps = np.asarray(self.timestamps)   
+
+        # Coriolis
+        self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
+        f0 = np.nanmean(self.f)
+        self.f[np.isnan(self.f)] = f0
+
+        # Gravity
+        self.g = config.MOD.g
+             
+        # Equivalent depth
+        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
+            ds = xr.open_dataset(config.MOD.He_data['path'])
+            self.Heb = ds[config.MOD.He_data['var']].values
+        else:
+            self.Heb = config.MOD.He_init
+            
+            
+        if config.MOD.Ntheta>0:
+            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
+            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
+        else:
+            self.bc_theta = np.array([0])
+            
+        self.omegas = np.asarray(config.MOD.w_waves)
+        self.bc_kind = config.MOD.bc_kind
+
+        
+        # Initialize model state
+        self.name_var = config.MOD.name_var
+        self.var_to_save = [self.name_var['SSH']] # ssh
+
+        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
+            dsin = xr.open_dataset(config.GRID.path_init_grid)
+            for name in self.name_var:
+                if name in config.MOD.name_init_var:
+                    var_init = dsin[config.MOD.name_init_var[name]]
+                    if len(var_init.shape)==3:
+                        var_init = var_init[0,:,:]
+                    if config.GRID.subsampling is not None:
+                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
+                    dsin.close()
+                    del dsin
+                    State.var[self.name_var[name]] = var_init.values
+                else:
+                    if name=='U':
+                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
+                    elif name=='V':
+                        State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
+                    elif name=='SSH':
+                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+        else:
+            for name in self.name_var:  
+                if name=='U':
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
+                elif name=='V':
+                    State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
+                elif name=='SSH':
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+
+        
+        # Model Parameters (OBC & He)
+        self.shapeHe = [State.ny,State.nx]
+        self.shapehbcx = [len(self.omegas), # tide frequencies
+                          2, # North/South
+                          2, # cos/sin
+                          len(self.bc_theta), # Angles
+                          State.nx # NX
+                          ]
+        self.shapehbcy = [len(self.omegas), # tide frequencies
+                          2, # North/South
+                          2, # cos/sin
+                          len(self.bc_theta), # Angles
+                          State.ny # NY
+                          ]
+        self.sliceHe = slice(0,np.prod(self.shapeHe))
+        self.slicehbcx = slice(np.prod(self.shapeHe),
+                               np.prod(self.shapeHe)+np.prod(self.shapehbcx))
+        self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
+                               np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
+        self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
+        State.params['He'] = np.zeros((self.shapeHe))
+        State.params['hbcx'] = np.zeros((self.shapehbcx))
+        State.params['hbcy'] = np.zeros((self.shapehbcy))
+        
+        # Model initialization
+        self.swm = model(X=State.X,
+                        Y=State.Y,
+                        dt=self.dt,
+                        bc=self.bc_kind,
+                        omegas=self.omegas,
+                        bc_theta=self.bc_theta,
+                        f=self.f)
+        
+        
+        # Compile jax-related functions
+        self._jstep_jit = jit(self._jstep)
+        self._jstep_tgl_jit = jit(self._jstep_tgl)
+        self._jstep_adj_jit = jit(self._jstep_adj)
+        self._compute_w1_IT_jit = jit(self._compute_w1_IT)
+        # Functions related to time_scheme
+        if self.time_scheme=='Euler':
+            self.swm_step = self.swm.step_euler_jit
+            self.swm_step_tgl = self.swm.step_euler_tgl_jit
+            self.swm_step_adj = self.swm.step_euler_adj_jit
+        elif self.time_scheme=='rk4':
+            self.swm_step = self.swm.step_rk4_jit
+            self.swm_step_tgl = self.swm.step_rk4_tgl_jit
+            self.swm_step_adj = self.swm.step_rk4_adj_jit
+        
+        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+            print('Tangent test:')
+            tangent_test(self,State,nstep=10)
+            print('Adjoint test:')
+            adjoint_test(self,State,nstep=10)
+
+    
+    def step(self,State,nstep=1,t=0):
 
         # Get state variable
         X0 = +State.getvar(
@@ -1378,6 +1502,9 @@ class Model_sw1l_np:
             self.name_var['V'],
             self.name_var['SSH']],vect=True)
         
+        # Remove NaN
+        X0[np.isnan(X0)] = np.nan
+
         # Get params in physical space
         if State.params is not None:
             params = +State.getparams(['He','hbcx','hbcy'],vect=True)
@@ -1395,10 +1522,10 @@ class Model_sw1l_np:
         # Remove time in control vector
         X1 = X1[1:]
         
-        # Reshaping
-        u1 = X1[self.swm.sliceu].reshape(self.swm.shapeu)
-        v1 = X1[self.swm.slicev].reshape(self.swm.shapev)
-        h1 = X1[self.swm.sliceh].reshape(self.swm.shapeh)
+        # Convert to numpy and reshape
+        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
+        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
+        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
         
         State.setvar([u1,v1,h1],[
             self.name_var['U'],
@@ -1444,7 +1571,7 @@ class Model_sw1l_np:
     
         return X1
         
-    def step_tgl_jnp(self,dState,State,nstep=1,t=0):
+    def step_tgl(self,dState,State,nstep=1,t=0):
         
         # Get state variable
         dX0 = +dState.getvar(
@@ -1480,9 +1607,9 @@ class Model_sw1l_np:
         dX1 = dX1[1:]
         
         # Reshaping
-        du1 = dX1[self.swm.sliceu].reshape(self.swm.shapeu)
-        dv1 = dX1[self.swm.slicev].reshape(self.swm.shapev)
-        dh1 = dX1[self.swm.sliceh].reshape(self.swm.shapeh)
+        du1 = np.array(dX1[self.swm.sliceu]).reshape(self.swm.shapeu)
+        dv1 = np.array(dX1[self.swm.slicev]).reshape(self.swm.shapev)
+        dh1 = np.array(dX1[self.swm.sliceh]).reshape(self.swm.shapeh)
         
         dState.setvar([du1,dv1,dh1],[
             self.name_var['U'],
@@ -1495,7 +1622,7 @@ class Model_sw1l_np:
         
         return dX1
     
-    def step_adj_jnp(self,adState, State, nstep=1,t=0):
+    def step_adj(self,adState, State, nstep=1,t=0):
         
         # Get state variable
         adX0 = +adState.getvar(
@@ -1506,6 +1633,10 @@ class Model_sw1l_np:
             [self.name_var['U'],
             self.name_var['V'],
             self.name_var['SSH']],vect=True)
+        
+        # Remove NaN
+        X0[np.isnan(X0)] = np.nan
+        adX0[np.isnan(adX0)] = np.nan
         
         # Get params in physical space
         if State.params is not None:
@@ -1541,15 +1672,18 @@ class Model_sw1l_np:
         adX1 = adX1[1:]
         
         # Reshaping
-        adu1 = adX1[self.swm.sliceu].reshape(self.swm.shapeu)
-        adv1 = adX1[self.swm.slicev].reshape(self.swm.shapev)
-        adh1 = adX1[self.swm.sliceh].reshape(self.swm.shapeh)
-        adparams = adX1[self.swm.nstates:]
+        adu1 = np.array(adX1[self.swm.sliceu]).reshape(self.swm.shapeu)
+        adv1 = np.array(adX1[self.swm.slicev]).reshape(self.swm.shapev)
+        adh1 = np.array(adX1[self.swm.sliceh]).reshape(self.swm.shapeh)
+        adparams = np.array(adX1[self.swm.nstates:])
         adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
         adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
         adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
         
         # Update state
+        adu1[np.isnan(adu1)] = 0
+        adv1[np.isnan(adv1)] = 0
+        adh1[np.isnan(adh1)] = 0
         adState.setvar([adu1,adv1,adh1],[
             self.name_var['U'],
             self.name_var['V'],
@@ -1682,6 +1816,7 @@ class Model_sw1l_np:
         
         return w1S,w1N,w1W,w1E     
     
+
 class Model_sw1lm:
     
     def __init__(self,config,State):
@@ -1875,6 +2010,7 @@ class Model_multi:
         for _MOD in config.MOD:
             _config.MOD = config.MOD[_MOD]
             self.Models.append(Model(_config,State))
+            print()
 
         # Time parameters
         self.dt = int(np.max([M.dt for M in self.Models])) # We take the longer timestep 
@@ -2037,6 +2173,7 @@ def adjoint_test(M,State,t0=0,nstep=1):
     
     # Run ADJ
     M.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
+    adState.plot()
     adX1 = np.concatenate((adState.getvar(vect=True),adState.getparams(vect=True)))
     
     mask = np.isnan(adX0+dX0)

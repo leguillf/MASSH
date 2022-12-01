@@ -301,7 +301,31 @@ MOD_SW1L_NP = dict(
 
     dir_model = None,
 
-    use_jax = False,
+    dtmodel = 300, # model timestep
+
+    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
+
+    bc_kind = '1d', # Either 1d or 2d
+
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
+
+    He_init = 0.9, # Mean height (in m)
+
+    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    g = 9.81
+
+)
+
+MOD_SW1L_JAX = dict(
+
+    name_var = {'U':'u','V':'v','SSH':'ssh'},
+
+    name_init_var = [],
+
+    dir_model = None,
 
     dtmodel = 300, # model timestep
 
@@ -309,7 +333,7 @@ MOD_SW1L_NP = dict(
 
     bc_kind = '1d', # Either 1d or 2d
 
-    w_igws = [2*3.14/12/3600], # igw frequencies (in seconds)
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
 
     He_init = 0.9, # Mean height (in m)
 
@@ -336,7 +360,7 @@ BC_EXT = dict(
 
     name_lat = '',
 
-    name_time = '',
+    name_time = None,
 
     name_var = {},
 
@@ -601,9 +625,9 @@ BASIS_LS = dict(
 # Internal Tides
 BASIS_IT = dict(
 
-    w_it = [],
+    Nwaves = 1, # number of wave component 
 
-    Ntheta = 0,
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
 
     sigma_B_He = 0.2, # Background variance for He
 
