@@ -56,11 +56,11 @@ myGRID = dict(
 
     lon_min = 230.,                                         # domain min longitude
 
-    lon_max = 240,                                         # domain max longitude
+    lon_max = 239,                                         # domain max longitude
 
     lat_min = 30.,                                          # domain min latitude
 
-    lat_max = 40,                                          # domain max latitude
+    lat_max = 39,                                          # domain max latitude
 
     dx = 25.,                                               # grid spacing in km
 
@@ -93,8 +93,23 @@ myMOD1 = dict(
 #################################################################################################################################
 # BOUNDARY CONDITIONS
 #################################################################################################################################
-NAME_BC = None
+NAME_BC = 'myBC'
 
+myBC = dict(
+
+    super = 'BC_EXT',
+
+    file = '../../data/2022a_mapping_HFdynamic/mdt.nc', # netcdf file(s) in whihch the boundary conditions fields are stored
+
+    name_lon = 'lon',
+
+    name_lat = 'lat',
+
+    name_var = {'SSH':'ssh'}, # name of the boundary conditions variable
+
+    name_mod_var = {'SSH':'ssh'},
+
+)
 
 #################################################################################################################################
 # OBSERVATIONAL OPERATORS
@@ -125,7 +140,7 @@ NAME_BASIS = 'myBASIS1'
 
 myBASIS1 = dict(
 
-    super = 'BASIS_BM',
+    super = 'BASIS_BM', 
 
     flux = False,
 
@@ -133,11 +148,11 @@ myBASIS1 = dict(
 
     wavelet_init = True, # Estimate the initial state 
 
-    name_mod_var = 'ssh',
+    name_mod_var = 'ssh', # factor for wavelet spacing= space
 
-    facns = 1., #factor for wavelet spacing= space
+    facns = 1., # factor for wavelet spacing= space
 
-    facnlt = 2., #factor for wavelet spacing= time
+    facnlt = 2., # factor for wavelet spacing= time
 
     npsp= 3.5, # Defines the wavelet shape
 
@@ -161,7 +176,7 @@ myBASIS1 = dict(
 
     facQ= 1, # factor to be multiplied to the estimated Q
 
-    Qmax = .03 , # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+    Qmax = .03, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
     slopQ = -2 # Slope such as Q = lambda^slope where lamda is the wavelength
 
@@ -177,11 +192,13 @@ myINV = dict(
 
     super = 'INV_4DVAR',
 
-    compute_test = True, # TLM, ADJ & GRAD tests
+    restart_4Dvar = False,
+
+    compute_test = False, # TLM, ADJ & GRAD tests
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
-    maxiter = 10, # Maximal number of iterations for the minimization process
+    maxiter = 0, # Maximal number of iterations for the minimization process
 
     opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
 

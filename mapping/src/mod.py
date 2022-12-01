@@ -2173,7 +2173,6 @@ def adjoint_test(M,State,t0=0,nstep=1):
     
     # Run ADJ
     M.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
-    adState.plot()
     adX1 = np.concatenate((adState.getvar(vect=True),adState.getparams(vect=True)))
     
     mask = np.isnan(adX0+dX0)
