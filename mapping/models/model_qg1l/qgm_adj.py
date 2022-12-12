@@ -12,8 +12,25 @@ class Qgm_adj(Qgm_tgl):
     
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
                  g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,Kdiffus=None,
-                 mdt=None,mdu=None,mdv=None):
-        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,Kdiffus,mdt,mdu,mdv)
+                 mdt=None,mdu=None,mdv=None,**arr_kwargs):
+        super().__init__(
+            dx=dx,
+            dy=dy,
+            dt=dt,
+            SSH=SSH,
+            c=c,
+            upwind=upwind,
+            upwind_adj=upwind_adj,
+            g=g,
+            f=f,
+            qgiter=qgiter,
+            qgiter_adj=qgiter_adj,
+            diff=diff,
+            Kdiffus=Kdiffus,
+            mdt=mdt,
+            mdu=mdu,
+            mdv=mdv)
+        
     
     def qrhs_adj(self,adrq,u,v,q,way):
 
@@ -270,9 +287,6 @@ class Qgm_adj(Qgm_tgl):
 
         
         return adh
-    
-    
-    
     
     
     def h2pv_adj(self,adq):

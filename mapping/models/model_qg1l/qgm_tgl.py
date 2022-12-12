@@ -14,8 +14,23 @@ class Qgm_tgl(Qgm):
     def __init__(self,dx=None,dy=None,dt=None,SSH=None,c=None,upwind=3,upwind_adj=None,
                  g=9.81,f=1e-4,qgiter=1,qgiter_adj=None,diff=False,Kdiffus=None,
                  mdt=None,mdu=None,mdv=None):
-        super().__init__(dx,dy,dt,SSH,c,upwind,upwind_adj,g,f,qgiter,qgiter_adj,diff,Kdiffus,mdt,mdu,mdv)
-    
+        super().__init__(
+            dx=dx,
+            dy=dy,
+            dt=dt,
+            SSH=SSH,
+            c=c,
+            upwind=upwind,
+            upwind_adj=upwind_adj,
+            g=g,
+            f=f,
+            qgiter=qgiter,
+            qgiter_adj=qgiter_adj,
+            diff=diff,
+            Kdiffus=Kdiffus,
+            mdt=mdt,
+            mdu=mdu,
+            mdv=mdv)
     
     def qrhs_tgl(self,du,dv,dq,u,v,q,way):
 

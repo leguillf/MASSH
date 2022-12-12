@@ -12,7 +12,7 @@ class Swm:
     #                             Initialization                              #
     ###########################################################################
     
-    def __init__(self,X=None,Y=None,dt=None,bc_kind='1d',g=9.81,f=1e-4,Heb=0.7):
+    def __init__(self,X=None,Y=None,dt=None,bc_kind='1d',g=9.81,f=1e-4,Heb=0.7,**arr_kwargs):
         
         self.X = X
         self.Y = Y

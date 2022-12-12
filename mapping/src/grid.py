@@ -153,8 +153,14 @@ def interp2d(ds,name_vars,lon_out,lat_out):
 
 
 def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
-                        lon2d, lat2d, flag_plot=0, sponge='gaspari-cohn',
-                        mask=None, coast=False,depth=None,mindepth=None):
+                        lon2d, lat2d, flag_plot=0,
+                        mask=None, coast=False,file_depth=None,name_var_depth=None,mindepth=None):
+
+    # Read depth
+    if file_depth is not None and os.path.exists(file_depth):
+        ds = xr.open_dataset(file_depth).squeeze()
+        depth = interp2d(ds,name_var_depth,lon2d,lat2d)
+    else: depth = None
 
     if type(timestamps) in [int,float]:
         timestamps = np.array([timestamps])

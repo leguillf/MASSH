@@ -27,49 +27,29 @@ from .tools import gaspari_cohn, hat_function, L2_scalar_prod
 def bfn(config,dt_start,dt_end,one_time_step,State):
     
     # Use temp_DA_path to save the projections
-    if config.save_obs_proj:
-        if config.path_save_proj is None:
-            pathsaveproj = config.tmp_DA_path
+    if config.INV.save_obs_proj:
+        if config.INV.path_save_proj is None:
+            pathsaveproj = config.EXP.tmp_DA_path
         else:
-            pathsaveproj = config.path_save_proj
+            pathsaveproj = config.INV.path_save_proj
     else:
         pathsaveproj = None
 
 
-    if config.name_model=='QG1L':
+    if config.MOD.super=='MOD_QG1L_NP':
         return bfn_qg1l(dt_start,
                         dt_end,
-                        config.assimilation_time_step,
+                        config.EXP.assimilation_time_step,
                         one_time_step,
                         State,
-                        config.name_mod_var,
-                        config.dist_scale,
+                        config.MOD.name_var,
+                        config.INV.dist_scale,
                         pathsaveproj,
-                        'projections_' + '_'.join(config.satellite),
-                        config.c,
-                        config.flag_plot,
-                        config.scalenudg)
-                
-    elif config.name_model=='QGML':
-            
-            return bfn_qgml(dt_start,
-                            dt_end,
-                            config.assimilation_time_step,
-                            one_time_step,
-                            State,
-                            config.name_mod_var,
-                            config.dist_scale,
-                            config.Rom,
-                            config.Fr,
-                            config.dh,
-                            config.N,
-                            config.L0,
-                            pathsaveproj,
-                            'projections_' + '_'.join(config.satellite),
-                            config.flag_plot,
-                            config.scalenudg)
+                        'projections_' + '_'.join(config.OBS.keys()),
+                        config.EXP.flag_plot,
+                        config.INV.scalenudg)
     else:
-        sys.exit('Error: No BFN class implemented for',config.name_model,'model')
+        sys.exit(f'Error: No BFN class implemented for {config.MOD.super} model')
         
 class bfn_qg1l(object):
     def __init__(self,
@@ -82,10 +62,8 @@ class bfn_qg1l(object):
                  dist_scale,
                  path_save=None,
                  name_save=None,
-                 c = 2.5,
                  flag_plot=0,
-                 scalenudg=(1, 1),
-                 qgiter=1):
+                 scalenudg=(1, 1)):
 
         # Time parameters
         self.dt_start = dt_start
@@ -122,7 +100,7 @@ class bfn_qg1l(object):
             self.dt_start,
             self.dt_end,
             self.assim_time_step,
-            'nudging_params_stretching'
+            'nudging_params_ssh'
             )
 
         self.dict_obs_rv = bfn_select_obs_temporal_window(
@@ -159,7 +137,7 @@ class bfn_qg1l(object):
     def compute_nudging_term(self, date, model_state):
 
         # Get model SSH state
-        ssh = model_state.getvar(0) # 1st variable (ssh)
+        ssh = model_state.getvar(self.name_mod_var['SSH']) # 1st variable (ssh)
 
         # Get observations and nudging parameters
         obs_ssh, nudging_coeff_ssh, sigma_ssh =\
@@ -247,11 +225,11 @@ class bfn_qg1l(object):
         files_back = sorted(glob.glob(path_back))
         
         for (ff,fb) in zip(files_forth,files_back):
-            dsf = xr.open_dataset(ff)
-            dsb = xr.open_dataset(fb)
-            for name_var in self.name_mod_var:
-                varf = dsf[name_var].values
-                varb = dsb[name_var].values
+            dsf = xr.open_dataset(ff,group='var')
+            dsb = xr.open_dataset(fb,group='var')
+            for name in self.name_mod_var:
+                varf = dsf[self.name_mod_var[name]].values
+                varb = dsb[self.name_mod_var[name]].values
                 varf[np.isnan(varf)] = 0
                 varb[np.isnan(varb)] = 0
                 if varf.size != 0 and np.std(varf)>0:
@@ -261,195 +239,6 @@ class bfn_qg1l(object):
             del dsf,dsb
         
         return err
-
-
-class bfn_qgml(object):
-    def __init__(self,
-                 dt_start,
-                 dt_end,
-                 assim_time_step,
-                 model_time_step,
-                 lon2d,
-                 lat2d,
-                 name_mod_var,
-                 name_grd,
-                 dist_scale,
-                 Rom,
-                 Fr,
-                 dh,
-                 N,
-                 L0,
-                 path_save=None,
-                 name_save=None,
-                 flag_plot=0,
-                 scalenudg=(1, 1, 1)):
-
-        # Time parameters
-        self.dt_start = dt_start
-        self.dt_end = dt_end
-        self.assim_time_step = assim_time_step
-        self.model_time_step = model_time_step
-        # Grid coordinates
-        self.lon2d = lon2d
-        self.lat2d = lat2d
-        self.ny, self.nx = self.lon2d.shape
-        self.f = 4*np.pi/86164*np.sin(self.lat2d*np.pi/180)
-        self.g = 9.81
-        self.name_grd = name_grd
-        # Model variables
-        self.name_mod_var = name_mod_var # Must be [SSH, PV2, .., PVn]
-        self.n_mod_var = len(name_mod_var)
-        # Observation variables
-        self.dist_scale = dist_scale
-        self.dict_obs_ssh = {}
-        # Projection variables
-        self.path_save = path_save
-        self.name_save = name_save
-        self.dict_proj_ssh = {}
-        # Model parameters
-        self.dh12 = 0.5 * (dh[0]+dh[1])
-        self.Fr = Fr
-        self.Rom = Rom
-        self.dx = L0/N
-        # Plotting parameter
-        self.flag_plot = flag_plot
-        #re-scaling coefficitent for nudging
-        if scalenudg is None:
-            self.scalenudg = (1, 1, 1)
-        else:
-            self.scalenudg = scalenudg
-        # Sponge
-        self.sponge = 'linear'
-
-    def select_obs(self, dict_obs):
-
-        self.dict_obs_ssh = bfn_select_obs_temporal_window(
-            dict_obs,
-            self.dt_start,
-            self.dt_end,
-            self.assim_time_step,
-            'nudging_params_stretching'
-            )
-
-        self.dict_obs_rv = bfn_select_obs_temporal_window(
-            dict_obs,
-            self.dt_start,
-            self.dt_end,
-            self.assim_time_step,
-            'nudging_params_relvort'
-            )
-
-    def do_projections(self):
-
-        self.dict_proj_ssh = bfn_projections(
-            'ssh',
-            self.dict_obs_ssh,
-            self.State.lon, self.State.lat,
-            self.dist_scale,
-            self.flag_plot,
-            self.path_save,
-            self.name_save)
-
-        self.dict_proj_rv = bfn_projections(
-            'relvort',
-            self.dict_obs_rv,
-            self.State.lon, self.State.lon,
-            self.dist_scale,
-            self.flag_plot,
-            self.path_save,
-            self.name_save)
-
-    def compute_nudging_term(self, date, model_state):
-
-        # Reshaping
-        model_state = model_state.reshape(self.n_mod_var, self.ny, self.nx)
-
-        # Get model SSH state
-        ssh = model_state[0]  # 1st variable (ssh)
-
-        # Get observations and nudging parameters
-        obs_rv, nudging_coeff_rv, sigma_rv =\
-            bfn_get_data_at_t(date,
-                              self.dict_proj_rv)
-        obs_ssh, nudging_coeff_ssh, sigma_ssh =\
-            bfn_get_data_at_t(date,
-                              self.dict_proj_ssh)
-
-        # Compute nudging term
-        N = {'psi1_1': np.zeros_like(ssh), 'psi1_2': np.zeros_like(ssh),
-             'rv': np.zeros_like(ssh), 'ssh': np.zeros_like(ssh)}
-
-        if obs_rv is not None and np.any(np.isfinite(obs_rv)):
-            # Nudging towards relative vorticity
-            rv = switchvar.ssh2rv(ssh, self.State)
-
-            nobs = len(obs_rv)
-            for iobs in range(nobs):
-                indNoNan = ~np.isnan(obs_rv[iobs])
-                if np.any(indNoNan):
-                    # Filter model state for spectral nudging
-                    rv_ls = rv.copy()
-                    if sigma_rv[iobs] is not None and sigma_rv[iobs] > 0:
-                        rv_ls = gaussian_filter(rv_ls, sigma=sigma_rv[iobs])
-
-                    N['rv'][indNoNan] += nudging_coeff_rv[iobs, indNoNan]\
-                      * (obs_rv[iobs, indNoNan]-rv_ls[indNoNan])
-
-        if obs_ssh is not None and np.any(np.isfinite(obs_ssh)):
-            # Nudging towards ssh
-            nobs = len(obs_ssh)
-            for iobs in range(nobs):
-                indNoNan = ~np.isnan(obs_ssh[iobs])
-                if np.any(indNoNan):
-                    # Filter model state for spectral nudging
-                    ssh_ls = ssh.copy()
-                    if sigma_ssh[iobs] is not None and sigma_ssh[iobs] > 0:
-                        ssh_ls = gaussian_filter(ssh_ls, sigma=sigma_ssh[iobs])
-                    N['ssh'][indNoNan] += nudging_coeff_ssh[iobs, indNoNan]\
-                      * (obs_ssh[iobs, indNoNan]-ssh_ls[indNoNan])
-
-        N['ssh'] = N['ssh'] * self.scalenudg[0]
-        N['psi1_1'] = self.g/self.f * N['ssh'] * self.scalenudg[0]
-        N['psi1_2'] = self.g/self.f * N['ssh'] * self.scalenudg[1]
-        N['rv'] = N['rv'] * self.scalenudg[2]
-
-        # Mask pixels that are not influenced by observations
-        N['ssh'][N['ssh'] == 0] = np.nan
-        N['psi1_1'][N['psi1_1'] == 0] = np.nan
-        N['psi1_2'][N['psi1_2'] == 0] = np.nan
-        N['rv'][N['rv'] == 0] = np.nan
-
-        if self.flag_plot > 3:
-            plt.figure()
-            plt.suptitle('Nudging coefficient')
-            plt.pcolormesh(self.lon2d, self.lat2d, self.f/self.g * N['ssh'])
-            plt.colorbar()
-            plt.show()
-
-        return N
-
-    def convergence(self, path_forth, path_back):
-
-        with xr.open_mfdataset(path_forth + '*', combine='nested',
-                               concat_dim='member') as ds:
-            ssh_forth = ds[self.name_mod_var[0]][:-1].values
-            psi2_forth = ds[self.name_mod_var[1]][:-1].values
-
-        with xr.open_mfdataset(path_back + '*', combine='nested',
-                               concat_dim='member') as ds:
-            ssh_back = ds[self.name_mod_var[0]][1:].values
-            psi2_back = ds[self.name_mod_var[1]][1:].values
-
-        psi1_forth = self.g/self.f[None, :, :] * ssh_forth
-        ape = 0.5*(self.Fr[0]/self.Rom/self.dh12)**2\
-              * np.sum((psi1_forth-psi2_forth)**2, axis=(1, 2))*self.dx**2
-        ape = np.mean(ape)
-        print("error on this loop for ssh: {:.4e}".format(
-              np.mean(np.abs(ssh_forth - ssh_back))))
-        print("error on this loop for psi2: {:.4e}".format( 
-              np.mean(np.abs(psi2_forth - psi2_back))))
-        print("mean ape on this loop: {:.4e}".format(ape))
-        return ape
 
 
 def bfn_select_obs_temporal_window(dict_obs, dt_start, dt_end,
@@ -465,28 +254,29 @@ def bfn_select_obs_temporal_window(dict_obs, dt_start, dt_end,
             obs_file_list = dict_obs[date]['obs_name']
             # Loop on each satellite
             for sat_info, obs_file in zip(sat_info_list,obs_file_list):
-                nudging_params = getattr(sat_info, nudging_name)
-                if nudging_params is not None and nudging_params['K']>0:
-                    # Get nudging parameters relative to stretching
-                    K = nudging_params['K']
-                    Tau = nudging_params['Tau']
-                    sigma = nudging_params['sigma']
-                    if date in dict_obs_sel:
-                        if (sigma,Tau) in dict_obs_sel[date]:
-                            dict_obs_sel[date][(sigma,Tau)]['sat_info'].append(sat_info)
-                            dict_obs_sel[date][(sigma,Tau)]['obs_name'].append(obs_file)
-                            dict_obs_sel[date][(sigma,Tau)]['K'].append(K)
+                if nudging_name in sat_info:
+                    nudging_params = sat_info[nudging_name]
+                    if nudging_params is not None and nudging_params['K']>0:
+                        # Get nudging parameters relative to stretching
+                        K = nudging_params['K']
+                        Tau = nudging_params['Tau']
+                        sigma = nudging_params['sigma']
+                        if date in dict_obs_sel:
+                            if (sigma,Tau) in dict_obs_sel[date]:
+                                dict_obs_sel[date][(sigma,Tau)]['sat_info'].append(sat_info)
+                                dict_obs_sel[date][(sigma,Tau)]['obs_name'].append(obs_file)
+                                dict_obs_sel[date][(sigma,Tau)]['K'].append(K)
+                            else:
+                                dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
+                                                                'obs_name':[obs_file],
+                                                                'K':[K]
+                                                                }
                         else:
+                            dict_obs_sel[date] = {}
                             dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
-                                                               'obs_name':[obs_file],
-                                                               'K':[K]
-                                                               }
-                    else:
-                        dict_obs_sel[date] = {}
-                        dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
-                                                           'obs_name':[obs_file],
-                                                           'K':[K]
-                                                           }
+                                                            'obs_name':[obs_file],
+                                                            'K':[K]
+                                                            }
         date += time_step
 
     return dict_obs_sel
@@ -604,21 +394,21 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
                           nudging_coeff_list=None, dist_scale=None):
 
 
-    if len(sat_info_list)==1 and sat_info_list[0].kind in ['fullSSH','fullRV']:
+    if len(sat_info_list)==1 and sat_info_list[0]['super']=='OBS_SSH_MODEL':
         # Full fields is provided, no need to compute tapering
         with xr.open_dataset(obs_file_list[0]) as ncin:
-            lonobs = ncin[sat_info_list[0].name_obs_lon].values % 360
-            latobs = ncin[sat_info_list[0].name_obs_lat].values
+            lonobs = ncin[sat_info_list[0].name_lon].values % 360
+            latobs = ncin[sat_info_list[0].name_lat].values
             # Compute 2D grid is needed
             if len(lonobs.shape)==1:
                 lonobs,latobs = np.meshgrid(lonobs,latobs)
-            varobs = ncin[sat_info_list[0].name_obs_var[0]].values
+            varobs = ncin[sat_info_list[0].name_var['SSH']].values
             if len(varobs.shape)==3:
                 if varobs.shape[0]>1:
                     print('Warning: the full field provided has several\
                           timestep, we take the first one')
                 varobs = varobs[0]
-            if varname == 'relvort' and sat_info_list[0].kind=='fullSSH':
+            if varname == 'relvort':
                 varobs = switchvar.ssh2rv(varobs, State)
            
             proj_var = +varobs
@@ -647,13 +437,10 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
           enumerate(zip(sat_info_list, obs_file_list, nudging_coeff_list)):
             # Open observation file
             with xr.open_dataset(obs_file) as ncin:
-                lon = ncin[sat_info.name_obs_lon].values
-                lat = ncin[sat_info.name_obs_lat].values
-                var = [ncin[var_].values for var_ in sat_info.name_obs_var]
-                
-            # Add MDT for CMEMS
-            if sat_info.kind=='CMEMS' and len(var)==2:
-                var[0] += var[1]
+                lon = ncin[sat_info.name_lon].values
+                lat = ncin[sat_info.name_lat].values
+                var = [ncin[var_].values for var_ in sat_info.name_var]
+            
                 
             K = K * np.ones_like(lon)
             
@@ -662,11 +449,11 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
             latobs = np.append(latobs, lat.ravel())
             nudging_coeff = np.append(nudging_coeff, K)
             # Check if we need to compute relative vorticity
-            if varname == 'relvort' and sat_info.name_obs_xac is not None:
-                # Only for 2D data (need 'xac' variable)
-                xac = ncin[sat_info.name_obs_xac].values
+            if varname == 'relvort' and sat_info.super=='OBS_SSH_SWATH':
+                # Only for SWATH data (need 'xac' variable)
+                xac = ncin[sat_info.name_xac].values
                 try:
-                    rv = switchvar.ssh2rv(var[0], State, lon=lon, lat=lat, xac=xac)
+                    rv = switchvar.ssh2rv(var[0], lon=lon, lat=lat, xac=xac)
                 except: 
                     print('Warning: for ' + obs_file +\
                           ' impossible to convert ssh to relatve vorticity,\

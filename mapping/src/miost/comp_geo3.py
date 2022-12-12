@@ -204,6 +204,7 @@ class Comp_geo3ss6d(Comp):
                 nt = len(enst[iff][P])
                 nwave += ntheta*2*nt
 
+
         # Fill the Q diagonal matrix (expected variace for each wavelet)
         self.wavetest=[None]*nf
         Q=zeros((nwave))
@@ -245,6 +246,10 @@ class Comp_geo3ss6d(Comp):
                             iwave += 1
                             Q[iwave] = PSDLOC*ff[iff]**2 * self.facQ* numpy.exp(-3*(self.cutRo * Ro*ff[iff])**3)
                             if numpy.isnan(Q[iwave]): pdb.set_trace()
+            print(f'lambda={1/ff[iff]:.1E}',
+                  f'nlocs={P:.1E}',
+                  f'tdec={numpy.nanmean(tdec[iff]):.1E}',
+                  f'Q={numpy.nanmean(Q[self.iff_wavebounds[iff]:iwave+1]):.1E}')
 
             self.P_wavebounds[iff][P+1] = iwave +1
         self.iff_wavebounds[iff+1] = iwave +1

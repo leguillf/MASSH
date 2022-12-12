@@ -7,445 +7,702 @@ Created on Wed Jan  6 19:20:42 2021
 """
 
 #################################################################################################################################
-# EXPERIMENTAL PARAMETERS
-#################################################################################################################################
-
-name_experiment = 'my_exp' # name of the experiment
-
-#################################################################################################################################
-# Outputs parameters
-#################################################################################################################################
-
-saveoutputs = True # save outputs flag (True or False)
-
-name_exp_save = 'my_output_name' # name of output files
-
-path_save = 'outputs/' + name_exp_save + '/' # path of output files
-
-flag_plot = 0 # between 0 and 4. 0 for none plot, 4 for full plot
-    
-#################################################################################################################################
-# Temporary DA parameters
-#################################################################################################################################
-        
-tmp_DA_path = "scratch/" +  name_exp_save + '/' # temporary data assimilation directory path
- 
-
-#################################################################################################################################
 # Global libraries     
 #################################################################################################################################
 
 from datetime import datetime,timedelta
 
-from math import pi
+#################################################################################################################################
+# EXPERIMENTAL PARAMETERS
+#################################################################################################################################
+EXP = dict(
+
+    name_experiment = 'my_exp', # name of the experiment
+
+    saveoutputs = True, # save outputs flag (True or False)
+
+    name_exp_save = 'my_output_name', # name of output files
+
+    path_save = 'outputs', # path of output files
+
+    tmp_DA_path = "scratch/", # temporary data assimilation directory path
+
+    flag_plot = 0, # between 0 and 4. 0 for none plot, 4 for full plot
+
+    name_lon = 'lon',
+
+    name_lat = 'lat',
+
+    name_time = 'time',
+
+    init_date = datetime(2012,10,1,0), # initial date (yyyy,mm,dd,hh) 
+
+    final_date = datetime(2012,12,2,0),  # final date (yyyy,mm,dd,hh) 
+
+    assimilation_time_step = timedelta(hours=1),  # assimilation time step (corresponding to observation update timestep)
+
+    saveoutput_time_step = timedelta(hours=1),  # time step at which the states are saved 
+
+    plot_time_step = timedelta(days=1),  #  time step at which the states are plotted (for debugging),
+
+    time_obs_min = None, 
+
+    time_obs_max = None,
+
+    write_obs = False, # save observation dictionary in *path_obs*
+
+    compute_obs = False, # force computing observations 
+
+    path_obs = None # if set to None, observations are saved in *tmp_DA_path*
+
+)
 
 
 #################################################################################################################################
-# Initialization parameters
+# GRID 
 #################################################################################################################################
-name_init = 'geo_grid' # Either 'geo_grid' or 'from_file'
+NAME_GRID = 'GRID_GEO'
 
-name_init_file = 'init_state.nc' # Name of init file, which will be used by other functions
+# Read grid from file
+GRID_FROM_FILE = dict(
 
-# For name_init=='from_file'
+    path_init_grid = '', 
 
-name_init_grid = '' 
+    name_init_lon = '',
 
-name_init_lon = ''
+    name_init_lat = '',
 
-name_init_lat = ''
+    subsampling = None,
 
-name_init_var = None
+)
 
-# For name_init=='geo_grid'
+# Regular geodetic grid
+GRID_GEO = dict(
 
-lon_min = 294.                                        # domain min longitude
+    lon_min = 294.,                                        # domain min longitude
 
-lon_max = 306.                                        # domain max longitude
+    lon_max = 306.,                                        # domain max longitude
 
-lat_min = 32.                                         # domain min latitude
+    lat_min = 32.,                                         # domain min latitude
 
-lat_max = 44.                                         # domain max latitude
+    lat_max = 44.,                                         # domain max latitude
 
-dx = 1/10.                                            # zonal grid spatial step (in degree)
+    dlon = 1/10.,                                            # zonal grid spatial step (in degree)
 
-dy = 1/10.                                            # meridional grid spatial step (in degree)
+    dlat = 1/10.,                                            # meridional grid spatial step (in degree)
 
-# Mask 
+    name_init_mask = None,
 
-name_init_mask = None
+    name_var_mask = {'lon':'','lat':'','var':''}
 
-name_var_mask = {'lon':'','lat':'','var':''}
+)
 
-# Gravity
+# Regular cartesian grid 
+GRID_CAR = dict(
 
-g = 9.81
+    super = 'GRID_CAR',
+
+    lon_min = 295.,                                        # domain min longitude
+
+    lon_max = 305.,                                        # domain max longitude
+
+    lat_min = 33.,                                         # domain min latitude
+
+    lat_max = 43.,                                         # domain max latitude
+
+    dx = 25.,                                              # grid spacing in km
+
+    name_init_mask = None,
+
+    name_var_mask = {'lon':'','lat':'','var':''}
+
+)
+
+# Restart from previous run 
+GRID_RESTART = dict(
+
+    name_grid = 'restart',
+
+)
+
 
 #################################################################################################################################
-# Time parameters
+# OBSERVATIONS 
 #################################################################################################################################
-   
-init_date = datetime(2012,10,1,0) # initial date (yyyy,mm,dd,hh) 
+NAME_OBS = None
 
-final_date = datetime(2012,12,2,0)  # final date (yyyy,mm,dd,hh) 
+# Nadir altimetry
+OBS_SSH_NADIR = dict(
 
-assimilation_time_step = timedelta(hours=1)  # assimilation time step (corresponding to observation update timestep)
+    path = '',
 
-saveoutput_time_step = timedelta(hours=1)  # time step at which the states are saved 
-
-plot_time_step = timedelta(days=1)  #  time step at which the states are plotted (for debugging)
-
-#################################################################################################################################
-# Model parameters
-#################################################################################################################################
-# - Diffusion
-# - QG1L
-# - JAX-QG1L
-# - QG1LM
-# - SW1L
-# - JAX-SW1L
-# - SW1LM
-
-name_model = 'QG1L'     
-
-# - common parameters
-
-dir_model = None
+    name_time = '',
     
-name_mod_var = ["ssh"]  
+    name_lon = '',
 
-n_mod_var = len(name_mod_var)             
+    name_lat = '',
+    
+    name_var = {'SSH':''},
 
-name_mod_lon = "lon"
+    sigma_noise = None,
 
-name_mod_lat = "lat"
+    add_mdt = None,
 
-dtmodel = 300   # model timestep
+    substract_mdt = None,
 
+    path_mdt = None,
 
-##########################################
-###   Diffusion-specific parameters    ### 
-########################################## 
+    name_var_mdt = None,
+    
+    nudging_params_ssh = None,
 
-Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
+    detrend = False
 
+)
 
-###################################
-###   QG-specific parameters    ### 
-################################### 
+# Swath altimetry
+OBS_SSH_SWATH = dict(
 
-qg_time_scheme = 'Euler' # Time scheme of the model (e.g. Euler,rk4)
+    path = '',
 
-upwind = 3 # Order of the upwind scheme for PV advection (either 1,2 or 3)
+    name_time = '',
+    
+    name_lon = '',
 
-upwind_adj = None # idem but for the adjoint loop
+    name_lat = '',
 
-Reynolds = False # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
+    name_xac = None,
+    
+    name_var = {'SSH':''},
 
-qgiter = 20 # number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
+    sigma_noise = None,
 
-qgiter_adj = None # idem for the adjoint loop
+    add_mdt = None,
 
-c0 = 2.7 # If not None, fixed value for phase velocity 
+    substract_mdt = None,
 
-filec_aux = None # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+    path_mdt = None,
 
-name_var_c = {'lon':'','lat':'','var':''} # Variable names for the phase velocity auxilliary file 
+    name_var_mdt = None,
+    
+    nudging_params_ssh = None,
 
-only_diffusion = False # If True, use only diffusion in the QG propagation
+    nudging_params_relvort = None,
 
-path_mdt = None # If provided, QGPV will be expressed thanks to the Reynolds decompositon
+    detrend = False
+    
+)
 
-name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''} 
+#################################################################################################################################
+# MODELS
+#################################################################################################################################
+NAME_MOD = None # Either DIFF, QG1L, QG1LM, SW1L, SW1LM    
 
+# Diffusion model
+MOD_DIFF = dict(
 
-###################################
-###   SW-specific parameters    ### 
-################################### 
+    name_var = {'SSH':"ssh"},
 
-sw_time_scheme = 'rk4' # Time scheme of the model (e.g. Euler,rk4)
+    name_init_var = {},
 
-bc_kind = '1d' # Either 1d or 2d
+    dtmodel = 300, # model timestep
 
-w_igws = [2*pi/12/3600] # igw frequencies (in seconds)
+    Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
 
-Nmodes = 1 # Number of spatial modes 
+)
 
-He_init = 0.9 # Mean height (in m)
+# 1.5-layer Quasi-Geostrophic models
+MOD_QG1L_NP = dict(
 
-He_data = None # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+    name_var = {'SSH':"ssh"},
 
-Ntheta = 1 # Number of angles (computed from the normal of the border) of incoming waves
+    name_init_var = {},
 
+    dir_model = None,
 
-#########################################
-###   External boundary conditions    ### 
-#########################################
+    dtmodel = 300, # model timestep
 
-flag_use_bc = False # set or not boundary conditions
+    upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
 
-lenght_bc = 50 # lenght (in km) of the peripherical band for which the boundary conditions are applied
+    upwind_adj = None, # idem but for the adjoint loop
 
-file_bc = None # netcdf file(s) in whihch the boundary conditions fields are stored
+    Reynolds = False, # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
 
-name_var_bc = {'time':'','lon':'','lat':'','var':''} # name of the boundary conditions variable
+    qgiter = 20, # number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
 
-add_mdt_bc = False # Add mdt to boundary conditions. Useful only if boundary conditions are on sla
+    qgiter_adj = None, # idem for the adjoint loop
 
-use_bc_on_coast = True # use boundary conditions on coast. Useful only if MDT or a mask is provided 
+    c0 = 2.7, # If not None, fixed value for phase velocity 
 
-file_depth = None # netcdf file(s) in which the topography is stored
+    filec_aux = None, # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
 
-name_var_depth = {'time':'','lon':'','lat':'','var':''} # name of the topography variable
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
 
-bc_mindepth = None # minimal depth below which boundary conditions are used  
+    cmin = None,
+
+    cmax = None,
+
+    only_diffusion = False, # If True, use only diffusion in the QG propagation
+
+    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
+
+    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
+
+    g = 9.81 
+
+)
+
+MOD_QG1L_JAX = dict(
+
+    name_var = {'SSH':"ssh"},
+
+    name_init_var = {},
+
+    dir_model = None,
+
+    multiscale = False,
+
+    dtmodel = 300, # model timestep
+
+    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk4)
+
+    upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
+
+    upwind_adj = None, # idem but for the adjoint loop
+
+    Reynolds = False, # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
+
+    c0 = 2.7, # If not None, fixed value for phase velocity 
+
+    filec_aux = None, # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+
+    cmin = None,
+
+    cmax = None,
+
+    only_diffusion = False, # If True, use only diffusion in the QG propagation
+
+    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
+
+    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
+
+    g = 9.81 
+
+)
+
+# 1.5-layer Shallow-Water model
+MOD_SW1L_NP = dict(
+
+    name_var = {'U':'u','V':'v','SSH':'ssh'},
+
+    name_init_var = [],
+
+    dir_model = None,
+
+    dtmodel = 300, # model timestep
+
+    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
+
+    bc_kind = '1d', # Either 1d or 2d
+
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
+
+    He_init = 0.9, # Mean height (in m)
+
+    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    g = 9.81
+
+)
+
+MOD_SW1L_JAX = dict(
+
+    name_var = {'U':'u','V':'v','SSH':'ssh'},
+
+    name_init_var = [],
+
+    dir_model = None,
+
+    dtmodel = 300, # model timestep
+
+    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
+
+    bc_kind = '1d', # Either 1d or 2d
+
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
+
+    He_init = 0.9, # Mean height (in m)
+
+    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    g = 9.81
+
+)
 
 
 #################################################################################################################################
-# Analysis parameters
+# BOUNDARY CONDITIONS
 #################################################################################################################################
-# - None
-# - BFN
-# - 4Dvar
-# - incr4Dvar
-# - OI
-# - MIOST
+NAME_BC = None # For now, only BC_EXT is available
 
-name_analysis = None
+# External boundary conditions
+BC_EXT = dict(
 
-###################################
-###   OI-specific parameters    ### 
-################################### 
+    file = None, # netcdf file(s) in whihch the boundary conditions fields are stored
 
-oi_Lt = 7 # days
+    name_lon = '',
 
-oi_Lx = 1 # degreee
+    name_lat = '',
 
-oi_Ly = 1 # degree
+    name_time = None,
 
-oi_noise = 5e-2 # meters
+    name_var = {},
 
+    name_mod_var = {},
 
-###################################
-###   BFN-specific parameters   ### 
-################################### 
+    dist_sponge = None  # distance (in km) for which boundary fields are spatially spread close to the borders (useful for MOD_QG1L_NP model)
 
-bfn_window_size = timedelta(days=7) # length of the bfn time window
-
-bfn_window_output = timedelta(days=3) # length of the output time window, in the middle of the bfn window. (need to be smaller than *bfn_window_size*)
-
-bfn_propation_timestep = timedelta(hours=1) # propagation time step of the BFN, corresponding to the time step at which the nudging term is computed
-
-bfn_window_overlap = True # overlap the BFN windows
-
-bfn_criterion = 0.01 # convergence criterion. typical value: 0.01
-
-bfn_max_iteration = 5 # maximal number of iterations if *bfn_criterion* is not met
-
-save_bfn_trajectory = False # save or not the back and forth iterations (for debugging)
-
-dist_scale = 10 # distance (in km) for which observations are spatially spread
-
-save_obs_proj = False # save or not the projected observation as pickle format. Set to True to maximize the speed of the algorithm.
-
-path_save_proj = None # path to save projected observations
-
-bfn_use_bc_as_init = False # Whether to use boundary conditions as initialization for the first temporal window
-
-scalenudg = None 
+)
 
 
+#################################################################################################################################
+# OBSERVATIONAL OPERATORS
+#################################################################################################################################
+NAME_OBSOP = None
 
-####################################
-###   4Dvar-specific parameters  ### 
-####################################
+OBSOP_INTERP = dict(
 
-compute_test = False # TLM, ADJ & GRAD tests
+    path_save = None, # Directory where to save observational operator
 
-path_init_4Dvar = None # To restart the minimization process from a specified control vector
+    compute_op = False, # Force computing H 
 
-restart_4Dvar = False # To restart the minimization process from the last control vector
+    Npix = 4, # Number of pixels to perform projection y=Hx
 
-gtol = None # Gradient norm must be less than gtol before successful termination.
+    mask_coast = False,
 
-maxiter = 20 # Maximal number of iterations for the minimization process
+    dist_coast = 100, # km
 
-maxiter_inner = 3 # Maximal number of iterations for the outer loop (only for incr4Dvar)
+    mask_borders = False,
 
-maxiter_outer = 3 # Maximal number of iterations for the inner loop (only for incr4Dvar)
+)
 
-opt_method = 'L-BFGS-B' # method for scipy.optimize.minimize
+#################################################################################################################################
+# INVERSION METHODS
+#################################################################################################################################
+NAME_INV = None
 
-save_minimization = False # save cost function and its gradient at each iteration 
+# Optimal Interpolation
+INV_OI = dict(
 
-path_H = None # Directory where to save observational operator
+    Lt = 7, # days
 
-compute_H = False # Force computing H 
+    Lx = 1, # degreee
 
-Npix_H = 4 # Number of pixels to perform projection y=Hx
+    Ly = 1, # degree
 
-checkpoint = 1 # Number of model timesteps separating two consecutive analysis 
+    noise = 5e-2 # meters
 
-window_length = timedelta(days=3) # Length of the 4Dvar time window
+)
 
-window_save = timedelta(days=1) # Length of the saving 4Dvar time window
+# Back and Forth Nudging
+INV_BFN = dict(
 
-window_overlap = True # If True, smooth output trajectory in time 
+    window_size = timedelta(days=7), # length of the bfn time window
 
-sigma_R = 1e-2 # Observational standard deviation
+    window_output = timedelta(days=3), # length of the output time window, in the middle of the bfn window. (need to be smaller than *bfn_window_size*)
 
-sigma_B_He = 0.2 # Background variance for He
+    propagation_timestep = timedelta(hours=1), # propagation time step of the BFN, corresponding to the time step at which the nudging term is computed
 
-sigma_B_bc = 1e-2 # Background variance for bc
+    window_overlap = True, # overlap the BFN windows
 
-facB_bc_coast = 1 # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+    criterion = 0.01, # convergence criterion. typical value: 0.01
 
-facB_He_coast = 1  # Factor for sigma_B_He located at coast. Useful only if mask is provided
+    max_iteration = 5, # maximal number of iterations if *bfn_criterion* is not met
 
-sigma_B_grad = 1 # Background variance for regularization term (proportional to grad(X))
+    save_trajectory = False, # save or not the back and forth iterations (for debugging)
 
-scalemodes = None # Only for SW1LM model, 
+    dist_scale = 10, #
 
-scalew_igws = None 
+    save_obs_proj = False, # save or not the projected observation as pickle format. Set to True to maximize the speed of the algorithm.
 
-prec = False # preconditoning
+    path_save_proj = None, # path to save projected observations
 
-grad_term = False # Add a term that minimizes the gradient of SSH in the cost function 
+    use_bc_as_init = False, # Whether to use boundary conditions as initialization for the first temporal window
 
-filter_name = None # name of filter used in preconditionning
+    scalenudg = None 
 
-filter_order = None # order of the filter
+)
 
-H_mask_coast = False
+# 4-Dimensional Variational 
+INV_4DVAR = dict(
 
-H_dist_coast = 100 # km
-  
-prescribe_background = False # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
+    compute_test = False, # TLM, ADJ & GRAD tests
 
-bkg_satellite = None # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
+    path_init_4Dvar = None, # To restart the minimization process from a specified control vector
 
-path_background = None # Path to the precribed background on BM basis
-  
-bkg_Kdiffus = 0. # 0 diffusion to perform the 4Dvar-Identity model 
+    restart_4Dvar = False, # To restart the minimization process from the last control vector
 
-name_bkg_var = 'res' # Default name of the BM basis variable the prescribed or computed background 
+    gtol = None, # Gradient norm must be less than gtol before successful termination.
 
-bkg_maxiter = 30 # 4Dvar-Identity model maximal number of iterations for the minimization process
+    maxiter = 10, # Maximal number of iterations for the minimization process
 
-bkg_maxiter_inner = 10 # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
+    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
 
-largescale_error_ratio = 1 # Ratio to reduce BM basis background error over lmeso wavelenghts
+    save_minimization = False, # save cost function and its gradient at each iteration 
 
-only_largescale = False # Flag to prescribe only BM basis background error over lmeso wavelenghts
+    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
+
+    sigma_R = 1e-2, # Observational standard deviation
+
+    sigma_B = None,
+
+    prec = False, # preconditoning
+    
+    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
+
+    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
+
+    path_background = None, # Path to the precribed background on BM basis
+    
+    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
+
+    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
+
+    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
+
+    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
+
+    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
+
+    only_largescale = False # Flag to prescribe only BM basis background error over lmeso wavelenghts
  
-####################################
-###   MIOST-specific parameters  ### 
-#################################### 
+)
 
-miost_window_size = timedelta(days=15)
+# Multi-scale Optimal Interpolation 
+INV_MIOST = dict(
 
-miost_window_output = timedelta(days=15)
+    window_size = timedelta(days=15),
 
-miost_window_overlap = True
+    window_output = timedelta(days=15),
 
-dir_miost = None
+    window_overlap = True,
 
-obs_subsampling = 1
+    dir = None,
 
+    obs_subsampling = 1
 
-#########################################
-### Reduced basis specific parameters ### 
-#########################################
+)
 
-# - For BM
+#################################################################################################################################
+# REDUCED BASIS
+#################################################################################################################################
 
-save_wave_basis = False # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+NAME_BASIS = None
 
-wavelet_init = True # Estimate the initial state 
+# Balanced Motions
+BASIS_BM = dict(
 
-facns = 1. #factor for wavelet spacing= space
+    name_mod_var = None, # Name of the related model variable 
 
-facnlt = 2. #factor for wavelet spacing= time
+    wavelet_init = True, # Estimate the initial state 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
-npsp= 3.5 # Defines the wavelet shape
+    save_wave_basis = 'inline', # 'inline' for saving in RAM, 'offline' for saving in tmp_DA_path, False for computing basis component at each time
 
-facpsp= 1.5 # factor to fix df between wavelets
+    facns = 1., #factor for wavelet spacing in space
 
-lmin= 80 # minimal wavelength (in km)
+    facnlt = 2., #factor for wavelet spacing in time
 
-lmax= 970. # maximal wavelength (in km)
+    npsp= 3.5, # Defines the wavelet shape
 
-lmeso = 300 # Largest mesoscale wavelenght 
+    facpsp= 1.5, # factor to fix df between wavelets
 
-tmeso = 20 # Largest mesoscale time of decorrelation 
+    lmin= 80, # minimal wavelength (in km)
 
-sloptdec = -1.28 # Slope such as tdec = lambda^slope where lamda is the wavelength
+    lmax= 970., # maximal wavelength (in km)
 
-factdec = 0.5 # factor to be multiplied to the computed time of decorrelation 
+    lmeso = 300, # Largest mesoscale wavelenght 
 
-tdecmin = 2.5 # minimum time of decorrelation 
+    tmeso = 20, # Largest mesoscale time of decorrelation 
 
-tdecmax = 40. # maximum time of decorrelation 
+    sloptdec = -1.28, # Slope such as tdec = lambda^slope where lamda is the wavelength
 
-facQ= 1 # factor to be multiplied to the estimated Q
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
 
-Qmax = 1e-3 # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+    tdecmin = 2.5, # minimum time of decorrelation 
 
-slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
+    tdecmax = 40., # maximum time of decorrelation 
 
-# - For IT 
+    facQ= 1, # factor to be multiplied to the estimated Q
 
-facgauss = 3.5  # factor for gaussian spacing= both space/time
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
-D_He = 200 # Space scale of gaussian decomposition for He (in km)
+    slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
 
-T_He = 20 # Time scale of gaussian decomposition for He (in days)
+)
 
-D_bc = 200 # Space scale of gaussian decomposition for boundary conditions (in km)
+# Balanced Motions with auxilliary data 
+BASIS_BMaux = dict(
 
-T_bc = 20 # Time scale of gaussian decomposition for boundary conditions (in days)
+    name_mod_var = None, # Name of the related model variable
+    
+    flux = True,
 
+    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+
+    wavelet_init = True, # Estimate the initial state 
+
+    facns = 1., #factor for wavelet spacing= space
+
+    facnlt = 2., #factor for wavelet spacing= time
+
+    npsp= 3.5, # Defines the wavelet shape
+
+    facpsp= 1.5, # factor to fix df between wavelets
+
+    lmin= 80, # minimal wavelength (in km)
+
+    lmax= 970., # maximal wavelength (in km)
+
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    distortion_eq = 2.,
+
+    lat_distortion_eq = 5.,
+
+    distortion_eq_law = 2.,
+
+    file_aux = None,
+
+    filec_aux = None,
+
+    tssr = 0.5,
+
+    facRo = 8.,
+
+    Romax = 150.,
+
+    cutRo =  1.6
+
+)
+
+# Large scales 
+BASIS_LS = dict(
+
+    flux = True,
+
+    name_mod_var = None, # Name of the related model variable
+
+    wavelet_init = True,
+
+    facnls= 3., #factor for large-scale wavelet spacing
+        
+    facnlt= 3.,
+        
+    tdec_lw= 25.,
+        
+    std_lw= 0.04,
+        
+    lambda_lw= 970,
+
+    fcor = .5
+
+)
+
+# Internal Tides
+BASIS_IT = dict(
+
+    Nwaves = 1, # number of wave component 
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    sigma_B_He = 0.2, # Background variance for He
+
+    sigma_B_bc = 1e-2, # Background variance for bc
+
+    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    D_He = 200, # Space scale of gaussian decomposition for He (in km)
+
+    T_He = 20, # Time scale of gaussian decomposition for He (in days)
+
+    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
+
+    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+
+    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
+
+    scalemodes = None, # Only for SW1LM model, 
+
+    scalew_igws = None 
+
+)
 
 
 #################################################################################################################################
-# Observation parameters
+# DIAGNOSTICS
 #################################################################################################################################
+NAME_DIAG = None
 
-satellite = ['swot']
+# Observatory System Simulation Experiment 
+DIAG_OSSE = dict(
 
-time_obs_min = None 
+    dir_output = None,
 
-time_obs_max = None
+    time_min = None,
 
-write_obs = False # save observation dictionary in *path_obs*
+    time_max = None,
 
-compute_obs = False # force computing observations 
+    lon_min = None,
 
-path_obs = None # if set to None, observations are saved in *tmp_DA_path*
+    lon_max = None,
 
-detrend = False # apply a 2D detrending on observations
+    lat_min = None,
 
-substract_mdt = False
+    lat_max = None,
 
-# - For each *satellite*:
+    name_ref = '',
 
-kind_swot = "swot_simulator"   # "swathSSH" for SWOT, "nadir" for nadirs  
-obs_path_swot = '../../data_Example1/dc_obs/' # directory where the observations are stored
-obs_name_swot = "2020a_SSH_mapping_NATL60_karin_swot.nc" # full name (or prefixe) in observation file(s)
-name_obs_var_swot = ["ssh_model"] # name of the observed variables 
-name_obs_lon_swot = "lon" # name of longitude variable
-name_obs_lat_swot = "lat" # name of latitude variable
-name_obs_time_swot = "time" # name of time variable
-name_obs_xac_swot = "x_ac" # name of the across track distance variable (only for swathSSH satellites)
-sigma_noise_swot = 1e-2 # Noise of observations
-add_mdt_swot = False # Whether to add mdt to observation variables or not
-substract_mdt_swot = False # Whether to substract mdt to observation variables or not
-nudging_params_stretching_swot = {'sigma':0,'K':0.1,'Tau':timedelta(days=1)} # nudging parameters relative to the stretching part of the PV. 
-nudging_params_relvort_swot = None # nudging parameters relative to the relative part of the PV (for nadir, set to None).
+    name_ref_time = '',
 
+    name_ref_lon = '',
 
+    name_ref_lat = '',
 
-   
+    name_ref_var = '',
+
+    options_ref =  None,
+
+    name_exp_var = '',
+
+    compare_to_baseline = True,
+
+    name_bas = None,
+
+    name_bas_time = None,
+
+    name_bas_lon = None,
+
+    name_bas_lat = None,
+
+    name_bas_var = None
+
+)
 
 
 
