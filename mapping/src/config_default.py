@@ -509,16 +509,16 @@ NAME_BASIS = None
 BASIS_BM = dict(
 
     name_mod_var = None, # Name of the related model variable 
-    
-    flux = True,
-
-    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
 
     wavelet_init = True, # Estimate the initial state 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
-    facns = 1., #factor for wavelet spacing= space
+    save_wave_basis = 'inline', # 'inline' for saving in RAM, 'offline' for saving in tmp_DA_path, False for computing basis component at each time
 
-    facnlt = 2., #factor for wavelet spacing= time
+    facns = 1., #factor for wavelet spacing in space
+
+    facnlt = 2., #factor for wavelet spacing in time
 
     npsp= 3.5, # Defines the wavelet shape
 
@@ -688,7 +688,19 @@ DIAG_OSSE = dict(
 
     options_ref =  None,
 
-    name_exp_var = ''
+    name_exp_var = '',
+
+    compare_to_baseline = True,
+
+    name_bas = None,
+
+    name_bas_time = None,
+
+    name_bas_lon = None,
+
+    name_bas_lat = None,
+
+    name_bas_var = None
 
 )
 

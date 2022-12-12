@@ -134,25 +134,64 @@ That could be due to non regular grid or bad written netcdf file')
                 self.name_exp_lat:slice(self.lat_min,self.lat_max)}
             )
         except:
-            print('Warning: unable to select study region in the experimen fields.\
+            print('Warning: unable to select study region in the experiment fields.\
 That could be due to non regular grid or bad written netcdf file')
         exp.close()
 
-    def regrid_exp(self):
+        # Baseline data
+        self.compare_to_baseline = config.DIAG.compare_to_baseline 
+        if self.compare_to_baseline:
+            self.name_bas_time = config.DIAG.name_bas_time
+            self.name_bas_lon = config.DIAG.name_bas_lon
+            self.name_bas_lat = config.DIAG.name_bas_lat
+            self.name_bas_var = config.DIAG.name_bas_var
+            bas = xr.open_mfdataset(config.DIAG.name_bas)
+            bas = bas.assign_coords({self.name_bas_lon:bas[self.name_bas_lon]%360})
+            self.bas = bas.sel(
+                {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
+                )
+            try:
+                self.bas = self.bas.sel(
+                    {self.name_bas_lon:slice(self.lon_min,self.lon_max),
+                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}
+                )
+            except:
+                print('Warning: unable to select study region in the baseline fields.')
+            bas.close()
 
+
+    def regrid_exp(self):
+        
         if self.geo_grid:
-            self.regrid_exp_geo()
+            self.exp_regridded =  self._regrid_geo(
+                self.exp[self.name_exp_lon].values,
+                self.exp[self.name_exp_lat].values, 
+                self.exp[self.name_exp_time].values, 
+                self.exp[self.name_exp_var],
+                self.name_exp_var)
         else:
-            self.regrid_exp_unstructured()
+            self.exp_regridded = self._regrid_unstructured(
+                self.exp[self.name_exp_lon].values,
+                self.exp[self.name_exp_lat].values, 
+                self.exp[self.name_exp_time].values, 
+                self.exp[self.name_exp_var],
+                self.name_exp_var)
+        
+        if self.compare_to_baseline:
+            self.bas_regridded = self._regrid_geo(
+                self.bas[self.name_bas_lon].values,
+                self.bas[self.name_bas_lat].values, 
+                self.bas[self.name_bas_time].values, 
+                self.bas[self.name_bas_var],
+                self.name_bas_var)        
     
-    
-    def regrid_exp_geo(self):
+    def _regrid_geo(self, lon, lat, time, var, name_var):
 
         # Define source grid
-        x_source_axis = pyinterp.Axis(self.exp[self.name_exp_lon].values, is_circle=False)
-        y_source_axis = pyinterp.Axis(self.exp[self.name_exp_lat].values)
-        z_source_axis = pyinterp.TemporalAxis(self.exp[self.name_exp_time][:].values)
-        ssh_source = self.exp[self.name_exp_var].T
+        x_source_axis = pyinterp.Axis(lon, is_circle=False)
+        y_source_axis = pyinterp.Axis(lat)
+        z_source_axis = pyinterp.TemporalAxis(time)
+        ssh_source = var.T
         grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, ssh_source.data)
         
         # Define target grid
@@ -175,54 +214,61 @@ That could be due to non regular grid or bad written netcdf file')
             y_source_axis = pyinterp.Axis(self.ref[self.name_ref_lat].values)
             z_source_axis = pyinterp.TemporalAxis(np.ascontiguousarray(self.ref[self.name_ref_time][:].values))
             grid = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis,  ssh_interp.T)
-            has_converged, filled = pyinterp.fill.gauss_seidel(grid)
+            _, filled = pyinterp.fill.gauss_seidel(grid)
         else:
             filled = ssh_interp.T
         
         # Save to dataset
-        self.exp_regridded = xr.Dataset({self.name_exp_var : ((self.name_ref_time, self.name_ref_lat, self.name_ref_lon), filled.T)},
-                                coords={self.name_ref_time: self.ref[self.name_ref_time].values,
-                                        self.name_ref_lon: self.ref[self.name_ref_lon].values, 
-                                        self.name_ref_lat: self.ref[self.name_ref_lat].values, 
-                                        })
+        return xr.DataArray(
+            data=filled.T,
+            coords={self.name_ref_time: self.ref[self.name_ref_time].values,
+                    self.name_ref_lon: self.ref[self.name_ref_lon].values, 
+                    self.name_ref_lat: self.ref[self.name_ref_lat].values, 
+                    },
+            dims=[self.name_ref_time, self.name_ref_lat, self.name_ref_lon]
+            )
     
-    def regrid_exp_unstructured(self):
+    def _regrid_unstructured(self, lon, lat, time, var, name_var):
         
         # Spatial interpolation 
         mesh = pyinterp.RTree()
-        times = self.exp[self.name_exp_time][:].values
         lon_target = self.ref[self.name_ref_lon].values
         lat_target = self.ref[self.name_ref_lat].values
         if len(lon_target.shape)==1:
             lon_target, lat_target = np.meshgrid(lon_target, lat_target)
-        lons = self.exp[self.name_exp_lon].values.ravel()
-        lats = self.exp[self.name_exp_lat].values.ravel()
-        exp_regridded = np.zeros((times.size,lat_target.shape[0],lon_target.shape[1]))
-        for i in range(times.size):
-            data = self.exp[self.name_exp_var][i].data.ravel()
+        lons = lon.ravel()
+        lats = lat.ravel()
+        var_regridded = np.zeros((time.size,lat_target.shape[0],lon_target.shape[1]))
+        for i in range(time.size):
+            data = var[i].data.ravel()
             mask = np.isnan(lons) + np.isnan(lats) + np.isnan(data)
             data = data[~mask]
             mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, data)
-            idw, neighbors = mesh.inverse_distance_weighting(
+            idw, _ = mesh.inverse_distance_weighting(
                 np.vstack((lon_target.ravel(), lat_target.ravel())).T,
                 within=False,  # Extrapolation is forbidden
                 k=11,  # We are looking for at most 11 neighbors
                 radius=600000,
                 num_threads=0)
-            exp_regridded[i,:,:] = idw.reshape(lon_target.shape)
+            var_regridded[i,:,:] = idw.reshape(lon_target.shape)
 
         # Save to dataset
-        exp_regridded = xr.Dataset({self.name_exp_var : ((self.name_ref_time, self.name_ref_lat, self.name_ref_lon), exp_regridded)},
-                                coords={self.name_ref_time: times,
-                                        self.name_ref_lon: self.ref[self.name_ref_lon].values, 
-                                        self.name_ref_lat: self.ref[self.name_ref_lat].values, 
-                                        })
+        var_regridded = xr.DataArray(
+            data=var_regridded,
+            coords={self.name_ref_time: time,
+                    self.name_ref_lon: self.ref[self.name_ref_lon].values, 
+                    self.name_ref_lat: self.ref[self.name_ref_lat].values, 
+                    },
+            dims=[self.name_ref_time, self.name_ref_lat, self.name_ref_lon]
+            )
 
         # Time interpolation
-        self.exp_regridded = exp_regridded.interp({self.name_ref_time:self.ref[self.name_ref_time]})
+        var_regridded = var_regridded.interp({self.name_ref_time:self.ref[self.name_ref_time]})
 
         # Mask
-        self.exp_regridded[self.name_exp_var].data[np.isnan(self.ref[self.name_ref_var])] = np.nan
+        var_regridded.data[np.isnan(self.ref[self.name_ref_var])] = np.nan
+
+        return var_regridded
 
         
     def rmse_based_scores(self,plot=False):
@@ -230,28 +276,23 @@ That could be due to non regular grid or bad written netcdf file')
         logging.info('     Compute RMSE-based scores...')
 
         # RMSE(t) based score
-        rmse_t = 1.0 - (((self.exp_regridded[self.name_exp_var] - self.ref[self.name_ref_var])**2).mean(
+        rmse_t = 1.0 - (((self.exp_regridded - self.ref[self.name_ref_var])**2).mean(
             dim=(self.name_ref_lon, self.name_ref_lat)))**0.5/(((self.ref[self.name_ref_var])**2).mean(dim=(self.name_ref_lon, self.name_ref_lat)))**0.5
+        if self.compare_to_baseline:
+            rmse_t_bas = 1.0 - (((self.bas_regridded - self.ref[self.name_ref_var])**2).mean(
+                dim=(self.name_ref_lon, self.name_ref_lat)))**0.5/(((self.ref[self.name_ref_var])**2).mean(dim=(self.name_ref_lon, self.name_ref_lat)))**0.5
+            rmse_t = xr.concat((rmse_t, rmse_t_bas), dim='run')
+            rmse_t['run'] = ['experiment','baseline']
         # RMSE(x, y) based score
-        rmse_xy = (((self.exp_regridded[self.name_exp_var] - self.ref[self.name_ref_var])**2).mean(dim=(self.name_ref_time)))**0.5
-        
+        rmse_xy = (((self.exp_regridded - self.ref[self.name_ref_var])**2).mean(dim=(self.name_ref_time)))**0.5
+        if self.compare_to_baseline:
+            rmse_xy_bas = (((self.bas_regridded - self.ref[self.name_ref_var])**2).mean(dim=(self.name_ref_time)))**0.5
+            rmse_xy = xr.concat((rmse_xy, rmse_xy_bas), dim='run')
+            rmse_xy['run'] = ['experiment','baseline']
+
+
         rmse_t = rmse_t.rename('rmse_t')
         rmse_xy = rmse_xy.rename('rmse_xy')
-
-        if plot:
-            fig,(ax1,ax2) = plt.subplots(1,2,figsize=(10,4))
-            rmse_t.plot(ax=ax1)
-            rmse_xy.plot(ax=ax2,cmap='Reds')
-
-        # Temporal stability of the error
-        reconstruction_error_stability_metric = rmse_t.std().values
-
-        # Show leaderboard SSH-RMSE metric (spatially and time averaged normalized RMSE)
-        leaderboard_rmse = 1.0 - (((self.exp_regridded[self.name_exp_var] - self.ref[self.name_ref_var]) ** 2).mean()) ** 0.5 / (
-            ((self.ref[self.name_ref_var]) ** 2).mean()) ** 0.5
-
-        logging.info('          => Leaderboard SSH RMSE score = %s', np.round(leaderboard_rmse.values, 2))
-        logging.info('          Error variability = %s (temporal stability of the mapping error)', np.round(reconstruction_error_stability_metric, 2))
 
         rmse_t.to_netcdf(f'{self.dir_output}/rmse_t.nc')
         rmse_xy.to_netcdf(f'{self.dir_output}/rmse_xy.nc')
@@ -259,9 +300,38 @@ That could be due to non regular grid or bad written netcdf file')
         self.rmse_t = rmse_t
         self.rmse_xy = rmse_xy
 
-        # Metrics
-        self.leaderboard_nrmse = np.round(leaderboard_rmse.values, 2)
-        self.leaderboard_nrmse_std = np.round(reconstruction_error_stability_metric, 2)
+        if plot:
+            if not self.compare_to_baseline:
+                fig,(ax1,ax2) = plt.subplots(1,2,figsize=(10,4))
+                rmse_t.plot(ax=ax1)
+                rmse_xy.plot(ax=ax2,cmap='Reds')
+            else:
+                fig,(ax1,ax2,ax3) = plt.subplots(1,3,figsize=(15,4))
+                rmse_t.sel(run='experiment').plot(ax=ax1,label='experiment')
+                rmse_t.sel(run='baseline').plot(ax=ax1,label='baseline')
+                ax1.set_title(None)
+                ax1.legend()
+                rmse_xy.sel(run='experiment').plot(ax=ax2,cmap='Reds',vmin=0,vmax=rmse_xy.max().values)
+                ax2.set_title('experiment')
+                rmse_xy.sel(run='baseline').plot(ax=ax3,cmap='Reds',vmin=0,vmax=rmse_xy.max().values)
+                ax3.set_title('baseline')
+
+            fig.savefig(f'{self.dir_output}/rmse.png',dpi=100)
+
+
+        # Show leaderboard SSH-RMSE metric (spatially and time averaged normalized RMSE)
+        self.leaderboard_rmse = (1.0 - (((self.exp_regridded - self.ref[self.name_ref_var]) ** 2).mean()) ** 0.5 / (
+            ((self.ref[self.name_ref_var]) ** 2).mean()) ** 0.5).values
+        
+        if self.compare_to_baseline:
+            self.leaderboard_rmse_bas = (1.0 - (((self.bas_regridded - self.ref[self.name_ref_var]) ** 2).mean()) ** 0.5 / (
+                ((self.ref[self.name_ref_var]) ** 2).mean()) ** 0.5).values
+            self.leaderboard_rmse_std_bas = rmse_t.sel(run='baseline').std().values
+            self.leaderboard_rmse_std = rmse_t.sel(run='experiment').std().values
+        else:
+            self.leaderboard_rmse_std = rmse_t.std().values
+
+
 
 
     def psd_based_scores(self,threshold=0.5, plot=False):
@@ -274,30 +344,22 @@ That could be due to non regular grid or bad written netcdf file')
             dim_mean=self.name_ref_lat)
         
         mean_psd_err = psd(
-            (self.exp_regridded[self.name_exp_var] - self.ref[self.name_ref_var]),
+            (self.exp_regridded - self.ref[self.name_ref_var]),
             dim=[self.name_ref_time,self.name_ref_lon],
             dim_mean=self.name_ref_lat)
-        
-        # return PSD-based score
+
         psd_based_score = (1.0 - mean_psd_err/mean_psd_signal)
 
-        # Plot
-        if plot:
-            plot_psd_score_v0(psd_based_score)
-
-        # Find the key metrics: shortest temporal & spatial scales resolved based on the 0.5 contour criterion of the PSD_score
-        level = [threshold]
-        cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score, level)
-        x05, y05 = cs.collections[0].get_paths()[0].vertices.T
-        plt.close()
-        
-        shortest_spatial_wavelength_resolved = np.min(x05)
-        shortest_temporal_wavelength_resolved = np.min(y05)/3600/24 # in days
-
-        logging.info('          => Leaderboard Spectral score = %s (degree lon)',
-                    np.round(shortest_spatial_wavelength_resolved, 2))
-        logging.info('          => shortest temporal wavelength resolved = %s (days)',
-                    np.round(shortest_temporal_wavelength_resolved, 2))
+        if self.compare_to_baseline:
+            mean_psd_err_bas = psd(
+                (self.bas_regridded - self.ref[self.name_ref_var]),
+                dim=[self.name_ref_time,self.name_ref_lon],
+                dim_mean=self.name_ref_lat)
+            mean_psd_err = xr.concat((mean_psd_err, mean_psd_err_bas), dim='run')
+            mean_psd_err['run'] = ['experiment','baseline']
+            psd_based_score_bas = (1.0 - mean_psd_err_bas/mean_psd_signal)
+            psd_based_score = xr.concat((psd_based_score, psd_based_score_bas), dim='run')
+            psd_based_score['run'] = ['experiment','baseline']
 
         mean_psd_signal.to_netcdf(f'{self.dir_output}/mean_psd_signal.nc')
         mean_psd_err.to_netcdf(f'{self.dir_output}/mean_psd_err.nc')
@@ -306,24 +368,59 @@ That could be due to non regular grid or bad written netcdf file')
         self.mean_psd_err = mean_psd_err
         self.psd_based_score = psd_based_score
 
-        # Metrics
-        self.leaderboard_psds_score = np.round(shortest_spatial_wavelength_resolved, 2) 
-        self.leaderboard_psdt_score = np.round(shortest_temporal_wavelength_resolved, 2)
+        # Plot
+        if plot:
+            fig = plot_psd_score_v0(psd_based_score)
+            fig.savefig(f'{self.dir_output}/psd.png',dpi=100)
 
-    def movie(self,n_workers=1,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+        # Find the key metrics: shortest temporal & spatial scales resolved based on the 0.5 contour criterion of the PSD_score
+        level = [threshold]
 
+        if self.compare_to_baseline:
+            # Experiment
+            cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='experiment'), level)
+            x05, y05 = cs.collections[0].get_paths()[0].vertices.T
+            plt.close()
+            self.leaderboard_psds_score = np.min(x05)
+            self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
+            # Baseline
+            cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='baseline'), level)
+            x05, y05 = cs.collections[0].get_paths()[0].vertices.T
+            plt.close()
+            self.leaderboard_psds_score_bas = np.min(x05)
+            self.leaderboard_psdt_score_bas = np.min(y05)/3600/24 # in days
+        else:
+            cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score, level)
+            x05, y05 = cs.collections[0].get_paths()[0].vertices.T
+            plt.close()
+            self.leaderboard_psds_score = np.min(x05)
+            self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
+
+
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+
+    
         # Create merged dataset
+        if self.compare_to_baseline:
+            name_dim_rmse = ('run', self.name_ref_time)
+        else:
+            name_dim_rmse = (self.name_ref_time,)
         coords = (self.name_ref_time,self.name_ref_lat,self.name_ref_lon)
         ds = xr.Dataset(
             {'ref':(coords,self.ref[self.name_ref_var].data),
-            'exp':(coords,self.exp_regridded[self.name_exp_var].data),
-            'err':(coords,self.ref[self.name_ref_var].data-self.exp_regridded[self.name_exp_var].data),
-            'rmse_score':(self.name_ref_time,self.rmse_t.data)},
+            'exp':(coords,self.exp_regridded.data),
+            'err':(coords,self.ref[self.name_ref_var].data-self.exp_regridded.data),
+            'rmse_score':(name_dim_rmse,self.rmse_t.data)},
             coords=(
                 {self.name_ref_time:self.ref[self.name_ref_time],
                 self.name_ref_lat:self.ref[self.name_ref_lat],
                 self.name_ref_lon:self.ref[self.name_ref_lon]})
         )
+        if self.compare_to_baseline:
+            ds['bas'] = (coords,self.bas_regridded.data)
+            ds['err_bas'] = (coords,self.ref[self.name_ref_var].data-self.bas_regridded.data)
+            ds = ds.assign_coords({'run': ['experiment','baseline']})
+        
         ds = ds.chunk({self.name_ref_time:1})
 
         # Plotting parameters
@@ -341,11 +438,16 @@ That could be due to non regular grid or bad written netcdf file')
             if tt==0:
                 return 
             
-            fig = plt.figure(figsize=(18,10))
+            if self.compare_to_baseline:
+                fig = plt.figure(figsize=(18,15))
+                gs = gridspec.GridSpec(3,5,width_ratios=(1,1,0.05,1,0.05))
+            else:
+                fig = plt.figure(figsize=(18,10))
+                gs = gridspec.GridSpec(2,5,width_ratios=(1,1,0.05,1,0.05))
 
             date = str(ds[self.name_ref_time][tt].values)[:13]
 
-            gs = gridspec.GridSpec(2,5,width_ratios=(1,1,0.05,1,0.05))
+            
 
             ids = ds.isel(time=tt)
             
@@ -371,9 +473,29 @@ That could be due to non regular grid or bad written netcdf file')
             ax5 = fig.add_subplot(gs[0, 4])
             plt.colorbar(im,cax=ax5)
 
+            if self.compare_to_baseline:
+
+                ax2 = fig.add_subplot(gs[1, 1])
+                im = ids.bas.plot(ax=ax2,cmap=cmap,vmin=clim[0],vmax=clim[1],add_colorbar=False)
+                ax2.set_ylabel('')
+                ax2.set_yticks([])
+                ax2.set_title('Baseline')
+        
+                ax4 = fig.add_subplot(gs[1, 3])
+                im = ids.err_bas.plot(ax=ax4,cmap='RdBu_r',vmin=-range_err,vmax=range_err,add_colorbar=False)
+                ax4.set_ylabel('')
+                ax4.set_yticks([])
+                ax4.set_title('Difference')
+
+    
             ids = ds.isel(time=slice(0,tt))
-            ax = fig.add_subplot(gs[1, :])
-            ids.rmse_score.plot.line(ax=ax,xlim=xlim,ylim=ylim)
+            ax = fig.add_subplot(gs[-1, :])
+            if self.compare_to_baseline:
+                ids.rmse_score.sel(run='experiment').plot(ax=ax,label='experiment',xlim=xlim,ylim=ylim)
+                ids.rmse_score.sel(run='baseline').plot(ax=ax,label='baseline',xlim=xlim,ylim=ylim)
+                ax.legend()
+            else:
+                ids.rmse_score.plot.line(ax=ax,xlim=xlim,ylim=ylim)
             ax.set_title(date)
 
             fig.savefig(f'{self.dir_output}/frame_{str(tt).zfill(5)}.png',dpi=100)
@@ -414,11 +536,20 @@ That could be due to non regular grid or bad written netcdf file')
 
     def Leaderboard(self):
 
+        
         data = [[self.name_experiment, 
-         self.leaderboard_nrmse, 
-         self.leaderboard_nrmse_std, 
-         self.leaderboard_psds_score, 
-         self.leaderboard_psdt_score,]]
+            np.round(self.leaderboard_rmse,2), 
+            np.round(self.leaderboard_rmse_std,2), 
+            np.round(self.leaderboard_psds_score,2), 
+            np.round(self.leaderboard_psdt_score,2),]]
+
+        if self.compare_to_baseline:
+            data.append(['baseline', 
+                np.round(self.leaderboard_rmse_bas,2), 
+                np.round(self.leaderboard_rmse_std_bas,2), 
+                np.round(self.leaderboard_psds_score_bas,2), 
+                np.round(self.leaderboard_psdt_score_bas,2),])
+
          
         Leaderboard = pd.DataFrame(data, 
                                 columns=['Method', 
@@ -426,29 +557,30 @@ That could be due to non regular grid or bad written netcdf file')
                                             "σ(RMSE)", 
                                             'λx (degree)', 
                                             'λt (days)'])
+        
         return Leaderboard
 
 def plot_psd_score_v0(ds_psd):
         
     try:
-        nb_experiment = len(ds_psd.experiment)
+        nb_run = len(ds_psd.run)
     except:
-        nb_experiment = 1
+        nb_run = 1
     
-    fig, ax0 =  plt.subplots(1, nb_experiment, sharey=True, figsize=(nb_experiment*10, 5))
+    fig, ax0 =  plt.subplots(1, nb_run, sharey=True, figsize=(nb_run*10, 5))
 
-    if nb_experiment==1:
+    if nb_run==1:
         ax0 = [ax0]
 
-    for exp in range(nb_experiment):
+    for run in range(nb_run):
 
-        ax = ax0[exp]
+        ax = ax0[run]
         try:
-            ctitle = ds_psd.experiment.values[exp]
+            ctitle = ds_psd.run.values[run]
         except:
             ctitle = ''
-        if nb_experiment > 1:
-            data = (ds_psd.isel(experiment=exp).values)
+        if nb_run > 1:
+            data = (ds_psd.isel(run=run).values)
         else:
             data = (ds_psd.values)
         ax.invert_yaxis()
@@ -491,6 +623,8 @@ def plot_psd_score_v0(ds_psd):
                         verticalalignment='center')
     
     plt.show()
+    return fig
+    
 
 def psd(da,dim,dim_mean=None,detrend='constant'):
 
