@@ -24,6 +24,7 @@ config.update("jax_enable_x64", True)
 from . import  grid
 
 
+
 def Model(config,State):
     """
     NAME
@@ -690,9 +691,9 @@ class Model_qg1l_jax:
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            tangent_test(self,State,nstep=100)
+            tangent_test(self,State,nstep=2)
             print('Adjoint test:')
-            adjoint_test(self,State,nstep=100)
+            adjoint_test(self,State,nstep=2)
         
 
     def set_bc(self,time_bc,var_bc):
@@ -700,7 +701,7 @@ class Model_qg1l_jax:
         for var in var_bc:
             if var in self.name_var['SSH']:
                 for i,t in enumerate(time_bc):
-                    self.SSHb[t] = var_bc[var][i].flatten()
+                    self.SSHb[t] = var_bc[var][i]#.flatten()
 
 
     def step(self,State,nstep=1,t=None):
@@ -709,23 +710,20 @@ class Model_qg1l_jax:
         SSH0 = State.getvar(name_var=self.name_var['SSH'])
         
         # init
-        SSH1 = +SSH0.flatten()
+        SSH1 = +SSH0
 
         # Boundary field
         if t in self.SSHb:
             SSHb = self.SSHb[t]
         else:
-            SSHb = np.zeros((self.nx*self.ny,))
-
-        # add bc to state variable 
-        SSH1 = np.concatenate((SSHb,SSH1))
+            SSHb = np.zeros((self.ny,self.nx,))
 
         # Time propagation
-        for i in range(nstep):
-            SSH1 = self.qgm.step_jit(SSH1)
+        #for i in range(nstep):
+        SSH1 = self.qgm.step_jit(SSH1,SSHb,nstep=nstep)
 
         # Convert to numpy and reshape
-        SSH1 = np.array(SSH1[self.ny*self.nx:]).reshape((self.ny,self.nx))
+        SSH1 = np.array(SSH1)
         
         # Update state
         if self.name_var['SSH'] in State.params:
@@ -741,27 +739,28 @@ class Model_qg1l_jax:
         SSH0 = State.getvar(name_var=self.name_var['SSH'])
         
         # init
-        dSSH1 = +dSSH0.flatten()
-        SSH1 = +SSH0.flatten()
+        dSSH1 = +dSSH0#.flatten()
+        SSH1 = +SSH0#.flatten()
         
         # Boundary field
         if t in self.SSHb:
             SSHb = self.SSHb[t]
         else:
-            SSHb = np.zeros((self.nx*self.ny,))
-        dSSHb = np.zeros((self.nx*self.ny,))
+            SSHb = np.zeros((self.ny,self.nx,))#np.zeros((self.nx*self.ny,))
+        #dSSHb = np.zeros((self.nx*self.ny,))
 
         # add bc to state variable 
-        SSH1 = np.concatenate((SSHb,SSH1))
-        dSSH1 = np.concatenate((dSSHb,dSSH1))
+        #SSH1 = np.concatenate((SSHb,SSH1))
+        #dSSH1 = np.concatenate((dSSHb,dSSH1))
 
         # Time propagation
-        for i in range(nstep):
-            dSSH1 = self.qgm.step_tgl_jit(dh0=dSSH1,h0=SSH1)
-            SSH1 = self.qgm.step_jit(SSH1)
+        dSSH1 = self.qgm.step_tgl_jit(dh0=dSSH1,h0=SSH1,hb=SSHb,nstep=nstep)
+        #for i in range(nstep):
+        #    dSSH1 = self.qgm.step_tgl_jit(dh0=dSSH1,h0=SSH1,hb=SSHb,nstep=nstep)
+        #    SSH1 = self.qgm.step_jit(SSH1,SSHb)
 
         # Convert to numpy and reshape
-        dSSH1 = np.array(dSSH1[self.ny*self.nx:]).reshape((self.ny,self.nx))
+        dSSH1 = np.array(dSSH1)#[self.ny*self.nx:]).reshape((self.ny,self.nx))
 
         # Update state
         if self.name_var['SSH'] in dState.params:
@@ -777,34 +776,35 @@ class Model_qg1l_jax:
         SSH0 = State.getvar(self.name_var['SSH'])
         
         # Init
-        adSSH1 = +adSSH0.flatten()
-        SSH1 = +SSH0.flatten()
+        adSSH1 = +adSSH0#.flatten()
+        SSH1 = +SSH0#.flatten()
 
         # Boundary field
         if t in self.SSHb:
             SSHb = self.SSHb[t]
         else:
-            SSHb = np.zeros((self.nx*self.ny,))
-        adSSHb = np.zeros((self.nx*self.ny,))
+            SSHb = np.zeros((self.ny,self.nx,))
+        adSSHb = np.zeros((self.ny,self.nx,))
 
         # add bc to state variable 
-        SSH1 = np.concatenate((SSHb,SSH1))
-        adSSH1 = np.concatenate((adSSHb,adSSH1))
+        #SSH1 = np.concatenate((SSHb,SSH1))
+        #adSSH1 = np.concatenate((adSSHb,adSSH1))
 
         # Current trajectory
-        traj = [SSH1]
-        if nstep>1:
-            for i in range(nstep):
-                SSH1 = self.qgm.step_jit(SSH1)
-                traj.append(SSH1)
+        #traj = [SSH1]
+        #if nstep>1:
+        #    for i in range(nstep):
+        #        SSH1 = self.qgm.step_jit(SSH1,SSHb)
+        #        traj.append(SSH1)
         
         # Time propagation
-        for i in reversed(range(nstep)):
-            SSH1 = traj[i]
-            adSSH1 = self.qgm.step_adj_jit(adSSH1,SSH1)
+        #for i in reversed(range(nstep)):
+            #SSH1 = traj[i]
+            #adSSH1 = self.qgm.step_adj_jit(adSSH1,SSH1,SSHb)
+        adSSH1 = self.qgm.step_adj_jit(adSSH1,SSH1,SSHb,nstep=nstep)
 
         # Convert to numpy and reshape
-        adSSH1 = np.array(adSSH1[self.ny*self.nx:]).reshape((self.ny,self.nx))
+        adSSH1 = np.array(adSSH1)#[self.ny*self.nx:]).reshape((self.ny,self.nx))
 
         # Update state and parameters
         if self.name_var['SSH'] in adState.params:

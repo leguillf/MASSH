@@ -5,6 +5,7 @@ from jax import jvp,vjp
 import matplotlib.pylab as plt 
 import numpy
 import jax 
+from functools import partial
 jax.config.update("jax_enable_x64", True)
 
 
@@ -168,17 +169,15 @@ class Qgm:
         self.euler_jit = jit(self.euler)
         self.rk2_jit = jit(self.rk2)
         self.rk4_jit = jit(self.rk4)
-        self.step_jit = jit(self.step)
-        self.step_tgl_jit = jit(self.step_tgl)
-        self.step_adj_jit = jit(self.step_adj)
+        self.one_step_jit = jit(self.one_step)
+        self.step_jit = jit(self.step,static_argnums=(3,4,))
+        self.step_tgl_jit = jit(self.step_tgl,static_argnums=(4,5,))
+        self.step_adj_jit = jit(self.step_adj,static_argnums=(4,5,))
         self.step_multiscales_jit = jit(self.step_multiscales)
         self.step_multiscales_tgl_jit = jit(self.step_multiscales_tgl)
         self.step_multiscales_adj_jit = jit(self.step_multiscales_adj)
         
         
-        
-        
-    
     def h2uv(self,h,ubc=None,vbc=None):
         """ SSH to U,V
     
@@ -208,9 +207,11 @@ class Qgm:
             u = u.at[self.ind1].set(ubc[self.ind1])
             #v[self.mask==1] = vbc[self.mask==1]
             v = v.at[self.ind1].set(vbc[self.ind1])
+        
+        u = jnp.where(jnp.isnan(u),0,u)
+        v = jnp.where(jnp.isnan(v),0,v)
             
         return u,v
-
 
     def h2pv(self,h,hbc,c=None):
         """ SSH to Q
@@ -247,8 +248,6 @@ class Qgm:
         q = q.at[self.ind0].set(0)
     
         return q
-    
-    
     
     def qrhs(self,u,v,q,uls=None,vls=None,qls=None,way=1):
 
@@ -435,9 +434,9 @@ class Qgm:
 
         return hrec
 
-    def euler(self,q0,rq):
+    def euler(self,q0,rq,way):
 
-        return q0 + self.dt*rq
+        return q0 + way * self.dt*rq
 
     def rk2(self,q0,rq,hb,way):
 
@@ -486,8 +485,29 @@ class Qgm:
 
         return q1
 
+    def one_step(self,h0,q0,hb,way=1):
 
-    def step(self,X0,way=1):
+        #  h-->(u,v)
+        u,v = self.h2uv_jit(h0)
+
+        # (u,v,q)-->rq
+        rq = self.qrhs_jit(u,v,q0,way=way)
+        
+        # 4/ increment integration 
+        if self.time_scheme == 'Euler':
+            q1 = self.euler_jit(q0,rq,way)
+        elif self.time_scheme == 'rk2':
+            q1 = self.rk2_jit(q0,rq,hb,way)
+        elif self.time_scheme == 'rk4':
+            q1 = self.rk4_jit(q0,rq,hb,way)
+            
+        # q-->h
+        h1 = self.pv2h_jit(q1,hb)
+
+        return h1,q1
+
+
+    def step(self,h0,hb,way=1,nstep=1):
         
         """ Propagation 
     
@@ -502,43 +522,20 @@ class Qgm:
     
         """
 
-        # Get boundary field and SSH at t0
-        hb = X0[:self.ny*self.nx].reshape((self.ny,self.nx))
-        h0 = X0[self.ny*self.nx:].reshape((self.ny,self.nx))
-
-        # 1/ h-->q
+        # h-->q
         q0 = self.h2pv_jit(h0,hb)
-        
-        # 2/ h-->(u,v)
-        u,v = self.h2uv_jit(h0)
-        #u[np.isnan(u)] = 0
-        u = jnp.where(jnp.isnan(u),0,u)
-        #v[np.isnan(v)] = 0
-        v = jnp.where(jnp.isnan(v),0,v)
 
-        # 3/ (u,v,q)-->rq
-        rq = self.qrhs_jit(u,v,q0,way=way)
-        
-        # 4/ increment integration 
-        if self.time_scheme == 'Euler':
-            q1 = self.euler_jit(q0,rq)
-        elif self.time_scheme == 'rk2':
-            q1 = self.rk2_jit(q0,rq,hb,way)
-        elif self.time_scheme == 'rk4':
-            q1 = self.rk4_jit(q0,rq,hb,way)
+        # Init
+        q1 = +q0
+        h1 = +h0
+
+        for _ in range(nstep):
+            h1,q1 = self.one_step_jit(h1,q1,hb,way=way)
             
-        # 5/ q-->h
-        h1 = self.pv2h_jit(q1,hb)
-
         # Mask
         h1 = h1.at[self.ind0].set(np.nan)
-
-        # Add again boundary field and flatten
-        X1 = jnp.concatenate(
-            (hb.flatten(),
-            h1.flatten()))
         
-        return X1
+        return h1
     
     def step_multiscales(self,h0,way=1):
         
@@ -585,15 +582,15 @@ class Qgm:
         return jnp.concatenate((hb.flatten(),hls.flatten(),h1.flatten()))
     
         
-    def step_tgl(self,dh0,h0):
+    def step_tgl(self,dh0,h0,hb,way=1,nstep=1):
         
-        _,dh1 = jvp(self.step_jit, (h0,), (dh0,))
+        _,dh1 = jvp(partial(self.step_jit,hb=hb,nstep=nstep,way=way), (h0,), (dh0,))
         
         return dh1
     
-    def step_adj(self,adh0,h0):
+    def step_adj(self,adh0,h0,hb,way=1,nstep=1):
         
-        _, adf = vjp(self.step_jit, h0)
+        _, adf = vjp(partial(self.step_jit,hb=hb,nstep=nstep,way=way), h0)
         
         return adf(adh0)[0]
     
