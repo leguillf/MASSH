@@ -9,10 +9,11 @@ import os, sys
 import numpy as np
 import logging
 import pickle 
-import matplotlib.pylab as plt
 import xarray as xr
 import scipy
 from scipy.integrate import quad
+import numba as nb
+from numba.typed import List
 
 def Basis(config, State, *args, **kwargs):
     """
@@ -444,6 +445,7 @@ class Basis_bm:
             self.window = mywindow_flux
         else:
             self.window = mywindow
+    
 
     def set_basis(self,time,return_q=False):
         
@@ -532,17 +534,24 @@ class Basis_bm:
         Qi = np.array([])
         Qt = np.array([]) # Initial state      
 
+        iwave = 0
+        self.iff_wavebounds = [None]*nf
         for iff in range(nf):
+            self.iff_wavebounds[iff] = iwave
             _nwavei = 2*ntheta*NP[iff] # just in space
             _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
             if 1/ff[iff]>self.lmeso:
                 if self.wavelet_init:
                     Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavei,))))
+                    iwave += _nwavei
                 Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
+                iwave += _nwavet
             else:
                 if self.wavelet_init:
                     Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavei,)))) 
+                    iwave += _nwavei
                 Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
+                iwave += _nwavet
                 
             print(f'lambda={1/ff[iff]:.1E}',
                   f'nlocs={NP[iff]:.1E}',
@@ -567,88 +576,138 @@ class Basis_bm:
 
 
         # Compute basis components
-        if not self.save_wave_basis:
-            self.facG = {}
-            self.indx = {}
-        
-        for t in time:
-            facGt = {}
-            indxt = {}
 
-            for iff in range(self.nf):
-                for P in range(self.NP[iff]):
-                    
-                    facGt[(iff,P)] = {}
-                    
-                    # Obs selection around point P
-                    iobs = np.where(
-                        (np.abs((np.mod(self.lon1d - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
-                        (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
-                        )[0]
-                    xx = (np.mod(self.lon1d[iobs] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
-                    yy = (self.lat1d[iobs] - self.ENSLAT[iff][P]) / self.km2deg
+        if self.save_wave_basis != False:
+            if self.save_wave_basis=='inline':
+                self.facG = {}
+                self.indx = {}
+            
+            for t in time:
 
-                    facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff])
-                    
-                    indxt[(iff,P)] = iobs
-                    
-                    if iobs.shape[0] > 0:
-                        # Initial State
-                        if t==0 and self.wavelet_init:
-                            facGt[(iff,P)][-1] = [None,]*self.ntheta # -1 stands for initial state
-                            for itheta in range(self.ntheta):
-                                facGt[(iff,P)][-1][itheta] = [[],[]]
-                                kx = self.k[iff] * np.cos(self.theta[itheta])
-                                ky = self.k[iff] * np.sin(self.theta[itheta])
-                                facGt[(iff,P)][-1][itheta][0] = np.sqrt(2)* facs * np.cos(kx*(xx)+ky*(yy))
-                                facGt[(iff,P)][-1][itheta][1] = np.sqrt(2)* facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
+                facGt, indxt = self._compute_component(t)
 
-                        # Time spread wavelets
-                        enstloc = self.enst[iff]
-                        for it in range(len(enstloc)):
-                            dt = t - enstloc[it]
-                            try:
-                                if abs(dt) < self.tdec[iff]:
-                                    fact = self.window(dt / self.tdec[iff]) 
-                                    fact /= self.norm_fact[iff]
-                                        
-                                    facGt[(iff,P)][it] = [None,]*self.ntheta
-                                    for itheta in range(self.ntheta):
-                                        facGt[(iff,P)][it][itheta] = [[],[]]
-                                        kx = self.k[iff] * np.cos(self.theta[itheta])
-                                        ky = self.k[iff] * np.sin(self.theta[itheta])
-                                        facGt[(iff,P)][it][itheta][0] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy))
-                                        facGt[(iff,P)][it][itheta][1] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
-                            except:
-                                print(f'Warning: an error occured at t={t}, iff={iff}, P={P}, enstloc={enstloc[it]}')
-
-            if self.save_wave_basis:
-                name_facG = os.path.join(self.path_save_tmp,f'facG_{t}.pic')
-                name_indx = os.path.join(self.path_save_tmp,'indx.pic')
-                if not os.path.exists(name_facG):
-                    with open(name_facG, 'wb') as f:
-                        pickle.dump(facGt,f)  
-                if not os.path.exists(name_indx):
-                    with open(name_indx, 'wb') as f:
-                        pickle.dump(indxt,f)     
-            else:
-                self.facG[t] = facGt
-                self.indx = indxt        
-        
-        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
-        
+                if self.save_wave_basis=='offline':
+                    name_facG = os.path.join(self.path_save_tmp,f'facG_{t}.pic')
+                    name_indx = os.path.join(self.path_save_tmp,'indx.pic')
+                    if not os.path.exists(name_facG):
+                        with open(name_facG, 'wb') as f:
+                            pickle.dump(facGt,f)  
+                    if not os.path.exists(name_indx):
+                        with open(name_indx, 'wb') as f:
+                            pickle.dump(indxt,f)     
+                else:
+                    self.facG[t] = facGt
+                    self.indx = indxt        
+            
+            print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
+            
         if return_q:
             return Q
     
+    def _compute_component(self,t):
+
+        facGt = [None,]*self.nf
+        indxt = [None,]*self.nf
+
+        for iff in range(self.nf):
+            facGt[iff] = [None,]*self.NP[iff]
+            indxt[iff] = [None,]*self.NP[iff]
+            for P in range(self.NP[iff]):
+                # Obs selection around point P
+                iobs = np.where(
+                    (np.abs((np.mod(self.lon1d - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
+                    (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
+                    )[0]
+                xx = (np.mod(self.lon1d[iobs] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
+                yy = (self.lat1d[iobs] - self.ENSLAT[iff][P]) / self.km2deg
+
+                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff])
+                
+                indxt[iff][P] = iobs
+                
+                if iobs.shape[0] > 0:
+                    enstloc = self.enst[iff] # Number of wavelet in time 
+                    facGt[iff][P] = [None,]*(len(enstloc)+1) # +1 for initial state
+                    # Initial State
+                    if t==0 and self.wavelet_init:
+                        facGt[iff][P][0] = [None,]*self.ntheta # 0 stands for initial state
+                        for itheta in range(self.ntheta):
+                            facGt[iff][P][0][itheta] = [[],[]]
+                            kx = self.k[iff] * np.cos(self.theta[itheta])
+                            ky = self.k[iff] * np.sin(self.theta[itheta])
+                            facGt[iff][P][0][itheta][0] = np.sqrt(2)* facs * np.cos(kx*(xx)+ky*(yy))
+                            facGt[iff][P][0][itheta][1] = np.sqrt(2)* facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
+
+                    # Time spread wavelets
+                    for it in range(len(enstloc)):
+                        dt = t - enstloc[it]
+                        try:
+                            if abs(dt) < self.tdec[iff]:
+                                fact = self.window(dt / self.tdec[iff]) 
+                                fact /= self.norm_fact[iff]
+                                    
+                                facGt[iff][P][it+1] = [None,]*self.ntheta
+                                for itheta in range(self.ntheta):
+                                    facGt[iff][P][it+1][itheta] = [[],[]]
+                                    kx = self.k[iff] * np.cos(self.theta[itheta])
+                                    ky = self.k[iff] * np.sin(self.theta[itheta])
+                                    facGt[iff][P][it+1][itheta][0] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy))
+                                    facGt[iff][P][it+1][itheta][1] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
+                        except:
+                            print(f'Warning: an error occured at t={t}, iff={iff}, P={P}, enstloc={enstloc[it]}')
+
+        return facGt, indxt
+
+
+
+    def _proj(self, phi, X, t, facG, indx, transpose):
+
+        iwave = 0
+        for iff in range(self.nf):
+            enstloc = self.enst[iff]
+            for P in range(self.NP[iff]):
+                iobs = indx[iff][P]
+                if iobs.shape[0] > 0:
+                    # Initial State
+                    if t==0 and self.wavelet_init:
+                        for itheta in range(self.ntheta):
+                            for iphase in range(2):
+                                if transpose:
+                                    phi[iwave] = np.sum(X[iobs] * facG[iff][P][0][itheta][iphase])
+                                else:
+                                    phi[iobs] += X[iwave] * facG[iff][P][0][itheta][iphase]
+                                iwave += 1
+                    elif self.wavelet_init:
+                        iwave += 2*self.ntheta
+
+                    # Time spread wavelets
+                    for it in range(len(enstloc)):
+                        if facG[iff][P][it+1] is None:
+                            iwave += 2*self.ntheta
+                        else:
+                            for itheta in range(self.ntheta):
+                                for iphase in range(2):
+                                    if transpose:
+                                        phi[iwave] = np.sum(X[iobs] * facG[iff][P][it+1][itheta][iphase])
+                                    else:
+                                        phi[iobs] += X[iwave] * facG[iff][P][it+1][itheta][iphase]
+                                    iwave += 1
+    
+
+    
+
     def operg(self, t, X, transpose=False,State=None):
         
         """
             Project to physicial space
         """
 
-        # Load basis components 
-        if self.save_wave_basis:
-            # Offline
+        # Basis component for time t
+        if self.save_wave_basis==False:
+            # Compute basis component
+            facG, indx = self._compute_component(t)
+        elif  self.save_wave_basis=='offline':
+            # Load basis components Offline
             name_facG = os.path.join(self.path_save_tmp,f'facG_{t}.pic')
             name_indx = os.path.join(self.path_save_tmp,'indx.pic')
             if os.path.exists(name_facG) and os.path.exists(name_indx):
@@ -656,8 +715,8 @@ class Basis_bm:
                     facG = pickle.load(f)
                 with open(name_indx, 'rb') as f:
                     indx = pickle.load(f)
-        else: 
-            # Inline
+        else:
+            # Load basis components Inline
             facG = self.facG[t]
             indx = self.indx
 
@@ -667,40 +726,10 @@ class Basis_bm:
             phi = np.zeros((self.nbasis,))
         else:
             phi = np.zeros((self.nphys,))
-        
-        iwave = 0
-        for iff in range(self.nf):
-            enstloc = self.enst[iff]
-            for P in range(self.NP[iff]):
-                iobs = indx[(iff,P)]
-                if iobs.shape[0] > 0:
-                    # Initial State
-                    if t==0 and self.wavelet_init:
-                        for itheta in range(self.ntheta):
-                            for iphase in range(2):
-                                if transpose:
-                                    phi[iwave] = np.sum(X[iobs] * facG[(iff,P)][-1][itheta][iphase])
-                                else:
-                                    phi[iobs] += X[iwave] * facG[(iff,P)][-1][itheta][iphase]
-                                iwave += 1
-                    elif self.wavelet_init:
-                        iwave += 2*self.ntheta
 
-                    # Time spread wavelets
-                    for it in range(len(enstloc)):
-                        if it not in facG[(iff,P)]:
-                            iwave += 2*self.ntheta
-                        else:
-                            for itheta in range(self.ntheta):
-                                for iphase in range(2):
-                                    if transpose:
-                                        phi[iwave] = np.sum(X[iobs] * facG[(iff,P)][it][itheta][iphase])
-                                    else:
-                                        phi[iobs] += X[iwave] * facG[(iff,P)][it][itheta][iphase]
-                                    iwave += 1
-        
-        if iwave!=self.nbasis:
-                print(f'Warning: not the right number of wavelet: {iwave}≠{self.nbasis}')
+        self._proj(phi, X, t, facG, indx, transpose)
+
+
         
         # Reshaping
         if not transpose:
@@ -1396,3 +1425,4 @@ def test_operg(Basis,t=0):
     ps2 = np.inner(Basis.operg(psi,t).flatten(),phi.flatten())
         
     print(f'test G[{t}]:', ps1/ps2)
+
