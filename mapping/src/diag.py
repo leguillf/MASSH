@@ -29,6 +29,9 @@ def Diag(config,State):
     if config.DIAG is None:
         return
     
+    elif config.DIAG.super is None:
+        return Diag_multi(config,State)
+    
     print(config.DIAG)
 
 
@@ -269,7 +272,6 @@ That could be due to non regular grid or bad written netcdf file')
         var_regridded.data[np.isnan(self.ref[self.name_ref_var])] = np.nan
 
         return var_regridded
-
         
     def rmse_based_scores(self,plot=False):
         
@@ -330,9 +332,6 @@ That could be due to non regular grid or bad written netcdf file')
             self.leaderboard_rmse_std = rmse_t.sel(run='experiment').std().values
         else:
             self.leaderboard_rmse_std = rmse_t.std().values
-
-
-
 
     def psd_based_scores(self,threshold=0.5, plot=False):
         
@@ -395,7 +394,6 @@ That could be due to non regular grid or bad written netcdf file')
             plt.close()
             self.leaderboard_psds_score = np.min(x05)
             self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
-
 
     def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
 
@@ -654,3 +652,44 @@ def psd(da,dim,dim_mean=None,detrend='constant'):
         
         return psd
     
+
+class Diag_multi:
+
+    def __init__(self,config,State):
+
+        self.Diag = []
+        _config = config.copy()
+
+        for _DIAG in config.DIAG:
+            _config.DIAG = config.DIAG[_DIAG]
+            _Diag = Diag(_config,State)
+            _Diag.dir_output = os.path.join(_Diag.dir_output,_DIAG)
+            if not os.path.exists(_Diag.dir_output):
+                os.makedirs(_Diag.dir_output)
+            self.Diag.append(_Diag)
+
+    def regrid_exp(self):
+
+        for _Diag in self.Diag:
+            _Diag.regrid_exp()
+    
+    def rmse_based_scores(self,plot=False):
+
+        for _Diag in self.Diag:
+            _Diag.rmse_based_scores(plot=plot)
+        
+    def psd_based_scores(self,plot=False,threshold=0.5):
+
+        for _Diag in self.Diag:
+            _Diag.psd_based_scores(plot=plot,threshold=threshold)
+    
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+
+        for _Diag in self.Diag:
+            _Diag.movie(framerate=framerate,Display=Display,clim=clim,range_err=range_err,cmap=cmap)
+        
+    def Leaderboard(self):
+
+        for _Diag in self.Diag:
+            _Diag.Leaderboard()
+    3

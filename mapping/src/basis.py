@@ -63,6 +63,8 @@ class Basis_it:
         
         self.sigma_B_He = config.BASIS.sigma_B_He
         self.sigma_B_bc = config.BASIS.sigma_B_bc
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
         
         if config.BASIS.Ntheta>0:
             self.Ntheta = 2*(config.BASIS.Ntheta-1)+3 # We add -pi/2,0,pi/2
@@ -285,7 +287,15 @@ class Basis_it:
             else:
                 Q = None
             
-            return Q
+            # Background
+            if self.path_background is not None and os.path.exists(self.path_background):
+                with xr.open_dataset(self.path_background) as ds:
+                    print(f'Load background from file: {self.path_background}')
+                    Xb = ds[self.var_background].values
+            else:
+                Xb = np.zeros_like(Q)
+
+            return Xb, Q
         
         
     def operg(self,t,X,State=None):
@@ -397,7 +407,6 @@ class Basis_it:
             
         print(f'test G[{t}]:', ps1/ps2)
 
-        
 class Basis_bm:
    
     def __init__(self,config,State):
@@ -424,7 +433,9 @@ class Basis_bm:
         self.save_wave_basis = config.BASIS.save_wave_basis
         self.wavelet_init = config.BASIS.wavelet_init
         self.name_mod_var = config.BASIS.name_mod_var
-
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
+        
         # Grid params
         self.nphys= State.lon.size
         self.shape_phys = (State.ny,State.nx)
@@ -560,6 +571,17 @@ class Basis_bm:
         
         Q = np.concatenate((Qi,Qt))
 
+
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values
+        else:
+            Xb = np.zeros_like(Q)
+
+
+
         self.DX=DX
         self.ENSLON=ENSLON
         self.ENSLAT=ENSLAT
@@ -602,7 +624,8 @@ class Basis_bm:
             print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
             
         if return_q:
-            return Q
+            
+            return Xb, Q
     
     def _compute_component(self,t):
 
@@ -797,6 +820,8 @@ class Basis_bmaux:
         self.distortion_eq_law = config.BASIS.distortion_eq_law
         self.lat_distortion_eq = config.BASIS.lat_distortion_eq
         self.name_mod_var = config.BASIS.name_mod_var
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
 
         # Dictionnaries to save wave coefficients and indexes for repeated runs
         self.path_save_tmp = config.EXP.tmp_DA_path
@@ -980,6 +1005,14 @@ class Basis_bmaux:
             
         nwave = iwave+1
         Q = Q[:nwave]
+
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values
+        else:
+            Xb = np.zeros_like(Q)
         
         
         self.lon1d = lon1d
@@ -1002,7 +1035,7 @@ class Basis_bmaux:
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
         
         if return_q:
-            return Q
+            return Xb, Q
         
 
     def operg(self, X, t, transpose=False,State=None):
@@ -1182,6 +1215,8 @@ class BASIS_ls:
         self.tdec_lw = config.BASIS.tdec_lw
         self.fcor = config.BASIS.fcor
         self.std_lw = config.BASIS.std_lw
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
 
         # Grid params
         self.nphys= State.lon.size
@@ -1248,6 +1283,14 @@ class BASIS_ls:
                 iwave += 1
                 Q[iwave] = (varHlw/(self.facnls*self.facnlt))**.5
         self.P_wavebounds[P+1] = iwave +1
+
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values
+        else:
+            Xb = np.zeros_like(Q)
         
         self.DX=DX
         self.ENSLON=ENSLON
@@ -1260,7 +1303,7 @@ class BASIS_ls:
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
         
         if return_q:
-            return Q
+            return Xb, Q
     
     def operg(self, t, X, transpose=False,State=None):
         
@@ -1361,18 +1404,20 @@ class Basis_multi:
         self.slice_basis = []
 
         if return_q:
+            Xb = np.array([])
             Q = np.array([])
 
         for B in self.Basis:
-            _Q = B.set_basis(time,return_q=return_q)
+            _Xb,_Q = B.set_basis(time,return_q=return_q)
             self.slice_basis.append(slice(self.nbasis,self.nbasis+B.nbasis))
             self.nbasis += B.nbasis
             
             if return_q:
+                Xb = np.concatenate((Xb,_Xb))
                 Q = np.concatenate((Q,_Q))
         
         if return_q:
-            return Q
+            return Xb,Q
 
     def operg(self, t, X, State=None):
         

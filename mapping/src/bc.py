@@ -29,6 +29,9 @@ def Bc(config, *args, **kwargs):
     if config.BC is None:
         return 
     
+    elif config.BC.super is None:
+        return Bc_multi(config)
+    
     print(config.BC)
     
     if config.BC.super=='BC_EXT':
@@ -167,4 +170,29 @@ class Bc_ext:
         bc_weight = bc_weight.reshape(lon.shape)
         
         return bc_weight
+
+class Bc_multi:
+
+    def __init__(self,config):
+
+        self.Bc = []
+        _config = config.copy()
+
+        for _BC in config.BC:
+            _config.BC = config.BC[_BC]
+            self.Bc.append(Bc(_config))
+
+    
+    def interp(self,time,lon,lat):
+
+        var_interp = {}
+
+        for i,_Bc in enumerate(self.Bc):
+
+            _var_interp = _Bc.interp(time,lon,lat)
+
+            for name in _var_interp:
+                var_interp[name] = _var_interp[name]
+
+        return var_interp
 

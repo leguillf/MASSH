@@ -104,8 +104,8 @@ class Variational:
             
             # 1. Misfit
             if timestamp in self.H.date_obs:
-                misfit, inv_noise2 = self.H.misfit(timestamp,State) # d=Hx-xobs   
-                Jo += (misfit*inv_noise2).dot(self.R.inv(misfit))
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -119,8 +119,8 @@ class Variational:
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if timestamp in self.H.date_obs:
-            misfit, inv_noise2 = self.H.misfit(timestamp,State) # d=Hx-xobsx
-            Jo += (misfit*inv_noise2).dot(self.R.inv(misfit))  
+            misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
+            Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
@@ -157,8 +157,7 @@ class Variational:
         # Last timestamp
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if timestamp in self.H.date_obs:
-            misfit,inv_noise2 = self.H.load_misfit(timestamp) # d=Hx-yobs
-            self.H.adj(timestamp,adState,self.R.inv(misfit*inv_noise2))
+            self.H.adj(timestamp,adState,self.R)
 
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
@@ -180,8 +179,7 @@ class Variational:
             
             # 1. Misfit 
             if timestamp in self.H.date_obs:
-                misfit,inv_noise2 = self.H.load_misfit(timestamp)
-                self.H.adj(timestamp,adState,self.R.inv(misfit*inv_noise2))
+                self.H.adj(timestamp,adState,self.R)
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 

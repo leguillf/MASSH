@@ -526,12 +526,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     # Set Reduced Basis
     if Basis is not None:
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in seconds) for which the basis components will be compute (at each timestep_checkpoint)
-        Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
+        Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
         sys.exit('4Dvar only work with reduced basis!!')
-
-    # Backgroud state 
-    Xb = np.zeros((Q.size,))
     
     # Covariance matrix
     from .tools_4Dvar import Cov
@@ -588,7 +585,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
         # Minimization options
         options = {'disp': True, 'maxiter': config.INV.maxiter}
         if config.INV.gtol is not None:
-            J0 = var.cost(Xopt)
+            _ = var.cost(Xopt)
             g0 = var.grad(Xopt)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0

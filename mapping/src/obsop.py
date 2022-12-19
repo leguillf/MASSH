@@ -9,7 +9,8 @@ import os,sys
 import xarray as xr 
 import numpy as np 
 from src import grid as grid
-import pickle
+import matplotlib.pylab as plt
+from scipy.interpolate import griddata
 
 def Obsop(config, State, dict_obs, Model, *args, **kwargs):
     """
@@ -84,9 +85,8 @@ class Obsop_interp:
         
         # For grid interpolation:
         self.Npix = config.OBSOP.Npix
-        coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
-        self.coords_car = grid.geo2cart(coords_geo)
-        #self.coords_car = coords_car[~np.isnan(coords_car)]
+        self.coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
+        self.coords_car = grid.geo2cart(self.coords_geo)
         
         # Mask boundary pixels
         self.ind_borders = []
@@ -96,8 +96,8 @@ class Obsop_interp:
                 np.concatenate((State.lat[0,:],State.lat[1:-1,-1],State.lat[-1,:],State.lat[:,0]))
                 ))
             if len(coords_geo_borders)>0:
-                for i in range(coords_geo.shape[0]):
-                    if np.any(np.all(np.isclose(coords_geo_borders,coords_geo[i]), axis=1)):
+                for i in range(self.coords_geo.shape[0]):
+                    if np.any(np.all(np.isclose(coords_geo_borders,self.coords_geo[i]), axis=1)):
                         self.ind_borders.append(i)
         
         # Mask coast pixels
@@ -141,11 +141,15 @@ class Obsop_interp:
         lat_obs = {}
         var_obs = {}
         err_obs = {}
+        is_full = {}
         for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+
             with xr.open_dataset(obs_file) as ncin:
-                lon = ncin[sat_info['name_lon']].values.ravel()
+                lon = ncin[sat_info['name_lon']].values.ravel() %360
                 lat = ncin[sat_info['name_lat']].values.ravel()
                 for name in sat_info['name_var']:
+                    if sat_info.super=='OBS_MODEL':
+                        is_full[name] = True
                     var = ncin[name].values.ravel()
                     if sat_info['sigma_noise'] is not None:
                         err = sat_info['sigma_noise'] * np.ones_like(var)
@@ -162,45 +166,52 @@ class Obsop_interp:
                         lon_obs[name] = +lon
                         lat_obs[name] = +lat
         
-        # Compute indexes, weights and masks for spatial interpolations 
-        indexes = {}
-        weights = {}
-        maskobs = {}
+        mode = 'w'
         for name in lon_obs:
-            _indexes, _weights = self.interpolator(lon_obs[name],lat_obs[name])
-            _maskobs = np.isnan(lon_obs[name])*np.isnan(lat_obs[name])
-            if self.flag_mask_coast:
-                coords_geo_obs = np.column_stack((lon_obs[name],lat_obs[name]))
-                coords_car_obs = grid.geo2cart(coords_geo_obs)
-                for i in range(lon_obs.size):
-                    _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
-                    if _dist<self.dist_coast:
-                        _maskobs[i] = True
-            indexes[name] = _indexes
-            weights[name] = _weights
-            maskobs[name] = _maskobs
-        
-        # Write in netcdf
-        for name in lon_obs:
-            
-            dsout = xr.Dataset(
-                {
-                    "var_obs": (("Nobs"), var_obs[name]),
-                    "err_obs": (("Nobs"), err_obs[name]),
-                    "indexes": (("Nobs","Npix"), indexes[name]),
-                                "weights": (("Nobs","Npix"), weights[name]),
-                                "maskobs": (("Nobs"), maskobs[name])},                
-                               )
-            dsout.to_netcdf(file_H, group=name,
-                encoding={'indexes': {'dtype': 'int16'}})
-            dsout.close()
+            if name in is_full:
+                # Grid interpolation: performing spatial interpolation now
+                coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
+                var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
+                err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
+    
+                # Write in netcdf
+                dsout = xr.Dataset(
+                    { "var_obs": (("Nobs"), var_obs_interp),
+                      "err_obs": (("Nobs"), err_obs_interp)})
+                dsout.to_netcdf(file_H, mode=mode, group=name)
+                dsout.close()
+                mode = 'a'
+            else:
+                # Sparse interpolation: compute indexes, weights and masks 
+                indexes, weights = self.interpolator(lon_obs[name],lat_obs[name])
+                maskobs = np.isnan(lon_obs[name])*np.isnan(lat_obs[name])
+                if self.flag_mask_coast:
+                    coords_geo_obs = np.column_stack((lon_obs[name],lat_obs[name]))
+                    coords_car_obs = grid.geo2cart(coords_geo_obs)
+                    for i in range(lon_obs.size):
+                        _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
+                        if _dist<self.dist_coast:
+                            maskobs[i] = True
 
+                # Write in netcdf
+                dsout = xr.Dataset(
+                    {
+                        "var_obs": (("Nobs"), var_obs[name]),
+                        "err_obs": (("Nobs"), err_obs[name]),
+                        "indexes": (("Nobs","Npix"), indexes),
+                                    "weights": (("Nobs","Npix"), weights),
+                                    "maskobs": (("Nobs"), maskobs)},                
+                                )
+                dsout.to_netcdf(file_H, mode=mode, group=name,
+                    encoding={'indexes': {'dtype': 'int16'}})
+                dsout.close()
+                mode = 'a'
+                
         if self.read_H:
             new_file_H = os.path.join(self.tmp_DA_path,name_file_H)
             if file_H!=new_file_H:
                 os.system(f"cp {file_H} {new_file_H}")
-                        
-        return t
+
     
     def interpolator(self,lon_obs,lat_obs):
         
@@ -232,7 +243,7 @@ class Obsop_interp:
             
         return np.asarray(indexes),np.asarray(weights)
      
-    def H(self,t,X,indexes,weights,maskobs):
+    def H(self,X,indexes,weights,maskobs):
         
         # Compute inerpolation of X to obs space
         HX = np.zeros(indexes.shape[0])
@@ -256,74 +267,96 @@ class Obsop_interp:
 
         # Initialization
         misfit = np.array([])
-        inv_err2 = np.array([])
 
+        mode = 'w'
         for name in self.name_var_obs[t]:
+
+            # Get model state
+            X = State.getvar(self.name_mod_var[name]).ravel() 
 
             # Read obs
             ds = xr.open_dataset(os.path.join(
                 self.tmp_DA_path,f"{self.name_H}_{t.strftime('%Y%m%d_%H%M.nc')}"), group=name)
 
-            # Get obs values, errors and indexes & weights of neighbour grid pixels
+            # Get obs values & errors
             var_obs = ds['var_obs'].values
             err_obs = ds['err_obs'].values
-            indexes = ds['indexes'].values
-            weights = ds['weights'].values
-            maskobs = ds['maskobs'].values
 
-            # Get model state
-            X = State.getvar(self.name_mod_var[name]).ravel() 
+            if 'indexes' in ds:
+                # Get obs indexes & weights of neighbour grid pixels
+                indexes = ds['indexes'].values
+                weights = ds['weights'].values
+                maskobs = ds['maskobs'].values
 
-            # Project model state to obs space
-            HX = self.H(t,X,indexes,weights,maskobs)
+                # Project model state to obs space
+                HX = self.H(X,indexes,weights,maskobs)
+            else:
+                # Observations are already interpolated onto the model grid
+                HX = +X
 
-            # Compute misfit
-            misfit = np.concatenate((misfit,HX-var_obs))
-            inv_err2 = np.concatenate((inv_err2,err_obs**(-2)))
+            # Compute misfit & errors
+            _misfit = (HX-var_obs)
+            _inverr = 1/err_obs
+            _misfit[np.isnan(_misfit)] = 0
+            _inverr[np.isnan(_inverr)] = 0
 
-        # Remove nan
-        misfit[np.isnan(misfit)] = 0
-        
-        # Save misfit
-        with open(
-            os.path.join(self.tmp_DA_path,f"misfit_{t.strftime('%Y%m%d_%H%M')}.pic"),'wb') as f:
-            pickle.dump((misfit,inv_err2),f)
+            # Save to netcdf
+            dsout = xr.Dataset(
+                    {
+                    "misfit": (("Nobs"), _inverr*_inverr*_misfit),
+                    }
+                    )
+            dsout.to_netcdf(
+                os.path.join(self.tmp_DA_path,f"misfit_{t.strftime('%Y%m%d_%H%M')}.nc"), 
+                mode=mode, 
+                group=name
+                )
+            dsout.close()
+            mode = 'a'
 
-        return misfit,inv_err2
-    
-    def load_misfit(self,t):
-        
-        with open(
-            os.path.join(self.tmp_DA_path,f"misfit_{t.strftime('%Y%m%d_%H%M')}.pic"),'rb') as f:
-            misfit,inv_err2 = pickle.load(f)
-        
-        return misfit,inv_err2
+            # Concatenate
+            misfit = np.concatenate((misfit,_inverr*_misfit))
 
-    def adj(self,t,adState,misfit):
+        return misfit
+
+    def adj(self, t, adState, R):
 
         for name in self.name_var_obs[t]:
 
-            # get adjoint model variable
-            advar = adState.getvar(self.name_mod_var[name])
+            # Read misfit
+            ds = xr.open_dataset(os.path.join(
+                os.path.join(self.tmp_DA_path,f"misfit_{t.strftime('%Y%m%d_%H%M')}.nc")), group=name)
+            misfit = ds['misfit'].values
+            ds.close()
+            del ds
 
-            # Read obs
+            # Apply R operator
+            misfit = R.inv(misfit)
+
+            # Read observational operator
             ds = xr.open_dataset(os.path.join(
                 self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')), group=name)
 
-            # Get indexes & weights of neighbour grid pixels
-            indexes = ds['indexes'].values
-            weights = ds['weights'].values
-            maskobs = ds['maskobs'].values
+            # Read adjoint variable
+            advar = adState.getvar(self.name_mod_var[name])
 
-            # Project misfit to model space
-            adH = np.zeros(advar.size)
-            Nobs,Npix = indexes.shape
-            for i in range(Nobs):
-                if not maskobs[i]:
-                    # Average
-                    for j in range(Npix):
-                        if weights[i].sum()!=0:
-                            adH[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+            if 'indexes' in ds:
+                # Get obs indexes & weights of neighbour grid pixels
+                indexes = ds['indexes'].values
+                weights = ds['weights'].values
+                maskobs = ds['maskobs'].values
+
+                # Project misfit to model space
+                adH = np.zeros(advar.size)
+                Nobs,Npix = indexes.shape
+                for i in range(Nobs):
+                    if not maskobs[i]:
+                        # Average
+                        for j in range(Npix):
+                            if weights[i].sum()!=0:
+                                adH[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+            else:
+                adH = +misfit
 
             # Update adjoint variable
             adState.setvar(advar + adH.reshape(advar.shape), self.name_mod_var[name])

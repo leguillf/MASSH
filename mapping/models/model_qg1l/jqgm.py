@@ -81,8 +81,8 @@ class Qgm:
         
         mask[:2,:] = 1
         mask[:,:2] = 1
-        mask[-2:,:] = 1
-        mask[:,-2:] = 1
+        mask[-3:,:] = 1
+        mask[:,-3:] = 1
         
         if SSH is not None and mdt is not None:
             isNAN = np.isnan(SSH) | np.isnan(mdt)
@@ -97,8 +97,8 @@ class Qgm:
             mask[isNAN] = 0
             indNan = np.argwhere(isNAN)
             for i,j in indNan:
-                for p1 in [-1,0,1]:
-                    for p2 in [-1,0,1]:
+                for p1 in range(-2,3):
+                    for p2 in range(-2,3):
                       itest=i+p1
                       jtest=j+p2
                       if ((itest>=0) & (itest<=ny-1) & (jtest>=0) & (jtest<=nx-1)):
@@ -162,6 +162,7 @@ class Qgm:
         self.inverse_elliptic_dst_jit = jit(inverse_elliptic_dst)
         self.pv2h_jit = jit(self.pv2h)
         self.qrhs_jit = jit(self.qrhs)
+        self.crhs_jit = jit(self.crhs)
         self._rq_jit = jit(self._rq)
         self._rq1_jit = jit(self._rq1)
         self._rq2_jit = jit(self._rq2)
@@ -170,9 +171,13 @@ class Qgm:
         self.rk2_jit = jit(self.rk2)
         self.rk4_jit = jit(self.rk4)
         self.one_step_jit = jit(self.one_step)
-        self.step_jit = jit(self.step,static_argnums=(3,4,))
-        self.step_tgl_jit = jit(self.step_tgl,static_argnums=(4,5,))
-        self.step_adj_jit = jit(self.step_adj,static_argnums=(4,5,))
+        self.one_step_tracer_jit = jit(self.one_step_tracer)
+        self.step_jit = jit(self.step,static_argnums=(2,3,))
+        self.step_tgl_jit = jit(self.step_tgl,static_argnums=(3,4,))
+        self.step_adj_jit = jit(self.step_adj,static_argnums=(3,4,))
+        self.step_tracer_jit = jit(self.step_tracer,static_argnums=(2,3,))
+        self.step_tracer_tgl_jit = jit(self.step_tracer_tgl,static_argnums=(3,4,))
+        self.step_tracer_adj_jit = jit(self.step_tracer_adj,static_argnums=(3,4,))
         self.step_multiscales_jit = jit(self.step_multiscales)
         self.step_multiscales_tgl_jit = jit(self.step_multiscales_tgl)
         self.step_multiscales_adj_jit = jit(self.step_multiscales_adj)
@@ -242,14 +247,14 @@ class Qgm:
         #ind = np.where((self.mask==1))
         #q[ind] = -self.g*self.f0[ind]/(c[ind]**2) * h[ind]#self.hbc[ind]
         q = q.at[self.ind1].set(
-            -self.g*self.f0[self.ind1]/(c[self.ind1]**2) * hbc[self.ind1])
+                -self.g*self.f0[self.ind1]/(c[self.ind1]**2) * hbc[self.ind1])
         #ind = np.where((self.mask==0))
         #q[ind] = 0
         q = q.at[self.ind0].set(0)
     
         return q
     
-    def qrhs(self,u,v,q,uls=None,vls=None,qls=None,way=1):
+    def qrhs(self,u,v,q,hb,uls=None,vls=None,qls=None,way=1):
 
         """ PV increment, upwind scheme
     
@@ -306,7 +311,7 @@ class Qgm:
                 # rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,self.qbar)
                 rq = rq.at[2:-2,2:-2].set(
                     rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,self.qbar))
-                
+            
             if uls is not None:
 
                 uplusls  = way * 0.5*(uls[2:-2,2:-2]+uls[2:-2,3:-1])
@@ -331,14 +336,14 @@ class Qgm:
                 #     uplus,vplus,uminus,vminus,qls)
                 rq = rq.at[2:-2,2:-2].set(
                     rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,qls))
-                
+            
             # rq[2:-2,2:-2] = rq[2:-2,2:-2] - way*\
             #     (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
             #         *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
             rq = rq.at[2:-2,2:-2].set(
                 rq[2:-2,2:-2] - way*\
-                     (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
-                         *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2]))
+                    (self.f0[3:-1,2:-2]-self.f0[1:-3,2:-2])/(2*self.dy[2:-2,2:-2])\
+                        *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2]))
     
         #diffusion
         if self.Kdiffus is not None:
@@ -354,6 +359,45 @@ class Qgm:
         rq = jnp.where(jnp.isnan(rq), 0, rq)
         
         return rq
+    
+    def crhs(self,u,v,c,way=1):
+
+        """ Tracer advection increment, upwind scheme
+    
+        Args:
+            u (2D array): Zonal velocity
+            v (2D array): Meridional velocity
+            c : tracer concentration
+            way: forward (+1) or backward (-1)
+    
+        Returns:
+            rc (2D array): Tracer advection increment
+    
+        """
+        rc = jnp.zeros((self.ny,self.nx))
+          
+        uplus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
+        uminus = way*0.5*(u[2:-2,2:-2]+u[2:-2,3:-1])
+        vplus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
+        vminus = way*0.5*(v[2:-2,2:-2]+v[3:-1,2:-2])
+        
+        #uplus[np.where((uplus<0))] = 0
+        uplus = jnp.where(uplus<0, 0, uplus)
+        #uminus[np.where((uminus>0))] = 0
+        uminus = jnp.where(uminus>0, 0, uminus)
+        #vplus[np.where((vplus<0))] = 0
+        vplus = jnp.where(vplus<0, 0, vplus)
+        #vminus[np.where((vminus>=0))] = 0
+        vminus = jnp.where(vminus>0, 0, vminus)
+        
+        #rq[2:-2,2:-2] = rq[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,q)
+        rc = rc.at[2:-2,2:-2].set(
+            rc[2:-2,2:-2] + self._rq_jit(uplus,vplus,uminus,vminus,c))
+
+        rc = jnp.where(self.mask<=1, 0, rc)
+        rc = jnp.where(jnp.isnan(rc), 0, rc)
+        
+        return rc
     
     def _rq(self,uplus,vplus,uminus,vminus,q):
         
@@ -423,7 +467,7 @@ class Qgm:
         # Interior pv
         qbc = self.h2pv_jit(hbc,hbc).astype('float64')
         qin = q[1:-1,1:-1] - qbc[1:-1,1:-1]
-        
+    
         # Inverse sine tranfrom to get reconstructed ssh
         hrec = jnp.zeros_like(q).astype('float64')
         inv = self.inverse_elliptic_dst_jit(qin,self.helmoltz_dst)
@@ -446,7 +490,7 @@ class Qgm:
         u12,v12 = self.h2uv_jit(h12)
         u12 = jnp.where(jnp.isnan(u12),0,u12)
         v12 = jnp.where(jnp.isnan(v12),0,v12)
-        rq12 = self.qrhs_jit(u12,v12,q12,way=way)
+        rq12 = self.qrhs_jit(u12,v12,q12,hb,way=way)
 
         q1 = q0 + self.dt*rq12
 
@@ -462,7 +506,7 @@ class Qgm:
         u2,v2 = self.h2uv_jit(h2)
         u2 = jnp.where(jnp.isnan(u2),0,u2)
         v2 = jnp.where(jnp.isnan(v2),0,v2)
-        rq2 = self.qrhs_jit(u2,v2,q2,way=way)
+        rq2 = self.qrhs_jit(u2,v2,q2,hb,way=way)
         k2 = rq2*self.dt
         # k3
         q3 = q0 + 0.5*k2
@@ -470,7 +514,7 @@ class Qgm:
         u3,v3 = self.h2uv_jit(h3)
         u3 = jnp.where(jnp.isnan(u3),0,u3)
         v3 = jnp.where(jnp.isnan(v3),0,v3)
-        rq3 = self.qrhs_jit(u3,v3,q3,way=way)
+        rq3 = self.qrhs_jit(u3,v3,q3,hb,way=way)
         k3 = rq3*self.dt
         # k4
         q4 = q0 + k2
@@ -478,7 +522,7 @@ class Qgm:
         u4,v4 = self.h2uv_jit(h4)
         u4 = jnp.where(jnp.isnan(u4),0,u4)
         v4 = jnp.where(jnp.isnan(v4),0,v4)
-        rq4 = self.qrhs_jit(u4,v4,q4,way=way)
+        rq4 = self.qrhs_jit(u4,v4,q4,hb,way=way)
         k4 = rq4*self.dt
         # q increment
         q1 = q0 + (k1+2*k2+2*k3+k4)/6.
@@ -491,7 +535,7 @@ class Qgm:
         u,v = self.h2uv_jit(h0)
 
         # (u,v,q)-->rq
-        rq = self.qrhs_jit(u,v,q0,way=way)
+        rq = self.qrhs_jit(u,v,q0,hb,way=way)
         
         # 4/ increment integration 
         if self.time_scheme == 'Euler':
@@ -505,6 +549,35 @@ class Qgm:
         h1 = self.pv2h_jit(q1,hb)
 
         return h1,q1
+
+    def one_step_tracer(self,h0,q0,c0,hb,way=1):
+
+        #  h-->(u,v)
+        u,v = self.h2uv_jit(h0)
+
+        # advection term for q
+        rq = self.qrhs_jit(u,v,q0,hb,way=way)
+        
+        # advection term(s) for tracer(s)
+        rc = jnp.zeros_like(c0)
+        for i in range(c0.shape[0]):
+            rc = rc.at[i,:,:].set(
+                self.crhs_jit(u,v,c0[i],way=way)
+                )
+        
+        # 4/ increment integration 
+        if self.time_scheme == 'Euler':
+            q1 = self.euler_jit(q0,rq,way)
+        elif self.time_scheme == 'rk2':
+            q1 = self.rk2_jit(q0,rq,hb,way)
+        elif self.time_scheme == 'rk4':
+            q1 = self.rk4_jit(q0,rq,hb,way)
+        c1 = self.euler_jit(c0,rc,way)
+            
+        # q-->h
+        h1 = self.pv2h_jit(q1,hb)
+
+        return h1,q1,c1
 
 
     def step(self,h0,hb,way=1,nstep=1):
@@ -529,6 +602,7 @@ class Qgm:
         q1 = +q0
         h1 = +h0
 
+        # Time propagation
         for _ in range(nstep):
             h1,q1 = self.one_step_jit(h1,q1,hb,way=way)
             
@@ -536,6 +610,38 @@ class Qgm:
         h1 = h1.at[self.ind0].set(np.nan)
         
         return h1
+
+    def step_tracer(self,X0,hb,way=1,nstep=1):
+
+        # Get SSH
+        h0 = +X0[0]
+
+        # Get tracers
+        c0 = X0[1:]
+
+        # h-->q
+        q0 = self.h2pv_jit(h0,hb)
+
+        # Init
+        q1 = +q0
+        h1 = +h0
+        c1 = +c0
+
+        # Time propagation
+        for _ in range(nstep):
+            h1,q1,c1 = self.one_step_tracer_jit(h1,q1,c1,hb,way=way)
+            
+        # Mask
+        h1 = h1.at[self.ind0].set(np.nan)
+        c1 = c1.at[:,self.ind0[0],self.ind0[1]].set(np.nan)
+
+        # Concatenate
+        X1 = jnp.append(h1[jnp.newaxis,:,:],c1,axis=0)
+    
+        return X1
+
+
+
     
     def step_multiscales(self,h0,way=1):
         
@@ -587,12 +693,24 @@ class Qgm:
         _,dh1 = jvp(partial(self.step_jit,hb=hb,nstep=nstep,way=way), (h0,), (dh0,))
         
         return dh1
+
+    def step_tracer_tgl(self,dX0,X0,hb,way=1,nstep=1):
+        
+        _,dh1 = jvp(partial(self.step_tracer_jit,hb=hb,nstep=nstep,way=way), (X0,), (dX0,))
+        
+        return dh1
     
     def step_adj(self,adh0,h0,hb,way=1,nstep=1):
         
         _, adf = vjp(partial(self.step_jit,hb=hb,nstep=nstep,way=way), h0)
         
         return adf(adh0)[0]
+
+    def step_tracer_adj(self,adX0,X0,hb,way=1,nstep=1):
+        
+        _, adf = vjp(partial(self.step_tracer_jit,hb=hb,nstep=nstep,way=way), X0)
+        
+        return adf(adX0)[0]
     
     def step_multiscales_tgl(self,dh0,h0):
         

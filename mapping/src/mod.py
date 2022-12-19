@@ -559,6 +559,9 @@ class Model_qg1l_jax:
             t += timedelta(seconds=self.dt)
         self.timestamps = np.asarray(self.timestamps)
 
+        # Anomaly mode
+        self.anomaly_bc = config.MOD.anomaly_bc
+
         # Coriolis
         self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
         f0 = np.nanmean(self.f)
@@ -639,7 +642,10 @@ class Model_qg1l_jax:
             
         # Initialize model state
         self.name_var = config.MOD.name_var
-        self.var_to_save = [self.name_var['SSH']] # ssh
+        if config.MOD.var_to_save is None:
+            self.var_to_save = [self.name_var['SSH']] # ssh
+        else:
+            self.var_to_save = config.MOD.var_to_save
 
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
             dsin = xr.open_dataset(config.GRID.path_init_grid)
@@ -658,14 +664,19 @@ class Model_qg1l_jax:
         else:
             for name in self.name_var:  
                 State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+                # Mask
+                #if State.mask is not None:
+                #    State.var[self.name_var[name]][State.mask] = np.nan
 
 
-        # Initialize model Parameters (Flux on SSH)
-        self.nparams = State.ny*State.nx
-        State.params[self.name_var['SSH']] = np.zeros((State.ny,State.nx))
+        # Initialize model Parameters (Flux on SSH and tracers)
+        for name in self.name_var:
+            State.params[self.name_var[name]] = np.zeros((State.ny,State.nx))
 
-        # Boundary condtions
-        self.SSHb = {}
+        # Initialize boundary condition dictionnary for each model variable
+        self.bc = {}
+        for _name_var_mod in self.name_var:
+            self.bc[_name_var_mod] = {}
        
         SSH0 = State.getvar(name_var=self.name_var['SSH'])
         if State.mask is not None:
@@ -687,130 +698,229 @@ class Model_qg1l_jax:
                          mdv=self.mdv,
                          mdu=self.mdu)
 
+        # Model functions initialization
+        self.advect_tracer = config.MOD.advect_tracer
+        if self.advect_tracer:
+            self.qgm_step = self.qgm.step_tracer_jit
+            self.qgm_step_tgl = self.qgm.step_tracer_tgl_jit
+            self.qgm_step_adj = self.qgm.step_tracer_adj_jit
+        else:
+            self.qgm_step = self.qgm.step_jit
+            self.qgm_step_tgl = self.qgm.step_tgl_jit
+            self.qgm_step_adj = self.qgm.step_adj_jit
         
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            tangent_test(self,State,nstep=2)
+            #tangent_test(self,State,nstep=10)
             print('Adjoint test:')
-            adjoint_test(self,State,nstep=2)
+            #adjoint_test(self,State,nstep=10)
         
 
     def set_bc(self,time_bc,var_bc):
 
-        for var in var_bc:
-            if var in self.name_var['SSH']:
-                for i,t in enumerate(time_bc):
-                    self.SSHb[t] = var_bc[var][i]#.flatten()
+        for _name_var_bc in var_bc:
+            for _name_var_mod in self.name_var:
+                if _name_var_bc==self.name_var[_name_var_mod]:
+                    for i,t in enumerate(time_bc):
+                        self.bc[_name_var_mod][t] = var_bc[_name_var_bc][i]
+
 
 
     def step(self,State,nstep=1,t=None):
         
-        # Get state variable
-        SSH0 = State.getvar(name_var=self.name_var['SSH'])
+        # Get state variable(s)
+        X0 = State.getvar(name_var=self.name_var['SSH'])
+        if self.advect_tracer:
+            X0 = X0[np.newaxis,:,:]
+            for name in self.name_var:
+                if name!='SSH':
+                    C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+                    X0 = np.append(X0, C0, axis=0)
         
         # init
-        SSH1 = +SSH0
+        X1 = +X0
 
         # Boundary field
-        if t in self.SSHb:
-            SSHb = self.SSHb[t]
+        if t in self.bc['SSH']: # for SSH
+            SSHb = self.bc['SSH'][t] # store bc value for forward model 
+            if t==0: # Initial state
+                if self.advect_tracer:
+                    X1[0] = +SSHb 
+                else:
+                    X1 = +SSHb
         else:
             SSHb = np.zeros((self.ny,self.nx,))
+        if self.advect_tracer: # for tracers
+            i = 1
+            for name in self.name_var: 
+                if name=='SSH':
+                    continue
+                else:
+                    if t in self.bc[name]:
+                        if t==0: # Initial state
+                            X1[i] = self.bc[name][t]
+                        else: # Boundary conditions
+                            X1[i][self.qgm.mask==1] = self.bc[name][t][self.qgm.mask==1]
+                        i += 1
 
         # Time propagation
-        #for i in range(nstep):
-        SSH1 = self.qgm.step_jit(SSH1,SSHb,nstep=nstep)
+        X1 = self.qgm_step(X1,SSHb,nstep=nstep)
 
         # Convert to numpy and reshape
-        SSH1 = np.array(SSH1)
+        X1 = np.array(X1)
         
         # Update state
         if self.name_var['SSH'] in State.params:
-            params = State.params[self.name_var['SSH']]
-            SSH1 += nstep*self.dt/(3600*24) * params
-        State.setvar(SSH1, name_var=self.name_var['SSH'])
+            Fssh = State.params[self.name_var['SSH']] # Forcing term for SSH
+            if self.advect_tracer:
+                X1[0] += nstep*self.dt/(3600*24) * Fssh
+                State.setvar(X1[0], name_var=self.name_var['SSH'])
+                for i,name in enumerate(self.name_var):
+                    if name!='SSH':
+                        Fc = State.params[self.name_var[name]] # Forcing term for tracer
+                        X1[i] += nstep*self.dt/(3600*24) * Fc
+                        State.setvar(X1[i], name_var=self.name_var[name])
+            else:
+                X1 += nstep*self.dt/(3600*24) * Fssh
+                State.setvar(X1, name_var=self.name_var['SSH'])
+            
     
 
     def step_tgl(self,dState,State,nstep=1,t=None):
         
         # Get state variable
-        dSSH0 = dState.getvar(name_var=self.name_var['SSH'])
-        SSH0 = State.getvar(name_var=self.name_var['SSH'])
+        dX0 = dState.getvar(name_var=self.name_var['SSH'])
+        X0 = State.getvar(name_var=self.name_var['SSH'])
+        if self.advect_tracer:
+            dX0 = dX0[np.newaxis,:,:]
+            X0 = X0[np.newaxis,:,:]
+            for name in self.name_var:
+                if name!='SSH':
+                    dC0 = dState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+                    dX0 = np.append(dX0, dC0, axis=0)
+                    C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+                    X0 = np.append(X0, C0, axis=0)
         
         # init
-        dSSH1 = +dSSH0#.flatten()
-        SSH1 = +SSH0#.flatten()
+        dX1 = +dX0
+        X1 = +X0
         
         # Boundary field
-        if t in self.SSHb:
-            SSHb = self.SSHb[t]
+        if t in self.bc['SSH']: # for SSH
+            SSHb = self.bc['SSH'][t] # store bc value for forward model 
+            if t==0: # Initial state
+                if self.advect_tracer:
+                    X1[0] = +SSHb 
+                else:
+                    X1 = +SSHb
         else:
-            SSHb = np.zeros((self.ny,self.nx,))#np.zeros((self.nx*self.ny,))
-        #dSSHb = np.zeros((self.nx*self.ny,))
-
-        # add bc to state variable 
-        #SSH1 = np.concatenate((SSHb,SSH1))
-        #dSSH1 = np.concatenate((dSSHb,dSSH1))
+            SSHb = np.zeros((self.ny,self.nx,))
+        if self.advect_tracer: # for tracers
+            i = 1
+            for name in self.name_var: 
+                if name=='SSH':
+                    continue
+                else:
+                    if t in self.bc[name]:
+                        if t==0: # Initial state
+                            X1[i] = self.bc[name][t]
+                        else: # Boundary conditions
+                            X1[i][self.qgm.mask==1] = self.bc[name][t][self.qgm.mask==1]
+                        i += 1
 
         # Time propagation
-        dSSH1 = self.qgm.step_tgl_jit(dh0=dSSH1,h0=SSH1,hb=SSHb,nstep=nstep)
-        #for i in range(nstep):
-        #    dSSH1 = self.qgm.step_tgl_jit(dh0=dSSH1,h0=SSH1,hb=SSHb,nstep=nstep)
-        #    SSH1 = self.qgm.step_jit(SSH1,SSHb)
+        dX1 = self.qgm_step_tgl(dX1,X1,hb=SSHb,nstep=nstep)
 
         # Convert to numpy and reshape
-        dSSH1 = np.array(dSSH1)#[self.ny*self.nx:]).reshape((self.ny,self.nx))
+        dX1 = np.array(dX1)
 
         # Update state
         if self.name_var['SSH'] in dState.params:
-            dparams = dState.params[self.name_var['SSH']]
-            dSSH1 += nstep*self.dt/(3600*24) * dparams
-        dState.setvar(dSSH1,name_var=self.name_var['SSH'])
+            dFssh = dState.params[self.name_var['SSH']] # Forcing term for SSH
+            if self.advect_tracer:
+                dX1[0] += nstep*self.dt/(3600*24) * dFssh
+                dState.setvar(dX1[0], name_var=self.name_var['SSH'])
+                for i,name in enumerate(self.name_var):
+                    if name!='SSH':
+                        dFc = dState.params[self.name_var[name]] # Forcing term for tracer
+                        dX1[i] += nstep*self.dt/(3600*24) * dFc
+                        dState.setvar(dX1[i], name_var=self.name_var[name])
+            else:
+                dX1 += nstep*self.dt/(3600*24) * dFssh
+                dState.setvar(dX1, name_var=self.name_var['SSH'])
         
 
     def step_adj(self,adState,State,nstep=1,t=None):
         
         # Get state variable
-        adSSH0 = adState.getvar(self.name_var['SSH'])
-        SSH0 = State.getvar(self.name_var['SSH'])
+        adSSH0 = adState.getvar(name_var=self.name_var['SSH'])
+        SSH0 = State.getvar(name_var=self.name_var['SSH'])
+        if self.advect_tracer:
+            adX0 = adSSH0[np.newaxis,:,:]
+            X0 = SSH0[np.newaxis,:,:]
+            for name in self.name_var:
+                if name!='SSH':
+                    adC0 = adState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+                    adX0 = np.append(adX0, adC0, axis=0)
+                    C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+                    X0 = np.append(X0, C0, axis=0)
+        else:
+            adX0 = adSSH0
+            X0 = SSH0
         
         # Init
-        adSSH1 = +adSSH0#.flatten()
-        SSH1 = +SSH0#.flatten()
+        adX1 = +adX0
+        X1 = +X0
 
         # Boundary field
-        if t in self.SSHb:
-            SSHb = self.SSHb[t]
+        if t in self.bc['SSH']: # for SSH
+            SSHb = self.bc['SSH'][t] # store bc value for forward model 
+            if t==0: # Initial state
+                if self.advect_tracer:
+                    X1[0] = +SSHb 
+                else:
+                    X1 = +SSHb
         else:
             SSHb = np.zeros((self.ny,self.nx,))
-        adSSHb = np.zeros((self.ny,self.nx,))
-
-        # add bc to state variable 
-        #SSH1 = np.concatenate((SSHb,SSH1))
-        #adSSH1 = np.concatenate((adSSHb,adSSH1))
-
-        # Current trajectory
-        #traj = [SSH1]
-        #if nstep>1:
-        #    for i in range(nstep):
-        #        SSH1 = self.qgm.step_jit(SSH1,SSHb)
-        #        traj.append(SSH1)
+        if self.advect_tracer: # for tracers
+            i = 1
+            for name in self.name_var: 
+                if name=='SSH':
+                    continue
+                else:
+                    if t in self.bc[name]:
+                        if t==0: # Initial state
+                            X1[i] = self.bc[name][t]
+                        else: # Boundary conditions
+                            X1[i][self.qgm.mask==1] = self.bc[name][t][self.qgm.mask==1]
+                        i += 1
         
         # Time propagation
-        #for i in reversed(range(nstep)):
-            #SSH1 = traj[i]
-            #adSSH1 = self.qgm.step_adj_jit(adSSH1,SSH1,SSHb)
-        adSSH1 = self.qgm.step_adj_jit(adSSH1,SSH1,SSHb,nstep=nstep)
+        adX1 = self.qgm_step_adj(adX1,X1,SSHb,nstep=nstep)
 
         # Convert to numpy and reshape
-        adSSH1 = np.array(adSSH1)#[self.ny*self.nx:]).reshape((self.ny,self.nx))
+        adX1 = np.array(adX1).squeeze()
 
         # Update state and parameters
         if self.name_var['SSH'] in adState.params:
-            adState.params[self.name_var['SSH']] += nstep*self.dt/(3600*24) * adSSH0
-        adSSH1[np.isnan(adSSH1)] = 0
-        adState.setvar(adSSH1,self.name_var['SSH'])
+            for name in self.name_var:
+                adState.params[self.name_var[name]] += nstep*self.dt/(3600*24) *\
+                    adState.getvar(name_var=self.name_var[name])
+                
+        if self.advect_tracer:
+            adState.setvar(adX1[0],self.name_var['SSH'])
+            for i,name in enumerate(self.name_var):
+                if name!='SSH':
+                    adState.setvar(adX1[i],self.name_var[name])
+        else:
+            adState.setvar(adX1,self.name_var['SSH'])
+
+                    
+
+
+            
+
   
 class Model_qg1lm:
 
