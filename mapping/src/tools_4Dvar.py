@@ -81,7 +81,7 @@ class Variational:
     def cost(self,X0):
                 
         # Initial state
-        State = self.State.copy(free=True)
+        State = self.State.copy()
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
@@ -148,7 +148,7 @@ class Variational:
             gb = 0
             
         # Current trajectory
-        State = self.State.copy(free=True)
+        State = self.State.copy()
         
         # Ajoint initialization   
         adState = self.State.copy(free=True)

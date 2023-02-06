@@ -189,17 +189,20 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     else:
                         sign = -1
                     varobs[name].data = varobs[name].data + sign*mdt_on_obs
-                    
+                # Remove high values
+                varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+
+            # Build netcdf
             coords = {obs_attr.name_time:_ds[obs_attr.name_time].values}
             coords[obs_attr.name_lon] = _ds[obs_attr.name_lon]
             coords[obs_attr.name_lat] = _ds[obs_attr.name_lat]
             if obs_attr.super=='OBS_SSH_SWATH' and obs_attr.name_xac is not None:
                 coords[obs_attr.name_xac] = _ds[obs_attr.name_xac] # Accross track distance 
-            
             dsout = xr.Dataset(varobs,
                                coords=coords
                                )
-            
+
+            # Write netcdf
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
             path = os.path.join(out_path, 'obs_' + obs_name + '_' +\
                 '_'.join(obs_attr.name_var) + '_' + date)
@@ -209,13 +212,13 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                 elif obs_attr.substract_mdt:
                     path += '_submdt'
             path += '.nc'
-
             dsout.to_netcdf(path, encoding={obs_attr.name_time: {'_FillValue': None},
                                             obs_attr.name_lon: {'_FillValue': None},
                                             obs_attr.name_lat: {'_FillValue': None}})
             dsout.close()
             _ds.close()
             del dsout,_ds
+            
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
                     dict_obs[dt_curr]['satellite'].append(obs_attr)

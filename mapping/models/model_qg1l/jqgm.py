@@ -633,8 +633,7 @@ class Qgm:
             
         # Mask
         h1 = h1.at[self.ind0].set(np.nan)
-        c1 = c1.at[:,self.ind0[0],self.ind0[1]].set(np.nan)
-
+    
         # Concatenate
         X1 = jnp.append(h1[jnp.newaxis,:,:],c1,axis=0)
     

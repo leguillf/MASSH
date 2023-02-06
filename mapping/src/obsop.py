@@ -63,7 +63,7 @@ class Obsop_interp:
         self.obs_sparse = {}
         
         # Date obs
-        self.date_obs = {}
+        self.date_obs = []
         self.name_var_obs = {}
         t_obs = [tobs for tobs in dict_obs.keys()] 
         for t in Model.timestamps:
@@ -72,10 +72,10 @@ class Obsop_interp:
                 t_obs = [tobs for tobs in dict_obs.keys()] 
                 if np.min(np.abs(delta_t))<=Model.dt/2:
                     ind_obs = np.argmin(np.abs(delta_t))
-                    self.date_obs[t] = t_obs[ind_obs]
+                    self.date_obs.append(t_obs[ind_obs])
                     # Get obs variable names (SSH,U,V,SST...) at this time
                     self.name_var_obs[t] = []
-                    for sat_info in dict_obs[self.date_obs[t]]['satellite']:
+                    for sat_info in dict_obs[t_obs[ind_obs]]['satellite']:
                         for name in sat_info['name_var']:
                             if name not in self.name_var_obs[t]:
                                 self.name_var_obs[t].append(name)
@@ -112,105 +112,114 @@ class Obsop_interp:
         else: self.flag_mask_coast = False
         
         # Process obs
-        for t in self.date_obs:
-            self.process_obs(
-                t,
-                dict_obs[self.date_obs[t]]['satellite'],
-                dict_obs[self.date_obs[t]]['obs_name']
-                )
-
+        self.dict_obs = dict_obs
+        
 
             
-    def process_obs(self,t,sat_info_list,obs_file_list):
+    def process_obs(self, var_bc):
 
-        name_file_H = f"{self.name_H}_{t.strftime('%Y%m%d_%H%M.nc')}"
+        for i,t in enumerate(self.date_obs):
 
-        if self.read_H:
-            file_H = os.path.join(self.path_H,name_file_H)
-            if os.path.exists(file_H) and not self.compute_H:
-                new_file_H = os.path.join(self.tmp_DA_path,name_file_H)
-                if new_file_H != file_H:
-                    os.system(f"cp {file_H} {new_file_H}")
-                self.obs_sparse[t] = True
-                return t
-        else:
-            file_H = os.path.join(self.tmp_DA_path,name_file_H)
-        
-        # Concatenate obs from different sensors
-        lon_obs = {}
-        lat_obs = {}
-        var_obs = {}
-        err_obs = {}
-        is_full = {}
-        for sat_info,obs_file in zip(sat_info_list,obs_file_list):
+            sat_info_list = self.dict_obs[t]['satellite']
+            obs_file_list = self.dict_obs[t]['obs_name']
 
-            with xr.open_dataset(obs_file) as ncin:
-                lon = ncin[sat_info['name_lon']].values.ravel() %360
-                lat = ncin[sat_info['name_lat']].values.ravel()
-                for name in sat_info['name_var']:
-                    if sat_info.super=='OBS_MODEL':
-                        is_full[name] = True
-                    var = ncin[name].values.ravel()
-                    if sat_info['sigma_noise'] is not None:
-                        err = sat_info['sigma_noise'] * np.ones_like(var)
-                    else:
-                        err = np.ones_like(var)                        
-                    if name in lon_obs:
-                        var_obs[name] = np.concatenate((var_obs[name],var))
-                        err_obs[name] = np.concatenate((err_obs[name],err))
-                        lon_obs[name] = np.concatenate((lon_obs[name],lon))
-                        lat_obs[name] = np.concatenate((lat_obs[name],lat))
-                    else:
-                        var_obs[name] = +var
-                        err_obs[name] = +err
-                        lon_obs[name] = +lon
-                        lat_obs[name] = +lat
-        
-        mode = 'w'
-        for name in lon_obs:
-            if name in is_full:
-                # Grid interpolation: performing spatial interpolation now
-                coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
-                var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
-                err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
-    
-                # Write in netcdf
-                dsout = xr.Dataset(
-                    { "var_obs": (("Nobs"), var_obs_interp),
-                      "err_obs": (("Nobs"), err_obs_interp)})
-                dsout.to_netcdf(file_H, mode=mode, group=name)
-                dsout.close()
-                mode = 'a'
+            name_file_H = f"{self.name_H}_{t.strftime('%Y%m%d_%H%M.nc')}"
+
+            if self.read_H:
+                file_H = os.path.join(self.path_H,name_file_H)
+                if os.path.exists(file_H) and not self.compute_H:
+                    new_file_H = os.path.join(self.tmp_DA_path,name_file_H)
+                    if new_file_H != file_H:
+                        os.system(f"cp {file_H} {new_file_H}")
+                    self.obs_sparse[t] = True
+                    return t
             else:
-                # Sparse interpolation: compute indexes, weights and masks 
-                indexes, weights = self.interpolator(lon_obs[name],lat_obs[name])
-                maskobs = np.isnan(lon_obs[name])*np.isnan(lat_obs[name])
-                if self.flag_mask_coast:
-                    coords_geo_obs = np.column_stack((lon_obs[name],lat_obs[name]))
-                    coords_car_obs = grid.geo2cart(coords_geo_obs)
-                    for i in range(lon_obs.size):
-                        _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
-                        if _dist<self.dist_coast:
-                            maskobs[i] = True
+                file_H = os.path.join(self.tmp_DA_path,name_file_H)
+            
+            # Concatenate obs from different sensors
+            lon_obs = {}
+            lat_obs = {}
+            var_obs = {}
+            err_obs = {}
+            is_full = {}
+            for sat_info,obs_file in zip(sat_info_list,obs_file_list):
 
-                # Write in netcdf
-                dsout = xr.Dataset(
-                    {
-                        "var_obs": (("Nobs"), var_obs[name]),
-                        "err_obs": (("Nobs"), err_obs[name]),
-                        "indexes": (("Nobs","Npix"), indexes),
-                                    "weights": (("Nobs","Npix"), weights),
-                                    "maskobs": (("Nobs"), maskobs)},                
-                                )
-                dsout.to_netcdf(file_H, mode=mode, group=name,
-                    encoding={'indexes': {'dtype': 'int16'}})
-                dsout.close()
-                mode = 'a'
+                with xr.open_dataset(obs_file) as ncin:
+                    lon = ncin[sat_info['name_lon']].values.ravel() %360
+                    lat = ncin[sat_info['name_lat']].values.ravel()
+                    for name in sat_info['name_var']:
+                        if sat_info.super=='OBS_MODEL':
+                            is_full[name] = True
+                        var = ncin[name].values.ravel()
+                        if sat_info['sigma_noise'] is not None:
+                            err = sat_info['sigma_noise'] * np.ones_like(var)
+                        else:
+                            err = np.ones_like(var)                        
+                        if name in lon_obs:
+                            var_obs[name] = np.concatenate((var_obs[name],var))
+                            err_obs[name] = np.concatenate((err_obs[name],err))
+                            lon_obs[name] = np.concatenate((lon_obs[name],lon))
+                            lat_obs[name] = np.concatenate((lat_obs[name],lat))
+                        else:
+                            var_obs[name] = +var
+                            err_obs[name] = +err
+                            lon_obs[name] = +lon
+                            lat_obs[name] = +lat
+            
+            mode = 'w'
+            for name in lon_obs:
+                coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
+                if name in is_full:
+                    # Grid interpolation: performing spatial interpolation now
+                    var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
+                    err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
+
+                    if var_bc is not None and name in var_bc:
+                        var_obs_interp -= var_bc[name][i].flatten()
+                        
+                    # Write in netcdf
+                    dsout = xr.Dataset(
+                        { "var_obs": (("Nobs"), var_obs_interp),
+                        "err_obs": (("Nobs"), err_obs_interp)})
+                    dsout.to_netcdf(file_H, mode=mode, group=name)
+                    dsout.close()
+                    mode = 'a'
+                else:
+                    # Sparse interpolation: compute indexes, weights and masks 
+                    indexes, weights = self.interpolator(lon_obs[name],lat_obs[name])
+                    maskobs = np.isnan(lon_obs[name])*np.isnan(lat_obs[name])
+                    if self.flag_mask_coast:
+                        coords_geo_obs = np.column_stack((lon_obs[name],lat_obs[name]))
+                        coords_car_obs = grid.geo2cart(coords_geo_obs)
+                        for i in range(lon_obs.size):
+                            _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
+                            if _dist<self.dist_coast:
+                                maskobs[i] = True
                 
-        if self.read_H:
-            new_file_H = os.path.join(self.tmp_DA_path,name_file_H)
-            if file_H!=new_file_H:
-                os.system(f"cp {file_H} {new_file_H}")
+                    if var_bc is not None and name in var_bc:
+
+                        mask = np.any(np.isnan(self.coords_geo),axis=1)
+                        var_bc_interp = griddata(self.coords_geo[~mask], var_bc[name][i].flatten()[~mask], coords_obs, method='cubic')
+                        var_obs[name] -= var_bc_interp
+
+                    # Write in netcdf
+                    dsout = xr.Dataset(
+                        {
+                            "var_obs": (("Nobs"), var_obs[name]),
+                            "err_obs": (("Nobs"), err_obs[name]),
+                            "indexes": (("Nobs","Npix"), indexes),
+                                        "weights": (("Nobs","Npix"), weights),
+                                        "maskobs": (("Nobs"), maskobs)},                
+                                    )
+                    dsout.to_netcdf(file_H, mode=mode, group=name,
+                        encoding={'indexes': {'dtype': 'int16'}})
+                    dsout.close()
+                    mode = 'a'
+                    
+            if self.read_H:
+                new_file_H = os.path.join(self.tmp_DA_path,name_file_H)
+                if file_H!=new_file_H:
+                    os.system(f"cp {file_H} {new_file_H}")
 
     
     def interpolator(self,lon_obs,lat_obs):
@@ -325,7 +334,8 @@ class Obsop_interp:
 
             # Read misfit
             ds = xr.open_dataset(os.path.join(
-                os.path.join(self.tmp_DA_path,f"misfit_{t.strftime('%Y%m%d_%H%M')}.nc")), group=name)
+                os.path.join(self.tmp_DA_path,f"misfit_{t.strftime('%Y%m%d_%H%M')}.nc")), 
+                group=name)
             misfit = ds['misfit'].values
             ds.close()
             del ds
@@ -335,7 +345,8 @@ class Obsop_interp:
 
             # Read observational operator
             ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')), group=name)
+                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')), 
+                group=name)
 
             # Read adjoint variable
             advar = adState.getvar(self.name_mod_var[name])

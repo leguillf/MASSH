@@ -163,6 +163,8 @@ OBS_SSH_NADIR = dict(
     
     name_var = {'SSH':''},
 
+    varmax = 1e2,
+
     sigma_noise = None,
 
     add_mdt = None,
@@ -228,8 +230,9 @@ MOD_DIFF = dict(
 
     dtmodel = 300, # model timestep
 
-    Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
+    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
 
+    init_from_bc = False
 )
 
 # 1.5-layer Quasi-Geostrophic models
@@ -279,13 +282,13 @@ MOD_QG1L_JAX = dict(
 
     name_var = {'SSH':"ssh"},
 
+    init_from_bc = False,
+
     name_init_var = {},
 
     dir_model = None,
 
     var_to_save = None,
-
-    anomaly_bc = False, # If True, use boundary condition fields as mean field
 
     multiscale = False,
 
@@ -396,8 +399,6 @@ BC_EXT = dict(
     name_time = None,
 
     name_var = {},
-
-    name_mod_var = {},
 
     dist_sponge = None  # distance (in km) for which boundary fields are spatially spread close to the borders (useful for MOD_QG1L_NP model)
 
@@ -513,7 +514,9 @@ INV_4DVAR = dict(
 
     largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
 
-    only_largescale = False # Flag to prescribe only BM basis background error over lmeso wavelenghts
+    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
+
+    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
  
 )
 

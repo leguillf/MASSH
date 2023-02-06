@@ -128,8 +128,9 @@ That could be due to non regular grid or bad written netcdf file')
         self.name_exp_var = config.DIAG.name_exp_var
         exp = xr.open_mfdataset(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc')
         exp = exp.assign_coords({self.name_ref_lon:exp[self.name_ref_lon]%360})
+        dt = (exp[self.name_exp_time][1]-ref[self.name_exp_time][0]).values
         self.exp = exp.sel(
-            {self.name_exp_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
+            {self.name_exp_time:slice(np.datetime64(self.time_min)-dt,np.datetime64(self.time_max)+dt)},
              )
         try:
             self.exp = self.exp.sel(
@@ -267,9 +268,6 @@ That could be due to non regular grid or bad written netcdf file')
 
         # Time interpolation
         var_regridded = var_regridded.interp({self.name_ref_time:self.ref[self.name_ref_time]})
-
-        # Mask
-        var_regridded.data[np.isnan(self.ref[self.name_ref_var])] = np.nan
 
         return var_regridded
         
@@ -534,7 +532,6 @@ That could be due to non regular grid or bad written netcdf file')
 
     def Leaderboard(self):
 
-        
         data = [[self.name_experiment, 
             np.round(self.leaderboard_rmse,2), 
             np.round(self.leaderboard_rmse_std,2), 
@@ -555,6 +552,10 @@ That could be due to non regular grid or bad written netcdf file')
                                             "σ(RMSE)", 
                                             'λx (degree)', 
                                             'λt (days)'])
+
+        with open(f'{self.dir_output}/metrics.txt', 'w') as f:
+            dfAsString = Leaderboard.to_string()
+            f.write(dfAsString)
         
         return Leaderboard
 
@@ -656,7 +657,13 @@ def psd(da,dim,dim_mean=None,detrend='constant'):
 class Diag_multi:
 
     def __init__(self,config,State):
+        
+        self.dir_output = f'{config.EXP.path_save}/diags/'
+        if not os.path.exists(self.dir_output):
+            os.makedirs(self.dir_output)
 
+
+        self.name_diag = config.DIAG
         self.Diag = []
         _config = config.copy()
 
@@ -690,6 +697,18 @@ class Diag_multi:
         
     def Leaderboard(self):
 
-        for _Diag in self.Diag:
-            _Diag.Leaderboard()
-    3
+        df = []
+        names = []
+        for (_Diag, name) in zip(self.Diag,self.name_diag):
+            _df = _Diag.Leaderboard()
+            df.append(_df)
+            names += [name,]*_df.shape[0]
+        
+        Leaderboard = pd.concat(df)
+        Leaderboard.insert(0,'Diags',names)
+
+        with open(f'{self.dir_output}/metrics.txt', 'w') as f:
+            dfAsString = Leaderboard.to_string()
+            f.write(dfAsString)
+
+        return Leaderboard

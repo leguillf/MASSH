@@ -522,6 +522,17 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     if Bc is not None:
         var_bc = Bc.interp(time_checkpoints,State.lon,State.lat)
         Model.set_bc(t_checkpoints,var_bc)
+    
+    # Process observations
+    if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
+        time_obs = [np.datetime64(date) for date in Obsop.date_obs]
+        var_bc = Bc.interp(time_obs,State.lon,State.lat)
+    else:
+        var_bc = None
+    Obsop.process_obs(var_bc)
+    
+    # Initial model state
+    Model.init(State)
 
     # Set Reduced Basis
     if Basis is not None:
@@ -546,7 +557,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     var = Variational(
         config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints)
     
-    # Initial State 
+    # Initial Control vector 
     if config.INV.path_init_4Dvar is None:
         Xopt = np.zeros((Xb.size,))
     else:
@@ -556,7 +567,6 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
         Xopt = ds.res.values
         ds.close()
 
-    
     # Restart mode
     if config.INV.restart_4Dvar:
         tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
@@ -628,7 +638,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     ds.close()
 
     # Init
-    State0 = State.copy(free=True)
+    State0 = State.copy()
     date = config.EXP.init_date
 
     # Forward propagation
@@ -655,8 +665,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
             if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                # Save output
-                State0.save_output(date,name_var=Model.var_to_save)
+                Model.ano_bc(t+j*Model.dt,State0,+1) # Get full field from anomaly 
+                State0.save_output(date,name_var=Model.var_to_save) # Save output
+                Model.ano_bc(t+j*Model.dt,State0,-1) # Get anomaly from full field 
 
             # Forward propagation
             Model.step(t=t+j*Model.dt,State=State0,nstep=1)
@@ -666,7 +677,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        State0.save_output(date,name_var=Model.var_to_save)
+        Model.ano_bc(t+nstep_check*Model.dt,State0,+1) # Get full field from anomaly 
+        State0.save_output(date,name_var=Model.var_to_save) # Save output
+        Model.ano_bc(t+nstep_check*Model.dt,State0,-1) # Get anomaly from full field 
         
     del State, State0, Xa, dict_obs, B, R
     gc.collect()
