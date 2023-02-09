@@ -29,6 +29,9 @@ def Bc(config, *args, **kwargs):
     if config.BC is None:
         return 
     
+    elif config.BC.super is None:
+        return Bc_multi(config)
+    
     print(config.BC)
     
     if config.BC.super=='BC_EXT':
@@ -55,8 +58,7 @@ class Bc_ext:
             self.var[name] = ds[config.BC.name_var[name]].data.squeeze()
 
         ds.close()        
-
-        self.name_mod_var = config.BC.name_mod_var
+        
         self.dist_sponge = config.BC.dist_sponge
         
 
@@ -70,9 +72,9 @@ class Bc_ext:
 
         # Define target grid
         if self.time is not None and self.time.size>1:
-            time = z_source_axis.safe_cast(np.ascontiguousarray(time))
-            z_target = np.tile(time,(lon.shape[1],lat.shape[0],1))
-            nt = time.size
+            time_target = z_source_axis.safe_cast(np.ascontiguousarray(time))
+            z_target = np.tile(time_target,(lon.shape[1],lat.shape[0],1))
+            nt = len(time_target)
         else:
             nt = 1
         x_target = np.repeat(lon.transpose()[:,:,np.newaxis],nt,axis=2)
@@ -95,11 +97,11 @@ class Bc_ext:
                                                 y_target[:,:,0].flatten(),
                                                 bounds_error=False).reshape(x_target[:,:,0].shape).T
 
-                _var_interp = _var_interp[np.newaxis,:,:].repeat(time.size,axis=0) 
+                _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
 
             _var_interp[np.isnan(_var_interp)] = 0
             
-            var_interp[self.name_mod_var[name]] = _var_interp
+            var_interp[name] = _var_interp
         
         return var_interp
 
@@ -167,4 +169,29 @@ class Bc_ext:
         bc_weight = bc_weight.reshape(lon.shape)
         
         return bc_weight
+
+class Bc_multi:
+
+    def __init__(self,config):
+
+        self.Bc = []
+        _config = config.copy()
+
+        for _BC in config.BC:
+            _config.BC = config.BC[_BC]
+            self.Bc.append(Bc(_config))
+
+    
+    def interp(self,time,lon,lat):
+
+        var_interp = {}
+
+        for i,_Bc in enumerate(self.Bc):
+
+            _var_interp = _Bc.interp(time,lon,lat)
+
+            for name in _var_interp:
+                var_interp[name] = _var_interp[name]
+
+        return var_interp
 

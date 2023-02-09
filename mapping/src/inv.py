@@ -223,20 +223,25 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
         ########################
         bfn_obj = bfn.bfn(
             config,init_bfn_date,final_bfn_date,one_time_step,State)
-        
-        ######################################
-        # 3. BOUNDARY AND INITIAL CONDITIONS #
-        ######################################
-        # Boundary conditions
-        Wbc = None
+
+        ##########################
+        # 3. Boundary conditions #
+        ##########################
         if Bc is not None:
-            periods = int((final_bfn_date-init_bfn_date).total_seconds()//\
-                one_time_step.total_seconds() + 1)
-            time_bc = [np.datetime64(time) for time in Model.timestamps[::periods]]
-            t_bc = [t for t in Model.T[::periods]]
+            time0 = np.datetime64(init_bfn_date)
+            tsec0 = (init_bfn_date - config.EXP.init_date).total_seconds()
+            time_bc = []
+            tsec_bc = []
+            while time0<=np.datetime64(final_bfn_date):
+                time_bc.append(time0)
+                tsec_bc.append(tsec0)
+                time0 += np.timedelta64(one_time_step)
+                tsec0 += one_time_step.total_seconds()
+                time_bc.append(time0)
+                tsec_bc.append(tsec0)
             var_bc = Bc.interp(time_bc,State.lon,State.lat)
-            Wbc = Bc.compute_weight_map(State.lon,State.lat,State.mask)
-            Model.set_bc(t_bc,var_bc,Wbc=Wbc)
+            Wbc = Bc.compute_weight_map(State.lon,State.lat,+State.mask)
+            Model.set_bc(tsec_bc,var_bc,Wbc=Wbc)
             
 
         ###################
@@ -289,7 +294,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
             while present_date_forward0 < final_bfn_date :
                 
                 # Time
-                t = (present_date_forward0 - init_bfn_date).total_seconds()
+                t = (present_date_forward0 - config.EXP.init_date).total_seconds()
 
                 # Model propagation and apply Nudging
                 Model.step_nudging(State,
@@ -348,7 +353,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
                 while present_date_backward0 > init_bfn_date :
                     
                     # Time
-                    t = (present_date_backward0 - init_bfn_date).total_seconds()
+                    t = (present_date_backward0 - config.EXP.init_date).total_seconds()
 
                     # Propagate the state by nudging the model vorticity towards the 2D observations
                     Model.step_nudging(State,
@@ -522,16 +527,24 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     if Bc is not None:
         var_bc = Bc.interp(time_checkpoints,State.lon,State.lat)
         Model.set_bc(t_checkpoints,var_bc)
+    
+    # Process observations
+    if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
+        time_obs = [np.datetime64(date) for date in Obsop.date_obs]
+        var_bc = Bc.interp(time_obs,State.lon,State.lat)
+    else:
+        var_bc = None
+    Obsop.process_obs(var_bc)
+    
+    # Initial model state
+    Model.init(State)
 
     # Set Reduced Basis
     if Basis is not None:
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in seconds) for which the basis components will be compute (at each timestep_checkpoint)
-        Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
+        Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
         sys.exit('4Dvar only work with reduced basis!!')
-
-    # Backgroud state 
-    Xb = np.zeros((Q.size,))
     
     # Covariance matrix
     from .tools_4Dvar import Cov
@@ -549,7 +562,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     var = Variational(
         config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints)
     
-    # Initial State 
+    # Initial Control vector 
     if config.INV.path_init_4Dvar is None:
         Xopt = np.zeros((Xb.size,))
     else:
@@ -559,7 +572,6 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
         Xopt = ds.res.values
         ds.close()
 
-    
     # Restart mode
     if config.INV.restart_4Dvar:
         tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
@@ -588,7 +600,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
         # Minimization options
         options = {'disp': True, 'maxiter': config.INV.maxiter}
         if config.INV.gtol is not None:
-            J0 = var.cost(Xopt)
+            _ = var.cost(Xopt)
             g0 = var.grad(Xopt)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
@@ -631,7 +643,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     ds.close()
 
     # Init
-    State0 = State.copy(free=True)
+    State0 = State.copy()
     date = config.EXP.init_date
 
     # Forward propagation
@@ -658,8 +670,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
             if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                # Save output
-                State0.save_output(date,name_var=Model.var_to_save)
+                Model.ano_bc(t+j*Model.dt,State0,+1) # Get full field from anomaly 
+                State0.save_output(date,name_var=Model.var_to_save) # Save output
+                Model.ano_bc(t+j*Model.dt,State0,-1) # Get anomaly from full field 
 
             # Forward propagation
             Model.step(t=t+j*Model.dt,State=State0,nstep=1)
@@ -669,7 +682,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        State0.save_output(date,name_var=Model.var_to_save)
+        Model.ano_bc(t+nstep_check*Model.dt,State0,+1) # Get full field from anomaly 
+        State0.save_output(date,name_var=Model.var_to_save) # Save output
+        Model.ano_bc(t+nstep_check*Model.dt,State0,-1) # Get anomaly from full field 
         
     del State, State0, Xa, dict_obs, B, R
     gc.collect()

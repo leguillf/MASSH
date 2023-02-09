@@ -131,6 +131,25 @@ GRID_RESTART = dict(
 #################################################################################################################################
 NAME_OBS = None
 
+OBS_MODEL = dict(
+
+    path = '',
+
+    name_time = '',
+    
+    name_lon = '',
+
+    name_lat = '',
+    
+    name_var = {},
+
+    subsampling = None, # Subsampling in time (in number of model time step)
+
+    sigma_noise = None
+
+)
+
+
 # Nadir altimetry
 OBS_SSH_NADIR = dict(
 
@@ -143,6 +162,8 @@ OBS_SSH_NADIR = dict(
     name_lat = '',
     
     name_var = {'SSH':''},
+
+    varmax = 1e2,
 
     sigma_noise = None,
 
@@ -203,12 +224,15 @@ MOD_DIFF = dict(
 
     name_var = {'SSH':"ssh"},
 
+    var_to_save = None,
+
     name_init_var = {},
 
     dtmodel = 300, # model timestep
 
-    Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
+    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
 
+    init_from_bc = False
 )
 
 # 1.5-layer Quasi-Geostrophic models
@@ -219,6 +243,8 @@ MOD_QG1L_NP = dict(
     name_init_var = {},
 
     dir_model = None,
+
+    var_to_save = None,
 
     dtmodel = 300, # model timestep
 
@@ -256,11 +282,17 @@ MOD_QG1L_JAX = dict(
 
     name_var = {'SSH':"ssh"},
 
+    init_from_bc = False,
+
     name_init_var = {},
 
     dir_model = None,
 
+    var_to_save = None,
+
     multiscale = False,
+
+    advect_tracer = False,
 
     dtmodel = 300, # model timestep
 
@@ -301,6 +333,8 @@ MOD_SW1L_NP = dict(
 
     dir_model = None,
 
+    var_to_save = None,
+
     dtmodel = 300, # model timestep
 
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
@@ -326,6 +360,8 @@ MOD_SW1L_JAX = dict(
     name_init_var = [],
 
     dir_model = None,
+
+    var_to_save = None,
 
     dtmodel = 300, # model timestep
 
@@ -363,8 +399,6 @@ BC_EXT = dict(
     name_time = None,
 
     name_var = {},
-
-    name_mod_var = {},
 
     dist_sponge = None  # distance (in km) for which boundary fields are spatially spread close to the borders (useful for MOD_QG1L_NP model)
 
@@ -458,7 +492,7 @@ INV_4DVAR = dict(
 
     timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
 
-    sigma_R = 1e-2, # Observational standard deviation
+    sigma_R = None, # Observational standard deviation
 
     sigma_B = None,
 
@@ -480,7 +514,9 @@ INV_4DVAR = dict(
 
     largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
 
-    only_largescale = False # Flag to prescribe only BM basis background error over lmeso wavelenghts
+    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
+
+    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
  
 )
 
@@ -544,7 +580,11 @@ BASIS_BM = dict(
 
     Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
-    slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 
 )
 
@@ -595,7 +635,11 @@ BASIS_BMaux = dict(
 
     Romax = 150.,
 
-    cutRo =  1.6
+    cutRo =  1.6,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 
 )
 
@@ -618,8 +662,11 @@ BASIS_LS = dict(
         
     lambda_lw= 970,
 
-    fcor = .5
+    fcor = .5,
 
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 )
 
 # Internal Tides
@@ -649,8 +696,11 @@ BASIS_IT = dict(
 
     scalemodes = None, # Only for SW1LM model, 
 
-    scalew_igws = None 
+    scalew_igws = None,
 
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 )
 
 
@@ -690,7 +740,7 @@ DIAG_OSSE = dict(
 
     name_exp_var = '',
 
-    compare_to_baseline = True,
+    compare_to_baseline = False,
 
     name_bas = None,
 

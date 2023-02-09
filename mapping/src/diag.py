@@ -5,12 +5,10 @@ import pyinterp
 import pyinterp.fill
 import logging
 import xrft
-from dask.diagnostics import ProgressBar
 import matplotlib.pylab as plt
 import matplotlib.gridspec as gridspec
 from IPython.display import Video
 from matplotlib.ticker import ScalarFormatter
-from dask import delayed,compute
 import gc
 import pandas as pd 
 import subprocess
@@ -28,6 +26,9 @@ def Diag(config,State):
 
     if config.DIAG is None:
         return
+    
+    elif config.DIAG.super is None:
+        return Diag_multi(config,State)
     
     print(config.DIAG)
 
@@ -125,8 +126,9 @@ That could be due to non regular grid or bad written netcdf file')
         self.name_exp_var = config.DIAG.name_exp_var
         exp = xr.open_mfdataset(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc')
         exp = exp.assign_coords({self.name_ref_lon:exp[self.name_ref_lon]%360})
+        dt = (exp[self.name_exp_time][1]-ref[self.name_exp_time][0]).values
         self.exp = exp.sel(
-            {self.name_exp_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
+            {self.name_exp_time:slice(np.datetime64(self.time_min)-dt,np.datetime64(self.time_max)+dt)},
              )
         try:
             self.exp = self.exp.sel(
@@ -146,7 +148,7 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
             bas = xr.open_mfdataset(config.DIAG.name_bas)
-            bas = bas.assign_coords({self.name_bas_lon:bas[self.name_bas_lon]%360})
+            bas = bas.assign_coords({self.name_bas_lon:(bas[self.name_bas_lon]+180)%360+180})
             self.bas = bas.sel(
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
                 )
@@ -265,11 +267,7 @@ That could be due to non regular grid or bad written netcdf file')
         # Time interpolation
         var_regridded = var_regridded.interp({self.name_ref_time:self.ref[self.name_ref_time]})
 
-        # Mask
-        var_regridded.data[np.isnan(self.ref[self.name_ref_var])] = np.nan
-
         return var_regridded
-
         
     def rmse_based_scores(self,plot=False):
         
@@ -330,9 +328,6 @@ That could be due to non regular grid or bad written netcdf file')
             self.leaderboard_rmse_std = rmse_t.sel(run='experiment').std().values
         else:
             self.leaderboard_rmse_std = rmse_t.std().values
-
-
-
 
     def psd_based_scores(self,threshold=0.5, plot=False):
         
@@ -396,10 +391,12 @@ That could be due to non regular grid or bad written netcdf file')
             self.leaderboard_psds_score = np.min(x05)
             self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
 
-
     def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
 
-    
+        # For memory leak when saving multiple png files...
+        import matplotlib
+        matplotlib.use('Agg')
+
         # Create merged dataset
         if self.compare_to_baseline:
             name_dim_rmse = ('run', self.name_ref_time)
@@ -431,13 +428,12 @@ That could be due to non regular grid or bad written netcdf file')
         if range_err is None:
             range_err = ds.err.to_dataset().apply(np.abs).apply(np.nanmax).err.values
         
-
         # Plotting function
         def _save_single_frame(ds, tt, xlim=xlim, ylim=ylim,clim=clim,range_err=range_err,cmap=cmap):
 
             if tt==0:
-                return 
-            
+                return
+
             if self.compare_to_baseline:
                 fig = plt.figure(figsize=(18,15))
                 gs = gridspec.GridSpec(3,5,width_ratios=(1,1,0.05,1,0.05))
@@ -446,8 +442,6 @@ That could be due to non regular grid or bad written netcdf file')
                 gs = gridspec.GridSpec(2,5,width_ratios=(1,1,0.05,1,0.05))
 
             date = str(ds[self.name_ref_time][tt].values)[:13]
-
-            
 
             ids = ds.isel(time=tt)
             
@@ -487,8 +481,7 @@ That could be due to non regular grid or bad written netcdf file')
                 ax4.set_yticks([])
                 ax4.set_title('Difference')
 
-    
-            ids = ds.isel(time=slice(0,tt))
+            ids = ds.isel(time=slice(0,tt+1))
             ax = fig.add_subplot(gs[-1, :])
             if self.compare_to_baseline:
                 ids.rmse_score.sel(run='experiment').plot(ax=ax,label='experiment',xlim=xlim,ylim=ylim)
@@ -503,13 +496,11 @@ That could be due to non regular grid or bad written netcdf file')
             plt.close(fig)
             del fig
             gc.collect(2)
+
         
         # Compute and save frames 
-        delayed_results = []
         for tt in range(ds[self.name_ref_time].size):
-            res = delayed(_save_single_frame)(ds, tt)
-            delayed_results.append(res)
-        results = compute(*delayed_results, scheduler="threads")
+            _save_single_frame(ds, tt)
 
         # Create movie
         sourcefolder = self.dir_output
@@ -524,6 +515,7 @@ That could be due to non regular grid or bad written netcdf file')
                 framerate,
                 os.path.join(self.dir_output, moviename),
             )
+        print(command)
 
         _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
 
@@ -536,7 +528,6 @@ That could be due to non regular grid or bad written netcdf file')
 
     def Leaderboard(self):
 
-        
         data = [[self.name_experiment, 
             np.round(self.leaderboard_rmse,2), 
             np.round(self.leaderboard_rmse_std,2), 
@@ -557,6 +548,10 @@ That could be due to non regular grid or bad written netcdf file')
                                             "σ(RMSE)", 
                                             'λx (degree)', 
                                             'λt (days)'])
+
+        with open(f'{self.dir_output}/metrics.txt', 'w') as f:
+            dfAsString = Leaderboard.to_string()
+            f.write(dfAsString)
         
         return Leaderboard
 
@@ -654,3 +649,62 @@ def psd(da,dim,dim_mean=None,detrend='constant'):
         
         return psd
     
+
+class Diag_multi:
+
+    def __init__(self,config,State):
+        
+        self.dir_output = f'{config.EXP.path_save}/diags/'
+        if not os.path.exists(self.dir_output):
+            os.makedirs(self.dir_output)
+
+
+        self.name_diag = config.DIAG
+        self.Diag = []
+        _config = config.copy()
+
+        for _DIAG in config.DIAG:
+            _config.DIAG = config.DIAG[_DIAG]
+            _Diag = Diag(_config,State)
+            _Diag.dir_output = os.path.join(_Diag.dir_output,_DIAG)
+            if not os.path.exists(_Diag.dir_output):
+                os.makedirs(_Diag.dir_output)
+            self.Diag.append(_Diag)
+
+    def regrid_exp(self):
+
+        for _Diag in self.Diag:
+            _Diag.regrid_exp()
+    
+    def rmse_based_scores(self,plot=False):
+
+        for _Diag in self.Diag:
+            _Diag.rmse_based_scores(plot=plot)
+        
+    def psd_based_scores(self,plot=False,threshold=0.5):
+
+        for _Diag in self.Diag:
+            _Diag.psd_based_scores(plot=plot,threshold=threshold)
+    
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+
+        for _Diag in self.Diag:
+            _Diag.movie(framerate=framerate,Display=Display,clim=clim,range_err=range_err,cmap=cmap)
+        
+    def Leaderboard(self):
+
+        df = []
+        names = []
+        for (_Diag, name) in zip(self.Diag,self.name_diag):
+            _df = _Diag.Leaderboard()
+            df.append(_df)
+            names += [name,]*_df.shape[0]
+        
+        Leaderboard = pd.concat(df)
+        Leaderboard.insert(0,'Diags',names)
+
+        with open(f'{self.dir_output}/metrics.txt', 'w') as f:
+            dfAsString = Leaderboard.to_string()
+            f.write(dfAsString)
+
+        return Leaderboard
