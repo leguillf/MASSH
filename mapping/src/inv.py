@@ -223,20 +223,25 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
         ########################
         bfn_obj = bfn.bfn(
             config,init_bfn_date,final_bfn_date,one_time_step,State)
-        
-        ######################################
-        # 3. BOUNDARY AND INITIAL CONDITIONS #
-        ######################################
-        # Boundary conditions
-        Wbc = None
+
+        ##########################
+        # 3. Boundary conditions #
+        ##########################
         if Bc is not None:
-            periods = int((final_bfn_date-init_bfn_date).total_seconds()//\
-                one_time_step.total_seconds() + 1)
-            time_bc = [np.datetime64(time) for time in Model.timestamps[::periods]]
-            t_bc = [t for t in Model.T[::periods]]
+            time0 = np.datetime64(init_bfn_date)
+            tsec0 = (init_bfn_date - config.EXP.init_date).total_seconds()
+            time_bc = []
+            tsec_bc = []
+            while time0<=np.datetime64(final_bfn_date):
+                time_bc.append(time0)
+                tsec_bc.append(tsec0)
+                time0 += np.timedelta64(one_time_step)
+                tsec0 += one_time_step.total_seconds()
+                time_bc.append(time0)
+                tsec_bc.append(tsec0)
             var_bc = Bc.interp(time_bc,State.lon,State.lat)
-            Wbc = Bc.compute_weight_map(State.lon,State.lat,State.mask)
-            Model.set_bc(t_bc,var_bc,Wbc=Wbc)
+            Wbc = Bc.compute_weight_map(State.lon,State.lat,+State.mask)
+            Model.set_bc(tsec_bc,var_bc,Wbc=Wbc)
             
 
         ###################
@@ -289,7 +294,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
             while present_date_forward0 < final_bfn_date :
                 
                 # Time
-                t = (present_date_forward0 - init_bfn_date).total_seconds()
+                t = (present_date_forward0 - config.EXP.init_date).total_seconds()
 
                 # Model propagation and apply Nudging
                 Model.step_nudging(State,
@@ -348,7 +353,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
                 while present_date_backward0 > init_bfn_date :
                     
                     # Time
-                    t = (present_date_backward0 - init_bfn_date).total_seconds()
+                    t = (present_date_backward0 - config.EXP.init_date).total_seconds()
 
                     # Propagate the state by nudging the model vorticity towards the 2D observations
                     Model.step_nudging(State,

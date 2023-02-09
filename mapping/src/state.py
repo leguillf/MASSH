@@ -21,12 +21,9 @@ from . import grid
 class State:
     """
     NAME
-       ini
+       State
     DESCRIPTION
-        Main function calling subfunctions considering the kind of init the
-    user set
-        Args:
-            config (module): configuration module
+        Main class handling the grid initialization, the storage of model variables and the saving of outputs 
     """
 
     
@@ -277,12 +274,12 @@ class State:
             
     def save_output(self,date,name_var=None):
         
-        filename = os.path.join(self.path_save,self.name_exp_save\
-                + '_y' + str(date.year)\
-                + 'm' + str(date.month).zfill(2)\
-                + 'd' + str(date.day).zfill(2)\
-                + 'h' + str(date.hour).zfill(2)\
-                + str(date.minute).zfill(2) + '.nc')
+        filename = os.path.join(self.path_save,f'{self.name_exp_save}'\
+            f'_y{date.year}'\
+            f'm{str(date.month).zfill(2)}'\
+            f'd{str(date.day).zfill(2)}'\
+            f'h{str(date.hour).zfill(2)}'\
+            f'm{str(date.minute).zfill(2)}.nc')
         
         coords = {}
         coords[self.name_time] = ((self.name_time), [pd.to_datetime(date)],)
@@ -384,12 +381,12 @@ class State:
         return
 
     def load_output(self,date,name_var=None):
-        filename = os.path.join(self.path_save,self.name_exp_save\
-            + '_y' + str(date.year)\
-            + 'm' + str(date.month).zfill(2)\
-            + 'd' + str(date.day).zfill(2)\
-            + 'h' + str(date.hour).zfill(2)\
-            + str(date.minute).zfill(2) + '.nc')
+        filename = os.path.join(self.path_save,f'{self.name_exp_save}'\
+            f'_y{date.year}'\
+            f'm{str(date.month).zfill(2)}'\
+            f'd{str(date.day).zfill(2)}'\
+            f'h{str(date.hour).zfill(2)}'\
+            f'm{str(date.minute).zfill(2)}.nc')
             
         ds = xr.open_dataset(filename)
         

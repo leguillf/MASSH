@@ -156,11 +156,6 @@ class Model_diffusion(M):
                             if mask[itest,jtest]==2:
                                 mask[itest,jtest] = 1
         self.mask = mask
-        plt.figure()
-        plt.pcolormesh(mask)
-        plt.colorbar()
-        plt.show()
-
 
         # Model Parameters (Flux on SSH)
         self.nparams = State.ny*State.nx
@@ -460,9 +455,9 @@ class Model_qg1l_np(M):
         
 
     def set_bc(self,time_bc,var_bc,Wbc=None):
-
+        
         for var in var_bc:
-            if var in self.name_var['SSH']:
+            if var=='SSH':
                 for i,t in enumerate(time_bc):
                     self.SSHb[t] = var_bc[var][i]
         
@@ -617,9 +612,6 @@ class Model_qg1l_jax(M):
             dir_model = config.MOD.dir_model  
         qgm = SourceFileLoader("qgm",dir_model + "/jqgm.py").load_module() 
         model = qgm.Qgm
-    
-        # Anomaly mode
-        self.anomaly_bc = config.MOD.anomaly_bc
 
         # Coriolis
         self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
@@ -730,8 +722,11 @@ class Model_qg1l_jax(M):
             self.bc[_name_var_mod] = {}
         self.init_from_bc = config.MOD.init_from_bc
 
-        # Use boundary conditions as mean field
-        self.anomaly_from_bc = config.INV.anomaly_from_bc
+        # Use boundary conditions as mean field (for 4Dvar only)
+        if config.INV is not None and config.INV.super=='INV_4DVAR':
+            self.anomaly_from_bc = config.INV.anomaly_from_bc
+        else:
+            self.anomaly_from_bc = False
 
        # Masked array for model initialization
         SSH0 = State.getvar(name_var=self.name_var['SSH'])

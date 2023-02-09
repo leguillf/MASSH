@@ -5,12 +5,10 @@ import pyinterp
 import pyinterp.fill
 import logging
 import xrft
-from dask.diagnostics import ProgressBar
 import matplotlib.pylab as plt
 import matplotlib.gridspec as gridspec
 from IPython.display import Video
 from matplotlib.ticker import ScalarFormatter
-from dask import delayed,compute
 import gc
 import pandas as pd 
 import subprocess
@@ -150,7 +148,7 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
             bas = xr.open_mfdataset(config.DIAG.name_bas)
-            bas = bas.assign_coords({self.name_bas_lon:bas[self.name_bas_lon]%360})
+            bas = bas.assign_coords({self.name_bas_lon:(bas[self.name_bas_lon]+180)%360+180})
             self.bas = bas.sel(
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
                 )
@@ -395,7 +393,10 @@ That could be due to non regular grid or bad written netcdf file')
 
     def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
 
-    
+        # For memory leak when saving multiple png files...
+        import matplotlib
+        matplotlib.use('Agg')
+
         # Create merged dataset
         if self.compare_to_baseline:
             name_dim_rmse = ('run', self.name_ref_time)
@@ -427,13 +428,12 @@ That could be due to non regular grid or bad written netcdf file')
         if range_err is None:
             range_err = ds.err.to_dataset().apply(np.abs).apply(np.nanmax).err.values
         
-
         # Plotting function
         def _save_single_frame(ds, tt, xlim=xlim, ylim=ylim,clim=clim,range_err=range_err,cmap=cmap):
 
             if tt==0:
-                return 
-            
+                return
+
             if self.compare_to_baseline:
                 fig = plt.figure(figsize=(18,15))
                 gs = gridspec.GridSpec(3,5,width_ratios=(1,1,0.05,1,0.05))
@@ -442,8 +442,6 @@ That could be due to non regular grid or bad written netcdf file')
                 gs = gridspec.GridSpec(2,5,width_ratios=(1,1,0.05,1,0.05))
 
             date = str(ds[self.name_ref_time][tt].values)[:13]
-
-            
 
             ids = ds.isel(time=tt)
             
@@ -483,8 +481,7 @@ That could be due to non regular grid or bad written netcdf file')
                 ax4.set_yticks([])
                 ax4.set_title('Difference')
 
-    
-            ids = ds.isel(time=slice(0,tt))
+            ids = ds.isel(time=slice(0,tt+1))
             ax = fig.add_subplot(gs[-1, :])
             if self.compare_to_baseline:
                 ids.rmse_score.sel(run='experiment').plot(ax=ax,label='experiment',xlim=xlim,ylim=ylim)
@@ -499,13 +496,11 @@ That could be due to non regular grid or bad written netcdf file')
             plt.close(fig)
             del fig
             gc.collect(2)
+
         
         # Compute and save frames 
-        delayed_results = []
         for tt in range(ds[self.name_ref_time].size):
-            res = delayed(_save_single_frame)(ds, tt)
-            delayed_results.append(res)
-        results = compute(*delayed_results, scheduler="threads")
+            _save_single_frame(ds, tt)
 
         # Create movie
         sourcefolder = self.dir_output
@@ -520,6 +515,7 @@ That could be due to non regular grid or bad written netcdf file')
                 framerate,
                 os.path.join(self.dir_output, moviename),
             )
+        print(command)
 
         _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
 

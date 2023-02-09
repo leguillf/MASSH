@@ -190,7 +190,8 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                         sign = -1
                     varobs[name].data = varobs[name].data + sign*mdt_on_obs
                 # Remove high values
-                varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+                if 'varmax' in obs_attr and obs_attr.varmax is not None:
+                    varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
 
             # Build netcdf
             coords = {obs_attr.name_time:_ds[obs_attr.name_time].values}

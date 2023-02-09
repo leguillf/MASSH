@@ -961,6 +961,7 @@ class Basis_bm:
                 tdec[iff] = self.tdecmax 
             tdec[iff] *= self.factdec
             enst[iff] = np.arange(-tdec[iff]/self.facnlt,deltat+tdec[iff]/self.facnlt , tdec[iff]/self.facnlt) 
+            # Compute time integral for each frequency
             tt = np.linspace(-tdec[iff],tdec[iff])
             tmp = np.zeros_like(tt)
             for i in range(tt.size-1):
