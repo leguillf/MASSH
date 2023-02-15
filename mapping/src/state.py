@@ -262,7 +262,7 @@ class State:
             mask_interp = mask.copy()
         
         # Convert to bool if float type     
-        if mask_interp.dtype!=np.bool : 
+        if mask_interp.dtype!=bool : 
             self.mask = np.empty((self.ny,self.nx),dtype='bool')
             ind_mask = (np.isnan(mask_interp)) | (mask_interp==1) | (np.abs(mask_interp)>10)
             self.mask[ind_mask] = True
