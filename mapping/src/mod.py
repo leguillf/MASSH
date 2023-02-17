@@ -424,7 +424,7 @@ class Model_qg1l_np(M):
 
         # Boundary conditions
         self.SSHb = {}
-        self.Wbc = np.zeros((State.ny,State.ny))
+        self.Wbc = np.zeros((State.ny,State.nx))
         
         # Model initialization
         self.qgm = model(dx=State.DX,
