@@ -200,8 +200,8 @@ class Model_diffusion(M):
                     State.var[self.name_var[name]][self.mask==1] = \
                         self.bc[name][t][self.mask==1]
     
+           
             
-
     def step(self,State,nstep=1,t=None):
         
         # Boundary conditions

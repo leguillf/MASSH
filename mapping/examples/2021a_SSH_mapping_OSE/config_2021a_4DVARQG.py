@@ -50,13 +50,13 @@ myGRID = dict(
 
     super = 'GRID_CAR',
 
-    lon_min = 295.,                                        # domain min longitude
+    lon_min = 295.25,                                        # domain min longitude
 
-    lon_max = 305.,                                        # domain max longitude
+    lon_max = 304.75,                                        # domain max longitude
 
-    lat_min = 33.,                                         # domain min latitude
+    lat_min = 33.25,                                         # domain min latitude
 
-    lat_max = 43.,                                         # domain max latitude
+    lat_max = 42.75,                                         # domain max latitude
 
     dx = 10.,                                              # grid spacinng in km
 
