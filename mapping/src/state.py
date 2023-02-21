@@ -569,14 +569,16 @@ class State:
         if not params:
             for ax,name_var in zip(axs,self.var):
                 ax.set_title(name_var)
+                cmap_range = np.nanmax(np.absolute(self.var[name_var]))
                 im = ax.pcolormesh(self.var[name_var],cmap=cmap,\
-                                shading='auto')
+                                shading='auto', vmin = -cmap_range, vmax = cmap_range)
                 plt.colorbar(im,ax=ax)
         else:
             for ax,name_var in zip(axs,self.params):
                 ax.set_title(name_var)
+                cmap_range = np.nanmax(np.absolute(self.params[name_var]))
                 im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
-                                shading='auto')
+                                shading='auto', vmin = -cmap_range, vmax = cmap_range)
                 plt.colorbar(im,ax=ax)
         
         plt.show()
