@@ -434,13 +434,15 @@ NAME_INV = None
 # Optimal Interpolation
 INV_OI = dict(
 
+    name_var = {'SSH':'ssh'},
+
     Lt = 7, # days
 
     Lx = 1, # degreee
 
     Ly = 1, # degree
 
-    noise = 5e-2 # meters
+    sigma_R = 5e-2 # meters
 
 )
 
@@ -520,18 +522,42 @@ INV_4DVAR = dict(
  
 )
 
-# Multi-scale Optimal Interpolation 
-INV_MIOST = dict(
+# Multi-scale Optimal Interpolation (Ubelmann et al. 2021) 
+INV_MOI = dict(
 
+    dir = None, # Directory of .py scripts
+
+    name_var = False,
+
+    path_mdt = None, # path of Mean Dynamic Topography (MDT) netcdf file.  
+
+    name_var_mdt = {'lon':'','lat':'','mdt':''}, # name of coordinates and variable of the MDT file
+    
     window_size = timedelta(days=15),
 
     window_output = timedelta(days=15),
 
     window_overlap = True,
 
-    dir = None,
+    sigma_R = 1e-2, 
 
-    obs_subsampling = 1
+    set_geo3ss6d = True, # Estimate small scales balanced motion component
+
+    set_geo3ls = True, # Estimate large scales balanced motion component
+
+    lmin= 80, # minimal wavelength (in km)
+
+    lmax= 970., # maximal wavelength (in km)
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    file_aux = None,
+
+    filec_aux = None,
 
 )
 

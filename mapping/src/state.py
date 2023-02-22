@@ -44,10 +44,10 @@ class State:
             os.makedirs(self.EXP.path_save)
         self.flag_plot = config.EXP.flag_plot
 
-        #  Initialize state variables
+        #  Initialize state variables dictonary
         self.var = {}
 
-        # Initialize controle parameters
+        # Initialize controle parameters dictonary
         self.params = {}
 
         # Initialize grid

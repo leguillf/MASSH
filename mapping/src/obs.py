@@ -5,7 +5,7 @@ Created on Wed Jan  6 20:15:09 2021
 
 @author: leguillou
 """
-import os 
+import os, sys
 import xarray as xr
 import numpy as np
 
@@ -346,6 +346,8 @@ def _new_dict_obs(dict_obs,new_dir):
 
 
 def detrend_obs(dict_obs):
+
+    sys.exit('obs.detrend is depreciated')
     
     for t in dict_obs:
         # Read obs
@@ -380,9 +382,7 @@ def detrend_obs(dict_obs):
             
             
             
-    
-
-def get_obs(dict_obs,box,time_init,subsampling=1):
+def get_obs(dict_obs,box,time_init,name_var='SSH'):
 
         lon0 = box[0]
         lon1 = box[1]
@@ -392,10 +392,10 @@ def get_obs(dict_obs,box,time_init,subsampling=1):
         time0 = box[4]
         time1 = box[5]
 
-        lon= np.array([])
-        lat= np.array([])
-        time= np.array([])
-        ssh= np.array([])
+        lon = np.array([])
+        lat = np.array([])
+        time = np.array([])
+        var = np.array([])
         
         for dt in dict_obs:
             
@@ -403,40 +403,45 @@ def get_obs(dict_obs,box,time_init,subsampling=1):
                 
                     path_obs = dict_obs[dt]['obs_name']
                     sat =  dict_obs[dt]['satellite']
-                    
+
                     for _sat,_path_obs in zip(sat,path_obs):
                         
                         ds = xr.open_dataset(_path_obs).squeeze() 
-                        lon_obs = ds[_sat.name_obs_lon] % 360
-                        lat_obs = ds[_sat.name_obs_lat]
+                        
+                        if name_var not in ds.variables:
+                            print(f'Warning: {name_var} not in {_path_obs}')
+                            continue
+
+                        lon_obs = ds[_sat.name_lon] % 360
+                        lat_obs = ds[_sat.name_lat]
                         
                         ds = ds.where((lon0<=lon_obs) & (lon1>=lon_obs) & 
                   (lat0<=lat_obs) & (lat1>=lat_obs), drop=True)
-                        time_obs = ds[_sat.name_obs_time].values
+                        time_obs = ds[_sat.name_time].values
                         time_obs = (time_obs-np.datetime64(time_init))/np.timedelta64(1, 'D')
 
-                        if _sat.kind=='fullSSH':
-                            if len(ds[_sat.name_obs_lon].shape)==1:
-                                lon_obs = ds[_sat.name_obs_lon].values[::subsampling]
-                                lat_obs = ds[_sat.name_obs_lat].values[::subsampling]
+                        if _sat.super=='OBS_MODEL':
+                            if len(ds[_sat.name_lon].shape)==1:
+                                lon_obs = ds[_sat.name_lon].values
+                                lat_obs = ds[_sat.name_lat].values
                                 lon_obs,lat_obs = np.meshgrid(lon_obs,lat_obs)
                             else:
-                                lon_obs = ds[_sat.name_obs_lon].values[::subsampling,::subsampling]
-                                lat_obs = ds[_sat.name_obs_lat].values[::subsampling,::subsampling]
-                            ssh_obs = ds[_sat.name_obs_var[0]].values[::subsampling,::subsampling]
-                            time_obs = time_obs * np.ones_like(ssh_obs)
+                                lon_obs = ds[_sat.name_lon].values
+                                lat_obs = ds[_sat.name_lat].values
+                            var_obs = ds[name_var].values
+                            time_obs = time_obs * np.ones_like(var_obs)
                         
-                        elif _sat.kind in ['swot_simulator','CMEMS']:
-                            lon_obs = ds[_sat.name_obs_lon].values
-                            lat_obs = ds[_sat.name_obs_lat].values
-                            ssh_obs = ds[_sat.name_obs_var[0]].values
-                            if len(ssh_obs.shape)==2:
+                        elif _sat.super in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
+                            lon_obs = ds[_sat.name_lon].values
+                            lat_obs = ds[_sat.name_lat].values
+                            var_obs = ds[name_var].values
+                            if len(var_obs.shape)==2:
                                 # SWATH data
-                                if ssh_obs.shape[0]==time_obs.size:
+                                if var_obs.shape[0]==time_obs.size:
                                     dim = 1
                                 else:
                                     dim = 0
-                                time_obs = time_obs.repeat(ssh_obs.shape[dim],axis=0)
+                                time_obs = time_obs.repeat(var_obs.shape[dim],axis=0)
                         ds.close()
                         del ds
                         
@@ -444,24 +449,23 @@ def get_obs(dict_obs,box,time_init,subsampling=1):
                         time1d = time_obs.ravel()
                         lon1d = lon_obs.ravel()
                         lat1d = lat_obs.ravel()
-                        ssh1d = ssh_obs.ravel()
+                        var1d = var_obs.ravel()
 
                         # Remove NaN pixels
-                        indNoNan= ~np.isnan(ssh1d)
+                        indNoNan= ~np.isnan(var1d)
                         time1d = time1d[indNoNan]
                         lon1d = lon1d[indNoNan]
                         lat1d = lat1d[indNoNan]
-                        ssh1d = ssh1d[indNoNan]    
+                        var1d = var1d[indNoNan]    
                         
                         # Append to arrays
                         time = np.append(time,time1d)
                         lon = np.append(lon,lon1d)
                         lat = np.append(lat,lat1d)
-                        ssh = np.append(ssh,ssh1d)
+                        var = np.append(var,var1d)
         
         coords = [None]*3
         coords_att = { 'lon':0, 'lat':1, 'time':2, 'nobs':len(time) }
-        values=None
 
         if len(time)>0:
             indsort = np.argsort(time)
@@ -469,12 +473,10 @@ def get_obs(dict_obs,box,time_init,subsampling=1):
                 lon=lon[indsort]   
                 lat=lat[indsort]
                 time=time[indsort]
-                ssh=ssh[indsort]
+                var=var[indsort]
 
             coords[coords_att['lon']] = lon
             coords[coords_att['lat']] = lat
             coords[coords_att['time']] = time      
-            values =  ssh
-
-                    
-        return [values, coords, coords_att]
+        
+        return [var, coords, coords_att]
