@@ -84,28 +84,35 @@ def Obs(config, State, *args, **kwargs):
 
         print(f'\n{name_obs}:\n{OBS}')
         
-        # Read observation
+        # Read observation files
         if '.nc' in OBS.path and '*' not in OBS.path:
-            ds = xr.open_dataset(OBS.path)
+            _ds = xr.open_dataset(OBS.path)
         else:
+            if '*' in OBS.path:
+                path = OBS.path
+            else:
+                path = f'{OBS.path}*.nc'
             try:
-                if '*' in OBS.path:
-                    ds = xr.open_mfdataset(f'{OBS.path}')
-                else:
-                    ds = xr.open_mfdataset(f'{OBS.path}*.nc')
-            except:
-                print('Warning: unable to properly open multiple netcdf files')
-                if '*' in OBS.path:
-                    files = glob.glob(f'{OBS.path}')
-                else:
-                    files = glob.glob(f'{OBS.path}*.nc')
+                _ds = xr.open_mfdataset(path)
+            except ValueError:
+                print('ValueError: opening with comnine==nested')
+                files = glob.glob(path)
                 # Get time dimension to concatenate
                 if len(files)==0:
                     continue
-                ds0 = xr.open_dataset(files[0])
-                name_time_dim = ds0[OBS.name_time].dims[0]
-                ds = xr.open_mfdataset(f'{OBS.path}*.nc',
+                _ds0 = xr.open_dataset(files[0])
+                name_time_dim = _ds0[OBS.name_time].dims[0]
+                _ds0.close()
+                _ds = xr.open_mfdataset(path,
                                     combine='nested',concat_dim=name_time_dim,lock=False)
+            except:
+                print('Error: unable to open multiple netcdf files')
+                continue
+        
+        # Load dataset, copy it, and close it
+        _ds = _ds.load()
+        ds = _ds.copy()
+        _ds.close()
             
         # Run subfunction specific to the kind of satellite
         if OBS.super in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
@@ -255,7 +262,6 @@ def _obs_model(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path,
     if len(lon_obs.shape)==1:
         lon_obs,lat_obs = np.meshgrid(lon_obs,lat_obs)
 
-    
     # Time loop
     count = 0
     for dt_curr in dt_list:
@@ -310,7 +316,7 @@ def _obs_model(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path,
             
 
 
-def _new_dict_obs(dict_obs,new_dir):
+def _new_dict_obs(dict_obs, new_dir, date_min=None, date_max=None):
     """
     NAME
         _new_dict_obs
@@ -328,6 +334,10 @@ def _new_dict_obs(dict_obs,new_dir):
     
     new_dict_obs = {}
     for date in dict_obs:
+        if date_min is not None and date<date_min:
+            continue
+        if date_max is not None and date>date_max:
+            continue
         # Create new dict_obs by copying the obs files in *new_dir* directory 
         new_dict_obs[date] = {'obs_name':[],'satellite':[]}
         for obs,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):

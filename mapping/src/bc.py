@@ -13,11 +13,11 @@ import pyinterp.fill
 from scipy import spatial
 from scipy.spatial.distance import cdist
 import pandas as pd
-from . import  grid
+from . import grid
 
 import matplotlib.pylab as plt
 
-def Bc(config, *args, **kwargs):
+def Bc(config, State=None, verbose=1, *args, **kwargs):
     """
     NAME
         Bc
@@ -30,60 +30,97 @@ def Bc(config, *args, **kwargs):
         return 
     
     elif config.BC.super is None:
-        return Bc_multi(config)
+        return Bc_multi(config,State=State,verbose=verbose)
     
-    print(config.BC)
+    if verbose:
+        print(config.BC)
     
     if config.BC.super=='BC_EXT':
-        return Bc_ext(config)
+        return Bc_ext(config,State=State)
     else:
         sys.exit(config.OBSOP.super + ' not implemented yet')
 
 
 class Bc_ext:
 
-    def __init__(self,config):
+    def __init__(self,config, State=None):
 
+        if State is None:
+            from . import state
+            State = state.State(config, verbose=False)
+
+        # Get grid coordinates
+        self.lon = State.lon
+        self.lat = State.lat
+        self.mask = +State.mask
+
+        # Study domain borders
+        lon_min = np.nanmin(self.lon)
+        lon_max = np.nanmax(self.lon)
+        lat_min = np.nanmin(self.lat)
+        lat_max = np.nanmax(self.lat)
+
+        # Grid spacing
+        dlon = np.nanmean(self.lon[:,1:]-self.lon[:,:-1])
+        dlat = np.nanmean(self.lat[1:,:]-self.lat[:-1,:])
+
+        # Read netcdf
         ds = xr.open_mfdataset(config.BC.file)
-        print(ds)
-        self.lon = ds[config.BC.name_lon].values %360
-        self.lat = ds[config.BC.name_lat].values
-        if config.BC.name_time is not None:
-            self.time = ds[config.BC.name_time].values
-        else:
-            self.time = None
 
+        # Convert longitude to 0,360
+        ds = ds.assign_coords(
+            {
+            config.BC.name_lon:((config.BC.name_lon,
+                                 ds[config.BC.name_lon].data%360))
+            })
+        ds = ds.sortby(ds[config.BC.name_lon])
+        
+        # Select study domain
+        lon_bc = ds[config.BC.name_lon].values
+        lat_bc = ds[config.BC.name_lat].values
+        dlon += np.nanmean(lon_bc[1:]-lon_bc[:-1])
+        dlat += np.nanmean(lat_bc[1:]-lat_bc[:-1])
+        ds = ds.sel({
+            config.BC.name_lon:slice(lon_min-dlon,lon_max+2*dlon),
+            config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)})
+        
+        # Get BC coordinates
+        self.lon_bc = ds[config.BC.name_lon].values 
+        self.lat_bc = ds[config.BC.name_lat].values
+        if config.BC.name_time is not None:
+            self.time_bc = ds[config.BC.name_time].values
+        else:
+            self.time_bc = None
+
+        # Get BC variables
         self.var = {}
         for name in config.BC.name_var:
-            self.var[name] = ds[config.BC.name_var[name]].data.squeeze()
+            self.var[name] = ds[config.BC.name_var[name]].load()
 
         ds.close()        
-        
-        self.dist_sponge = config.BC.dist_sponge
-        
-
-    def interp(self,time,lon,lat):
+            
+    def interp(self,time):
 
         # Define source grid
-        x_source_axis = pyinterp.Axis(self.lon, is_circle=True)
-        y_source_axis = pyinterp.Axis(self.lat)
-        if self.time is not None and self.time.size>1:
-            z_source_axis = pyinterp.TemporalAxis(self.time)
+        x_source_axis = pyinterp.Axis(self.lon_bc, is_circle=True)
+        y_source_axis = pyinterp.Axis(self.lat_bc)
+        if self.time_bc is not None and self.time_bc.size>1:
+            z_source_axis = pyinterp.TemporalAxis(self.time_bc)
 
         # Define target grid
-        if self.time is not None and self.time.size>1:
+        if self.time_bc is not None and self.time_bc.size>1:
             time_target = z_source_axis.safe_cast(np.ascontiguousarray(time))
-            z_target = np.tile(time_target,(lon.shape[1],lat.shape[0],1))
+            z_target = np.tile(time_target,(self.lon.shape[1],self.lat.shape[0],1))
             nt = len(time_target)
         else:
             nt = 1
-        x_target = np.repeat(lon.transpose()[:,:,np.newaxis],nt,axis=2)
-        y_target = np.repeat(lat.transpose()[:,:,np.newaxis],nt,axis=2)
+        x_target = np.repeat(self.lon.transpose()[:,:,np.newaxis],nt,axis=2)
+        y_target = np.repeat(self.lat.transpose()[:,:,np.newaxis],nt,axis=2)
 
         # Interpolation
         var_interp = {}
         for name in self.var:
-            if self.time is not None and self.time.size>1:
+            if self.time_bc is not None and self.time_bc.size>1:
                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, self.var[name].T)
                 _var_interp = pyinterp.trivariate(grid_source,
                                             x_target.flatten(),
@@ -105,90 +142,26 @@ class Bc_ext:
         
         return var_interp
 
-    def compute_weight_map(self,lon,lat,mask=None,bc=True):
-
-        if self.dist_sponge is None:
-            print('No sponge distance set in the configuration')
-            return np.zeros_like(lon)
-        
-        if mask is None:
-            mask = np.zeros_like(lon,dtype=bool)
-
-        #####################
-        # Compute weights map
-        #####################
-        coords = np.column_stack((lon.ravel(), lat.ravel()))
-        # construct KD-tree
-        ground_pixel_tree = spatial.cKDTree(grid.geo2cart(coords))
-        subdomain = grid.geo2cart(coords)[:100]
-        eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
-        dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
-        # Add boundary pixels to mask
-        if bc:
-            mask[0,:] = True
-            mask[-1,:] = True
-            mask[:,0] = True
-            mask[:,-1] = True
-        
-        # get boundary coordinates
-        lon_bc = lon[mask]
-        lat_bc = lat[mask]
-        coords_bc = np.column_stack((lon_bc, lat_bc))
-        bc_tree = spatial.cKDTree(grid.geo2cart(coords_bc))
-        
-        # Compute distance between model pixels and boundary pixels
-        dist_mx = ground_pixel_tree.sparse_distance_matrix(bc_tree,2*self.dist_sponge)
-        
-        # Initialize weight map
-        bc_weight = np.zeros(lon.size)
-        #
-        keys = np.array(list(dist_mx.keys()))
-        ind_mod = keys[:, 0]
-        dist = np.array(list(dist_mx.values()))
-        dist = np.maximum(dist-0.5*dist_threshold, 0)
-        # Dataframe initialized without nan values in var
-        df = pd.DataFrame({'ind_mod': ind_mod,
-                        'dist': dist,
-                        'weight':np.ones_like(dist)})
-        # Remove external values in the boundary pixels
-        ind_dist = (df.dist == 0)
-        df = df[np.logical_or(ind_dist,
-                            np.isin(df.ind_mod,
-                                    df[ind_dist].ind_mod,
-                                    invert=True))]
-        # Compute tapering
-        df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*self.dist_sponge)**2)))
-        # Nudge values out of pixels
-        df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
-        # Compute weight average and save it
-        df['tapering'] = df['tapering']**10
-        wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
-        dfg = df.groupby('ind_mod')
-        weights = dfg['weight'].apply(wa)
-        bc_weight[weights.index] = np.array(weights)
-        bc_weight = bc_weight.reshape(lon.shape)
-        
-        return bc_weight
-
 class Bc_multi:
 
-    def __init__(self,config):
+    def __init__(self,config,State=None,verbose=1):
 
         self.Bc = []
         _config = config.copy()
 
-        for _BC in config.BC:
-            _config.BC = config.BC[_BC]
-            self.Bc.append(Bc(_config))
+        for name_bc in config.BC:
+            _config.BC = config.BC[name_bc]
+            _Bc = Bc(_config,State=State,verbose=verbose)
+            self.Bc.append(_Bc)
 
     
-    def interp(self,time,lon,lat):
+    def interp(self,time):
 
         var_interp = {}
 
-        for i,_Bc in enumerate(self.Bc):
+        for _Bc in self.Bc:
 
-            _var_interp = _Bc.interp(time,lon,lat)
+            _var_interp = _Bc.interp(time)
 
             for name in _var_interp:
                 var_interp[name] = _var_interp[name]

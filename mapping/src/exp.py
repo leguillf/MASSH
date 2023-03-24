@@ -9,6 +9,7 @@ Created on Thu Feb  4 17:26:07 2021
 
 
 import os, sys
+from copy import deepcopy
 
 
 class Config(dict):
@@ -27,7 +28,10 @@ class Config(dict):
     def copy(self):
         other = {}
         for key,val in self.items():
-            other[key] = val
+            if type(val)==dict:
+                other[key] = deepcopy(val)
+            else:
+                other[key] = val
         return Config(other)
 
 
@@ -38,8 +42,15 @@ def _merge_configs(config_exp,config_def,NAME):
 
     _config = {}
     _config['super'] = dict_exp['super']
-    for key,val in dict_def.items():
+    for key in dict_def:
         if key in dict_exp:
+            # Check if we have encapsulated super class 
+            if type(dict_exp[key])==dict and 'super' in dict_exp[key]:
+                # If yes, we merge with default config
+                _dict_def = getattr(config_def, dict_exp[key]['super'])
+                for _key in _dict_def:
+                    if _key not in dict_exp[key]:
+                        dict_exp[key][_key] = _dict_def[_key]
             _config[key] = dict_exp[key]
         else:
             _config[key] = dict_def[key]
@@ -47,7 +58,6 @@ def _merge_configs(config_exp,config_def,NAME):
     return Config(_config)
 
 def merge_configs(config_exp,config_def,name):
-    
 
     try:
         NAME = getattr(config_exp,name)

@@ -283,5 +283,52 @@ myINV = dict(
 #################################################################################################################################
 # Diagnostics
 #################################################################################################################################
-NAME_DIAG = None
+NAME_DIAG = 'myDIAG'
 
+myDIAG = dict(
+
+    super = 'DIAG_OSE',
+
+    dir_output = None,
+
+    time_min = datetime(2017,1,1,0),
+
+    time_max = datetime(2017,12,31,0),
+
+    name_ref = 'data/dt_gulfstream_c2_phy_l3_20161201-20180131_285-315_23-53.nc',
+
+    name_ref_time = 'time',
+
+    name_ref_lon = 'longitude',
+
+    name_ref_lat = 'latitude',
+
+    name_ref_var = 'sla_unfiltered',
+
+    delta_t_ref = 0.9434,
+
+    velocity_ref = 6.77,
+
+    add_mdt_to_ref = True, 
+
+    lenght_scale = 1000,
+
+    path_mdt = '../../aux/aux_mdt_cnes_cls18_global.nc',
+
+    name_var_mdt = {'lon':'longitude','lat':'latitude','mdt':'mdt'},
+
+    name_exp_var = 'ssh',
+
+    compare_to_baseline = True,
+
+    name_bas = 'data/OSE_ssh_mapping_DUACS.nc',
+
+    name_bas_time = 'time',
+
+    name_bas_lon = 'lon',
+
+    name_bas_lat = 'lat',
+
+    name_bas_var = 'ssh'
+
+)

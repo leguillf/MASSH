@@ -37,7 +37,7 @@ EXP = dict(
 
     saveoutput_time_step = timedelta(hours=6),  # time step at which the states are saved 
 
-    flag_plot = 0,
+    flag_plot = 1,
 
 )
     
@@ -78,10 +78,9 @@ myMOD = dict(
 
     dtmodel = 3600, # model timestep
 
-    Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
+    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
 
 )
-
 
 #################################################################################################################################
 # OBSERVATIONAL OPERATORS
@@ -136,7 +135,7 @@ myBASIS = dict(
 
     tmeso = 10, # Largest mesoscale time of decorrelation 
 
-    sloptdec = -1, # Slope such as tdec = lambda^slope where lamda is the wavelength
+    sloptdec = -.5, # Slope such as tdec = lambda^slope where lamda is the wavelength
 
     factdec = 1, # factor to be multiplied to the computed time of decorrelation 
 

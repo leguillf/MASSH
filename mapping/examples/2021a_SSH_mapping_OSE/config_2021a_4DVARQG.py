@@ -6,7 +6,7 @@ Created on Wed Jan  6 19:20:42 2021
 @author: leguillou
 """
 
-name_experiment = '2021a_4DVARQG'
+name_experiment = '2021a_4DVARQG_5km'
 
 #################################################################################################################################
 # Global libraries     
@@ -29,9 +29,9 @@ EXP = dict(
 
     tmp_DA_path = f"scratch/{name_experiment}", # temporary data assimilation directory path,
 
-    init_date = datetime(2017,10,1,0), # initial date (yyyy,mm,dd,hh) 
+    init_date = datetime(2017,7,1,0), # initial date (yyyy,mm,dd,hh) 
 
-    final_date = datetime(2017,12,15,0),  # final date (yyyy,mm,dd,hh) 
+    final_date = datetime(2017,12,31,0),  # final date (yyyy,mm,dd,hh) 
 
     assimilation_time_step = timedelta(hours=6),  
 
@@ -50,15 +50,15 @@ myGRID = dict(
 
     super = 'GRID_CAR',
 
-    lon_min = 295.25,                                        # domain min longitude
+    lon_min = 295examples/2021a_SSH_mapping_OSE/config_2021a_4DVARQG.py,                                        # domain min longitude
 
-    lon_max = 304.75,                                        # domain max longitude
+    lon_max = 305,                                        # domain max longitude
 
-    lat_min = 33.25,                                         # domain min latitude
+    lat_min = 33,                                         # domain min latitude
 
-    lat_max = 42.75,                                         # domain max latitude
+    lat_max = 43,                                         # domain max latitude
 
-    dx = 10.,                                              # grid spacinng in km
+    dx = 5.,                                              # grid spacinng in km
 
 )
 
@@ -186,7 +186,7 @@ myINV = dict(
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
-    maxiter = 200, # Maximal number of iterations for the minimization process
+    maxiter = 1000, # Maximal number of iterations for the minimization process
 
     opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
 
@@ -341,5 +341,42 @@ S3A = dict(
 #################################################################################################################################
 # Diagnostics
 #################################################################################################################################
-NAME_DIAG = None
+NAME_DIAG = 'myDIAG'
+
+myDIAG = dict(
+
+    super = 'DIAG_OSE',
+
+    dir_output = None,
+
+    time_min = datetime(2017,10,15,0),
+
+    time_max = datetime(2017,12,15,0),
+
+    name_ref = 'data/dt_gulfstream_c2_phy_l3_20161201-20180131_285-315_23-53.nc',
+
+    name_ref_time = 'time',
+
+    name_ref_lon = 'longitude',
+
+    name_ref_lat = 'latitude',
+
+    name_ref_var = 'sla_unfiltered',
+
+    delta_t_ref = 0.9434,
+
+    velocity_ref = 6.77,
+
+    add_mdt_to_ref = True, 
+
+    lenght_scale = 1000,
+
+    path_mdt = '../../aux/aux_mdt_cnes_cls18_global.nc',
+
+    name_var_mdt = {'lon':'longitude','lat':'latitude','mdt':'mdt'},
+
+    name_exp_var = 'ssh',
+
+
+)
 

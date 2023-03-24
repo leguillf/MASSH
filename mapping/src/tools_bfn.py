@@ -660,8 +660,8 @@ def bfn_construct_ground_pixel_tree(lon, lat):
     # construct KD-tree
     ground_pixel_tree = spatial.cKDTree(grid.geo2cart(coords))
     subdomain = grid.geo2cart(coords)[0:100]
-    eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
-    dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
+    `eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
+    dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])`
 
     return ground_pixel_tree, dist_threshold
 

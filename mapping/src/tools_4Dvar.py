@@ -73,7 +73,10 @@ class Variational:
         # Grad test
         if config.INV.compute_test:
             print('Gradient test:')
-            X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
+            if self.prec:
+                X = (np.random.random(self.basis.nbasis)-0.5)
+            else:
+                X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
             
             
@@ -101,6 +104,8 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
+
+            #State.plot(title=timestamp)
             
             # 1. Misfit
             if timestamp in self.H.date_obs:
@@ -125,7 +130,8 @@ class Variational:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        State.plot(title='end of cost function evaluation')
+        State.plot(title='State variables at the end of cost function evaluation')
+        State.plot(title='Parameters at the end of cost function evaluation',params=True)
         
         if self.save_minimization:
             self.J.append(J)
@@ -186,7 +192,7 @@ class Variational:
         
         g = adX + gb  # total gradient
         
-        adState.plot(title='end of grad function evaluation')
+        adState.plot(title='adjoint variables at the end of gradient function evaluation')
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))

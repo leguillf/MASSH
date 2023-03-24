@@ -13,7 +13,7 @@ import xarray as xr
 import scipy
 from scipy.integrate import quad
 
-def Basis(config, State, *args, **kwargs):
+def Basis(config, State, verbose=True, *args, **kwargs):
     """
     NAME
         Basis
@@ -26,11 +26,11 @@ def Basis(config, State, *args, **kwargs):
         return 
     
     elif config.BASIS.super is None:
-        return Basis_multi(config, State)
+        return Basis_multi(config, State, verbose=verbose)
 
     else:
-        
-        print(config.BASIS)
+        if verbose:
+            print(config.BASIS)
 
         if config.BASIS.super=='BASIS_BM':
             return Basis_bm(config, State)
@@ -1347,14 +1347,14 @@ class BASIS_ls:
 
 class Basis_multi:
 
-    def __init__(self,config,State):
+    def __init__(self,config,State,verbose=True):
 
         self.Basis = []
         _config = config.copy()
 
         for _BASIS in config.BASIS:
             _config.BASIS = config.BASIS[_BASIS]
-            self.Basis.append(Basis(_config,State))
+            self.Basis.append(Basis(_config,State,verbose=verbose))
 
     def set_basis(self,time,return_q=False):
 

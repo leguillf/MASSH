@@ -188,9 +188,6 @@ class Qgm:
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
         
             
-        
-
-        
     
     def h2uv(self,h,ubc=None,vbc=None):
         """ SSH to U,V

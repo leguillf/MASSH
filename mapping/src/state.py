@@ -27,9 +27,9 @@ class State:
     """
 
     
-    def __init__(self,config,first=True):
+    def __init__(self,config,first=True, verbose=True):
 
-        if first:
+        if first and verbose:
             print(config.GRID)
         
         self.config = config
@@ -125,30 +125,27 @@ class State:
 
         km2deg = 1./110
 
-        ENSLAT1 = np.arange(
+        ENSLAT = np.arange(
             config.lat_min,
             config.lat_max + config.dx*km2deg,
             config.dx*km2deg)
 
-        ENSLON1 = np.mod(
+        ENSLON = np.mod(
                 np.arange(
                     config.lon_min,
-                    config.lon_max+config.dx/np.cos(ENSLAT1[0]*np.pi/180.)*km2deg,
-                    config.dx/np.cos(ENSLAT1[0]*np.pi/180.)*km2deg),
+                    config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
+                    config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg),
                 360)
 
-        lat2d = np.zeros((ENSLAT1.size,ENSLON1.size))*np.nan
-        lon2d = np.zeros((ENSLAT1.size,ENSLON1.size))*np.nan
+        lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
+        lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
 
-        for I in range(len(ENSLAT1)):
-            ENSLON1 = np.mod(
-                np.arange(
-                    config.lon_min,
-                    config.lon_max+config.dx/np.cos(ENSLAT1[I]*np.pi/180.)*km2deg,
-                    config.dx/np.cos(ENSLAT1[I]*np.pi/180.)*km2deg),
-                360)
-            lat2d[I,:ENSLON1.size] = np.repeat(ENSLAT1[I],len(ENSLON1)) 
-            lon2d[I,:ENSLON1.size] = ENSLON1
+        lon_mean = ENSLON.mean()
+
+        for I in range(len(ENSLAT)):
+            for J in range(len(ENSLON)):
+                lat2d[I,J] = ENSLAT[I]
+                lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.)*km2deg
         
         self.lon = lon2d
         self.lat = lat2d
@@ -505,16 +502,26 @@ class State:
 
         return deepcopy(np.asarray(params_to_return))
 
-    def setvar(self,var,name_var=None):
+    def setvar(self,var,name_var=None,add=False):
+
         if name_var is None:
             for i,name in enumerate(self.var):
-                self.var[name] = deepcopy(var[i])
+                if add:
+                    self.var[name] += var[i]
+                else:
+                    self.var[name] = deepcopy(var[i])
         else:
             if type(name_var) in (list,np.ndarray):
                 for i,name in enumerate(name_var):
-                    self.var[name] = deepcopy(var[i])
+                    if add:
+                        self.var[name] += var[i]
+                    else:
+                        self.var[name] = deepcopy(var[i])
             else:
-                self.var[name_var] = deepcopy(var)
+                if add:
+                    self.var[name_var] += var
+                else:
+                    self.var[name_var] = deepcopy(var)
     
     def scalar(self,coeff,copy=False):
         if copy:
@@ -569,16 +576,22 @@ class State:
         if not params:
             for ax,name_var in zip(axs,self.var):
                 ax.set_title(name_var)
-                cmap_range = np.nanmax(np.absolute(self.var[name_var]))
-                im = ax.pcolormesh(self.var[name_var],cmap=cmap,\
-                                shading='auto', vmin = -cmap_range, vmax = cmap_range)
+                if np.sign(np.nanmin(self.var[name_var]))!=np.sign(np.nanmax(self.var[name_var])):
+                    cmap_range = np.nanmax(np.absolute(self.var[name_var]))
+                    im = ax.pcolormesh(self.var[name_var],cmap=cmap,\
+                                    shading='auto', vmin = -cmap_range, vmax = cmap_range)
+                else:
+                    im = ax.pcolormesh(self.var[name_var], shading='auto')
                 plt.colorbar(im,ax=ax)
         else:
             for ax,name_var in zip(axs,self.params):
                 ax.set_title(name_var)
-                cmap_range = np.nanmax(np.absolute(self.params[name_var]))
-                im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
-                                shading='auto', vmin = -cmap_range, vmax = cmap_range)
+                if np.sign(np.nanmin(self.params[name_var]))!=np.sign(np.nanmax(self.params[name_var])):
+                    cmap_range = np.nanmax(np.absolute(self.params[name_var]))
+                    im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
+                                    shading='auto', vmin = -cmap_range, vmax = cmap_range)
+                else:
+                    im = ax.pcolormesh(self.params[name_var],shading='auto')
                 plt.colorbar(im,ax=ax)
         
         plt.show()
