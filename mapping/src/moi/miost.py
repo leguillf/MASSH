@@ -82,7 +82,7 @@ def run_miost(config, comm=None, rank=0, size=1):
     if use_mpi: obsmask = comm.allreduce(obsmask, op=MPI.SUM)
     
     obs = list(numpy.asarray(obs)[obsmask == True])
-    obs_data = list(numpy.asarray(obs_data)[obsmask == True])
+    #obs_data = list(numpy.asarray(obs_data)[obsmask == True])
     if rank ==0:  
         logging.info('')
         logging.info('Loading observations Done')

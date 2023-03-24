@@ -11,8 +11,11 @@ import numpy as np
 from src import grid as grid
 import matplotlib.pylab as plt
 from scipy.interpolate import griddata
+from scipy import spatial
+from scipy.spatial.distance import cdist
+import pandas as pd
 
-def Obsop(config, State, dict_obs, Model, *args, **kwargs):
+def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
     """
     NAME
         basis
@@ -24,7 +27,8 @@ def Obsop(config, State, dict_obs, Model, *args, **kwargs):
     if config.OBSOP is None:
         return 
     
-    print(config.OBSOP)
+    if verbose:
+        print(config.OBSOP)
     
     if config.OBSOP.super=='OBSOP_INTERP':
         return Obsop_interp(config,State,dict_obs,Model)
@@ -87,6 +91,7 @@ class Obsop_interp:
         self.Npix = config.OBSOP.Npix
         self.coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
         self.coords_car = grid.geo2cart(self.coords_geo)
+        self.dmax = self.Npix*np.mean(np.sqrt(State.DX**2 + State.DY**2))*1e-3*np.sqrt(2)/2 # maximal distance for space interpolation
         
         # Mask boundary pixels
         self.ind_borders = []
@@ -116,7 +121,7 @@ class Obsop_interp:
         
 
             
-    def process_obs(self, var_bc):
+    def process_obs(self, var_bc=None):
 
         for i,t in enumerate(self.date_obs):
 
@@ -193,11 +198,10 @@ class Obsop_interp:
                         coords_car_obs = grid.geo2cart(coords_geo_obs)
                         for i in range(lon_obs.size):
                             _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
-                            if _dist<self.dist_coast:
+                            if (self.flag_mask_coast and _dist<self.dist_coast):
                                 maskobs[i] = True
                 
                     if var_bc is not None and name in var_bc:
-
                         mask = np.any(np.isnan(self.coords_geo),axis=1)
                         var_bc_interp = griddata(self.coords_geo[~mask], var_bc[name][i].flatten()[~mask], coords_obs, method='cubic')
                         var_obs[name] -= var_bc_interp
@@ -212,7 +216,7 @@ class Obsop_interp:
                                         "maskobs": (("Nobs"), maskobs)},                
                                     )
                     dsout.to_netcdf(file_H, mode=mode, group=name,
-                        encoding={'indexes': {'dtype': 'int16'}})
+                        encoding={'indexes': {'dtype': int}})
                     dsout.close()
                     mode = 'a'
                     
@@ -222,35 +226,26 @@ class Obsop_interp:
                     os.system(f"cp {file_H} {new_file_H}")
 
     
+
     def interpolator(self,lon_obs,lat_obs):
         
         coords_geo_obs = np.column_stack((lon_obs, lat_obs))
         coords_car_obs = grid.geo2cart(coords_geo_obs)
 
-        indexes = []
-        weights = []
+        indexes = np.zeros((lon_obs.size,self.Npix),dtype=int)
+        weights = np.zeros((lon_obs.size,self.Npix))
         for iobs in range(lon_obs.size):
-            _dist = np.sqrt(np.sum(np.square(coords_car_obs[iobs]-self.coords_car),axis=1))
+            _dist = cdist(coords_car_obs[iobs][np.newaxis,:], self.coords_car, metric="euclidean")[0]
             # Npix closest
             ind_closest = np.argsort(_dist)
             # Get Npix closest pixels (ignoring boundary pixels)
-            n = 0
-            i = 0
-            ind = []
-            w = []
-            while n<self.Npix:
-                if ind_closest[i] in self.ind_borders:
+            for ipix in range(self.Npix):
+                if (not ind_closest[ipix] in self.ind_borders) and (_dist[ind_closest[ipix]]<=self.dmax):
                     #Ignoring boundary pixels 
-                    w.append(0.)
-                else:
-                    w.append(1/_dist[ind_closest[i]])
-                ind.append(ind_closest[i])
-                n += 1
-                i +=1 
-            indexes.append(ind)
-            weights.append(w)   
-            
-        return np.asarray(indexes),np.asarray(weights)
+                    weights[iobs,ipix] = np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*self.dmax)**2)))
+                    indexes[iobs,ipix] = ind_closest[ipix]
+
+        return indexes,weights
      
     def H(self,X,indexes,weights,maskobs):
         

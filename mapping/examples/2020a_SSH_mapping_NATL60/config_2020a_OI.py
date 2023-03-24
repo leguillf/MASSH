@@ -6,13 +6,13 @@ Created on Wed Jan  6 19:20:42 2021
 @author: leguillou
 """
 
-name_experiment = '2020a_4DVARId'
+name_experiment = '2020a_OI' # name of the experiment
 
 #################################################################################################################################
 # Global libraries     
 #################################################################################################################################
 
-from datetime import datetime,timedelta
+from datetime import datetime, timedelta
  
 #################################################################################################################################
 # EXPERIMENTAL PARAMETERS
@@ -35,9 +35,11 @@ EXP = dict(
 
     assimilation_time_step = timedelta(hours=3),  
 
-    saveoutput_time_step = timedelta(hours=6),  # time step at which the states are saved 
+    saveoutput_time_step = timedelta(days=1),  # time step at which the states are saved 
 
-    flag_plot = 1,
+    flag_plot = 0,
+
+    write_obs = True
 
 )
     
@@ -58,126 +60,12 @@ myGRID = dict(
 
     lat_max = 43.,                                         # domain max latitude
 
-    dlon = 1/10.,                                            # zonal grid spatial step (in degree)
+    dx = 1/4.,                                            # zonal grid spatial step (in degree)
 
-    dlat = 1/10.,                                            # meridional grid spatial step (in degree)
-
-)
-
-#################################################################################################################################
-# Model parameters
-#################################################################################################################################
-NAME_MOD = 'myMOD'
-
-
-myMOD = dict(
-
-    super = 'MOD_DIFF',
-
-    name_var = {'SSH':"ssh"},
-
-    dtmodel = 3600, # model timestep
-
-    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
+    dy = 1/4.,                                            # meridional grid spatial step (in degree)
 
 )
 
-#################################################################################################################################
-# OBSERVATIONAL OPERATORS
-#################################################################################################################################
-NAME_OBSOP = 'myOBSOP'
-
-myOBSOP = dict(
-
-    super = 'OBSOP_INTERP',
-
-    path_save = None, # Directory where to save observational operator
-
-    compute_op = False, # Force computing H 
-
-    Npix = 4, # Number of pixels to perform projection y=Hx
-
-    mask_coast = False,
-
-    mask_borders = False,
-
-)
-
-#################################################################################################################################
-# Reduced basis parameters
-#################################################################################################################################
-
-NAME_BASIS = 'myBASIS'
-
-myBASIS = dict(
-
-    super = 'BASIS_BM',
-
-    flux = True,
-
-    wavelet_init = False, # Estimate the initial state 
-
-    name_mod_var = 'ssh',
-
-    facns = 1., #factor for wavelet spacing= space
-
-    facnlt = 2., #factor for wavelet spacing= time
-
-    npsp = 3.5, # Defines the wavelet shape
-
-    facpsp = 1.5, # factor to fix df between wavelets
-
-    lmin = 80, # minimal wavelength (in km)
-
-    lmax = 970., # maximal wavelength (in km)
-
-    lmeso = 300, # Largest mesoscale wavelenght 
-
-    tmeso = 10, # Largest mesoscale time of decorrelation 
-
-    sloptdec = -.5, # Slope such as tdec = lambda^slope where lamda is the wavelength
-
-    factdec = 1, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 0., # minimum time of decorrelation 
-
-    tdecmax = 15., # maximum time of decorrelation 
-
-    facQ = 1, # factor to be multiplied to the estimated Q
-
-    Qmax = .03 , # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
-
-    slopQ = -2 # Slope such as Q = lambda^slope where lamda is the wavelength
-
-)
-
-
-#################################################################################################################################
-# Analysis parameters
-#################################################################################################################################
-NAME_INV = 'myINV'
-
-myINV = dict(
-
-    super = 'INV_4DVAR',
-
-    compute_test = False, # TLM, ADJ & GRAD tests
-
-    gtol = 1e-5, # Gradient norm must be less than gtol before successful termination.
-
-    maxiter = 200, # Maximal number of iterations for the minimization process
-
-    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
-
-    save_minimization = False, # save cost function and its gradient at each iteration 
-
-    timestep_checkpoint = timedelta(hours=6), #  timesteps separating two consecutive analysis 
-
-    sigma_R = 1e-2, # Observational standard deviation
-
-    prec = True, # preconditoning
- 
-)
 
 #################################################################################################################################
 # Observation parameters
@@ -248,23 +136,28 @@ G2 = dict(
 
 )
 
-SWOT = dict(
 
-    super = 'OBS_SSH_SWATH',
+#################################################################################################################################
+# INVERSION
+#################################################################################################################################
+NAME_INV = 'myINV'
 
-    path = 'data/dc_obs/2020a_SSH_mapping_NATL60_karin_swot.nc',
+myINV = dict(
 
-    name_time = 'time',
+    super = 'INV_OI',
+
+    name_var = {'SSH':'ssh'},
     
-    name_lon = 'lon',
+    Lt = 7, # days
 
-    name_lat = 'lat',
-    
-    name_xac = 'x_ac',
+    Lx = 1, # degreee
 
-    name_var = {'SSH':'ssh_model'},
+    Ly = 1, # degree
+
+    sigma_R = 5e-2 # meters
 
 )
+
 
 #################################################################################################################################
 # Diagnostics
@@ -308,4 +201,3 @@ myDIAG = dict(
     name_bas_var = 'gssh'
 
 )
-
