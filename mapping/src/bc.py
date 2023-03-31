@@ -52,7 +52,8 @@ class Bc_ext:
 
         self.var = {}
         for name in config.BC.name_var:
-            self.var[name] = ds[config.BC.name_var[name]].data.squeeze()
+            # self.var[name] = ds[config.BC.name_var[name]].data.squeeze() #(older version)#
+            self.var[name] = ds[name].data.squeeze()
 
         ds.close()        
 
@@ -98,8 +99,9 @@ class Bc_ext:
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(time.size,axis=0) 
 
             _var_interp[np.isnan(_var_interp)] = 0
-            
-            var_interp[self.name_mod_var[name]] = _var_interp
+
+            #var_interp[self.name_mod_var[name]] = _var_interp #(older version)#
+            var_interp[name] = _var_interp
         
         return var_interp
 

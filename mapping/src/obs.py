@@ -91,11 +91,11 @@ def Obs(config, State, *args, **kwargs):
         else:
             try:
                 if '*' in OBS.path:
-                    ds = xr.open_mfdataset(f'{OBS.path}')
+                    ds = xr.open_mfdataset(f'{OBS.path}',combine='nested',concat_dim=OBS.name_concat_dim)
                 else:
-                    ds = xr.open_mfdataset(f'{OBS.path}*.nc')
+                    ds = xr.open_mfdataset(f'{OBS.path}*.nc',combine='nested',concat_dim=OBS.name_concat_dim)
             except:
-                print('Warning: unable to properly open multiple netcdf files')
+                print('Warning: unable to properly open multiple netcdf files. Please check the parameters and name_concat_dim.')
                 if '*' in OBS.path:
                     files = glob.glob(f'{OBS.path}')
                 else:
@@ -191,10 +191,9 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     # Time loop
     count = 0
     for dt_curr in dt_list:
-        
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
-       
+
         try:
             _ds = ds.sel({obs_attr.name_time:slice(dt1,dt2)})
         except:
@@ -210,7 +209,9 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         lat = _ds[obs_attr.name_lat].values
         
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
-                    
+        
+
+
         if is_obs:
             # Save the selected dataset in a new nc file
             varobs = {}

@@ -22,7 +22,7 @@ from importlib.machinery import SourceFileLoader
 from . import grid
 
 
-def Inv(config, State, Model, dict_obs=None, Obsop=None, Basis=None, Bc=None, *args, **kwargs):
+def Inv(config, State, Model, dict_obs=None, Obsop=None, Basis=None, Bc=None, test=False, *args, **kwargs):
     """
     NAME
         Inv
@@ -43,7 +43,8 @@ def Inv(config, State, Model, dict_obs=None, Obsop=None, Basis=None, Bc=None, *a
         return Inv_bfn(config,State,Model,dict_obs,Bc=Bc)
     
     elif config.INV.super=='INV_4DVAR':
-        return Inv_4Dvar(config,State,Model,dict_obs=dict_obs,Obsop=Obsop,Basis=Basis,Bc=Bc)
+        print(test)
+        return Inv_4Dvar(config,State,Model,dict_obs=dict_obs,Obsop=Obsop,Basis=Basis,Bc=Bc,test=test)
     
     elif config.INV.super=='INV_MIOST':
         return Inv_miost(config,State,dict_obs)
@@ -491,7 +492,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
 
 
 
-def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
+def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,test=False) :
     
     '''
     Run a 4Dvar analysis
@@ -528,7 +529,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in seconds) for which the basis components will be compute (at each timestep_checkpoint)
         Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
-        sys.exit('4Dvar only work with reduced basis!!')
+        sys.exit('4Dvar only works with reduced basis!!')
 
     # Backgroud state 
     Xb = np.zeros((Q.size,))
@@ -549,6 +550,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
     var = Variational(
         config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints)
     
+    if test : 
+        return var
+    
     # Initial State 
     if config.INV.path_init_4Dvar is None:
         Xopt = np.zeros((Xb.size,))
@@ -558,7 +562,6 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None) :
         ds = xr.open_dataset(config.INV.path_init_4Dvar)
         Xopt = ds.res.values
         ds.close()
-
     
     # Restart mode
     if config.INV.restart_4Dvar:
@@ -717,7 +720,7 @@ def Inv_incr4Dvar(config,State,Model,dict_obs=None) :
     # Cost and Grad functions
     var = Variational(
         config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
-    
+
     # Initial State of the outer loop
     if config.path_init_4Dvar is None:
         Xa = var.Xb*0

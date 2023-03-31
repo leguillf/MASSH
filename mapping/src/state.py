@@ -237,7 +237,7 @@ class State:
         dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
        
         ds = ds.sel(
-            {name_lon:slice(self.lon_min-dlon,self.lon_max),
+            {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
              name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
         
         lon = ds[name_lon].values

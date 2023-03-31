@@ -144,6 +144,8 @@ OBS_SSH_NADIR = dict(
     
     name_var = {'SSH':''},
 
+    name_concat_dim = None, # dimension to concatenate for multiple file opening
+
     sigma_noise = None,
 
     add_mdt = None,
@@ -174,6 +176,8 @@ OBS_SSH_SWATH = dict(
     name_xac = None,
     
     name_var = {'SSH':''},
+
+    name_concat_dim = None, # dimension to concatenate for multiple file opening
 
     sigma_noise = None,
 
@@ -545,6 +549,21 @@ BASIS_BM = dict(
     Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
     slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
+
+)
+
+# Constant basis 
+BASIS_CONSTANT = dict(
+
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    name_mod_var = None, # Name of the related model variable 
+
+    tdec = 20 # Decorrelation time of the constant wavelet 
 
 )
 
