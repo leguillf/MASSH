@@ -15,6 +15,8 @@ import matplotlib.pyplot as plt
 from scipy import interpolate
 import glob
 from datetime import datetime
+import pyinterp 
+import pyinterp.fill
 
 from . import grid
 
@@ -74,6 +76,11 @@ class State:
             self.lat_min = np.nanmin(self.lat)
             self.lat_max = np.nanmax(self.lat)
 
+            if np.sign(self.lon_min)==-1:
+                self.lon_unit = '-180_180'
+            else:
+                self.lon_unit = '0_360'
+
             # Mask
             self.ini_mask(config.GRID)
 
@@ -108,7 +115,6 @@ class State:
         lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) % 360
         lat = np.arange(config.lat_min, config.lat_max + config.dlat, config.dlat) 
         lon,lat = np.meshgrid(lon,lat)
-        self.lon = lon % 360
         self.lat = lat
         self.present_date = config.init_date
     
@@ -130,17 +136,13 @@ class State:
             config.lat_max + config.dx*km2deg,
             config.dx*km2deg)
 
-        ENSLON = np.mod(
-                np.arange(
+        ENSLON = np.arange(
                     config.lon_min,
                     config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
-                    config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg),
-                360)
+                    config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
 
         lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
         lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
-
-        lon_mean = ENSLON.mean()
 
         for I in range(len(ENSLAT)):
             for J in range(len(ENSLON)):
@@ -174,7 +176,7 @@ class State:
             lon = lon[::config.subsampling,::config.subsampling]
             lat = lat[::config.subsampling,::config.subsampling]
             
-        self.lon = lon % 360
+        self.lon = lon 
         self.lat = lat
         self.present_date = config.init_date
         dsin.close()
@@ -196,7 +198,7 @@ class State:
             if len(lon.shape)==1:
                 self.geo_grid = True
                 lon,lat = np.meshgrid(lon,lat)
-            self.lon = lon % 360
+            self.lon = lon 
             self.lat = lat
             self.present_date = datetime.utcfromtimestamp(dsin['time'].values.tolist()/1e9)
             if self.first:
@@ -226,38 +228,45 @@ class State:
         else:
             self.mask = (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
             return
-        
+
+        # Convert longitudes
+        if np.sign(ds[name_lon].data.min())==-1 and self.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds[name_lon])    
+
         dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
         dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
+        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
+        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
        
         ds = ds.sel(
             {name_lon:slice(self.lon_min-dlon,self.lon_max),
              name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
-        
+
         lon = ds[name_lon].values
         lat = ds[name_lat].values
-        var = ds[name_var].values
-        lon = lon % 360
-        
-        if len(lon.shape)==1:
-            lon_mask,lat_mask = np.meshgrid(lon,lat)
-        else:
-            lon_mask = +lon
-            lat_mask = +lat
+        var = ds[name_var]
                 
         if len(var.shape)==2:
-            mask = +var
+            mask = var
         elif len(var.shape)==3:
-            mask = +var[0,:,:]
+            mask = var[0,:,:]
+        
+        
         
         # Interpolate to state grid
-        if np.any(lon_mask!=self.lon) or np.any(lat_mask!=self.lat):
-            mask_interp = interpolate.griddata(
-                (lon_mask.ravel(),lat_mask.ravel()), mask.ravel(),
-                (self.lon.ravel(),self.lat.ravel())).reshape((self.ny,self.nx))
-        else:
-            mask_interp = mask.copy()
-        
+        x_source_axis = pyinterp.Axis(lon, is_circle=False)
+        y_source_axis = pyinterp.Axis(lat)
+        x_target = self.lon.T
+        y_target = self.lat.T
+        grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, mask.T)
+        mask_interp = pyinterp.bivariate(grid_source,
+                                        x_target.flatten(),
+                                        y_target.flatten(),
+                                        bounds_error=False).reshape(x_target.shape).T
+                                        
         # Convert to bool if float type     
         if mask_interp.dtype!=bool : 
             self.mask = np.empty((self.ny,self.nx),dtype='bool')
@@ -413,8 +422,10 @@ class State:
         other = self.copy(free=True)
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape)
+            other.var[name][self.mask] = np.nan
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape)
+            other.params[name][self.mask] = np.nan
         return other
     
     

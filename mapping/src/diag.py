@@ -677,6 +677,10 @@ class Diag_ose():
             self.dir_output = config.DIAG.dir_output
         if not os.path.exists(self.dir_output):
             os.makedirs(self.dir_output)
+        # Save config
+        cmd = f"cp {config.name_file} {self.dir_output}/config.py"
+        os.system(cmd)
+
         # time_min
         if config.DIAG.time_min is None:
             self.time_min = config.EXP.init_date

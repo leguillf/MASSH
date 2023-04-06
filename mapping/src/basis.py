@@ -11,7 +11,19 @@ import logging
 import pickle 
 import xarray as xr
 import scipy
+from scipy.sparse import csc_matrix
+import matplotlib.pylab as plt
 from scipy.integrate import quad
+from scipy.interpolate import griddata
+import jax.numpy as jnp 
+from jax.experimental import sparse
+from jax import jit
+import jax
+from functools import partial
+from jax.lax import scan
+jax.config.update("jax_enable_x64", True)
+
+import matplotlib.pylab as plt
 
 def Basis(config, State, verbose=True, *args, **kwargs):
     """
@@ -34,7 +46,10 @@ def Basis(config, State, verbose=True, *args, **kwargs):
 
         if config.BASIS.super=='BASIS_BM':
             return Basis_bm(config, State)
-
+        
+        elif config.BASIS.super=='BASIS_BM_JAX':
+            return Basis_bm_jax(config, State)
+        
         elif config.BASIS.super=='BASIS_BMaux':
             return Basis_bmaux(config)
         
@@ -405,6 +420,8 @@ class Basis_it:
             
         print(f'test G[{t}]:', ps1/ps2)
 
+
+
 class Basis_bm:
    
     def __init__(self,config,State):
@@ -443,17 +460,36 @@ class Basis_bm:
         self.lon1d = State.lon.flatten()
         self.lat1d = State.lat.flatten()
 
+        # Mask
+        if State.mask is not None:
+            self.mask1d = State.mask.ravel()
+        else:
+            self.mask1d = None
+
+        # Depth data
+        if config.BASIS.file_depth is not None:
+            ds = xr.open_dataset(config.BASIS.file_depth)
+            lon_depth = ds[config.BASIS.name_var_depth['lon']].values
+            lat_depth = ds[config.BASIS.name_var_depth['lat']].values
+            var_depth = ds[config.BASIS.name_var_depth['var']].values
+            finterpDEPTH = scipy.interpolate.RegularGridInterpolator((lon_depth,lat_depth),var_depth,bounds_error=False,fill_value=None)
+            self.depth = -finterpDEPTH((self.lon1d,self.lat1d))
+            self.depth[np.isnan(self.depth)] = 0.
+            self.depth[np.isnan(self.depth)] = 0.
+
+            self.depth1 = config.BASIS.depth1
+            self.depth2 = config.BASIS.depth2
+        else:
+            self.depth = None
+
         # Dictionnaries to save wave coefficients and indexes for repeated runs
         self.path_save_tmp = config.EXP.tmp_DA_path
-        self.indx = {}
-        self.facG = {}
 
         # Time window
         if self.flux:
             self.window = mywindow_flux
         else:
             self.window = mywindow
-    
 
     def set_basis(self,time,return_q=False):
         
@@ -493,12 +529,10 @@ class Basis_bm:
         
         DX = 1./ff*self.npsp * 0.5 # wavelet extension
         DXG = DX / self.facns # distance (km) between the wavelets grid in space
-        NP = np.empty(nf, dtype='int16') # Nomber of spatial wavelet locations for a given frequency
+        NP = np.empty(nf, dtype='int32') # Nomber of spatial wavelet locations for a given frequency
         nwave = 0
         self.nwavemeso = 0
-        lonmax = LON_MAX
-        if (LON_MAX<LON_MIN): lonmax = LON_MAX+360.
-        
+
     
         for iff in range(nf):
             
@@ -512,14 +546,29 @@ class Basis_bm:
                 LAT_MAX + DX[iff]*self.km2deg,
                 DXG[iff]*self.km2deg)
             for I in range(len(ENSLAT1)):
-                ENSLON1 = np.mod(
-                    np.arange(
+                _ENSLON = np.arange(
                         LON_MIN - (DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                        lonmax+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
-                    360)
-                ENSLAT[iff] = np.concatenate(([ENSLAT[iff],np.repeat(ENSLAT1[I],len(ENSLON1))]))
-                ENSLON[iff] = np.concatenate(([ENSLON[iff],ENSLON1]))
+                        LON_MAX+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg)
+                _ENSLAT = np.repeat(ENSLAT1[I],len(_ENSLON))
+                if self.mask1d is None:
+                    _ENSLON1 = _ENSLON
+                    _ENSLAT1 = _ENSLAT
+                else:
+                    # Avoid wave component for which the state grid points are full masked
+                    _ENSLON1 = []
+                    _ENSLAT1 = []
+                    for (lon,lat) in zip(_ENSLON,_ENSLAT):
+                        indphys = np.where(
+                            (np.abs((self.lon1d - lon) / self.km2deg * np.cos(lat * np.pi / 180.)) <= .5/ff[iff]) &
+                            (np.abs((self.lat1d - lat) / self.km2deg) <= .5/ff[iff])
+                            )[0]
+                        if not np.all(self.mask1d[indphys]):
+                            _ENSLON1.append(lon)
+                            _ENSLAT1.append(lat)                    
+                    ENSLAT[iff] = np.concatenate(([ENSLAT[iff],_ENSLAT1]))
+                    ENSLON[iff] = np.concatenate(([ENSLON[iff],_ENSLON1]))
+
             NP[iff] = len(ENSLON[iff])
             tdec[iff] = self.tmeso*self.lmeso**(self.sloptdec) * ff[iff]**self.sloptdec
             if tdec[iff]<self.tdecmin:
@@ -528,48 +577,39 @@ class Basis_bm:
                 tdec[iff] = self.tdecmax 
             tdec[iff] *= self.factdec
             enst[iff] = np.arange(-tdec[iff]/self.facnlt,deltat+tdec[iff]/self.facnlt , tdec[iff]/self.facnlt) 
-            # Compute time integral for each frequency
+            # Compute time integral for each frequency for normalization
             tt = np.linspace(-tdec[iff],tdec[iff])
             tmp = np.zeros_like(tt)
             for i in range(tt.size-1):
                 tmp[i+1] = tmp[i] + self.window(tt[i]/tdec[iff])*(tt[i+1]-tt[i])
             norm_fact[iff] = tmp.max()
 
-
             nwave += ntheta*2*len(enst[iff])*NP[iff]
                 
         # Fill the Q diagonal matrix (expected variance for each wavelet)     
          
-        Qi = np.array([])
-        Qt = np.array([]) # Initial state      
-
+        Q = np.array([]) 
         iwave = 0
-        self.iff_wavebounds = [None]*nf
+        self.iff_wavebounds = [None]*(nf+1)
         for iff in range(nf):
             self.iff_wavebounds[iff] = iwave
-            _nwavei = 2*ntheta*NP[iff] # just in space
-            _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
-            if 1/ff[iff]>self.lmeso:
-                if self.wavelet_init:
-                    Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavei,))))
-                    iwave += _nwavei
-                Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
+            if NP[iff]>0:
+                _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
+                if 1/ff[iff]>self.lmeso:
+                    # Constant
+                    Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
+                else:
+                    # Slope
+                    Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
                 iwave += _nwavet
-            else:
-                if self.wavelet_init:
-                    Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavei,)))) 
-                    iwave += _nwavei
-                Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
-                iwave += _nwavet
-                
-            print(f'lambda={1/ff[iff]:.1E}',
-                  f'nlocs={NP[iff]:.1E}',
-                  f'tdec={tdec[iff]:.1E}',
-                  f'Q={Qt[-1]:.1E}')
+                    
+                print(f'lambda={1/ff[iff]:.1E}',
+                    f'nlocs={NP[iff]:.1E}',
+                    f'tdec={tdec[iff]:.1E}',
+                    f'Q={Q[-1]:.1E}')
+        self.iff_wavebounds[-1] = iwave
         
-        Q = np.concatenate((Qi,Qt))
-
-
+    
         # Background
         if self.path_background is not None and os.path.exists(self.path_background):
             with xr.open_dataset(self.path_background) as ds:
@@ -577,8 +617,6 @@ class Basis_bm:
                 Xb = ds[self.var_background].values
         else:
             Xb = np.zeros_like(Q)
-
-
 
         self.DX=DX
         self.ENSLON=ENSLON
@@ -596,15 +634,8 @@ class Basis_bm:
 
 
         # Compute basis components
-
-        ## In space
-        self.indx, self.facGx = self._compute_component_space()
-
-        ## In time
-        self.facGt = {}
-        for t in time:
-            facGt = self._compute_component_time(t)
-            self.facGt[t] = facGt      
+        self.Gx, self.Nx = self._compute_component_space() # in space
+        self.Gt, self.Nt = self._compute_component_time(time) # in time
         
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
             
@@ -613,142 +644,265 @@ class Basis_bm:
     
     def _compute_component_space(self):
 
-        indx = [None,]*self.nf
-        facGx = [None,]*self.nf
+        Gx = [None,]*self.nf
+        Nx = [None,]*self.nf
 
         for iff in range(self.nf):
-            indx[iff] = [None,]*self.NP[iff]
-            facGx[iff] = [None,]*self.NP[iff]
+
+            data = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,))
+            indices = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,),dtype=int)
+            sizes = np.zeros((2*self.ntheta*self.NP[iff],),dtype=int)
+
+            ind_tmp = 0
+            iwave = 0
+
             for P in range(self.NP[iff]):
                 # Obs selection around point P
-                iobs = np.where(
-                    (np.abs((np.mod(self.lon1d - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
+                indphys = np.where(
+                    (np.abs((self.lon1d - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
                     (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
                     )[0]
-                xx = (np.mod(self.lon1d[iobs] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
-                yy = (self.lat1d[iobs] - self.ENSLAT[iff][P]) / self.km2deg
+                xx = (self.lon1d[indphys] - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
+                yy = (self.lat1d[indphys] - self.ENSLAT[iff][P]) / self.km2deg
+                # Spatial tapering shape of the wavelet 
+                if self.mask1d is not None:
+                    indmask = self.mask1d[indphys]
+                    indphys = indphys[~indmask]
+                    xx = xx[~indmask]
+                    yy = yy[~indmask]
+                facd = np.ones((indphys.size))
+                if self.depth is not None:
+                    facd = (self.depth[indphys]-self.depth1)/(self.depth2-self.depth1)
+                    facd[facd>1]=1.
+                    facd[facd<0]=0.
+                    indphys = indphys[facd>0]
+                    xx = xx[facd>0]
+                    yy = yy[facd>0]
+                    facd = facd[facd>0]
 
-                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff])
+                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
 
-                indx[iff][P] = iobs
-                
-                facGx[iff][P] = [None,]*self.ntheta
-                if iobs.shape[0] > 0:
-                    for itheta in range(self.ntheta):
-                        facGx[iff][P][itheta] = [[],[]]
-                        kx = self.k[iff] * np.cos(self.theta[itheta])
-                        ky = self.k[iff] * np.sin(self.theta[itheta])
-                        facGx[iff][P][itheta][0] = np.sqrt(2) * facs * np.cos(kx*(xx)+ky*(yy))
-                        facGx[iff][P][itheta][1] = np.sqrt(2) * facs * np.sin(kx*(xx)+ky*(yy))
+                for itheta in range(self.ntheta):
+                    # Wave vector components
+                    kx = self.k[iff] * np.cos(self.theta[itheta])
+                    ky = self.k[iff] * np.sin(self.theta[itheta])
+                    # Cosine component
+                    sizes[iwave] = indphys.size
+                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.cos(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
+                    # Sine component
+                    sizes[iwave] = indphys.size
+                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.sin(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
 
-        return indx, facGx
+            nwaves = iwave
+            Nx[iff] = nwaves
+
+            sizes = sizes[:nwaves]
+            indices = indices[:ind_tmp]
+            data = data[:ind_tmp]
+
+            indptr = np.zeros((nwaves+1),dtype=int)
+            indptr[1:] = np.cumsum(sizes)
+
+            Gx[iff] = csc_matrix((data, indices, indptr), shape=(self.nphys, nwaves))
+
+        return Gx, Nx
     
+    def _compute_component_time(self, time):
 
-    def _compute_component_time(self, t):
+        Gt = {} # Time operator that gathers the time factors for each frequency 
+        Nt = {} # Number of wave times tw such as abs(tw-t)<tdec
 
-        facGt = [None,]*self.nf
+        for t in time:
 
-        for iff in range(self.nf):
-            facGt[iff] = [None,]*(len(self.enst[iff])) 
-            # Time spread wavelets
-            for it in range(len(self.enst[iff])):
-                dt = t - self.enst[iff][it]
-                if abs(dt) < self.tdec[iff]:
-                    fact = self.window(dt / self.tdec[iff]) 
-                    fact /= self.norm_fact[iff]    
-                    facGt[iff][it] = fact      
+            Gt[t] = [None,]*self.nf
+            Nt[t] = [0,]*self.nf
 
-        return facGt          
+            for iff in range(self.nf):
+                Gt[t][iff] = np.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],))
+                ind_tmp = 0
+                for it in range(len(self.enst[iff])):
+                    dt = t - self.enst[iff][it]
+                    if abs(dt) < self.tdec[iff]:
+                        Nt[t][iff] += 1
+                        fact = self.window(dt / self.tdec[iff]) 
+                        fact /= self.norm_fact[iff]   
+                        Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta*self.NP[iff]] = fact   
+                    ind_tmp += 2*self.ntheta*self.NP[iff]
+        return Gt, Nt     
 
-
-    def _proj(self, phi, X, t, transpose):
-
-        iwave = 0
-        for iff in range(self.nf):
-            enstloc = self.enst[iff]
-            for P in range(self.NP[iff]):
-                iobs = self.indx[iff][P]
-                if iobs.shape[0] > 0:
-                    # Initial State
-                    if t==0 and self.wavelet_init:
-                        for itheta in range(self.ntheta):
-                            for iphase in range(2):
-                                if transpose:
-                                    phi[iwave] = np.sum(X[iobs] * self.facGx[iff][P][itheta][iphase])
-                                else:
-                                    phi[iobs] += X[iwave] * self.facGx[iff][P][itheta][iphase]
-                                iwave += 1
-                    elif self.wavelet_init:
-                        iwave += 2*self.ntheta
-
-                    # Time spread wavelets
-                    for it in range(len(enstloc)):
-                        if self.facGt[t][iff][it] is None:
-                            iwave += 2*self.ntheta
-                        else:
-                            for itheta in range(self.ntheta):
-                                for iphase in range(2):
-                                    if transpose:
-                                        phi[iwave] = np.sum(X[iobs] * self.facGx[iff][P][itheta][iphase] * self.facGt[t][iff][it])
-                                    else:
-                                        phi[iobs] += X[iwave] * self.facGx[iff][P][itheta][iphase] * self.facGt[t][iff][it]
-                                    iwave += 1
-    
-
-    
-
-    def operg(self, t, X, transpose=False,State=None):
+    def operg(self, t, X, State=None):
         
         """
             Project to physicial space
         """
 
         # Projection
-        if transpose:
-            X = X.flatten()
-            phi = np.zeros((self.nbasis,))
-        else:
-            phi = np.zeros((self.nphys,))
+        phi = np.zeros(self.shape_phys).ravel()
+        for iff in range(self.nf):
+            Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
+            GtXf = self.Gt[t][iff] * Xf
+            ind0 = np.nonzero(self.Gt[t][iff])[0]
+            if ind0.size>0:
+                GtXf = GtXf[ind0].reshape(self.Nt[t][iff],self.Nx[iff])
+                phi += self.Gx[iff].dot(GtXf.sum(axis=0))
+        phi = phi.reshape(self.shape_phys)
 
-        self._proj(phi, X, t, transpose)
-        
-        # Reshaping
-        if not transpose:
-            phi = phi.reshape(self.shape_phys)
-
+        # Update State
         if State is not None:
-            if t==0:
-                if self.wavelet_init:
-                    State.setvar(phi,self.name_mod_var)
-                    State.params[self.name_mod_var] = np.zeros(self.shape_phys)
-                else:
-                    State.params[self.name_mod_var] = phi
-            else:
-                State.params[self.name_mod_var] = phi
+            State.params[self.name_mod_var] = phi
         else:
             return phi
-        
 
     def operg_transpose(self, t, adState):
         
         """
             Project to reduced space
         """
-        
-        if t==0:
-            if self.wavelet_init:
-                adX = self.operg(t, adState.getvar(self.name_mod_var), transpose=True)
-            else:
-                adX = self.operg(t, adState.params[self.name_mod_var], transpose=True)
-        else:
-            if adState.params[self.name_mod_var] is None:
-                adState.params[self.name_mod_var] = np.zeros((self.nphys,))
-            adX = self.operg(t, adState.params[self.name_mod_var], transpose=True)
+
+        if adState.params[self.name_mod_var] is None:
+            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+
+        adX = np.zeros(self.nbasis)
+        adparams = adState.params[self.name_mod_var].ravel()
+        for iff in range(self.nf):
+            Gt = +self.Gt[t][iff]
+            ind0 = np.nonzero(Gt)[0]
+            if ind0.size>0:
+                Gt = Gt[ind0].reshape(self.Nt[t][iff],self.Nx[iff])
+                adGtXf = self.Gx[iff].T.dot(adparams)
+                adGtXf = np.repeat(adGtXf[np.newaxis,:],self.Nt[t][iff],axis=0)
+                adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][ind0] += (Gt*adGtXf).ravel()
         
         adState.params[self.name_mod_var] *= 0.
         
         return adX
         
+
+class Basis_bm_jax(Basis_bm): 
+
+
+    def __init__(self,config,State):
+        super().__init__(config,State)
+        self.operg_jit = jit(self.operg, static_argnums=[0])
+    
+    def _compute_component_space(self):
+
+        Gx = [None,]*self.nf
+        Nx = [None,]*self.nf
+
+        for iff in range(self.nf):
+
+            data = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,))
+            row = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,),dtype=int)
+            col = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,),dtype=int)
+
+            ind_tmp = 0
+            iwave = 0
+
+            for P in range(self.NP[iff]):
+                # Obs selection around point P
+                indphys = np.where(
+                    (np.abs((np.mod(self.lon1d - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
+                    (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
+                    )[0]
+                xx = (np.mod(self.lon1d[indphys] - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
+                yy = (self.lat1d[indphys] - self.ENSLAT[iff][P]) / self.km2deg
+
+                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff])
+
+                for itheta in range(self.ntheta):
+                    # Wave vector components
+                    kx = self.k[iff] * np.cos(self.theta[itheta])
+                    ky = self.k[iff] * np.sin(self.theta[itheta])
+                    # Cosine component
+                    col[ind_tmp:ind_tmp+indphys.size] = iwave
+                    row[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.cos(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
+                    # Sine component
+                    col[ind_tmp:ind_tmp+indphys.size] = iwave
+                    row[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.sin(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
+
+            nwaves = iwave
+            Nx[iff] = nwaves
+
+            indexes = np.column_stack((row,col))
+
+            Gx[iff] = sparse.BCOO((jnp.array(data), jnp.array(indexes)), 
+                                  shape=(self.nphys, nwaves))
+
+        return Gx,Nx
+    
+    def _compute_component_time(self, time):
+
+        Gt = {} # Time operator that gathers the time factors for each frequency 
+        Nt = {} # Number of wave times tw such as abs(tw-t)<tdec
+        indt = {}
+
+        for t in time:
+
+            Gt[t] = [None,]*self.nf
+            Nt[t] = [0,]*self.nf
+            indt[t] = [None,]*self.nf
+
+            for iff in range(self.nf):
+                Gt[t][iff] = jnp.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],))
+                ind_tmp = 0
+                for it in range(len(self.enst[iff])):
+                    dt = t - self.enst[iff][it]
+                    if abs(dt) < self.tdec[iff]:
+                        Nt[t][iff] += 1
+                        fact = self.window(dt / self.tdec[iff]) 
+                        fact /= self.norm_fact[iff]   
+                        Gt[t][iff] = Gt[t][iff].at[ind_tmp:ind_tmp+2*self.ntheta*self.NP[iff]].set(fact)   
+                    ind_tmp += 2*self.ntheta*self.NP[iff]
+
+                indt[t][iff] = jnp.nonzero(Gt[t][iff])[0]
+
+        self.indt = indt
+
+        return Gt, Nt     
+    
+
+    @sparse.sparsify
+    def _sparse_op(self,Gx,X):
+        return Gx @ X
+    
+    def operg(self, t, X, State_params):
+        
+        """
+            Project to physicial space
+        """
+
+        phi = jnp.zeros(self.shape_phys).ravel()
+        for iff in range(self.nf):
+            Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
+            GtXf = self.Gt[t][iff] * Xf
+            
+            if self.indt[t][iff].size>0:
+                GtXf = GtXf[self.indt[t][iff]].reshape(self.Nt[t][iff],self.Nx[iff])
+                GtXf_sum = GtXf.sum(axis=0)
+                phi0 = self._sparse_op(self.Gx[iff], GtXf_sum)
+                phi += phi0
+        phi = phi.reshape(self.shape_phys)
+
+        # Update State parameters 
+        State_params[self.name_mod_var] = phi
+
+        return State_params
+
+
+
 class Basis_bmaux:
    
     def __init__(self,config):
@@ -839,8 +993,6 @@ class Basis_bmaux:
         NP = np.empty(nf, dtype='int16') # Nomber of spatial wavelet locations for a given frequency
         nwave = 0
         self.nwavemeso = 0
-        lonmax = LON_MAX
-        if (LON_MAX<LON_MIN): lonmax = LON_MAX+360.
             
         for iff in range(nf):
                 
@@ -854,7 +1006,7 @@ class Basis_bmaux:
                 ENSLON1 = np.mod(
                     np.arange(
                         LON_MIN - (DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
-                        lonmax+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
+                        LON_MAX + DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
                         DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I])),
                     360)
                 ENSLAT[iff]=np.concatenate(([ENSLAT[iff],np.repeat(ENSLAT1[I],len(ENSLON1))]))

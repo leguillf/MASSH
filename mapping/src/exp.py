@@ -102,6 +102,7 @@ def Exp(path_config):
     # Merge with default config file
     from . import config_default as config_def
     config = Config({})
+    config.name_file = path_config
 
     # EXP
     config.EXP = {}
@@ -125,13 +126,13 @@ def Exp(path_config):
     # temporary directory
     if not os.path.exists(config.EXP.tmp_DA_path):
         os.makedirs(config.EXP.tmp_DA_path)
-    cmd = f"cp {path_config} {config.EXP.tmp_DA_path}/config.py"
+    cmd = f"cp {config.name_file} {config.EXP.tmp_DA_path}/config.py"
     os.system(cmd)
 
     # outptut directory
     if not os.path.exists(config.EXP.path_save):
         os.makedirs(config.EXP.path_save)
-    cmd = f"cp {path_config} {config.EXP.path_save}/config.py"
+    cmd = f"cp {config.name_file} {config.EXP.path_save}/config.py"
     os.system(cmd)
 
     return config

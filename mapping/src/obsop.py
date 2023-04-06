@@ -11,9 +11,14 @@ import numpy as np
 from src import grid as grid
 import matplotlib.pylab as plt
 from scipy.interpolate import griddata
-from scipy import spatial
+from scipy.sparse import coo_matrix
 from scipy.spatial.distance import cdist
 import pandas as pd
+from jax.experimental import sparse
+import jax.numpy as jnp 
+from jax import jit
+import jax
+jax.config.update("jax_enable_x64", True)
 
 def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
     """
@@ -32,6 +37,8 @@ def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
     
     if config.OBSOP.super=='OBSOP_INTERP':
         return Obsop_interp(config,State,dict_obs,Model)
+    elif config.OBSOP.super=='OBSOP_INTERP_JAX':
+        return Obsop_interp_jax(config,State,dict_obs,Model)
     
     else:
         sys.exit(config.OBSOP.super + ' not implemented yet')
@@ -64,7 +71,6 @@ class Obsop_interp:
                 self.read_H = False
             else:
                 self.read_H = True
-        self.obs_sparse = {}
         
         # Date obs
         self.date_obs = []
@@ -88,10 +94,19 @@ class Obsop_interp:
         self.name_mod_var = Model.name_var
         
         # For grid interpolation:
+        self.interp_method = config.OBSOP.interp_method
         self.Npix = config.OBSOP.Npix
-        self.coords_geo = np.column_stack((State.lon.ravel(), State.lat.ravel()))
+        lon = +State.lon
+        lat = +State.lat
+        self.coords_geo = np.column_stack((lon.ravel(), lat.ravel()))
         self.coords_car = grid.geo2cart(self.coords_geo)
         self.dmax = self.Npix*np.mean(np.sqrt(State.DX**2 + State.DY**2))*1e-3*np.sqrt(2)/2 # maximal distance for space interpolation
+
+        # Mask land
+        if State.mask is not None:
+            self.ind_mask = np.where(State.mask)[1]
+        else:
+            self.ind_mask = []
         
         # Mask boundary pixels
         self.ind_borders = []
@@ -105,42 +120,54 @@ class Obsop_interp:
                     if np.any(np.all(np.isclose(coords_geo_borders,self.coords_geo[i]), axis=1)):
                         self.ind_borders.append(i)
         
-        # Mask coast pixels
-        self.dist_coast = config.H_dist_coast
-        if config.OBSOP.mask_coast and self.dist_coast is not None and State.mask is not None and np.any(State.mask):
-            self.flag_mask_coast = True
-            lon_land = State.lon[State.mask].ravel()
-            lat_land = State.lat[State.mask].ravel()
-            coords_geo_land = np.column_stack((lon_land,lat_land))
-            self.coords_car_land = grid.geo2cart(coords_geo_land)
-            
-        else: self.flag_mask_coast = False
-        
         # Process obs
         self.dict_obs = dict_obs
-        
 
-            
+    
+    def _sparse_op(self,lon_obs,lat_obs):
+        
+        coords_geo_obs = np.column_stack((lon_obs, lat_obs))
+        coords_car_obs = grid.geo2cart(coords_geo_obs)
+
+        row = [] # indexes of observation grid
+        col = [] # indexes of state grid
+        data = [] # interpolation coefficients
+        Nobs = coords_geo_obs.shape[0]
+
+        for iobs in range(Nobs):
+            _dist = cdist(coords_car_obs[iobs][np.newaxis,:], self.coords_car, metric="euclidean")[0]
+            # Npix closest
+            ind_closest = np.argsort(_dist)
+            # Get Npix closest pixels (ignoring boundary pixels)
+            weights = []
+            for ipix in range(self.Npix):
+                if (not ind_closest[ipix] in self.ind_borders) and (not ind_closest[ipix] in self.ind_mask) and (_dist[ind_closest[ipix]]<=self.dmax):
+                    weights.append(np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*self.dmax)**2))))
+                    row.append(iobs)
+                    col.append(ind_closest[ipix])
+            sum_weights = np.sum(weights)
+            # Fill interpolation coefficients 
+            for w in weights:
+                data.append(w/sum_weights)
+
+        return coo_matrix((data, (row, col)), shape=(Nobs, self.coords_geo.shape[0]))
+
     def process_obs(self, var_bc=None):
 
+        self.varobs = {}
+        self.errobs = {}
+        self.Hop = {}
+
         for i,t in enumerate(self.date_obs):
+
+            self.varobs[t] = {}
+            self.errobs[t] = {}
+            self.Hop[t] = {}
 
             sat_info_list = self.dict_obs[t]['satellite']
             obs_file_list = self.dict_obs[t]['obs_name']
 
-            name_file_H = f"{self.name_H}_{t.strftime('%Y%m%d_%H%M.nc')}"
-
-            if self.read_H:
-                file_H = os.path.join(self.path_H,name_file_H)
-                if os.path.exists(file_H) and not self.compute_H:
-                    new_file_H = os.path.join(self.tmp_DA_path,name_file_H)
-                    if new_file_H != file_H:
-                        os.system(f"cp {file_H} {new_file_H}")
-                    self.obs_sparse[t] = True
-                    return t
-            else:
-                file_H = os.path.join(self.tmp_DA_path,name_file_H)
-            
+        
             # Concatenate obs from different sensors
             lon_obs = {}
             lat_obs = {}
@@ -152,11 +179,17 @@ class Obsop_interp:
                 with xr.open_dataset(obs_file) as ncin:
                     lon = ncin[sat_info['name_lon']].values.ravel() %360
                     lat = ncin[sat_info['name_lat']].values.ravel()
+
                     for name in sat_info['name_var']:
                         if sat_info.super=='OBS_MODEL':
-                            is_full[name] = True
-                        var = ncin[name].values.ravel()
-                        if sat_info['sigma_noise'] is not None:
+                            is_full[name] = True # We'll interpolate the observations to the state grid to accelerate the misfit computations
+                        # Observed variable
+                        var = ncin[name].values.ravel() 
+                        # Observed error
+                        name_err = name + '_err'
+                        if name_err in ncin:
+                            err = ncin[name_err].values.ravel() 
+                        elif sat_info['sigma_noise'] is not None:
                             err = sat_info['sigma_noise'] * np.ones_like(var)
                         else:
                             err = np.ones_like(var)                        
@@ -171,102 +204,32 @@ class Obsop_interp:
                             lon_obs[name] = +lon
                             lat_obs[name] = +lat
             
-            mode = 'w'
             for name in lon_obs:
                 coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
                 if name in is_full:
                     # Grid interpolation: performing spatial interpolation now
-                    var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
-                    err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
+                    var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
+                    err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
 
                     if var_bc is not None and name in var_bc:
                         var_obs_interp -= var_bc[name][i].flatten()
-                        
-                    # Write in netcdf
-                    dsout = xr.Dataset(
-                        { "var_obs": (("Nobs"), var_obs_interp),
-                        "err_obs": (("Nobs"), err_obs_interp)})
-                    dsout.to_netcdf(file_H, mode=mode, group=name)
-                    dsout.close()
-                    mode = 'a'
+
+                    # Fill dictionnaries
+                    self.varobs[t][name] = var_obs_interp
+                    self.errobs[t][name] = err_obs_interp
+
                 else:
-                    # Sparse interpolation: compute indexes, weights and masks 
-                    indexes, weights = self.interpolator(lon_obs[name],lat_obs[name])
-                    maskobs = np.isnan(lon_obs[name])*np.isnan(lat_obs[name])
-                    if self.flag_mask_coast:
-                        coords_geo_obs = np.column_stack((lon_obs[name],lat_obs[name]))
-                        coords_car_obs = grid.geo2cart(coords_geo_obs)
-                        for i in range(lon_obs.size):
-                            _dist = np.min(np.sqrt(np.sum(np.square(coords_car_obs[i]-self.coords_car_land),axis=1)))
-                            if (self.flag_mask_coast and _dist<self.dist_coast):
-                                maskobs[i] = True
-                
                     if var_bc is not None and name in var_bc:
                         mask = np.any(np.isnan(self.coords_geo),axis=1)
                         var_bc_interp = griddata(self.coords_geo[~mask], var_bc[name][i].flatten()[~mask], coords_obs, method='cubic')
                         var_obs[name] -= var_bc_interp
 
-                    # Write in netcdf
-                    dsout = xr.Dataset(
-                        {
-                            "var_obs": (("Nobs"), var_obs[name]),
-                            "err_obs": (("Nobs"), err_obs[name]),
-                            "indexes": (("Nobs","Npix"), indexes),
-                                        "weights": (("Nobs","Npix"), weights),
-                                        "maskobs": (("Nobs"), maskobs)},                
-                                    )
-                    dsout.to_netcdf(file_H, mode=mode, group=name,
-                        encoding={'indexes': {'dtype': int}})
-                    dsout.close()
-                    mode = 'a'
-                    
-            if self.read_H:
-                new_file_H = os.path.join(self.tmp_DA_path,name_file_H)
-                if file_H!=new_file_H:
-                    os.system(f"cp {file_H} {new_file_H}")
-
-    
-
-    def interpolator(self,lon_obs,lat_obs):
-        
-        coords_geo_obs = np.column_stack((lon_obs, lat_obs))
-        coords_car_obs = grid.geo2cart(coords_geo_obs)
-
-        indexes = np.zeros((lon_obs.size,self.Npix),dtype=int)
-        weights = np.zeros((lon_obs.size,self.Npix))
-        for iobs in range(lon_obs.size):
-            _dist = cdist(coords_car_obs[iobs][np.newaxis,:], self.coords_car, metric="euclidean")[0]
-            # Npix closest
-            ind_closest = np.argsort(_dist)
-            # Get Npix closest pixels (ignoring boundary pixels)
-            for ipix in range(self.Npix):
-                if (not ind_closest[ipix] in self.ind_borders) and (_dist[ind_closest[ipix]]<=self.dmax):
-                    #Ignoring boundary pixels 
-                    weights[iobs,ipix] = np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*self.dmax)**2)))
-                    indexes[iobs,ipix] = ind_closest[ipix]
-
-        return indexes,weights
-     
-    def H(self,X,indexes,weights,maskobs):
-        
-        # Compute inerpolation of X to obs space
-        HX = np.zeros(indexes.shape[0])
-        
-        for i,(mask,ind,w) in enumerate(zip(maskobs,indexes,weights)):
-            if not mask:
-                # Average
-                if ind.size>1:
-                    try:
-                        HX[i] = np.average(X[ind],weights=w)
-                    except:
-                        HX[i] = np.nan
-                else:
-                    HX[i] = X[ind[0]]
-            else:
-                HX[i] = np.nan
-        
-        return HX
-
+                    # Fill dictionnaries
+                    self.varobs[t][name] = var_obs[name]
+                    self.errobs[t][name] = err_obs[name]
+                    # Compute Sparse operator 
+                    self.Hop[t][name] = self._sparse_op(lon_obs[name],lat_obs[name])
+                
     def misfit(self,t,State):
 
         # Initialization
@@ -278,32 +241,19 @@ class Obsop_interp:
             # Get model state
             X = State.getvar(self.name_mod_var[name]).ravel() 
 
-            # Read obs
-            ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,f"{self.name_H}_{t.strftime('%Y%m%d_%H%M.nc')}"), group=name)
 
-            # Get obs values & errors
-            var_obs = ds['var_obs'].values
-            err_obs = ds['err_obs'].values
-
-            if 'indexes' in ds:
-                # Get obs indexes & weights of neighbour grid pixels
-                indexes = ds['indexes'].values
-                weights = ds['weights'].values
-                maskobs = ds['maskobs'].values
-
-                # Project model state to obs space
-                HX = self.H(X,indexes,weights,maskobs)
+            # Project model state to obs space
+            if name in self.Hop[t]:
+                HX = self.Hop[t][name] @ X
             else:
-                # Observations are already interpolated onto the model grid
                 HX = +X
 
             # Compute misfit & errors
-            _misfit = (HX-var_obs)
-            _inverr = 1/err_obs
+            _misfit = (HX-self.varobs[t][name])
+            _inverr = 1/self.errobs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
-
+        
             # Save to netcdf
             dsout = xr.Dataset(
                     {
@@ -338,35 +288,87 @@ class Obsop_interp:
             # Apply R operator
             misfit = R.inv(misfit)
 
-            # Read observational operator
-            ds = xr.open_dataset(os.path.join(
-                self.tmp_DA_path,self.name_H+t.strftime('_%Y%m%d_%H%M.nc')), 
-                group=name)
-
             # Read adjoint variable
             advar = adState.getvar(self.name_mod_var[name])
 
-            if 'indexes' in ds:
-                # Get obs indexes & weights of neighbour grid pixels
-                indexes = ds['indexes'].values
-                weights = ds['weights'].values
-                maskobs = ds['maskobs'].values
-
-                # Project misfit to model space
-                adH = np.zeros(advar.size)
-                Nobs,Npix = indexes.shape
-                for i in range(Nobs):
-                    if not maskobs[i]:
-                        # Average
-                        for j in range(Npix):
-                            if weights[i].sum()!=0:
-                                adH[indexes[i,j]] += weights[i,j]*misfit[i]/(weights[i].sum())
+            # Compute adjoint operation of y = Hx
+            if name in self.Hop[t]:
+                adX = self.Hop[t][name].T @ misfit
             else:
-                adH = +misfit
+                adX = +misfit
 
             # Update adjoint variable
-            adState.setvar(advar + adH.reshape(advar.shape), self.name_mod_var[name])
-            
+            adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])      
+
+
 
         
-      
+class Obsop_interp_jax(Obsop_interp):
+
+    def __init__(self,config,State,dict_obs,Model):
+        super().__init__(config,State,dict_obs,Model)
+
+        self.H_jit = jit(self.H, static_argnums=[1,2])
+        self.misfit_jit = jit(self.misfit, static_argnums=[1])
+
+    def _sparse_op(self,lon_obs,lat_obs):
+        
+        coords_geo_obs = np.column_stack((lon_obs, lat_obs))
+        coords_car_obs = grid.geo2cart(coords_geo_obs)
+
+        row = [] # indexes of observation grid
+        col = [] # indexes of state grid
+        data = [] # interpolation coefficients
+        Nobs = coords_geo_obs.shape[0]
+
+        for iobs in range(Nobs):
+            _dist = cdist(coords_car_obs[iobs][np.newaxis,:], self.coords_car, metric="euclidean")[0]
+            # Npix closest
+            ind_closest = np.argsort(_dist)
+            # Get Npix closest pixels (ignoring boundary pixels)
+            weights = []
+            for ipix in range(self.Npix):
+                if (not ind_closest[ipix] in self.ind_borders) and (_dist[ind_closest[ipix]]<=self.dmax):
+                    weights.append(np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*self.dmax)**2))))
+                    row.append(iobs)
+                    col.append(ind_closest[ipix])
+            sum_weights = np.sum(weights)
+            # Fill interpolation coefficients 
+            for w in weights:
+                data.append(w/sum_weights)
+
+        data = jnp.array(data)
+        row = jnp.array(row)
+        col = jnp.array(col)
+        indexes = jnp.column_stack((row,col))
+
+        sparse_matrix = sparse.BCOO((data, indexes), shape=(Nobs, self.coords_geo.shape[0]))
+
+        return sparse_matrix
+    
+    def misfit(self,State_var,t):
+
+        # Initialization
+        misfit = np.array([])
+
+        for name in self.name_var_obs[t]:
+
+            # Get model state
+            X = State_var[self.name_mod_var[name]].ravel() 
+
+            # Project model state to obs space
+            if name in self.Hop[t]:
+                HX = self.Hop[t][name] @ X
+            else:
+                HX = +X
+
+            # Compute misfit & errors
+            _misfit = (HX-self.varobs[t][name])
+            _inverr = 1/self.errobs[t][name]
+            _misfit = jnp.where(jnp.isnan(_misfit),0,_misfit) 
+            _inverr = jnp.where(jnp.isnan(_inverr),0,_inverr) 
+
+            # Concatenate
+            misfit = jnp.concatenate((misfit,_inverr*_misfit))
+
+        return misfit

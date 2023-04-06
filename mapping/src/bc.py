@@ -65,15 +65,18 @@ class Bc_ext:
         dlat = np.nanmean(self.lat[1:,:]-self.lat[:-1,:])
 
         # Read netcdf
-        ds = xr.open_mfdataset(config.BC.file)
+        _ds = xr.open_mfdataset(config.BC.file)
 
-        # Convert longitude to 0,360
-        ds = ds.assign_coords(
-            {
-            config.BC.name_lon:((config.BC.name_lon,
-                                 ds[config.BC.name_lon].data%360))
-            })
-        ds = ds.sortby(ds[config.BC.name_lon])
+        # Convert longitude 
+        if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':
+            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, _ds[config.BC.name_lon].data % 360))})
+        elif np.sign(_ds[config.BC.name_lon].data.min())==1 and State.lon_unit=='-180_180':
+            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180))})
+        _ds = _ds.sortby(_ds[config.BC.name_lon])    
+
+        # Copy dataset
+        ds = _ds.copy()
+        _ds.close()
         
         # Select study domain
         lon_bc = ds[config.BC.name_lon].values
@@ -127,6 +130,9 @@ class Bc_ext:
                                             y_target.flatten(),
                                             z_target.flatten(),
                                             bounds_error=False).reshape(x_target.shape).T
+                _var_interp[np.isnan(_var_interp)] = 0
+                for t in range(len(time)):
+                    _var_interp[t][self.mask] = np.nan
             else:
                 grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, self.var[name].T)
                 _var_interp = pyinterp.bivariate(grid_source,
@@ -135,8 +141,12 @@ class Bc_ext:
                                                 bounds_error=False).reshape(x_target[:,:,0].shape).T
 
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
+                _var_interp[np.isnan(_var_interp)] = 0
+                _var_interp[self.mask] = np.nan
 
-            _var_interp[np.isnan(_var_interp)] = 0
+            
+            
+            
             
             var_interp[name] = _var_interp
         

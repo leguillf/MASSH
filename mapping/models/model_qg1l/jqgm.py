@@ -5,6 +5,7 @@ from jax import jvp, vjp
 import matplotlib.pylab as plt
 import numpy
 import jax
+from jax.lax import scan
 from functools import partial
 
 jax.config.update("jax_enable_x64", True)
@@ -75,11 +76,10 @@ class Qgm:
 
         # Mask array
         mask = np.zeros((ny,nx))+2
-        
         mask[:2,:] = 1
         mask[:,:2] = 1
-        mask[-2:,:] = 1
-        mask[:,-2:] = 1
+        mask[-3:,:] = 1
+        mask[:,-3:] = 1
         
         if SSH is not None and mdt is not None:
             isNAN = np.isnan(SSH) | np.isnan(mdt)
@@ -99,9 +99,9 @@ class Qgm:
                       itest=i+p1
                       jtest=j+p2
                       if ((itest>=0) & (itest<=ny-1) & (jtest>=0) & (jtest<=nx-1)):
-                          if mask[itest,jtest]==2:
-                              mask[itest,jtest] = 1
-        
+                            if mask[itest,jtest]==2:
+                                mask[itest,jtest] = 1     
+
         self.mask = mask
         self.ind1 = np.where((mask == 1))
         self.ind0 = np.where((mask == 0))
@@ -133,6 +133,7 @@ class Qgm:
         self.rk4_jit = jit(self.rk4)
         self.bc_jit = jit(self.bc)
         self.one_step_jit = jit(self.one_step)
+        self.one_step_for_scan_jit = jit(self.one_step_for_scan)
         self.step_jit = jit(self.step, static_argnums=3)
         self.step_tgl_jit = jit(self.step_tgl, static_argnums=4)
         self.step_adj_jit = jit(self.step_adj, static_argnums=4)
@@ -181,8 +182,7 @@ class Qgm:
              (h[1:-1, 2:] + h[1:-1, :-2] - 2 * h[1:-1, 1:-1]) / self.dx ** 2) - \
             self.g * self.f[1:-1, 1:-1] / (c[1:-1, 1:-1] ** 2) * h[1:-1, 1:-1])
 
-        q = q.at[self.ind1].set(
-                -self.g*self.f[self.ind1]/(c[self.ind1]**2) * hbc[self.ind1])
+        q = jnp.where(jnp.isnan(q),0,q)
         q = q.at[self.ind0].set(0)
 
         return q
@@ -230,6 +230,8 @@ class Qgm:
                 (self.f[2:,1:-1]-self.f[:-2,1:-1])/(2*self.dy)\
                     *0.5*(v[1:,:]+v[:-1,:]))
         rhs_q = jnp.where(jnp.isnan(rhs_q), 0, rhs_q)
+        rhs_q = rhs_q.at[self.ind1].set(0)
+        rhs_q = rhs_q.at[self.ind0].set(0)
 
         #######################
         # Tracer advection
@@ -240,8 +242,9 @@ class Qgm:
             for i in range(c0.shape[0]):
                 rhs_c = jnp.zeros((self.ny,self.nx))
                 rhs_c = self._adv_jit(up, vp, um, vm, c0[i])
-                rhs_c = jnp.where(self.mask == 0, np.nan, rhs_c)
+                rhs_c = jnp.where(self.mask == 0, jnp.nan, rhs_c)
                 rhs_c = jnp.where(jnp.isnan(rhs_c), 0, rhs_c)
+                rhs_c = rhs_c.at[self.ind1].set(0)
                 incr = jnp.append(incr[:,:],rhs_c[jnp.newaxis,:,:],axis=0)
     
         return incr
@@ -259,12 +262,6 @@ class Qgm:
             res = res.at[2:-2,2:-2].set(self._adv2_jit(up, vp, um, vm, var0))
         elif self.upwind == 3:
             res = res.at[2:-2,2:-2].set(self._adv3_jit(up, vp, um, vm, var0))
-        
-        # Use first order scheme for boundary pixels
-        if self.upwind>1:
-            res_tmp = jnp.zeros_like(var0)
-            res_tmp = res_tmp.at[1:-1, 1:-1].set(self._adv1_jit(up, vp, um, vm, var0))
-        models/model_qg1l/jqgm.py     res = res.at[self.ind1].set(res_tmp[self.ind1])
         
         return res
 
@@ -466,6 +463,14 @@ class Qgm:
 
         return h1, var1
 
+    def one_step_for_scan(self,X0,X):
+
+        h1, var1, Xb = X0
+        h1, var1 = self.one_step_jit(h1, var1, Xb)
+        X = (h1, var1, Xb)
+
+        return X,X
+
     
     def step(self, X0, Xb, way=1, nstep=1):
 
@@ -481,7 +486,7 @@ class Qgm:
             q1 (2D array): propagated PV (if q0 is provided)
 
         """
-        
+
         # Get SSH and tracers
         if len(X0.shape)==3:
             h0 = +X0[0]
@@ -491,6 +496,9 @@ class Qgm:
             h0 = +X0
             c0 = None
             hb = +Xb
+
+        # SSH boundary condition
+        h0 = h0.at[self.ind1].set(hb[self.ind1])
 
         # h-->q
         q0 = self.h2pv_jit(h0, hb)
@@ -502,11 +510,11 @@ class Qgm:
             var1 = jnp.append(var1[jnp.newaxis,:,:],c0,axis=0)
 
         # Time propagation
-        for _ in range(nstep):
-            h1, var1 = self.one_step_jit(h1, var1, Xb, way=way)
+        X1, _ = scan(self.one_step_for_scan_jit, init=(h1, var1, Xb), xs=jnp.zeros(nstep))
+        h1, var1, Xb = X1
 
         # Mask
-        h1 = h1.at[self.ind0].set(np.nan)
+        h1 = h1.at[self.ind0].set(jnp.nan)
 
         # Concatenate
         if len(var1.shape)==3:
@@ -586,6 +594,7 @@ class Qgm:
         adh1 = jnp.where(jnp.isnan(adh1), 0, adh1)
 
         return adh1
+
 
 
 if __name__ == "__main__":

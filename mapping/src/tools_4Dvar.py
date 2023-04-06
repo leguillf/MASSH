@@ -6,12 +6,20 @@ Created on Tue Jul 28 14:49:01 2020
 @author: leguillou
 """
 
+import time
+
+
 import os
 import xarray as xr 
 import numpy as np 
 import pandas as pd 
 from datetime import timedelta
 from src import grid as grid
+import jax.numpy as jnp 
+import jax.lax as lax
+import jax
+from jax.lax import scan
+jax.config.update("jax_enable_x64", True)
 
 
 class Cov :
@@ -79,7 +87,14 @@ class Variational:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
             
-            
+    def _cost_for_scan(self,X0,X):
+
+        h1, var1, Xb = X0
+        h1, var1 = self.one_step_jit(h1, var1, Xb)
+        X = (h1, var1, Xb)
+
+        return X,X
+
         
     def cost(self,X0):
                 
@@ -104,8 +119,6 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
-
-            #State.plot(title=timestamp)
             
             # 1. Misfit
             if timestamp in self.H.date_obs:
@@ -115,7 +128,7 @@ class Variational:
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 self.basis.operg(t/3600/24, X, State=State)
-        
+            
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoints[i]) + '.nc'))
 
@@ -135,7 +148,7 @@ class Variational:
         
         if self.save_minimization:
             self.J.append(J)
-        
+
         return J
     
     def grad(self,X0): 
@@ -196,23 +209,133 @@ class Variational:
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))
-        
+
         return g 
+
+class Variational_jax:
+    
+    def __init__(self, 
+                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None):
+        
+        # Objects
+        self.M = M # model
+        self.H = H # observational operator
+        self.State = State # state variables
+    
+        # Covariance matrixes
+        self.B = B
+        self.R = R
+        
+        # Background state
+        self.Xb = jnp.array(Xb)
+        
+        # Temporary path where to save model trajectories
+        self.tmp_DA_path = config.EXP.tmp_DA_path
+
+        # checkpoint 
+        self.checkpoints = checkpoints
+        
+        # preconditioning
+        self.prec = config.INV.prec
+        
+        # Wavelet reduced basis
+        self.dtbasis = int(config.INV.timestep_checkpoint.total_seconds()//M.dt)
+        self.basis = Basis 
+        
+        # Save cost function and its gradient at each iteration 
+        self.save_minimization = config.INV.save_minimization
+        if self.save_minimization:
+            self.J = []
+            self.dJ = [] # For incremental 4Dvar only
+            self.G = []
+        
+        # For incremental 4Dvar only
+        self.X0 = self.Xb*0
+        
+        # Grad test
+        if config.INV.compute_test:
+            print('Gradient test:')
+            if self.prec:
+                X = jnp.array(np.random.random(self.basis.nbasis)-0.5)
+            else:
+                X = jnp.array(self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb)
+            grad_test(self.cost,self.grad,X)
+            
+            
+        
+    def cost(self,X0):
+                
+        # Initial state
+        State = self.State.copy()
+        # Background cost function evaluation 
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                Jb = jnp.dot(X0,self.B.inv(X0)) # cost of background term
+        else:
+            X  = X0 - self.Xb
+            Jb = 0
+    
+        # Observational cost function evaluation
+        Jo = 0.
+        State_var = State.var
+        State_params = State.params
+
+        #for i in range(len(self.checkpoints)-1):
+        i = 0
+
+        timestamp = self.M.timestamps[self.checkpoints[i]]
+        t = self.M.T[self.checkpoints[i]]
+        nstep = self.checkpoints[i+1] - self.checkpoints[i]
+        
+        # 1. Misfit
+        if timestamp in self.H.date_obs:
+            misfit = self.H.misfit_jit(State_var,timestamp) # d=Hx-xobs   
+            Jo += misfit.dot(self.R.inv(misfit))
+        
+        # 2. Reduced basis
+        if self.checkpoints[i]%self.dtbasis==0:
+            State_params = self.basis.operg_jit(t/3600/24, X, State_params)
+
+        # 3. Run forward model
+        State_var = self.M.step_jit(t,State_var, State_params,nstep=nstep)
+
+        timestamp = self.M.timestamps[self.checkpoints[-1]]
+        if timestamp in self.H.date_obs:
+            misfit = self.H.misfit_jit(State_var,timestamp) # d=Hx-xobsx
+            Jo += misfit.dot(self.R.inv(misfit))  
+        
+        # Cost function 
+        J = 1/2 * (Jo + Jb)
+        
+        if self.save_minimization:
+            self.J.append(J)
+        
+        return J
+    
+    def grad(self,X0): 
+
+        grad_fun = jax.grad(self.cost)
+
+        return grad_fun(X0)
     
     
     
     
 def grad_test(J, G, X):
-        h = np.random.random(X.size)
-        h /= np.linalg.norm(h)
-        JX = J(X)
-        GX = G(X)
-        Gh = h.dot(np.where(np.isnan(GX),0,GX))
-        for p in range(10):
-            lambd = 10**(-p)
-            test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))
-            
-            print(f'{lambd:.1E} , {test:.2E}')
+    h = np.random.random(X.size)
+    h /= np.linalg.norm(h)
+    JX = J(X)
+    GX = G(X)
+    Gh = h.dot(np.where(np.isnan(GX),0,GX))
+    for p in range(10):
+        lambd = 10**(-p)
+        test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))
+        
+        print(f'{lambd:.1E} , {test:.2E}')
 
 def plot_grad_test(L) :
     '''
