@@ -433,6 +433,8 @@ class Model_qg1l_np(M):
         else:
             for name in self.name_var:  
                 State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+                if State.mask is not None:
+                    State.var[self.name_var[name]][State.mask] = np.nan
 
         # Observed variable
         self.name_obs_var = self.name_var['SSH'] # SSH

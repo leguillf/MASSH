@@ -227,6 +227,10 @@ class State:
             self.mask = (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
             return
         
+        # Fix hole at Greenwich meridian 
+        ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        ds = ds.sortby(ds[name_lon])
+
         dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
         dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
        
@@ -252,6 +256,8 @@ class State:
         
         # Interpolate to state grid
         if np.any(lon_mask!=self.lon) or np.any(lat_mask!=self.lat):
+            lon_mask[lon_mask>180] = lon_mask[lon_mask>180] - 360  # Need to convert coordinates back in order to avoid white line error
+            self.lon[self.lon>180] = self.lon[self.lon>180] - 360
             mask_interp = interpolate.griddata(
                 (lon_mask.ravel(),lat_mask.ravel()), mask.ravel(),
                 (self.lon.ravel(),self.lat.ravel())).reshape((self.ny,self.nx))
