@@ -131,7 +131,8 @@ GRID_RESTART = dict(
 #################################################################################################################################
 NAME_OBS = None
 
-OBS_MODEL = dict(
+# L4 products (has to be on 2D latitude x longitude grids)
+OBS_L4 = dict(
 
     path = '', # path of observation netcdf file(s)
 
@@ -150,7 +151,6 @@ OBS_MODEL = dict(
     sigma_noise = None  # Value of (constant) measurement error (will be used if *name_err* is not provided)
 
 )
-
 
 # Nadir altimetry
 OBS_SSH_NADIR = dict(
@@ -237,27 +237,14 @@ MOD_DIFF = dict(
     dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
 )
 
-MOD_DIFF_2 = dict(
-
-    name_var = {'SSH':"ssh"},
-
-    var_to_save = None,
-
-    name_init_var = {},
-
-    dtmodel = 300, # model timestep
-
-    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
-
-    init_from_bc = False,
-
-    dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
-)
-
 # 1.5-layer Quasi-Geostrophic models
 MOD_QG1L_NP = dict(
 
     name_var = {'SSH':"ssh"},
+
+    init_from_bc = False,
+
+    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
 
     name_init_var = {},
 
@@ -299,29 +286,21 @@ MOD_QG1L_NP = dict(
 
 MOD_QG1L_JAX = dict(
 
-    name_var = {'SSH':"ssh"},
+    name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc.)
 
-    init_from_bc = False,
+    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
 
-    name_init_var = {},
+    dir_model = None, # directory of the model (if other than mapping/models/model_qg1l)
 
-    dir_model = None,
-
-    var_to_save = None,
-
-    multiscale = False,
-
-    advect_tracer = False,
-
-    dtmodel = 300, # model timestep
-
-    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk4)
+    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
     upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
 
-    upwind_adj = None, # idem but for the adjoint loop
+    advect_tracer = False, # Whether or not to advect tracers. If True, need to add tracer variables (e.g. SST) in *name_var*
 
-    Reynolds = False, # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
+    dtmodel = 300, # model timestep
+
+    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk2,rk4)
 
     c0 = 2.7, # If not None, fixed value for phase velocity 
 
@@ -329,17 +308,15 @@ MOD_QG1L_JAX = dict(
 
     name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
 
-    cmin = None,
+    cmin = None, # Minimum value of phase velocity to consider
 
-    cmax = None,
+    cmax = None, # Maximum value of phase velocity to consider
 
-    only_diffusion = False, # If True, use only diffusion in the QG propagation
+    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
 
-    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
+    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
 
-    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
-
-    g = 9.81 
+    Kdiffus = None,
 
 )
 
@@ -495,6 +472,8 @@ NAME_OBSOP = None
 
 OBSOP_INTERP = dict(
 
+    write_op = False, # Write operator data to *path_save*
+
     path_save = None, # Directory where to save observational operator
 
     compute_op = True, # Force computing H 
@@ -507,11 +486,13 @@ OBSOP_INTERP = dict(
 
     mask_borders = False,
 
-    interp_method = 'cubic'
+    interp_method = 'linear' # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
 
 )
 
 OBSOP_INTERP_JAX = dict(
+
+    write_op = False, # Write operator data to *path_save*
 
     path_save = None, # Directory where to save observational operator
 
@@ -1033,10 +1014,73 @@ DIAG_OSSE = dict(
 
     name_bas_lat = None,
 
-    name_bas_var = None
+    name_bas_var = None,
+
+    name_mask = None,
+
+    name_var_mask = {'lon':'','lat':'','var':''}
 
 )
 
+DIAG_OSSE_UV = dict(
+
+    dir_output = None,
+
+    time_min = None,
+
+    time_max = None,
+
+    lon_min = None,
+
+    lon_max = None,
+
+    lat_min = None,
+
+    lat_max = None,
+
+    name_ref = '',
+
+    name_ref_time = '',
+
+    name_ref_lon = '',
+
+    name_ref_lat = '',
+
+    name_ref_var_u = '',
+
+    name_ref_var_v = '',
+
+    options_ref =  {},
+
+    name_exp_var_ssh = '',
+
+    name_exp_var_u = None,
+
+    name_exp_var_v = None,
+
+    compare_to_baseline = False,
+
+    name_bas = None,
+
+    name_bas_time = None,
+
+    name_bas_lon = None,
+
+    name_bas_lat = None,
+
+    name_bas_var_ssh = None,
+
+    name_bas_var_u = None,
+
+    name_bas_var_v = None,
+
+    name_mask = None,
+
+    name_var_mask = {'lon':'','lat':'','var':''}
+
+)
+
+# Observatory System Experiment (e.g. validation with real data)
 DIAG_OSE = dict(
 
     dir_output = None,

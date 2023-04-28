@@ -729,10 +729,11 @@ class Basis_bm:
                 for it in range(len(self.enst[iff])):
                     dt = t - self.enst[iff][it]
                     if abs(dt) < self.tdec[iff]:
-                        Nt[t][iff] += 1
                         fact = self.window(dt / self.tdec[iff]) 
-                        fact /= self.norm_fact[iff]   
-                        Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta*self.NP[iff]] = fact   
+                        fact /= self.norm_fact[iff]
+                        if fact!=0:   
+                            Nt[t][iff] += 1
+                            Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta*self.NP[iff]] = fact   
                     ind_tmp += 2*self.ntheta*self.NP[iff]
         return Gt, Nt     
 
@@ -1539,7 +1540,7 @@ class Basis_multi:
 
         for i,B in enumerate(self.Basis):
             _X = X[self.slice_basis[i]]
-            phi = np.append(phi,B.operg(t, _X, State=State))
+            phi = np.append(phi, B.operg(t, _X, State=State))
         
         if State is None:
             return phi
@@ -1553,7 +1554,7 @@ class Basis_multi:
         
         adX = np.array([])
         for B in self.Basis:
-            adX = np.concatenate((adX,B.operg_transpose(t, adState=adState)))
+            adX = np.concatenate((adX, B.operg_transpose(t, adState=adState)))
 
         return adX
 

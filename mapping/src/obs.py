@@ -53,7 +53,7 @@ def Obs(config, State, *args, **kwargs):
     date2 = time_obs_max.strftime('%Y%m%d')
     box = f'{int(State.lon_min)}_{int(State.lon_max)}_{int(State.lat_min)}_{int(State.lat_max)}'
     
-    name_dict_obs = f'dict_obs_{"_".join(config.OBS.keys())}_{date1}_{date2}_{box}.txt'
+    name_dict_obs = f'dict_obs_{"_".join(config.OBS.keys())}_{date1}_{date2}_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}.txt'
     print('Observation information will be saved in',name_dict_obs)
     
     # Check if previous *dict_obs* has been computed
@@ -111,16 +111,19 @@ def Obs(config, State, *args, **kwargs):
         # Copy and close dataset
         ds = _ds.copy()
         _ds.close()
-            
+        
+        # Name of obs files
+        out_name = f'obs_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}'
+
         # Run subfunction specific to the kind of satellite
         if OBS.super in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
             _obs_alti(ds, assim_dates, dict_obs, name_obs, OBS, 
                                 config.EXP.assimilation_time_step, 
-                                config.EXP.tmp_DA_path,State.lon_unit,bbox)
-        elif OBS.super=='OBS_MODEL':
-            _obs_model(ds, assim_dates, dict_obs, name_obs, OBS, 
+                                config.EXP.tmp_DA_path,out_name,State.lon_unit,bbox)
+        elif OBS.super=='OBS_L4':
+            _obs_l4(ds, assim_dates, dict_obs, name_obs, OBS, 
                                 config.EXP.assimilation_time_step, 
-                                config.EXP.tmp_DA_path,State.lon_unit,bbox)
+                                config.EXP.tmp_DA_path,out_name,State.lon_unit,bbox)
     
     # Write *dict_obs* for next experiment
     if config.EXP.write_obs:
@@ -128,12 +131,11 @@ def Obs(config, State, *args, **kwargs):
             os.makedirs(path_save_obs)
         new_dict_obs = _new_dict_obs(dict_obs,path_save_obs)
         with open(os.path.join(path_save_obs,name_dict_obs), 'w') as f:
-            #pickle.dump(new_dict_obs,f)
             f.write(str(new_dict_obs))
             
     return dict_obs
 
-def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, lon_unit='0_360', bbox=None):
+def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, out_name, lon_unit='0_360', bbox=None):
     """
     NAME
         _obs_alti
@@ -216,8 +218,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
             # Write netcdf
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
-            path = os.path.join(out_path, 'obs_' + obs_name + '_' +\
-                '_'.join(obs_attr.name_var) + '_' + date)
+            path = f"{out_path}/{out_name}_{obs_name}_{'_'.join(obs_attr.name_var)}_{date}"
             if finterpmdt is not None:
                 if obs_attr.add_mdt:
                     path += '_addmdt'
@@ -233,20 +234,22 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
             
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
-                    dict_obs[dt_curr]['satellite'].append(obs_attr)
-                    dict_obs[dt_curr]['obs_name'].append(path)
+                dict_obs[dt_curr]['obs_name'].append(obs_name)
+                dict_obs[dt_curr]['obs_path'].append(path)
+                dict_obs[dt_curr]['attributes'].append(obs_attr)
             else:
                 dict_obs[dt_curr] = Config({})
-                dict_obs[dt_curr]['satellite'] = [obs_attr]
-                dict_obs[dt_curr]['obs_name'] = [path]
-            
+                dict_obs[dt_curr]['obs_name'] = [obs_name]
+                dict_obs[dt_curr]['obs_path'] = [path]
+                dict_obs[dt_curr]['attributes'] = [obs_attr]
+                
             count +=1
 
         
     print(f'--> {count} tracks selected')
     
     
-def _obs_model(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, lon_unit='0_360', bbox=None ):
+def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, out_name, lon_unit='0_360', bbox=None ):
     
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
     ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
@@ -308,8 +311,7 @@ def _obs_model(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path,
             dsout = xr.Dataset(varobs)
             
             date = dt_curr.strftime('%Y%m%d_%Hh%M')
-            path = os.path.join(out_path, 'obs_' + obs_name + '_' +\
-                '_'.join(obs_attr.name_var) + '_' + date + '.nc')
+            path = f"{out_path}/{out_name}_{obs_name}_{'_'.join(obs_attr.name_var)}_{date}.nc"
             dsout.to_netcdf(path, encoding={obs_attr.name_lon: {'_FillValue': None},
                                             obs_attr.name_lat: {'_FillValue': None}})
             dsout.close()
@@ -317,12 +319,14 @@ def _obs_model(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path,
             del dsout,_ds
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
-                    dict_obs[dt_curr]['satellite'].append(obs_attr)
-                    dict_obs[dt_curr]['obs_name'].append(path)
+                dict_obs[dt_curr]['obs_name'].append(obs_name)
+                dict_obs[dt_curr]['obs_path'].append(path)
+                dict_obs[dt_curr]['attributes'].append(obs_attr)
             else:
                 dict_obs[dt_curr] = Config({})
-                dict_obs[dt_curr]['satellite'] = [obs_attr]
-                dict_obs[dt_curr]['obs_name'] = [path]
+                dict_obs[dt_curr]['obs_name'] = [obs_name]
+                dict_obs[dt_curr]['obs_path'] = [path]
+                dict_obs[dt_curr]['attributes'] = [obs_attr]
             
             count +=1
     
@@ -353,16 +357,17 @@ def _new_dict_obs(dict_obs, new_dir, date_min=None, date_max=None):
         if date_max is not None and date>date_max:
             continue
         # Create new dict_obs by copying the obs files in *new_dir* directory 
-        new_dict_obs[date] = {'obs_name':[],'satellite':[]}
-        for obs,sat in zip(dict_obs[date]['obs_name'],dict_obs[date]['satellite']):
-            file_obs = os.path.basename(obs)
-            new_obs = os.path.join(new_dir,file_obs)
+        new_dict_obs[date] = {'obs_name':[],'obs_path':[],'attributes':[]}
+        for obs_name,obs_path,attributes in zip(dict_obs[date]['obs_name'],dict_obs[date]['obs_path'],dict_obs[date]['attributes']):
+            file_obs = os.path.basename(obs_path)
+            new_obs_path = os.path.join(new_dir,file_obs)
             # Copy to *tmp_DA_path* directory
-            if os.path.normpath(obs)!=os.path.normpath(new_obs): 
-                os.system(f'cp {obs} {new_obs}')
+            if os.path.normpath(obs_path)!=os.path.normpath(new_obs_path): 
+                os.system(f'cp {obs_path} {new_obs_path}')
             # Update new dictionary 
-            new_dict_obs[date]['obs_name'].append(new_obs)
-            new_dict_obs[date]['satellite'].append(Config(sat))
+            new_dict_obs[date]['obs_name'].append(obs_name)
+            new_dict_obs[date]['obs_path'].append(new_obs_path)
+            new_dict_obs[date]['attributes'].append(Config(attributes))
             
     return new_dict_obs
                     
@@ -425,10 +430,10 @@ def get_obs(dict_obs,box,time_init,name_var='SSH'):
             
             if (dt<=time1) & (dt>=time0):
                 
-                    path_obs = dict_obs[dt]['obs_name']
-                    sat =  dict_obs[dt]['satellite']
+                    path_obs = dict_obs[dt]['obs_path']
+                    attrs =  dict_obs[dt]['attributes']
 
-                    for _sat,_path_obs in zip(sat,path_obs):
+                    for _attrs,_path_obs in zip(attrs,path_obs):
                         
                         ds = xr.open_dataset(_path_obs).squeeze() 
                         
@@ -436,28 +441,28 @@ def get_obs(dict_obs,box,time_init,name_var='SSH'):
                             print(f'Warning: {name_var} not in {_path_obs}')
                             continue
 
-                        lon_obs = ds[_sat.name_lon] % 360
-                        lat_obs = ds[_sat.name_lat]
+                        lon_obs = ds[_attrs.name_lon] % 360
+                        lat_obs = ds[_attrs.name_lat]
                         
                         ds = ds.where((lon0<=lon_obs) & (lon1>=lon_obs) & 
                   (lat0<=lat_obs) & (lat1>=lat_obs), drop=True)
-                        time_obs = ds[_sat.name_time].values
+                        time_obs = ds[_attrs.name_time].values
                         time_obs = (time_obs-np.datetime64(time_init))/np.timedelta64(1, 'D')
 
-                        if _sat.super=='OBS_MODEL':
-                            if len(ds[_sat.name_lon].shape)==1:
-                                lon_obs = ds[_sat.name_lon].values
-                                lat_obs = ds[_sat.name_lat].values
+                        if _attrs.super=='OBS_L4':
+                            if len(ds[_attrs.name_lon].shape)==1:
+                                lon_obs = ds[_attrs.name_lon].values
+                                lat_obs = ds[_attrs.name_lat].values
                                 lon_obs,lat_obs = np.meshgrid(lon_obs,lat_obs)
                             else:
-                                lon_obs = ds[_sat.name_lon].values
-                                lat_obs = ds[_sat.name_lat].values
+                                lon_obs = ds[_attrs.name_lon].values
+                                lat_obs = ds[_attrs.name_lat].values
                             var_obs = ds[name_var].values
                             time_obs = time_obs * np.ones_like(var_obs)
                         
-                        elif _sat.super in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
-                            lon_obs = ds[_sat.name_lon].values
-                            lat_obs = ds[_sat.name_lat].values
+                        elif _attrs.super in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
+                            lon_obs = ds[_attrs.name_lon].values
+                            lat_obs = ds[_attrs.name_lat].values
                             var_obs = ds[name_var].values
                             if len(var_obs.shape)==2:
                                 # SWATH data

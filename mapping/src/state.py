@@ -101,6 +101,9 @@ class State:
             # Coriolis
             self.f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
             
+            # Gravity
+            self.g = 9.81
+            
     def ini_geo_grid(self,config):
         """
         NAME
@@ -242,7 +245,7 @@ class State:
         dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
        
         ds = ds.sel(
-            {name_lon:slice(self.lon_min-dlon,self.lon_max),
+            {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
              name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
 
         lon = ds[name_lon].values
@@ -253,8 +256,6 @@ class State:
             mask = var
         elif len(var.shape)==3:
             mask = var[0,:,:]
-        
-        
         
         # Interpolate to state grid
         x_source_axis = pyinterp.Axis(lon, is_circle=False)
@@ -314,9 +315,9 @@ class State:
             if len(var_to_save.shape)==2:
                 var_to_save = var_to_save[np.newaxis,:,:]
             
-            var[name] = (dims,var_to_save)
+            var[name] = (dims, var_to_save)
             
-        ds = xr.Dataset(var,coords=coords)
+        ds = xr.Dataset(var, coords=coords)
         ds.to_netcdf(filename,
                      encoding={'time': {'units': 'days since 1900-01-01'}},
                      unlimited_dims={'time':True})
@@ -421,10 +422,10 @@ class State:
     def random(self,ampl=1):
         other = self.copy(free=True)
         for name in self.var.keys():
-            other.var[name] = ampl * np.random.random(self.var[name].shape)
+            other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
             other.var[name][self.mask] = np.nan
         for name in self.params.keys():
-            other.params[name] = ampl * np.random.random(self.params[name].shape)
+            other.params[name] = ampl * np.random.random(self.params[name].shape).astype('float64')
             other.params[name][self.mask] = np.nan
         return other
     
@@ -587,10 +588,12 @@ class State:
         if not params:
             for ax,name_var in zip(axs,self.var):
                 ax.set_title(name_var)
-                if np.sign(np.nanmin(self.var[name_var]))!=np.sign(np.nanmax(self.var[name_var])):
-                    cmap_range = np.nanmax(np.absolute(self.var[name_var]))
+                _min = np.nanmin(self.var[name_var])
+                _max = np.nanmax(self.var[name_var])
+                _max_abs = np.nanmax(np.absolute(self.var[name_var]))
+                if np.sign(_min)!=np.sign(_max) and ((_max-np.abs(_min))<.5*_max_abs):
                     im = ax.pcolormesh(self.var[name_var],cmap=cmap,\
-                                    shading='auto', vmin = -cmap_range, vmax = cmap_range)
+                                    shading='auto', vmin = -_max_abs, vmax = _max_abs)
                 else:
                     im = ax.pcolormesh(self.var[name_var], shading='auto')
                 plt.colorbar(im,ax=ax)

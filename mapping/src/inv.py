@@ -66,6 +66,9 @@ def Inv_forward(config,State,Model,Bc=None):
         Run a model forward integration  
     
     """
+
+    if 'JAX' in config.MOD.super:
+        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     
     present_date = config.EXP.init_date
     if config.EXP.saveoutputs:
@@ -505,6 +508,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     '''
     Run a 4Dvar analysis
     '''
+
+    if 'JAX' in config.MOD.super:
+        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     
     # Compute checkpoints
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
@@ -578,7 +584,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         ds.close()
     
     # Path where to save the control vector at each 4Dvar iteration 
-    # (carefull, depending on the number of control variables, these files can be big)
+    # (carefull, depending on the number of control variables, these files may use large disk space)
     if config.INV.path_save_control_vectors is not None:
         path_save_control_vectors = config.INV.path_save_control_vectors
     else:
@@ -588,7 +594,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
 
     # Restart mode
     if config.INV.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(path_save_control_vectors,'X_it-*.nc')))
+        tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
             ds = xr.open_dataset(tmp_files[-1])
@@ -608,7 +614,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
             now = datetime.now()
             current_time = now.strftime("%Y-%m-%d_%H%M%S")
             ds = xr.Dataset({'res':(('x',),XX)})
-            ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it-'+current_time+'.nc'))
+            ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
             ds.close()
                 
         # Minimization options
@@ -658,7 +664,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         
     # Save minimum for next experiments
     ds = xr.Dataset({'res':(('x',),Xa)})
-    ds.to_netcdf(os.path.join(path_save_control_vectors,'Xini.nc'))
+    ds.to_netcdf(os.path.join(path_save_control_vectors,'Xres.nc'))
     ds.close()
 
     # Init
@@ -797,7 +803,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
 
     # Restart mode
     if config.INV.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(path_save_control_vectors,'X_it-*.nc')))
+        tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
             ds = xr.open_dataset(tmp_files[-1])
@@ -817,7 +823,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
             now = datetime.now()
             current_time = now.strftime("%Y-%m-%d_%H%M%S")
             ds = xr.Dataset({'res':(('x',),XX)})
-            ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it-'+current_time+'.nc'))
+            ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
             ds.close()
                 
         # Minimization options
@@ -927,6 +933,11 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
 
     from . import mod, state, obs, obsop, bc, basis
     from multiprocessing import Process
+
+    # Avoid preallocating GPU memory for multi JAX processes
+    if 'JAX' in config.MOD.super:
+        #os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+        os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/config.INV.nprocs)
 
     # Split full experimental time window in sub windows
     list_config = []

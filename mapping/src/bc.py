@@ -124,13 +124,18 @@ class Bc_ext:
         var_interp = {}
         for name in self.var:
             if self.time_bc is not None and self.time_bc.size>1:
-                grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, self.var[name].T)
+                var = +self.var[name]
+                grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
+                # Remove NaN
+                if np.isnan(var).any():
+                    _, var = pyinterp.fill.gauss_seidel(grid_source)
+                    grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
+                # Interpolate
                 _var_interp = pyinterp.trivariate(grid_source,
                                             x_target.flatten(),
                                             y_target.flatten(),
                                             z_target.flatten(),
                                             bounds_error=False).reshape(x_target.shape).T
-                _var_interp[np.isnan(_var_interp)] = 0
                 for t in range(len(time)):
                     _var_interp[t][self.mask] = np.nan
             else:
@@ -141,7 +146,6 @@ class Bc_ext:
                                                 bounds_error=False).reshape(x_target[:,:,0].shape).T
 
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
-                _var_interp[np.isnan(_var_interp)] = 0
                 _var_interp[self.mask] = np.nan
 
             

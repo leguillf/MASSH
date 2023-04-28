@@ -9,9 +9,10 @@ import os,sys
 import xarray as xr 
 import numpy as np 
 from src import grid as grid
+import pickle
 import matplotlib.pylab as plt
 from scipy.interpolate import griddata
-from scipy.sparse import coo_matrix
+from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
 import pandas as pd
 from jax.experimental import sparse
@@ -51,26 +52,21 @@ class Obsop_interp:
         self.compute_H = config.OBSOP.compute_op
         
         # Pattern for saving files
-        date1 = config.EXP.init_date.strftime('%Y%m%d')
-        date2 = config.EXP.final_date.strftime('%Y%m%d')
         box = f'{int(State.lon_min)}_{int(State.lon_max)}_{int(State.lat_min)}_{int(State.lat_max)}'
-        self.name_H = f'H_{"_".join(config.OBS.keys())}_{date1}_{date2}_{box}_{int(State.dx)}_{int(State.dy)}_{config.OBSOP.Npix}'
+        self.name_H = f'H_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}_{int(State.dx)}_{int(State.dy)}_{config.OBSOP.Npix}'
 
-        # Temporary path where to save H operators
+        # Path to save operators
+        self.compute_op = config.OBSOP.compute_op
+        self.write_op = config.OBSOP.write_op
+        if self.write_op:
+            # We'll save or read operator data to *path_save*
+            self.path_save = config.OBSOP.path_save
+            if not os.path.exists(self.path_save):
+                os.makedirs(self.path_save)
+
+        # Temporary path where to save misfit
         self.tmp_DA_path = config.EXP.tmp_DA_path
-        if config.OBSOP.path_save is not None:
-            # We'll save to *path_H* or read in *path_H* from previous run
-            self.path_H = config.OBSOP.path_save
-            self.read_H = True
-            if not os.path.exists(self.path_H):
-                os.makedirs(self.path_H)
-        else:
-            # We'll use temporary directory to read/save the files
-            self.path_H = self.tmp_DA_path
-            if self.compute_H:
-                self.read_H = False
-            else:
-                self.read_H = True
+        
         
         # Date obs
         self.date_obs = []
@@ -85,7 +81,7 @@ class Obsop_interp:
                     self.date_obs.append(t_obs[ind_obs])
                     # Get obs variable names (SSH,U,V,SST...) at this time
                     self.name_var_obs[t] = []
-                    for sat_info in dict_obs[t_obs[ind_obs]]['satellite']:
+                    for sat_info in dict_obs[t_obs[ind_obs]]['attributes']:
                         for name in sat_info['name_var']:
                             if name not in self.name_var_obs[t]:
                                 self.name_var_obs[t].append(name)
@@ -98,6 +94,7 @@ class Obsop_interp:
         self.Npix = config.OBSOP.Npix
         lon = +State.lon
         lat = +State.lat
+        self.shape_grid = (State.ny, State.nx)
         self.coords_geo = np.column_stack((lon.ravel(), lat.ravel()))
         self.coords_car = grid.geo2cart(self.coords_geo)
         self.dmax = self.Npix*np.mean(np.sqrt(State.DX**2 + State.DY**2))*1e-3*np.sqrt(2)/2 # maximal distance for space interpolation
@@ -150,7 +147,7 @@ class Obsop_interp:
             for w in weights:
                 data.append(w/sum_weights)
 
-        return coo_matrix((data, (row, col)), shape=(Nobs, self.coords_geo.shape[0]))
+        return csc_matrix((data, (row, col)), shape=(Nobs, self.coords_geo.shape[0]))
 
     def process_obs(self, var_bc=None):
 
@@ -164,8 +161,9 @@ class Obsop_interp:
             self.errobs[t] = {}
             self.Hop[t] = {}
 
-            sat_info_list = self.dict_obs[t]['satellite']
-            obs_file_list = self.dict_obs[t]['obs_name']
+            sat_info_list = self.dict_obs[t]['attributes']
+            obs_file_list = self.dict_obs[t]['obs_path']
+            obs_name_list = self.dict_obs[t]['obs_name']
 
         
             # Concatenate obs from different sensors
@@ -174,15 +172,26 @@ class Obsop_interp:
             var_obs = {}
             err_obs = {}
             is_full = {}
-            for sat_info,obs_file in zip(sat_info_list,obs_file_list):
 
+            # For saving operator
+            name_obs_L3 = []
+            name_obs_L4 = []
+
+            for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
+                ####################
+                # Merge observations
+                ####################
                 with xr.open_dataset(obs_file) as ncin:
-                    lon = ncin[sat_info['name_lon']].values.ravel() %360
+                    lon = ncin[sat_info['name_lon']].values.ravel() 
                     lat = ncin[sat_info['name_lat']].values.ravel()
 
                     for name in sat_info['name_var']:
-                        if sat_info.super=='OBS_MODEL':
-                            is_full[name] = True # We'll interpolate the observations to the state grid to accelerate the misfit computations
+                        if sat_info.super=='OBS_L4':
+                            is_full[name] = True
+                            if obs_name not in name_obs_L4:
+                                name_obs_L4.append(obs_name)
+                        elif obs_name not in name_obs_L3:
+                            name_obs_L3.append(obs_name)
                         # Observed variable
                         var = ncin[name].values.ravel() 
                         # Observed error
@@ -206,10 +215,22 @@ class Obsop_interp:
             
             for name in lon_obs:
                 coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
+                ################
+                # Process L4 obs
+                ################
                 if name in is_full:
-                    # Grid interpolation: performing spatial interpolation now
-                    var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
-                    err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
+                    file_L4 = f"{self.path_save}/{self.name_H}_L4_{'_'.join(name_obs_L4)}_{self.interp_method}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
+                    if not self.compute_op and self.write_op and os.path.exists(file_L4):
+                        with open(file_L4, "rb") as f:
+                            var_obs_interp, err_obs_interp = pickle.load(f)
+                    else:
+                        # Grid interpolation: performing spatial interpolation now
+                        var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
+                        err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
+                        # Save operator if asked
+                        if self.write_op:
+                            with open(file_L4, "wb") as f:
+                                pickle.dump((var_obs_interp,err_obs_interp), f)
 
                     if var_bc is not None and name in var_bc:
                         var_obs_interp -= var_bc[name][i].flatten()
@@ -218,7 +239,11 @@ class Obsop_interp:
                     self.varobs[t][name] = var_obs_interp
                     self.errobs[t][name] = err_obs_interp
 
+                ################
+                # Process L3 obs
+                ################
                 else:
+                    file_L3 = f"{self.path_save}/{self.name_H}_L3_{'_'.join(name_obs_L3)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
                     if var_bc is not None and name in var_bc:
                         mask = np.any(np.isnan(self.coords_geo),axis=1)
                         var_bc_interp = griddata(self.coords_geo[~mask], var_bc[name][i].flatten()[~mask], coords_obs, method='cubic')
@@ -227,8 +252,21 @@ class Obsop_interp:
                     # Fill dictionnaries
                     self.varobs[t][name] = var_obs[name]
                     self.errobs[t][name] = err_obs[name]
-                    # Compute Sparse operator 
-                    self.Hop[t][name] = self._sparse_op(lon_obs[name],lat_obs[name])
+
+                    # Compute Sparse operator
+                    if not self.compute_op and self.write_op and os.path.exists(file_L3):
+                        with open(file_L3, "rb") as f:
+                            self.Hop[t][name] = pickle.load(f)
+                    else:
+                        # Compute operator
+                        _H = self._sparse_op(lon_obs[name],lat_obs[name])
+                        self.Hop[t][name] = _H
+                        # Save operator if asked
+                        if self.write_op:
+                            with open(file_L3, "wb") as f:
+                                pickle.dump(_H, f)
+
+        
                 
     def misfit(self,t,State):
 
@@ -240,7 +278,6 @@ class Obsop_interp:
 
             # Get model state
             X = State.getvar(self.name_mod_var[name]).ravel() 
-
 
             # Project model state to obs space
             if name in self.Hop[t]:
