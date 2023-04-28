@@ -339,6 +339,9 @@ class Model_qg1l_np(M):
 
         # Coriolis
         self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
+
+        # Gravity
+        self.g = State.g
         
         # Open MDT map if provided
         self.hbc = self.mdt = self.mdu = self.mdv = None
@@ -1052,7 +1055,7 @@ class Model_sw1l_np(M):
         self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
 
         # Gravity
-        self.g = config.MOD.g
+        self.g = State.g
              
         # Equivalent depth
         if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):

@@ -166,6 +166,7 @@ That could be due to non regular grid or bad written netcdf file')
                 bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, bas[self.name_bas_lon].data % 360))})
             elif np.sign(bas[self.name_bas_lon].data.min())==1 and State.lon_unit=='-180_180':
                 bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, (bas[self.name_bas_lon].data + 180) % 360 - 180))})
+            bas = bas.sortby(bas[self.name_bas_lon])    
             self.bas = bas.sel(
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
                 )

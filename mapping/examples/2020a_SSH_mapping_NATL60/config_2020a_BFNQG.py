@@ -37,7 +37,7 @@ EXP = dict(
 
     saveoutput_time_step = timedelta(hours=3),  # time step at which the states are saved 
 
-    flag_plot = 0,
+    flag_plot = 1,
 
 )
     
@@ -58,9 +58,9 @@ myGRID = dict(
 
     lat_max = 43.,                                         # domain max latitude
 
-    dx = 1/20.,                                            # zonal grid spatial step (in degree)
+    dlon = 1/4.,                                            # zonal grid spatial step (in degree)
 
-    dy = 1/20.,                                            # meridional grid spatial step (in degree)
+    dlat = 1/4.,                                            # meridional grid spatial step (in degree)
 
 )
 
@@ -75,9 +75,11 @@ myMOD = dict(
 
     name_var = {'SSH':"ssh", "PV":"pv"}, # Adding PV enables to store it at every time step for the computation of nudging term
 
-    dtmodel = 600, # model timestep
+    dtmodel = 1200, # model timestep
 
     c0 = 2.7, # 1st baroclinic phase velocity (m/s), assumed constant all over the domain
+
+    dist_sponge_bc = 50
 
 )
 
@@ -200,7 +202,7 @@ myINV = dict(
 
     propagation_timestep = timedelta(hours=3), # propagation time step of the BFN, corresponding to the time step at which the nudging term is computed
 
-    max_iteration = 20, # maximal number of iterations if *bfn_criterion* is not met
+    max_iteration = 2, # maximal number of iterations if *bfn_criterion* is not met
 
     criterion = 1e-3 # convergence criterion 
 
@@ -231,8 +233,6 @@ myDIAG = dict(
     name_ref_lat = 'lat',
 
     name_ref_var = 'sossheig',
-
-    options_ref = {'combine':'nested', 'concat_dim':'time', 'parallel':True},
 
     name_exp_var = 'ssh',
 

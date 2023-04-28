@@ -423,27 +423,6 @@ MOD_SW1L_JAX = dict(
 
 )
 
-# Tracer conservation
-MOD_TRAC = dict(
-
-    name_var = {'SST':"sst"},
-
-    var_to_save = None,
-
-    name_init_var = {},
-
-    dtmodel = 300, # model timestep
-
-    model_dyn = None,
-
-    compute_ugeo_from_ssh = False,
-
-    init_from_bc = True,
-
-    dist_sponge_bc = None  
-
-)
-
 #################################################################################################################################
 # BOUNDARY CONDITIONS
 #################################################################################################################################
