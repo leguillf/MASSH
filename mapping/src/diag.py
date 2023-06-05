@@ -143,14 +143,6 @@ That could be due to non regular grid or bad written netcdf file')
         self.exp = exp.sel(
             {self.name_exp_time:slice(np.datetime64(self.time_min)-dt,np.datetime64(self.time_max)+dt)},
              )
-        try:
-            self.exp = self.exp.sel(
-                {self.name_exp_lon:slice(self.lon_min,self.lon_max),
-                self.name_exp_lat:slice(self.lat_min,self.lat_max)}
-            )
-        except:
-            print('Warning: unable to select study region in the experiment fields.\
-That could be due to non regular grid or bad written netcdf file')
         exp.close()
         self.exp = self.exp.load()
 
@@ -166,7 +158,10 @@ That could be due to non regular grid or bad written netcdf file')
                 bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, bas[self.name_bas_lon].data % 360))})
             elif np.sign(bas[self.name_bas_lon].data.min())==1 and State.lon_unit=='-180_180':
                 bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, (bas[self.name_bas_lon].data + 180) % 360 - 180))})
-            bas = bas.sortby(bas[self.name_bas_lon])    
+            try:
+                bas = bas.sortby(bas[self.name_bas_lon])    
+            except:
+                print(end='\r')
             self.bas = bas.sel(
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
                 )
@@ -179,6 +174,11 @@ That could be due to non regular grid or bad written netcdf file')
                 print('Warning: unable to select study region in the baseline fields.')
             bas.close()
             self.bas = self.bas.load()
+
+            if len(self.bas[self.name_bas_lon].shape)==1:
+                self.geo_grid_bas = True
+            else:
+                self.geo_grid_bas = False
         
         # Mask
         if config.DIAG.name_mask is not None:
@@ -221,17 +221,24 @@ That could be due to non regular grid or bad written netcdf file')
                 self.exp[self.name_exp_lat].values, 
                 self.exp[self.name_exp_time].values, 
                 self.exp[self.name_exp_var])
-            if self.mask is not None:
-                self.exp_regridded.data[:,self.mask] = np.nan
-            else:
-                self.exp_regridded.data[np.isnan(self.ref[self.name_ref_var].data)] = np.nan
+        if self.mask is not None:
+            self.exp_regridded.data[:,self.mask] = np.nan
+        else:
+            self.exp_regridded.data[np.isnan(self.ref[self.name_ref_var].data)] = np.nan
         
         if self.compare_to_baseline:
-            self.bas_regridded = self._regrid_geo(
-                self.bas[self.name_bas_lon].values,
-                self.bas[self.name_bas_lat].values, 
-                self.bas[self.name_bas_time].values, 
-                self.bas[self.name_bas_var])        
+            if self.geo_grid_bas:
+                self.bas_regridded = self._regrid_geo(
+                    self.bas[self.name_bas_lon].values,
+                    self.bas[self.name_bas_lat].values, 
+                    self.bas[self.name_bas_time].values, 
+                    self.bas[self.name_bas_var])    
+            else:
+                self.bas_regridded = self._regrid_unstructured(
+                    self.bas[self.name_bas_lon].values,
+                    self.bas[self.name_bas_lat].values, 
+                    self.bas[self.name_bas_time].values, 
+                    self.bas[self.name_bas_var])    
             if self.mask is not None:
                 self.bas_regridded.data[:,self.mask] = np.nan
             else:
@@ -427,23 +434,14 @@ That could be due to non regular grid or bad written netcdf file')
             bas_noNans.data[mask] = 0.
 
         
-        mean_psd_signal = self._psd(
-            ref_noNans,
-            dim=[self.name_ref_time,self.name_ref_lon],
-            dim_mean=self.name_ref_lat)
+        mean_psd_signal = self._psd(ref_noNans,dim_iso=[self.name_ref_lon,self.name_ref_lat])
         
-        mean_psd_err = self._psd(
-            (exp_noNans - ref_noNans),
-            dim=[self.name_ref_time,self.name_ref_lon],
-            dim_mean=self.name_ref_lat)
+        mean_psd_err = self._psd((exp_noNans - ref_noNans),dim_iso=[self.name_ref_lon,self.name_ref_lat])
 
         psd_based_score = (1.0 - mean_psd_err/mean_psd_signal)
 
         if self.compare_to_baseline:
-            mean_psd_err_bas = self._psd(
-                (bas_noNans - ref_noNans),
-                dim=[self.name_ref_time,self.name_ref_lon],
-                dim_mean=self.name_ref_lat)
+            mean_psd_err_bas = self._psd((bas_noNans - ref_noNans),dim_iso=[self.name_ref_lon,self.name_ref_lat])
             mean_psd_err = xr.concat((mean_psd_err, mean_psd_err_bas), dim='run')
             mean_psd_err['run'] = ['experiment','baseline']
             psd_based_score_bas = (1.0 - mean_psd_err_bas/mean_psd_signal)
@@ -467,19 +465,19 @@ That could be due to non regular grid or bad written netcdf file')
 
         if self.compare_to_baseline:
             # Experiment
-            cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='experiment'), level)
+            cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='experiment'), level)
             x05, y05 = cs.collections[0].get_paths()[0].vertices.T
             plt.close()
             self.leaderboard_psds_score = np.min(x05)
             self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
             # Baseline
-            cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='baseline'), level)
+            cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='baseline'), level)
             x05, y05 = cs.collections[0].get_paths()[0].vertices.T
             plt.close()
             self.leaderboard_psds_score_bas = np.min(x05)
             self.leaderboard_psdt_score_bas = np.min(y05)/3600/24 # in days
         else:
-            cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score, level)
+            cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score, level)
             x05, y05 = cs.collections[0].get_paths()[0].vertices.T
             plt.close()
             self.leaderboard_psds_score = np.min(x05)
@@ -508,20 +506,20 @@ That could be due to non regular grid or bad written netcdf file')
                 data = (ds_psd.isel(run=run).values)
             else:
                 data = (ds_psd.values)
-            ax.invert_yaxis()
+            #ax.invert_yaxis()
             ax.invert_xaxis()
-            c1 = ax.contourf(1./(ds_psd.freq_lon), 1./ds_psd.freq_time, data,
+            c1 = ax.contourf(1./(ds_psd.freq_r), 1./ds_psd.freq_time, data,
                             levels=np.arange(0,1.1, 0.1), cmap='RdYlGn', extend='both')
             ax.set_xlabel('spatial wavelength (degree_lon)', fontweight='bold', fontsize=18)
             ax0[0].set_ylabel('temporal wavelength (days)', fontweight='bold', fontsize=18)
-            #plt.xscale('log')
+            ax.set_xscale('log')
             ax.set_yscale('log')
             ax.grid(linestyle='--', lw=1, color='w')
             ax.tick_params(axis='both', labelsize=18)
             ax.set_title(f'PSD-based score ({ctitle})', fontweight='bold', fontsize=18)
             for axis in [ax.xaxis, ax.yaxis]:
                 axis.set_major_formatter(ScalarFormatter())
-            c2 = ax.contour(1./(ds_psd.freq_lon), 1./ds_psd.freq_time, data, levels=[0.5], linewidths=2, colors='k')
+            c2 = ax.contour(1./(ds_psd.freq_r), 1./ds_psd.freq_time, data, levels=[0.5], linewidths=2, colors='k')
             
             cbar = fig.colorbar(c1, ax=ax, pad=0.01)
             cbar.add_lines(c2)
@@ -550,29 +548,37 @@ That could be due to non regular grid or bad written netcdf file')
         plt.show()
         return fig
     
-    def _psd(self,da,dim,dim_mean=None,detrend='constant'):
+    def _psd(self,da,dim=None,dim_iso=None,dim_mean=None,detrend='constant'):
 
             # Rechunk 
-            chunks = {}
-            if type(dim)!=list:
-                dim = [dim]
-            for d in dim:
-                chunks[d] = da[d].size
-            signal = da.chunk(chunks)
+            if dim is not None:
+                chunks = {}
+                if type(dim)!=list:
+                    dim = [dim]
+                for d in dim:
+                    chunks[d] = da[d].size
+                da = da.chunk(chunks)
         
             # Compute PSD
             psd = xrft.power_spectrum(
-                signal, 
+                da, 
                 dim=dim, 
                 detrend=detrend, 
                 window=True).compute()
             
-            # Averaged 
+            # Isotropize
+            if dim_iso is not None:
+                psd = xrft.isotropize(psd,fftdim=[f'freq_{dim_iso[0]}',f'freq_{dim_iso[1]}'])
+
+            # Positive coordinates
+            ispos = True
+            for d in psd.dims:
+                ispos = ispos & (psd[d] > 0.)
+            psd = psd.where(ispos, drop=True)
+            
+            # Average
             if dim_mean is not None:
-                ispos = True
-                for d in dim:
-                    ispos = ispos & (psd[f'freq_{d}'] > 0.)
-                psd = psd.mean(dim=dim_mean).where(ispos, drop=True)
+                psd = psd.mean(dim=dim_mean)
             
             psd.name = f'PSD_{da.name}'
             
@@ -834,33 +840,35 @@ That could be due to non regular grid or bad written netcdf file')
         self.name_exp_lon = config.EXP.name_lon
         self.name_exp_lat = config.EXP.name_lat
         self.name_exp_var_ssh = config.DIAG.name_exp_var_ssh
+        self.name_exp_var_u = config.DIAG.name_exp_var_u
+        self.name_exp_var_v = config.DIAG.name_exp_var_v
         exp = xr.open_mfdataset(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc')
         exp = exp.assign_coords({self.name_exp_lon:exp[self.name_exp_lon]})
         dt = (exp[self.name_exp_time][1]-exp[self.name_exp_time][0]).values
         self.exp = exp.sel(
             {self.name_exp_time:slice(np.datetime64(self.time_min)-dt,np.datetime64(self.time_max)+dt)},
              )
-        try:
-            self.exp = self.exp.sel(
-                {self.name_exp_lon:slice(self.lon_min,self.lon_max),
-                self.name_exp_lat:slice(self.lat_min,self.lat_max)}
-            )
-        except:
-            print('Warning: unable to select study region in the experiment fields.\
-That could be due to non regular grid or bad written netcdf file')
-        
         # Compute geostrophic current velocities
         g = 9.81
-        ssh = self.exp[self.name_exp_var_ssh].copy()
-        u = ssh.differentiate(ssh.dims[1])
-        u.data *= -g/State.f/State.DY
-        v = ssh.differentiate(ssh.dims[2])
-        v.data *= g/State.f/State.DX
-        if self.exp_geo_grid:
-            u.data *= State.lon[0,1] - State.lon[0,0]
-            v.data *= State.lat[1,0] - State.lat[0,0]
-        self.exp['u'] = u.rename('u')
-        self.exp['v'] = v.rename('v')
+        if self.name_exp_var_u is not None and self.name_exp_var_u in exp:
+            if self.name_exp_var_u != 'u':
+                u = exp[self.name_exp_var_u]
+                self.exp['u'] = u.rename('u')
+            if self.name_exp_var_v != 'v':
+                v = exp[self.name_exp_var_v]
+                self.exp['v'] = v.rename('v')
+        else:
+            ssh = self.exp[self.name_exp_var_ssh].copy()
+            u = ssh.differentiate(ssh.dims[1])
+            u.data *= -g/State.f/State.DY
+            v = ssh.differentiate(ssh.dims[2])
+            v.data *= g/State.f/State.DX
+            if self.exp_geo_grid:
+                u.data *= State.lat[1,0] - State.lat[0,0]
+                v.data *= State.lon[0,1] - State.lon[0,0]
+            self.exp['u'] = u.rename('u')
+            self.exp['v'] = v.rename('v')
+        
         exp.close()
         self.exp = self.exp.load()
 
@@ -876,8 +884,9 @@ That could be due to non regular grid or bad written netcdf file')
                 bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, bas[self.name_bas_lon].data % 360))})
             elif np.sign(bas[self.name_bas_lon].data.min())==1 and State.lon_unit=='-180_180':
                 bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, (bas[self.name_bas_lon].data + 180) % 360 - 180))})
+            dt = (bas[self.name_bas_time][1]-bas[self.name_bas_time][0]).values
             self.bas = bas.sel(
-                {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
+                {self.name_bas_time:slice(np.datetime64(self.time_min)-dt, np.datetime64(self.time_max)+dt)},
                 )
             try:
                 self.bas = self.bas.sel(
@@ -910,6 +919,7 @@ That could be due to non regular grid or bad written netcdf file')
             self.bas['v'] = v.rename('v')
             bas.close()
             self.bas = self.bas.load()
+
         
         # Mask
         if config.DIAG.name_mask is not None:
@@ -1223,21 +1233,18 @@ That could be due to non regular grid or bad written netcdf file')
         
         mean_psd_signal = self._psd(
             ref_noNans,
-            dim=[self.name_ref_time,self.name_ref_lon],
-            dim_mean=self.name_ref_lat)
+            dim_iso=[self.name_ref_lon,self.name_ref_lat])
         
         mean_psd_err = self._psd(
             (exp_noNans - ref_noNans),
-            dim=[self.name_ref_time,self.name_ref_lon],
-            dim_mean=self.name_ref_lat)
+            dim_iso=[self.name_ref_lon,self.name_ref_lat])
 
         psd_based_score = (1.0 - mean_psd_err/mean_psd_signal)
 
         if self.compare_to_baseline:
             mean_psd_err_bas = self._psd(
                 (bas_noNans - ref_noNans),
-                dim=[self.name_ref_time,self.name_ref_lon],
-                dim_mean=self.name_ref_lat)
+                dim_iso=[self.name_ref_lon,self.name_ref_lat])
             mean_psd_err = xr.concat((mean_psd_err, mean_psd_err_bas), dim='run')
             mean_psd_err['run'] = ['experiment','baseline']
             psd_based_score_bas = (1.0 - mean_psd_err_bas/mean_psd_signal)
@@ -1256,14 +1263,14 @@ That could be due to non regular grid or bad written netcdf file')
         level = [threshold]
 
         # Experiment
-        cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='experiment'), level)
+        cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='experiment'), level)
         x05, y05 = cs.collections[0].get_paths()[0].vertices.T
         plt.close()
         self.leaderboard_psds_score[mode] = np.min(x05)
         self.leaderboard_psdt_score[mode] = np.min(y05)/3600/24 # in days
         if self.compare_to_baseline:
             # Baseline
-            cs = plt.contour(1./psd_based_score[f'freq_{self.name_ref_lon}'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='baseline'), level)
+            cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='baseline'), level)
             x05, y05 = cs.collections[0].get_paths()[0].vertices.T
             plt.close()
             self.leaderboard_psds_score_bas[mode] = np.min(x05)
@@ -1295,7 +1302,7 @@ That could be due to non regular grid or bad written netcdf file')
                 data = (ds_psd.values)
             ax.invert_yaxis()
             ax.invert_xaxis()
-            c1 = ax.contourf(1./(ds_psd.freq_lon), 1./ds_psd.freq_time, data,
+            c1 = ax.contourf(1./(ds_psd.freq_r), 1./ds_psd.freq_time, data,
                             levels=np.arange(0,1.1, 0.1), cmap='RdYlGn', extend='both')
             ax.set_xlabel('spatial wavelength (degree_lon)', fontweight='bold', fontsize=18)
             ax0[0].set_ylabel('temporal wavelength (days)', fontweight='bold', fontsize=18)
@@ -1306,7 +1313,7 @@ That could be due to non regular grid or bad written netcdf file')
             ax.set_title(f'PSD-based score ({ctitle})', fontweight='bold', fontsize=18)
             for axis in [ax.xaxis, ax.yaxis]:
                 axis.set_major_formatter(ScalarFormatter())
-            c2 = ax.contour(1./(ds_psd.freq_lon), 1./ds_psd.freq_time, data, levels=[0.5], linewidths=2, colors='k')
+            c2 = ax.contour(1./(ds_psd.freq_r), 1./ds_psd.freq_time, data, levels=[0.5], linewidths=2, colors='k')
             
             cbar = fig.colorbar(c1, ax=ax, pad=0.01)
             cbar.add_lines(c2)
@@ -1335,29 +1342,37 @@ That could be due to non regular grid or bad written netcdf file')
         plt.show()
         return fig
     
-    def _psd(self,da,dim,dim_mean=None,detrend='constant'):
+    def _psd(self,da,dim=None,dim_iso=None,dim_mean=None,detrend='constant'):
 
             # Rechunk 
-            chunks = {}
-            if type(dim)!=list:
-                dim = [dim]
-            for d in dim:
-                chunks[d] = da[d].size
-            signal = da.chunk(chunks)
+            if dim is not None:
+                chunks = {}
+                if type(dim)!=list:
+                    dim = [dim]
+                for d in dim:
+                    chunks[d] = da[d].size
+                da = da.chunk(chunks)
         
             # Compute PSD
             psd = xrft.power_spectrum(
-                signal, 
+                da, 
                 dim=dim, 
                 detrend=detrend, 
                 window=True).compute()
             
-            # Averaged 
+            # Isotropize
+            if dim_iso is not None:
+                psd = xrft.isotropize(psd,fftdim=[f'freq_{dim_iso[0]}',f'freq_{dim_iso[1]}'])
+
+            # Positive coordinates
+            ispos = True
+            for d in psd.dims:
+                ispos = ispos & (psd[d] > 0.)
+            psd = psd.where(ispos, drop=True)
+            
+            # Average
             if dim_mean is not None:
-                ispos = True
-                for d in dim:
-                    ispos = ispos & (psd[f'freq_{d}'] > 0.)
-                psd = psd.mean(dim=dim_mean).where(ispos, drop=True)
+                psd = psd.mean(dim=dim_mean)
             
             psd.name = f'PSD_{da.name}'
             

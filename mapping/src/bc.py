@@ -79,13 +79,17 @@ class Bc_ext:
         _ds.close()
         
         # Select study domain
+        time_bc = ds[config.BC.name_time].values
         lon_bc = ds[config.BC.name_lon].values
         lat_bc = ds[config.BC.name_lat].values
         dlon += np.nanmean(lon_bc[1:]-lon_bc[:-1])
         dlat += np.nanmean(lat_bc[1:]-lat_bc[:-1])
+        dtime = time_bc[1]-time_bc[0]
         ds = ds.sel({
+            config.BC.name_time:slice(np.datetime64(config.EXP.init_date)-dtime,np.datetime64(config.EXP.final_date)+dtime),
             config.BC.name_lon:slice(lon_min-dlon,lon_max+2*dlon),
-            config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)})
+            config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)
+            })
         
         # Get BC coordinates
         self.lon_bc = ds[config.BC.name_lon].values 
@@ -148,10 +152,6 @@ class Bc_ext:
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
                 _var_interp[self.mask] = np.nan
 
-            
-            
-            
-            
             var_interp[name] = _var_interp
         
         return var_interp

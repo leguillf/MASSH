@@ -7,13 +7,11 @@ Created on Thu Dec 12 12:02:05 2019
 """
 
 import os
-import sys
-import numpy as np
 import xarray as xr
+import numpy as np
 from scipy import interpolate
-from .tools import gaspari_cohn
-from datetime import datetime
-import calendar
+import pyinterp 
+import pyinterp.fill
 from scipy import spatial
 from scipy.spatial.distance import cdist
 import pandas as pd
@@ -150,6 +148,82 @@ def interp2d(ds,name_vars,lon_out,lat_out):
                    (lon_out.ravel(),lat_out.ravel())).reshape((lat_out.shape))
     
     return var_out
+
+
+def interp3d_geo(lon, lat, time, var, lon_target, lat_target, time_target, remove_NaN=False):
+
+        # Define source grid
+        x_source_axis = pyinterp.Axis(lon, is_circle=False)
+        y_source_axis = pyinterp.Axis(lat)
+        if time is not None:
+            z_source_axis = pyinterp.TemporalAxis(time)
+        ssh_source = var.T
+        if time is not None:    
+            grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, ssh_source.data)
+        else:
+            grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, ssh_source.data)
+        
+        # Define target grid
+        mx_target, my_target, mz_target = np.meshgrid(
+            lon_target.flatten(),
+            lat_target.flatten(),
+            z_source_axis.safe_cast(np.ascontiguousarray(time_target)),
+            indexing="ij")
+
+        # Spatio-temporal Interpolation
+        if time is not None:  
+            ssh_interp = pyinterp.trivariate(grid_source,
+                                            mx_target.flatten(),
+                                            my_target.flatten(),
+                                            mz_target.flatten(),
+                                            bounds_error=False).reshape(mx_target.shape).T
+        else:
+            ssh_interp = pyinterp.bivariate(grid_source,
+                                            mx_target.flatten(),
+                                            my_target.flatten(),
+                                            bounds_error=False).reshape(mx_target.shape).T
+        
+        # Extrapolation in NaN values if needed
+        if remove_NaN and np.isnan(ssh_interp).any():
+            x_source_axis = pyinterp.Axis(lon_target, is_circle=False)
+            y_source_axis = pyinterp.Axis(lat_target)
+            z_source_axis = pyinterp.TemporalAxis(np.ascontiguousarray(time_target))
+            grid = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis,  ssh_interp.T)
+            _, filled = pyinterp.fill.gauss_seidel(grid)
+        else:
+            filled = ssh_interp.T
+        
+        # Save to dataset
+        return filled
+
+def interp3d_unstructured(lon, lat, time, var, lon_target, lat_target, time_target):
+        
+    # Spatial interpolation 
+    mesh = pyinterp.RTree()
+    if len(lon_target.shape)==1:
+        lon_target, lat_target = np.meshgrid(lon_target, lat_target)
+    lons = lon.ravel()
+    lats = lat.ravel()
+    var_regridded = np.zeros((time.size,lat_target.shape[0],lon_target.shape[1]))
+    for i in range(time.size):
+        data = var[i].data.ravel()
+        mask = np.isnan(lons) + np.isnan(lats) + np.isnan(data)
+        data = data[~mask]
+        mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, data)
+        idw, _ = mesh.inverse_distance_weighting(
+            np.vstack((lon_target.ravel(), lat_target.ravel())).T,
+            within=False,  # Extrapolation is forbidden
+            k=11,  # We are looking for at most 11 neighbors
+            radius=600000,
+            num_threads=0)
+        var_regridded[i,:,:] = idw.reshape(lon_target.shape)
+
+
+    # Time interpolation
+    f = interpolate.interp1d(time,var_regridded,axis=0)
+    var_regridded = f(time_target)
+
+    return var_regridded
 
 
 def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,

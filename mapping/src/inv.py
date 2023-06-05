@@ -97,7 +97,7 @@ def Inv_forward(config,State,Model,Bc=None):
 
         # Save
         if config.EXP.saveoutputs:
-            State.save_output(present_date,name_var=Model.var_to_save)
+            Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
         
     return
 
@@ -250,6 +250,11 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
                 tsec_bc.append(tsec0)
             var_bc = Bc.interp(time_bc)
             Model.set_bc(tsec_bc,var_bc)
+        
+        # Initial model state
+        if bfn_first_window:
+            Model.init(State)
+            State.plot(title='Init State')
             
 
         ###################
@@ -512,14 +517,14 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     if 'JAX' in config.MOD.super:
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     
-    # Compute checkpoints
+    # Compute checkpoints when the cost function will be evaluated 
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
     checkpoints = [0]
     time_checkpoints = [np.datetime64(Model.timestamps[0])]
     t_checkpoints = [Model.T[0]]
     check = 0
     for i,t in enumerate(Model.timestamps[:-1]):
-        if i>0 and (t in Obsop.date_obs or check==nstep_check):
+        if i>0 and (Obsop.is_obs(t) or check==nstep_check):
             checkpoints.append(i)
             time_checkpoints.append(np.datetime64(t))
             t_checkpoints.append(Model.T[i])
@@ -538,7 +543,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         var_bc = Bc.interp(time_checkpoints)
         Model.set_bc(t_checkpoints,var_bc)
     
-    # Process observations
+    # Observations operator 
     if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
         time_obs = [np.datetime64(date) for date in Obsop.date_obs]
         var_bc = Bc.interp(time_obs)
@@ -552,7 +557,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
 
     # Set Reduced Basis
     if Basis is not None:
-        time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in seconds) for which the basis components will be compute (at each timestep_checkpoint)
+        time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in days) for which the basis components will be compute (at each timestep_checkpoint)
         Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
         sys.exit('4Dvar only work with reduced basis!!')
@@ -680,24 +685,14 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         # Reduced basis
         Basis.operg(t/3600/24,Xa,State=State0)
 
-        # Boundary conditions
-        if Bc is not None:
-            times = np.asarray([
-                np.datetime64(date) + np.timedelta64(step*int(Model.dt),'s')\
-                     for step in range(nstep_check)
-                     ])
-            var_bc = Bc.interp(times)
-            Model.set_bc([t+step*int(Model.dt) for step in range(nstep_check)],var_bc)
-
         # Forward
         for j in range(nstep_check):
             
             if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                Model.ano_bc(t+j*Model.dt,State0,+1) # Get full field from anomaly 
-                State0.save_output(date,name_var=Model.var_to_save) # Save output
-                Model.ano_bc(t+j*Model.dt,State0,-1) # Get anomaly from full field 
+                Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+                State0.plot(date)
 
             # Forward propagation
             Model.step(t=t+j*Model.dt,State=State0,nstep=1)
@@ -707,9 +702,8 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        Model.ano_bc(t+nstep_check*Model.dt,State0,+1) # Get full field from anomaly 
-        State0.save_output(date,name_var=Model.var_to_save) # Save output
-        Model.ano_bc(t+nstep_check*Model.dt,State0,-1) # Get anomaly from full field 
+        Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+    
         
     del State, State0, Xa, dict_obs, B, R
     gc.collect()

@@ -92,7 +92,7 @@ def Exp(path_config):
     """
     
     _dir,_config = os.path.split(path_config)
-    sys.path.append(_dir)
+    sys.path.insert(0,_dir)
     if _config[-3:]=='.py':
         _config = _config[:-3]
     else:
@@ -123,16 +123,19 @@ def Exp(path_config):
     config.INV = merge_configs(config_exp,config_def,'NAME_INV')
     config.DIAG = merge_configs(config_exp,config_def,'NAME_DIAG')
 
+    del config_exp
+    sys.modules.pop(_config)
+
     # temporary directory
     if not os.path.exists(config.EXP.tmp_DA_path):
         os.makedirs(config.EXP.tmp_DA_path)
-    cmd = f"cp {config.name_file} {config.EXP.tmp_DA_path}/config.py"
+    cmd = f"cp {path_config} {config.EXP.tmp_DA_path}/config.py"
     os.system(cmd)
 
     # outptut directory
     if not os.path.exists(config.EXP.path_save):
         os.makedirs(config.EXP.path_save)
-    cmd = f"cp {config.name_file} {config.EXP.path_save}/config.py"
+    cmd = f"cp {path_config} {config.EXP.path_save}/config.py"
     os.system(cmd)
 
     return config

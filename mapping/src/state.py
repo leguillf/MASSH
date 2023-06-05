@@ -115,7 +115,7 @@ class State:
                 config (module): configuration module
         """
         self.geo_grid = True
-        lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) % 360
+        lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) 
         lat = np.arange(config.lat_min, config.lat_max + config.dlat, config.dlat) 
         lon,lat = np.meshgrid(lon,lat)
         self.lon = lon

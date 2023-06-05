@@ -86,14 +86,6 @@ class Variational:
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
-            
-    def _cost_for_scan(self,X0,X):
-
-        h1, var1, Xb = X0
-        h1, var1 = self.one_step_jit(h1, var1, Xb)
-        X = (h1, var1, Xb)
-
-        return X,X
 
         
     def cost(self,X0):
@@ -121,7 +113,7 @@ class Variational:
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
             
             # 1. Misfit
-            if timestamp in self.H.date_obs:
+            if self.H.is_obs(timestamp):
                 misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
             
@@ -136,7 +128,7 @@ class Variational:
             self.M.step(t=t,State=State,nstep=nstep)
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
-        if timestamp in self.H.date_obs:
+        if self.H.is_obs(timestamp):
             misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))  
         
@@ -175,7 +167,7 @@ class Variational:
 
         # Last timestamp
         timestamp = self.M.timestamps[self.checkpoints[-1]]
-        if timestamp in self.H.date_obs:
+        if self.H.is_obs(timestamp):
             self.H.adj(timestamp,adState,self.R)
 
         # Time loop
@@ -197,15 +189,18 @@ class Variational:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
             
             # 1. Misfit 
-            if timestamp in self.H.date_obs:
+            if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.R)
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
+
         
         adState.plot(title='adjoint variables at the end of gradient function evaluation')
+        self.basis.operg(t/3600/24,adX,State=State)
+        State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))

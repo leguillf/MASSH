@@ -43,7 +43,7 @@ class Qgm:
     #                             Initialization                              #
     ###########################################################################
     def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, upwind=3,
-                 g=9.81, f=1e-4, time_scheme='Euler', Wbc=None, Kdiffus=None):
+                 g=9.81, f=1e-4, time_scheme='Euler', Wbc=None, Kdiffus=None, Kdiffus_trac=None,bc_trac='OBC'):
 
         # Grid shape
         ny, nx, = np.shape(dx)
@@ -70,7 +70,7 @@ class Qgm:
 
         # Rossby radius
         if hasattr(c, "__len__"):
-            self.c = c.astype('float64')
+            self.c = (np.nanmean(c) * np.ones((self.ny,self.nx))).astype('float64')
         else:
             self.c = c * np.ones((self.ny,self.nx)).astype('float64')
 
@@ -110,7 +110,9 @@ class Qgm:
         mask[1,1:-1] = 2
         mask[1:-1,1] = 2
         mask[-2,1:-1] = 2
+        mask[-3,1:-1] = 2
         mask[1:-1,-2] = 2
+        mask[1:-1,-3] = 2
 
         # mask=0 on land 
         if isNAN is not None:
@@ -144,13 +146,17 @@ class Qgm:
 
         # Diffusion coefficient 
         self.Kdiffus = Kdiffus
+        self.Kdiffus_trac = Kdiffus_trac
+
+        # BC
+        self.bc_trac = bc_trac
 
         # JIT compiling functions
         self.h2uv_jit = jit(self.h2uv)
         self.h2pv_jit = jit(self.h2pv)
         self.pv2h_jit = jit(self.pv2h)
         self.rhs_jit = jit(self.rhs)
-        self._adv_jit = jit(self._adv,static_argnums=5)
+        self._adv_jit = jit(self._adv)
         self._adv1_jit = jit(self._adv1)
         self._adv2_jit = jit(self._adv2)
         self._adv3_jit = jit(self._adv3)
@@ -178,13 +184,19 @@ class Qgm:
 
         """
     
-        u = - self.g / self.f[1:-1,1:] * (h[2:, :-1] + h[2:, 1:] - h[:-2, 1:] - h[:-2, :-1])  / (4 * self.dy)
-        v =   self.g / self.f[1:,1:-1] * (h[1:, 2:] + h[:-1, 2:] - h[:-1, :-2] - h[1:, :-2])  / (4 * self.dx)
+        u = jnp.zeros((self.ny,self.nx))
+        v = jnp.zeros((self.ny,self.nx))
 
-        u = jnp.where(jnp.isnan(u), 0, u)
-        v = jnp.where(jnp.isnan(v), 0, v)
-
-        return u, v
+        u = u.at[1:-1,1:].set(- self.g/self.f[1:-1,1:]*\
+         (h[2:,:-1]+h[2:,1:]-h[:-2,1:]-h[:-2,:-1])/(4*self.dy))
+             
+        v = v.at[1:,1:-1].set(self.g/self.f[1:,1:-1]*\
+            (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx))
+        
+        u = jnp.where(jnp.isnan(u),0,u)
+        v = jnp.where(jnp.isnan(v),0,v)
+            
+        return u,v
 
     def h2pv(self, h, hbc, c=None):
         """ SSH to Q
@@ -244,8 +256,8 @@ class Qgm:
         #######################
         # Upwind current
         #######################
-        u_on_T = way*(u[:,1:] + u[:,:-1])/2
-        v_on_T = way*(v[1:,:] + v[:-1,:])/2
+        u_on_T = way*0.5*(u[1:-1,1:-1]+u[1:-1,2:])
+        v_on_T = way*0.5*(v[1:-1,1:-1]+v[2:,1:-1])
         up = jnp.where(u_on_T < 0, 0, u_on_T)
         um = jnp.where(u_on_T > 0, 0, u_on_T)
         vp = jnp.where(v_on_T < 0, 0, v_on_T)
@@ -255,11 +267,11 @@ class Qgm:
         # PV advection
         #######################
         rhs_q = self._adv_jit(up, vp, um, vm, q0)
-        rhs_q = rhs_q.at[1:-1,1:-1].set(
-            rhs_q[1:-1,1:-1] - way*\
-                (self.f[2:,1:-1]-self.f[:-2,1:-1])/(2*self.dy)\
-                    *0.5*(v[1:,:]+v[:-1,:])
-        )
+        rhs_q = rhs_q.at[2:-2,2:-2].set(
+                rhs_q[2:-2,2:-2] - way*\
+                    (self.f[3:-1,2:-2]-self.f[1:-3,2:-2])/(2*self.dy)\
+                        *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2]))
+        # Diffusion
         if self.Kdiffus is not None:
             rhs_q = rhs_q.at[2:-2,2:-2].set(
                 rhs_q[2:-2,2:-2] +\
@@ -280,14 +292,24 @@ class Qgm:
             incr = incr[jnp.newaxis,:,:] # add new axis to concatenate with advected tracer
             for i in range(c0.shape[0]):
                 rhs_c = jnp.zeros((self.ny,self.nx),dtype='float64')
+                # Advection
                 rhs_c = self._adv_jit(up, vp, um, vm, c0[i])
+                # Diffusion
+                if self.Kdiffus_trac is not None:
+                    rhs_c = rhs_c.at[2:-2,2:-2].set(
+                        rhs_c[2:-2,2:-2] +\
+                        self.Kdiffus_trac/(self.dx**2)*\
+                            (c0[i,2:-2,3:-1]+c0[i,2:-2,1:-3]-2*c0[i,2:-2,2:-2]) +\
+                        self.Kdiffus_trac/(self.dy**2)*\
+                            (c0[i,3:-1,2:-2]+c0[i,1:-3,2:-2]-2*c0[i,2:-2,2:-2])
+                    )
                 rhs_c = jnp.where(jnp.isnan(rhs_c), 0, rhs_c)
                 rhs_c = rhs_c.at[self.ind0].set(0)
                 incr = jnp.append(incr[:,:],rhs_c[jnp.newaxis,:,:],axis=0)
     
         return incr
     
-    def _adv(self,up, vp, um, vm,var0):
+    def _adv(self,up, vp, um, vm, var0):
         """
             main function for upwind schemes
         """
@@ -302,7 +324,7 @@ class Qgm:
             res = res.at[2:-2,2:-2].set(self._adv3_jit(up, vp, um, vm, var0))
 
         # Use first order scheme for boundary pixels
-        if self.upwind>1:
+        if self.upwind>1 and self.bc_trac=='OBC':
             res_tmp = jnp.zeros_like(var0,dtype='float64')
             res_tmp = res_tmp.at[1:-1, 1:-1].set(self._adv1_jit(up, vp, um, vm, var0))
             res = res.at[self.ind2].set(res_tmp[self.ind2])
@@ -362,12 +384,10 @@ class Qgm:
     def pv2h(self, q, hb, qb):
 
         # Interior pv
-        q0 = q.copy()
-        q0 = q0.at[self.ind12].set(qb[self.ind12])
         qin = q[1:-1,1:-1] - qb[1:-1,1:-1]
         
         # Inverse sine tranfrom to get reconstructed ssh
-        hrec = jnp.zeros_like(q0,dtype='float64')
+        hrec = jnp.zeros_like(q,dtype='float64')
         inv = inverse_elliptic_dst(qin, self.helmoltz_dst)
         hrec = hrec.at[1:-1, 1:-1].set(inv)
 
@@ -443,37 +463,43 @@ class Qgm:
         """
 
         if len(varb.shape)==3 and varb.shape[0]>1:
+
             # Compute adimensional coefficients fro OBC
-            r1_S = 1/2 * self.dt/self.dy * (v[0,:]  + jnp.abs(v[0,:] ))
-            r2_S = 1/2 * self.dt/self.dy * (v[0,:]  - jnp.abs(v[0,:] ))
-            r1_N = 1/2 * self.dt/self.dy * (v[-1,:]  + jnp.abs(v[-1,:] ))
-            r2_N = 1/2 * self.dt/self.dy * (v[-1,:]  - jnp.abs(v[-1,:] ))
-            r1_W = 1/2 * self.dt/self.dx * (u[:,0] + jnp.abs(u[:,0]))
-            r2_W = 1/2 * self.dt/self.dx * (u[:,0] - jnp.abs(u[:,0]))
-            r1_E = 1/2 * self.dt/self.dx * (u[:,-1] + jnp.abs(u[:,-1]))
-            r2_E = 1/2 * self.dt/self.dx * (u[:,-1] - jnp.abs(u[:,-1]))
+            r1_S = 1/2 * self.dt/self.dy * (v[1,1:-1]  + jnp.abs(v[1,1:-1] ))
+            r2_S = 1/2 * self.dt/self.dy * (v[1,1:-1]  - jnp.abs(v[1,1:-1] ))
+            r1_N = 1/2 * self.dt/self.dy * (v[-1,1:-1]  + jnp.abs(v[-1,1:-1] ))
+            r2_N = 1/2 * self.dt/self.dy * (v[-1,1:-1]  - jnp.abs(v[-1,1:-1] ))
+            r1_W = 1/2 * self.dt/self.dx * (u[1:-1,1] + jnp.abs(u[1:-1,1]))
+            r2_W = 1/2 * self.dt/self.dx * (u[1:-1,1] - jnp.abs(u[1:-1,1]))
+            r1_E = 1/2 * self.dt/self.dx * (u[1:-1,-1] + jnp.abs(u[1:-1,-1]))
+            r2_E = 1/2 * self.dt/self.dx * (u[1:-1,-1] - jnp.abs(u[1:-1,-1]))
 
             for i in range(1, varb.shape[0]):
 
-                #######################
-                # Tracer Open BC
-                #######################
-                # South
-                var1 = var1.at[i,0,1:-1].set(
-                    var0[i,0,1:-1] - (r1_S*(var0[i,0,1:-1]-varb[i,0,1:-1]) + r2_S*(var0[i,1,1:-1]-var0[i,0,1:-1])))
+                if self.bc_trac=='OBC':
 
-                # North
-                var1 = var1.at[i,-1,1:-1].set(
-                    var0[i,-1,1:-1] - (r1_N*(var0[i,-1,1:-1]-var0[i,-2,1:-1]) + r2_N*(varb[i,-1,1:-1]-var0[i,-1,1:-1])))
-                
-                # West
-                var1 = var1.at[i,1:-1,0].set(
-                    var0[i,1:-1,0] - (r1_W*(var0[i,1:-1,0]-varb[i,1:-1,0]) + r2_W*(var0[i,1:-1,1]-var0[i,1:-1,0])))
-                
-                # East
-                var1 = var1.at[i,1:-1,-1].set(
-                    var0[i,1:-1,-1] - (r1_E*(var0[i,1:-1,-1]-var0[i,1:-1,-2]) + r2_E*(varb[i,1:-1,-1]-var0[i,1:-1,-1])))
-                
+                    #######################
+                    # Tracer Open BC
+                    #######################
+                    # South
+                    var1 = var1.at[i,0,1:-1].set(
+                        var0[i,0,1:-1] - (r1_S*(var0[i,0,1:-1]-varb[i,0,1:-1]) + r2_S*(var0[i,1,1:-1]-var0[i,0,1:-1])))
+
+                    # North
+                    var1 = var1.at[i,-1,1:-1].set(
+                        var0[i,-1,1:-1] - (r1_N*(var0[i,-1,1:-1]-var0[i,-2,1:-1]) + r2_N*(varb[i,-1,1:-1]-var0[i,-1,1:-1])))
+                    
+                    # West
+                    var1 = var1.at[i,1:-1,0].set(
+                        var0[i,1:-1,0] - (r1_W*(var0[i,1:-1,0]-varb[i,1:-1,0]) + r2_W*(var0[i,1:-1,1]-var0[i,1:-1,0])))
+                    
+                    # East
+                    var1 = var1.at[i,1:-1,-1].set(
+                        var0[i,1:-1,-1] - (r1_E*(var0[i,1:-1,-1]-var0[i,1:-1,-2]) + r2_E*(varb[i,1:-1,-1]-var0[i,1:-1,-1])))
+
+                else:
+                    var1 = var1.at[i,self.ind12].set(varb[i,self.ind12])
+            
                 #######################
                 # Tracer Relaxation BC
                 #######################

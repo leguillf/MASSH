@@ -177,7 +177,11 @@ OBS_SSH_NADIR = dict(
 
     name_var_mdt = None, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
     
-    nudging_params_ssh = None, # dictionary of nudging parameters on SSH {'sigma':<float>,'K':<float>,'Tau':<datetime.timedelta>}. Note that 'sigma' parameter is useless now, and will be removed soon
+    nudging_params_ssh = None, # dictionary of nudging parameters on SSH {'sigma':<float>,'K':<float>,'Tau':<datetime.timedelta>}. Note that 'sigma' parameter is useless now, and will be removed soon,
+
+    delta_t = None, # Sampling period of the satellite (in s), used for computing geostrophic current 
+
+    velocity = None # Velocity of the satellite (in m/s), used for computing geostrophic current 
 
 )
 
@@ -318,6 +322,10 @@ MOD_QG1L_JAX = dict(
 
     Kdiffus = None,
 
+    Kdiffus_trac = None,
+
+    bc_trac = 'OBC', # Either OBC or fixed
+
 )
 
 MOD_QG1L_JAX_FULL = dict(
@@ -423,6 +431,52 @@ MOD_SW1L_JAX = dict(
 
 )
 
+# Tracer advection
+
+MOD_TRACADV_SSH = dict(
+
+    name_var = {'SST':'sst','SSH':'ssh'}, # Dictionnary of variable names (need to be at least one tracer e.g SST and SSH variables.)
+
+    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
+
+    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
+
+    upwind = 3, # Order of the upwind scheme for tracer advection (either 1,2 or 3)
+
+    time_scheme = 'Euler', # Either Euler, rk2 or rk4
+
+    dtmodel = 300, # model timestep
+
+    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
+
+    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
+
+    Kdiffus = None
+
+)
+
+MOD_TRACADV_VEL = dict(
+
+    name_var = {'SST':'sst','U':'u','V':'v'}, # Dictionnary of variable name (need to be at least one tracer e.g SST and optionaly velocity variables.)
+
+    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
+
+    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
+
+    upwind = 3, # Order of the upwind scheme for tracer advection (either 1,2 or 3)
+
+    time_scheme = 'Euler', # Either Euler, rk2 or rk4
+
+    dtmodel = 300, # model timestep
+
+    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
+
+    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
+
+    Kdiffus = None
+
+)
+
 #################################################################################################################################
 # BOUNDARY CONDITIONS
 #################################################################################################################################
@@ -449,7 +503,9 @@ BC_EXT = dict(
 #################################################################################################################################
 NAME_OBSOP = None
 
-OBSOP_INTERP = dict(
+OBSOP_INTERP_L3 = dict(
+
+    name_obs = None, # List of observation class names. If None, all observation will be considered. 
 
     write_op = False, # Write operator data to *path_save*
 
@@ -459,33 +515,39 @@ OBSOP_INTERP = dict(
 
     Npix = 4, # Number of pixels to perform projection y=Hx
 
-    mask_coast = False,
+    mask_borders = False,
 
-    dist_coast = 100, # km
+)
+
+OBSOP_INTERP_L3_GEOCUR = dict(
+
+    name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+    write_op = False, # Write operator data to *path_save*
+
+    path_save = None, # Directory where to save observational operator
+
+    compute_op = True, # Force computing H 
+
+    Npix = 4, # Number of pixels to perform projection y=Hx
+
+    mask_borders = False,
+
+)
+
+OBSOP_INTERP_L4 = dict(
+
+    name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+    write_op = False, # Write operator data to *path_save*
+
+    path_save = None, # Directory where to save observational operator
+
+    compute_op = True, # Force computing H 
 
     mask_borders = False,
 
     interp_method = 'linear' # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
-
-)
-
-OBSOP_INTERP_JAX = dict(
-
-    write_op = False, # Write operator data to *path_save*
-
-    path_save = None, # Directory where to save observational operator
-
-    compute_op = True, # Force computing H 
-
-    Npix = 4, # Number of pixels to perform projection y=Hx
-
-    mask_coast = False,
-
-    dist_coast = 100, # km
-
-    mask_borders = False,
-
-    interp_method = 'cubic'
 
 )
 
@@ -782,6 +844,76 @@ BASIS_BM = dict(
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
     var_background = None # name of the variable of the basis vector
+
+)
+
+BASIS_GEOCUR = dict(
+
+    name_mod_u = None, # Name of the related model variable 
+
+    name_mod_v = None, # Name of the related model variable 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    facns = 1., #factor for wavelet spacing in space
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    lmeso = 300, # Largest mesoscale wavelenght 
+
+    tmeso = 20, # Largest mesoscale time of decorrelation 
+
+    sloptdec = -1.28, # Slope such as tdec = lambda^slope where lamda is the wavelength
+
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    depth1 = 0.,
+
+    depth2 = 30.,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
+BASIS_GAUSS3D = dict(
+
+    name_mod_var = '', # Name of the related model variable 
+
+    flux = False,
+
+    facns = 1., # Factor for gaussian spacing in space
+
+    facnlt = 2., # Factor for gaussian spacing in time
+
+    sigma_D = 300, # Spatial scale (km)
+
+    sigma_T = 20, # Time scale (days)
+
+    sigma_Q = 0.01, # Standard deviation for matrix Q 
 
 )
 
