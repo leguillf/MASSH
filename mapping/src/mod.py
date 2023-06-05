@@ -662,8 +662,11 @@ class Model_qg1l_jax(M):
                                    State.lon,
                                    State.lat)
 
-            if
-            self.c[np.isnan(self.c)] = np.nanmean(self.c)
+            if np.any(np.isnan(self.c)):
+                if config.MOD.cmin is not None:
+                    self.c[np.isnan(self.c)] = config.MOD.cmin
+                else:
+                    self.c[np.isnan(self.c)] = np.nanmean(self.c)
             
             if config.MOD.cmin is not None:
                 self.c[self.c<config.MOD.cmin] = config.MOD.cmin
