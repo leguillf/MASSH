@@ -97,6 +97,7 @@ def Obs(config, State, *args, **kwargs):
             except ValueError:
                 print('ValueError: opening with comnine==nested')
                 files = glob.glob(path)
+
                 # Get time dimension to concatenate
                 if len(files)==0:
                     continue
@@ -169,10 +170,9 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     # Time loop
     count = 0
     for dt_curr in dt_list:
-        
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
-       
+
         try:
             _ds = ds.sel({obs_attr.name_time:slice(dt1,dt2)})
         except:
@@ -188,7 +188,9 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         lat = _ds[obs_attr.name_lat].values
         
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
-                    
+        
+
+
         if is_obs:
             # Save the selected dataset in a new nc file
             varobs = {}

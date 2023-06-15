@@ -103,7 +103,6 @@ class Bc_ext:
         self.var = {}
         for name in config.BC.name_var:
             self.var[name] = ds[config.BC.name_var[name]].load()
-
         ds.close()        
             
     def interp(self,time):
