@@ -131,6 +131,25 @@ GRID_RESTART = dict(
 #################################################################################################################################
 NAME_OBS = None
 
+OBS_MODEL = dict(
+
+    path = '',
+
+    name_time = '',
+    
+    name_lon = '',
+
+    name_lat = '',
+    
+    name_var = {},
+
+    subsampling = None, # Subsampling in time (in number of model time step)
+
+    sigma_noise = None
+
+)
+
+
 # Nadir altimetry
 OBS_SSH_NADIR = dict(
 
@@ -144,7 +163,7 @@ OBS_SSH_NADIR = dict(
     
     name_var = {'SSH':''},
 
-    name_concat_dim = None, # dimension to concatenate for multiple file opening
+    varmax = 1e2,
 
     sigma_noise = None,
 
@@ -177,8 +196,6 @@ OBS_SSH_SWATH = dict(
     
     name_var = {'SSH':''},
 
-    name_concat_dim = None, # dimension to concatenate for multiple file opening
-
     sigma_noise = None,
 
     add_mdt = None,
@@ -207,12 +224,17 @@ MOD_DIFF = dict(
 
     name_var = {'SSH':"ssh"},
 
+    var_to_save = None,
+
     name_init_var = {},
 
     dtmodel = 300, # model timestep
 
-    Kdiffus = 0 # coefficient of diffusion. Set to 0 for Identity model
+    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
 
+    init_from_bc = False,
+
+    dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
 )
 
 # 1.5-layer Quasi-Geostrophic models
@@ -223,6 +245,8 @@ MOD_QG1L_NP = dict(
     name_init_var = {},
 
     dir_model = None,
+
+    var_to_save = None,
 
     dtmodel = 300, # model timestep
 
@@ -260,11 +284,17 @@ MOD_QG1L_JAX = dict(
 
     name_var = {'SSH':"ssh"},
 
+    init_from_bc = False,
+
     name_init_var = {},
 
     dir_model = None,
 
+    var_to_save = None,
+
     multiscale = False,
+
+    advect_tracer = False,
 
     dtmodel = 300, # model timestep
 
@@ -305,6 +335,8 @@ MOD_SW1L_NP = dict(
 
     dir_model = None,
 
+    var_to_save = None,
+
     dtmodel = 300, # model timestep
 
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
@@ -331,6 +363,8 @@ MOD_SW1L_JAX = dict(
 
     dir_model = None,
 
+    var_to_save = None,
+
     dtmodel = 300, # model timestep
 
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
@@ -349,6 +383,26 @@ MOD_SW1L_JAX = dict(
 
 )
 
+# Tracer conservation
+MOD_TRAC = dict(
+
+    name_var = {'SST':"sst"},
+
+    var_to_save = None,
+
+    name_init_var = {},
+
+    dtmodel = 300, # model timestep
+
+    model_dyn = None,
+
+    compute_ugeo_from_ssh = False,
+
+    init_from_bc = True,
+
+    dist_sponge_bc = None  
+
+)
 
 #################################################################################################################################
 # BOUNDARY CONDITIONS
@@ -360,17 +414,13 @@ BC_EXT = dict(
 
     file = None, # netcdf file(s) in whihch the boundary conditions fields are stored
 
-    name_lon = '',
+    name_lon = 'lon',
 
-    name_lat = '',
+    name_lat = 'lat',
 
     name_time = None,
 
     name_var = {},
-
-    name_mod_var = {},
-
-    dist_sponge = None  # distance (in km) for which boundary fields are spatially spread close to the borders (useful for MOD_QG1L_NP model)
 
 )
 
@@ -404,13 +454,15 @@ NAME_INV = None
 # Optimal Interpolation
 INV_OI = dict(
 
+    name_var = {'SSH':'ssh'},
+
     Lt = 7, # days
 
     Lx = 1, # degreee
 
     Ly = 1, # degree
 
-    noise = 5e-2 # meters
+    sigma_R = 5e-2 # meters
 
 )
 
@@ -462,7 +514,7 @@ INV_4DVAR = dict(
 
     timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
 
-    sigma_R = 1e-2, # Observational standard deviation
+    sigma_R = None, # Observational standard deviation
 
     sigma_B = None,
 
@@ -484,22 +536,100 @@ INV_4DVAR = dict(
 
     largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
 
-    only_largescale = False # Flag to prescribe only BM basis background error over lmeso wavelenghts
+    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
+
+    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
  
 )
 
-# Multi-scale Optimal Interpolation 
-INV_MIOST = dict(
+INV_4DVAR_PARALLEL = dict(
 
+    nprocs = 1,
+
+    overlap_frac = .5,
+
+    window_size_proc = timedelta(days=30),
+
+    compute_test = False, # TLM, ADJ & GRAD tests
+
+    path_init_4Dvar = None, # To restart the minimization process from a specified control vector
+
+    restart_4Dvar = False, # To restart the minimization process from the last control vector
+
+    gtol = None, # Gradient norm must be less than gtol before successful termination.
+
+    maxiter = 10, # Maximal number of iterations for the minimization process
+
+    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
+
+    save_minimization = False, # save cost function and its gradient at each iteration 
+
+    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
+
+    sigma_R = None, # Observational standard deviation
+
+    sigma_B = None,
+
+    prec = False, # preconditoning
+    
+    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
+
+    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
+
+    path_background = None, # Path to the precribed background on BM basis
+    
+    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
+
+    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
+
+    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
+
+    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
+
+    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
+
+    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
+
+    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
+ 
+)
+
+# Multi-scale Optimal Interpolation (Ubelmann et al. 2021) 
+INV_MOI = dict(
+
+    dir = None, # Directory of .py scripts
+
+    name_var = False,
+
+    path_mdt = None, # path of Mean Dynamic Topography (MDT) netcdf file.  
+
+    name_var_mdt = {'lon':'','lat':'','mdt':''}, # name of coordinates and variable of the MDT file
+    
     window_size = timedelta(days=15),
 
     window_output = timedelta(days=15),
 
     window_overlap = True,
 
-    dir = None,
+    sigma_R = 1e-2, 
 
-    obs_subsampling = 1
+    set_geo3ss6d = True, # Estimate small scales balanced motion component
+
+    set_geo3ls = True, # Estimate large scales balanced motion component
+
+    lmin= 80, # minimal wavelength (in km)
+
+    lmax= 970., # maximal wavelength (in km)
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    file_aux = None,
+
+    filec_aux = None,
 
 )
 
@@ -548,7 +678,11 @@ BASIS_BM = dict(
 
     Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
-    slopQ = -5 # Slope such as Q = lambda^slope where lamda is the wavelength
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 
 )
 
@@ -614,7 +748,11 @@ BASIS_BMaux = dict(
 
     Romax = 150.,
 
-    cutRo =  1.6
+    cutRo =  1.6,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 
 )
 
@@ -637,8 +775,11 @@ BASIS_LS = dict(
         
     lambda_lw= 970,
 
-    fcor = .5
+    fcor = .5,
 
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 )
 
 # Internal Tides
@@ -668,8 +809,11 @@ BASIS_IT = dict(
 
     scalemodes = None, # Only for SW1LM model, 
 
-    scalew_igws = None 
+    scalew_igws = None,
 
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 )
 
 
@@ -705,11 +849,75 @@ DIAG_OSSE = dict(
 
     name_ref_var = '',
 
-    options_ref =  None,
+    options_ref =  {},
 
     name_exp_var = '',
 
-    compare_to_baseline = True,
+    compare_to_baseline = False,
+
+    name_bas = None,
+
+    name_bas_time = None,
+
+    name_bas_lon = None,
+
+    name_bas_lat = None,
+
+    name_bas_var = None
+
+)
+
+DIAG_OSE = dict(
+
+    dir_output = None,
+
+    time_min = None,
+
+    time_max = None,
+
+    lon_min = None,
+
+    lon_max = None,
+
+    lat_min = None,
+
+    lat_max = None,
+
+    bin_lon_step = 1,
+
+    bin_lat_step = 1,
+
+    bin_time_step = '1D',
+
+    name_ref = '',
+
+    name_ref_time = '',
+
+    name_ref_lon = '',
+
+    name_ref_lat = '',
+
+    name_ref_var = '',
+
+    options_ref =  {},
+
+    add_mdt_to_ref = False,
+
+    path_mdt = None,
+
+    name_var_mdt = None,
+    
+    delta_t_ref = 0.9434, # s
+
+    velocity_ref = 6.77, # km/s
+
+    lenght_scale = 1000, # km
+
+    nb_min_obs = 10,
+
+    name_exp_var = '',
+
+    compare_to_baseline = False,
 
     name_bas = None,
 

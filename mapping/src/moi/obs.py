@@ -123,22 +123,21 @@ class ObsRcur(Obs):
 class MASSH(ObsSla):
     """
     """
-    __slots__ = ('name','dict_obs','subsampling','noise','data_lon','data_lat','data_time','nobs', 'nobs_tot')
+    __slots__ = ('name','dict_obs','noise','name_var','data_lon','data_lat','data_time','nobs', 'nobs_tot')
 
 
 
-    def __init__(self, dict_obs,noise=0.03,subsampling=1,**kwargs):
-        self.noise=noise
+    def __init__(self, dict_obs, name_var, noise,**kwargs):
+        self.noise = noise
         self.dict_obs = dict_obs
-        self.subsampling = subsampling
-        #self.dirname = kwargs.get('dirname')
+        self.name_var = name_var
         for k, v in kwargs.items():
             setattr(self, k, v)
         super(MASSH,self).__init__(**kwargs)
 
 
 
-    def get_obs(self,box, float_type='f4', chunk=0, nchunks=1):
+    def get_obs(self, box, float_type='f4', chunk=0, nchunks=1):
 
         lon0 = box[0]
         lon1 = box[1]
@@ -148,10 +147,10 @@ class MASSH(ObsSla):
         time0 = datetime(2003,1,1) + timedelta(days=box[4]-19358)
         time1 = datetime(2003,1,1) + timedelta(days=box[5]-19358)
 
-        lon= numpy.array([])
-        lat= numpy.array([])
-        time= numpy.array([])
-        ssh= numpy.array([])
+        lon = numpy.array([])
+        lat = numpy.array([])
+        time = numpy.array([])
+        var = numpy.array([])
         
         for dt in self.dict_obs:
             
@@ -159,38 +158,45 @@ class MASSH(ObsSla):
                 
                     path_obs = self.dict_obs[dt]['obs_name']
                     sat =  self.dict_obs[dt]['satellite']
-                    
+
                     for _sat,_path_obs in zip(sat,path_obs):
                         
                         ds = xr.open_dataset(_path_obs).squeeze() 
-                        time_obs = ds[_sat.name_obs_time].values
-                        time_obs = (time_obs-numpy.datetime64(time0))/numpy.timedelta64(1, 'D')
-                        lon_obs = ds[_sat.name_obs_lon] % 360
-                        lat_obs = ds[_sat.name_obs_lat]
+                        
+                        if self.name_var not in ds.variables:
+                            print(f'Warning: {self.name_var} not in {_path_obs}')
+                            continue
+
+                        lon_obs = ds[_sat.name_lon] % 360
+                        lat_obs = ds[_sat.name_lat]
                         
                         ds = ds.where((lon0<=lon_obs) & (lon1>=lon_obs) & 
                   (lat0<=lat_obs) & (lat1>=lat_obs), drop=True)
+                        time_obs = ds[_sat.name_time].values
+                        time_obs = (time_obs-numpy.datetime64(time0))/numpy.timedelta64(1, 'D')
 
-                        if _sat.kind=='fullSSH':
-                            if len(ds[_sat.name_obs_lon].shape)==1:
-                                lon_obs = ds[_sat.name_obs_lon].values[::self.subsampling]
-                                lat_obs = ds[_sat.name_obs_lat].values[::self.subsampling]
+                        if _sat.super=='OBS_MODEL':
+                            if len(ds[_sat.name_lon].shape)==1:
+                                lon_obs = ds[_sat.name_lon].values
+                                lat_obs = ds[_sat.name_lat].values
                                 lon_obs,lat_obs = numpy.meshgrid(lon_obs,lat_obs)
                             else:
-                                lon_obs = ds[_sat.name_obs_lon].values[::self.subsampling,::self.subsampling]
-                                lat_obs = ds[_sat.name_obs_lat].values[::self.subsampling,::self.subsampling]
-                            ssh_obs = ds[_sat.name_obs_var[0]].values[::self.subsampling,::self.subsampling]
-                            time_obs = time_obs * numpy.ones_like(ssh_obs)
+                                lon_obs = ds[_sat.name_lon].values
+                                lat_obs = ds[_sat.name_lat].values
+                            var_obs = ds[self.name_var].values
+                            time_obs = time_obs * numpy.ones_like(var_obs)
                         
-                        elif _sat.kind in ['swot_simulator','CMEMS']:
-                            lon_obs = ds[_sat.name_obs_lon].values
-                            lat_obs = ds[_sat.name_obs_lat].values
-                            ssh_obs = ds[_sat.name_obs_var[0]].values
-                            if _sat.kind=='CMEMS' and len(_sat.name_obs_var)==2:
-                                ssh_obs += ds[_sat.name_obs_var[1]].values
-                            if len(ssh_obs.shape)==2:
+                        elif _sat.super in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
+                            lon_obs = ds[_sat.name_lon].values
+                            lat_obs = ds[_sat.name_lat].values
+                            var_obs = ds[self.name_var].values
+                            if len(var_obs.shape)==2:
                                 # SWATH data
-                                time_obs = time_obs.repeat(ssh_obs.shape[1],axis=0)
+                                if var_obs.shape[0]==time_obs.size:
+                                    dim = 1
+                                else:
+                                    dim = 0
+                                time_obs = time_obs.repeat(var_obs.shape[dim],axis=0)
                         ds.close()
                         del ds
                         
@@ -198,133 +204,39 @@ class MASSH(ObsSla):
                         time1d = time_obs.ravel()
                         lon1d = lon_obs.ravel()
                         lat1d = lat_obs.ravel()
-                        ssh1d = ssh_obs.ravel()
+                        var1d = var_obs.ravel()
 
                         # Remove NaN pixels
-                        indNoNan= ~numpy.isnan(ssh1d)
+                        indNoNan= ~numpy.isnan(var1d)
                         time1d = time1d[indNoNan]
                         lon1d = lon1d[indNoNan]
                         lat1d = lat1d[indNoNan]
-                        ssh1d = ssh1d[indNoNan]    
+                        var1d = var1d[indNoNan]    
                         
                         # Append to arrays
                         time = numpy.append(time,time1d)
                         lon = numpy.append(lon,lon1d)
                         lat = numpy.append(lat,lat1d)
-                        ssh = numpy.append(ssh,ssh1d)
+                        var = numpy.append(var,var1d)
         
         coords = [None]*3
         coords_att = { 'lon':0, 'lat':1, 'time':2, 'nobs':len(time) }
-        values=None
-        noise=None
+
         if len(time)>0:
             indsort = numpy.argsort(time)
             if len(indsort)>0:
                 lon=lon[indsort]   
                 lat=lat[indsort]
                 time=time[indsort]
-                ssh=ssh[indsort]
+                var=var[indsort]
 
             coords[coords_att['lon']] = lon
             coords[coords_att['lat']] = lat
-            coords[coords_att['time']] = time      
-            values =  ssh
+            coords[coords_att['time']] = time   
             noise =  self.noise * numpy.ones(time.size)
                     
-        return [values, noise, coords, coords_att]
+        return [var, noise, coords, coords_att]
                         
-    
-
-# class fullSSH(ObsSla):
-#     """
-#     """
-#     __slots__ = ('subsampling','name_time', 'name_lon', 'name_lat','name','name_ssh','data_lon','data_lat','data_time','nobs', 'nobs_tot')
-
-
-
-#     def __init__(self, noise=0.03,**kwargs):
-#         self.noise=noise
-#         #self.dirname = kwargs.get('dirname')
-#         for k, v in kwargs.items():
-#             setattr(self, k, v)
-#         super(fullSSH,self).__init__(**kwargs)
-
-
-
-#     def get_obs(self,box, float_type='f4', chunk=0, nchunks=1):
-
-#         lon0 = box[0]
-#         lon1 = box[1]
-#         lat0 = box[2]
-#         lat1 = box[3]
-        
-#         time0 = numpy.datetime64('2003-01-01') + numpy.timedelta64(box[4]-19358,'D')
-#         time1 = numpy.datetime64('2003-01-01') + numpy.timedelta64(box[5]-19358,'D')
-
-#         lon=[]
-#         lat=[]
-#         time=[]
-#         sla=[]
-        
-#         # open dataset 
-#         ds = xr.open_mfdataset(os.path.join(self.dirname,self.root1+'*.nc'))
-        
-#         # Selecting data
-#         time_obs = ds[self.name_time]
-#         lon_obs = ds[self.name_lon] % 360
-#         lat_obs = ds[self.name_lat]
-        
-#         ds = ds.where((time_obs>=time0)&(time_obs<=time1)&(lon0<=lon_obs) & (lon1>=lon_obs) & 
-#                   (lat0<=lat_obs) & (lat1>=lat_obs), drop=True) 
-        
-#         print(ds)
-        
-#         time_obs = ds[self.name_time].values
-#         lon_obs = ds[self.name_lon].values[::self.subsampling]
-#         lat_obs = ds[self.name_lat].values[::self.subsampling]
-#         ssh_obs = ds[self.name_ssh].values[:,::self.subsampling,::self.subsampling]
-        
-#         time = []
-#         lon = []
-#         lat = []
-#         sla = []
-        
-#         for t,_time in enumerate(time_obs):
-#             for i,_lat in enumerate(lat_obs):
-#                 for j,_lon in enumerate(lon_obs):
-#                     time.append(_time)
-#                     lon.append(_lon)
-#                     lat.append(_lat)
-#                     sla.append(ssh_obs[t,i,j])
-        
-#         time = numpy.asarray(time)
-#         lon = numpy.asarray(lon)
-#         lat = numpy.asarray(lat)
-#         sla = numpy.asarray(sla)
-        
-#         sla[numpy.isnan(sla)] = 0
-        
-#         coords = [None]*3
-#         coords_att = { 'lon':0, 'lat':1, 'time':2, 'nobs':len(time) }
-#         values=None
-#         noise=None
-#         if len(time)>0:
-#             indsort = numpy.argsort(time)
-#             if len(indsort)>0:
-#                 lon=lon[indsort]
-#                 lat=lat[indsort]
-#                 time=time[indsort]
-#                 sla=sla[indsort]
-
-#             coords[coords_att['lon']] = numpy.array((lon), dtype=float_type) 
-#             coords[coords_att['lat']] = numpy.array((lat), dtype=float_type)
-#             coords[coords_att['time']] = numpy.array((time-time0)/ numpy.timedelta64(1, 'D'), dtype=float_type)       
-#             values =  numpy.array((sla),dtype=float_type)  
-#             noise =  self.noise * numpy.ones(time.size)
-                    
-#         return [values, noise, coords, coords_att]
-    
-   
     
 class Cmems(ObsSla):
 

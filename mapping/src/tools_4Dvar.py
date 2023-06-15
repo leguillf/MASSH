@@ -73,7 +73,10 @@ class Variational:
         # Grad test
         if config.INV.compute_test:
             print('Gradient test:')
-            X = (np.random.random(self.basis.nbasis)-0.5)*self.B.sigma 
+            if self.prec:
+                X = (np.random.random(self.basis.nbasis)-0.5)
+            else:
+                X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
             
             
@@ -81,7 +84,7 @@ class Variational:
     def cost(self,X0):
                 
         # Initial state
-        State = self.State.copy(free=True)
+        State = self.State.copy()
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
@@ -101,11 +104,13 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
+
+            #State.plot(title=timestamp)
             
             # 1. Misfit
             if timestamp in self.H.date_obs:
-                misfit, inv_noise2 = self.H.misfit(timestamp,State) # d=Hx-xobs   
-                Jo += (misfit*inv_noise2).dot(self.R.inv(misfit))
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -119,13 +124,14 @@ class Variational:
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if timestamp in self.H.date_obs:
-            misfit, inv_noise2 = self.H.misfit(timestamp,State) # d=Hx-xobsx
-            Jo += (misfit*inv_noise2).dot(self.R.inv(misfit))  
+            misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
+            Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        State.plot(title='end of cost function evaluation')
+        State.plot(title='State variables at the end of cost function evaluation')
+        State.plot(title='Parameters at the end of cost function evaluation',params=True)
         
         if self.save_minimization:
             self.J.append(J)
@@ -148,7 +154,7 @@ class Variational:
             gb = 0
             
         # Current trajectory
-        State = self.State.copy(free=True)
+        State = self.State.copy()
         
         # Ajoint initialization   
         adState = self.State.copy(free=True)
@@ -157,8 +163,7 @@ class Variational:
         # Last timestamp
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if timestamp in self.H.date_obs:
-            misfit,inv_noise2 = self.H.load_misfit(timestamp) # d=Hx-yobs
-            self.H.adj(timestamp,adState,self.R.inv(misfit*inv_noise2))
+            self.H.adj(timestamp,adState,self.R)
 
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
@@ -180,15 +185,14 @@ class Variational:
             
             # 1. Misfit 
             if timestamp in self.H.date_obs:
-                misfit,inv_noise2 = self.H.load_misfit(timestamp)
-                self.H.adj(timestamp,adState,self.R.inv(misfit*inv_noise2))
+                self.H.adj(timestamp,adState,self.R)
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
         g = adX + gb  # total gradient
         
-        adState.plot(title='end of grad function evaluation')
+        adState.plot(title='adjoint variables at the end of gradient function evaluation')
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))

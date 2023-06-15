@@ -12,10 +12,8 @@ import pickle
 import xarray as xr
 import scipy
 from scipy.integrate import quad
-import numba as nb
-from numba.typed import List
 
-def Basis(config, State, *args, **kwargs):
+def Basis(config, State, verbose=True, *args, **kwargs):
     """
     NAME
         Basis
@@ -28,11 +26,11 @@ def Basis(config, State, *args, **kwargs):
         return 
     
     elif config.BASIS.super is None:
-        return Basis_multi(config, State)
+        return Basis_multi(config, State, verbose=verbose)
 
     else:
-        
-        print(config.BASIS)
+        if verbose:
+            print(config.BASIS)
 
         if config.BASIS.super=='BASIS_BM':
             return Basis_bm(config, State)
@@ -66,6 +64,8 @@ class Basis_it:
         
         self.sigma_B_He = config.BASIS.sigma_B_He
         self.sigma_B_bc = config.BASIS.sigma_B_bc
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
         
         if config.BASIS.Ntheta>0:
             self.Ntheta = 2*(config.BASIS.Ntheta-1)+3 # We add -pi/2,0,pi/2
@@ -288,7 +288,15 @@ class Basis_it:
             else:
                 Q = None
             
-            return Q
+            # Background
+            if self.path_background is not None and os.path.exists(self.path_background):
+                with xr.open_dataset(self.path_background) as ds:
+                    print(f'Load background from file: {self.path_background}')
+                    Xb = ds[self.var_background].values
+            else:
+                Xb = np.zeros_like(Q)
+
+            return Xb, Q
         
         
     def operg(self,t,X,State=None):
@@ -399,6 +407,7 @@ class Basis_it:
         ps2 = np.inner(phi0,phi1)
             
         print(f'test G[{t}]:', ps1/ps2)
+
 
 
 class Basis_bm_offset: 
@@ -880,7 +889,6 @@ class Basis_constant:
         return adX
 
 
-
 class Basis_bm:
    
     def __init__(self,config,State):
@@ -904,10 +912,11 @@ class Basis_bm:
         self.slopQ = config.BASIS.slopQ
         self.lmeso = config.BASIS.lmeso
         self.tmeso = config.BASIS.tmeso
-        self.save_wave_basis = config.BASIS.save_wave_basis
         self.wavelet_init = config.BASIS.wavelet_init
         self.name_mod_var = config.BASIS.name_mod_var
-
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
+        
         # Grid params
         self.nphys= State.lon.size
         self.shape_phys = (State.ny,State.nx)
@@ -1006,7 +1015,7 @@ class Basis_bm:
                 tdec[iff] = self.tdecmax 
             tdec[iff] *= self.factdec
             enst[iff] = np.arange(-tdec[iff]/self.facnlt,deltat+tdec[iff]/self.facnlt , tdec[iff]/self.facnlt) 
-            
+
             ## Calculation of norm_fact : the time integral of time enveloppe between -tdec and +tdec ## 
             tt = np.linspace(-tdec[iff],tdec[iff])
             tmp = np.zeros_like(tt)
@@ -1061,6 +1070,17 @@ class Basis_bm:
 
         Q = np.concatenate((Qi,Qt))
 
+
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values
+        else:
+            Xb = np.zeros_like(Q)
+
+
+
         self.DX=DX
         self.ENSLON=ENSLON
         self.ENSLAT=ENSLAT
@@ -1077,43 +1097,30 @@ class Basis_bm:
 
 
         # Compute basis components
+        ## In space
+        self.indx, self.facGx = self._compute_component_space()
 
-        if self.save_wave_basis != False:
-            if self.save_wave_basis=='inline':
-                self.facG = {}
-                self.indx = {}
-            
-            for t in time:
-
-                facGt, indxt = self._compute_component(t,i_wavelength)
-
-                if self.save_wave_basis=='offline':
-                    name_facG = os.path.join(self.path_save_tmp,f'facG_{t}.pic')
-                    name_indx = os.path.join(self.path_save_tmp,'indx.pic')
-                    if not os.path.exists(name_facG):
-                        with open(name_facG, 'wb') as f:
-                            pickle.dump(facGt,f)  
-                    if not os.path.exists(name_indx):
-                        with open(name_indx, 'wb') as f:
-                            pickle.dump(indxt,f)     
-                else:
-                    self.facG[t] = facGt
-                    self.indx = indxt        
-            
-            print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
+        ## In time
+        self.facGt = {}
+        for t in time:
+            facGt = self._compute_component_time(t)
+            self.facGt[t] = facGt      
+        
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
             
         if return_q:
-            return Q
+            return Xb, Q
     
-    def _compute_component(self,t,i_wavelength=None):
 
-        facGt = [None,]*(self.nf+1)
-        indxt = [None,]*(self.nf+1)
+    def _compute_component_space(self):
 
-        for iff in range(self.nf): # iff is the index of the wavelength 
-            facGt[iff] = [None,]*self.NP[iff]
-            indxt[iff] = [None,]*self.NP[iff]
-            for P in range(self.NP[iff]): # P is the index of the spatial center of the wavelet  
+        indx = [None,]*self.nf
+        facGx = [None,]*self.nf
+
+        for iff in range(self.nf):
+            indx[iff] = [None,]*self.NP[iff]
+            facGx[iff] = [None,]*self.NP[iff]
+            for P in range(self.NP[iff]):
                 # Obs selection around point P
                 iobs = np.where(
                     (np.abs((np.mod(self.lon1d - self.ENSLON[iff][P]+180,360)-180) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
@@ -1124,119 +1131,70 @@ class Basis_bm:
                 # yy : distance along y between the obs and the center of the wavelet
                 yy = (self.lat1d[iobs] - self.ENSLAT[iff][P]) / self.km2deg 
 
-                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) # spatial compact support of the wavelet (cos**2(2*pi*x/DX)*cos**2(2*pi*y/DY) )
+                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff])
+
+                indx[iff][P] = iobs
                 
-                indxt[iff][P] = iobs
-                
-                if iobs.shape[0] > 0: # if there are observations in the wavelet support 
-                    enstloc = self.enst[iff] # Number of wavelets in time 
-                    facGt[iff][P] = [None,]*(len(enstloc)+1) # +1 for initial state
-                    # Initial State
-                    if t==0 and self.wavelet_init:
-                        facGt[iff][P][0] = [None,]*self.ntheta # 0 stands for initial state
-                        for itheta in range(self.ntheta):
-                            facGt[iff][P][0][itheta] = [[],[]]
-                            kx = self.k[iff] * np.cos(self.theta[itheta])
-                            ky = self.k[iff] * np.sin(self.theta[itheta])
+                facGx[iff][P] = [None,]*self.ntheta
+                if iobs.shape[0] > 0:
+                    for itheta in range(self.ntheta):
+                        facGx[iff][P][itheta] = [[],[]]
+                        kx = self.k[iff] * np.cos(self.theta[itheta])
+                        ky = self.k[iff] * np.sin(self.theta[itheta])
+                        facGx[iff][P][itheta][0] = np.sqrt(2) * facs * np.cos(kx*(xx)+ky*(yy))
+                        facGx[iff][P][itheta][1] = np.sqrt(2) * facs * np.sin(kx*(xx)+ky*(yy))
 
-                            ####### test : to keep only wavelength with index equals to i_wavelength ######
-                            if (iff != None) and (iff != i_wavelength) :  
-                                facGt[iff][P][0][itheta][0] = 0
-                                facGt[iff][P][0][itheta][1] = 0
-                            ###############################################################################
-                            else : 
-                                facGt[iff][P][0][itheta][0] = np.sqrt(2)* facs * np.cos(kx*(xx)+ky*(yy))
-                                facGt[iff][P][0][itheta][1] = np.sqrt(2)* facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
+        return indx, facGx
+    
 
-                    # Time spread wavelets (fluxes)
-                    for it in range(len(enstloc)):
-                        dt = t - enstloc[it]
-                        try:
-                            if abs(dt) < self.tdec[iff]:
-                                fact = self.window(dt / self.tdec[iff]) # temporal compact support of the wavelet cos**2(2*pi*t/T)
-                                fact /= self.norm_fact[iff] # divides by the integral of spatial support over the decrorrelation time 
-                                
-                                facGt[iff][P][it+1] = [None,]*self.ntheta
-                                for itheta in range(self.ntheta):
-                                    facGt[iff][P][it+1][itheta] = [[],[]]
-                                    kx = self.k[iff] * np.cos(self.theta[itheta]) # =(2*pi/lambda)*cos(theta)
-                                    ky = self.k[iff] * np.sin(self.theta[itheta]) # =(2*pi/lambda)*sin(theta)
-                                    
-                                    ####### test : to keep only wavelength with index equals to i_wavelength ######
-                                    if (iff != None) and (iff != i_wavelength) : 
-                                        facGt[iff][P][it+1][itheta][0] = 0
-                                        facGt[iff][P][it+1][itheta][1] = 1
-                                    ###############################################################################
-                                    else : 
-                                        facGt[iff][P][it+1][itheta][0] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy))
-                                        facGt[iff][P][it+1][itheta][1] = np.sqrt(2)* fact * facs * np.cos(kx*(xx)+ky*(yy)-np.pi/2)
-                        except:
-                            print(f'Warning: an error occured at t={t}, iff={iff}, P={P}, enstloc={enstloc[it]}')
+    def _compute_component_time(self, t):
 
-        # Defining facGt and indxt for offset parameter 
-        facGt[self.nf] = [None,]*1
-        indxt[self.nf] = [None,]*1
+        facGt = [None,]*self.nf
 
-        # We select all observations  
-        facs = np.ones((len(self.lon1d)))
-        
-        if  (len(self.lon1d)) > 0:
-            enstloc = self.enst[0] # time centers of wavelets 
-            facGt[iff+1][0] = [None,]*(len(enstloc)+1) # +1 for initial state
-            # Initial State
-            if t==0 and self.wavelet_init:
-                facGt[iff+1][0][0] = [None,]*1 # 0 stands for initial state
-                facGt[iff+1][0][0][0] = np.ones((len(self.lon1d)))
+        for iff in range(self.nf):
+            facGt[iff] = [None,]*(len(self.enst[iff])) 
+            # Time spread wavelets
+            for it in range(len(self.enst[iff])):
+                dt = t - self.enst[iff][it]
+                if abs(dt) < self.tdec[iff]:
+                    fact = self.window(dt / self.tdec[iff]) 
+                    fact /= self.norm_fact[iff]    
+                    facGt[iff][it] = fact      
 
-            # Time spread wavelets (fluxes)
-            for it in range(len(enstloc)):
-                dt = t - enstloc[it]
-                try:
-                    if abs(dt) < self.tdec[0]:
-                        fact = self.window(dt / self.tdec[0]) 
-                        fact /= self.norm_fact[0]
-                            
-                        facGt[iff+1][0][it+1] = [None,]*1
-                        facGt[iff+1][0][it+1][0] = np.ones((len(self.lon1d)))
-
-                except:
-                    print(f'Warning: an error occured at t={t}, iff={iff}, P={P}, enstloc={enstloc[it]}')
-
-        return facGt, indxt
+        return facGt          
 
 
-
-    def _proj(self, phi, X, t, facG, indx, transpose):
+    def _proj(self, phi, X, t, transpose):
 
         iwave = 0
         for iff in range(self.nf):
             enstloc = self.enst[iff]
             for P in range(self.NP[iff]):
-                iobs = indx[iff][P]
+                iobs = self.indx[iff][P]
                 if iobs.shape[0] > 0:
                     # Initial State
                     if t==0 and self.wavelet_init:
                         for itheta in range(self.ntheta):
                             for iphase in range(2):
                                 if transpose:
-                                    phi[iwave] = np.sum(X[iobs] * facG[iff][P][0][itheta][iphase])
+                                    phi[iwave] = np.sum(X[iobs] * self.facGx[iff][P][itheta][iphase])
                                 else:
-                                    phi[iobs] += X[iwave] * facG[iff][P][0][itheta][iphase]
+                                    phi[iobs] += X[iwave] * self.facGx[iff][P][itheta][iphase]
                                 iwave += 1
                     elif self.wavelet_init:
                         iwave += 2*self.ntheta
 
                     # Time spread wavelets
                     for it in range(len(enstloc)):
-                        if facG[iff][P][it+1] is None:
+                        if self.facGt[t][iff][it] is None:
                             iwave += 2*self.ntheta
                         else:
                             for itheta in range(self.ntheta):
                                 for iphase in range(2):
                                     if transpose:
-                                        phi[iwave] = np.sum(X[iobs] * facG[iff][P][it+1][itheta][iphase])
+                                        phi[iwave] = np.sum(X[iobs] * self.facGx[iff][P][itheta][iphase] * self.facGt[t][iff][it])
                                     else:
-                                        phi[iobs] += X[iwave] * facG[iff][P][it+1][itheta][iphase]
+                                        phi[iobs] += X[iwave] * self.facGx[iff][P][itheta][iphase] * self.facGt[t][iff][it]
                                     iwave += 1
     
 
@@ -1248,24 +1206,6 @@ class Basis_bm:
             Project to physicial space
         """
 
-        # Basis component for time t
-        if self.save_wave_basis==False:
-            # Compute basis component
-            facG, indx = self._compute_component(t)
-        elif  self.save_wave_basis=='offline':
-            # Load basis components Offline
-            name_facG = os.path.join(self.path_save_tmp,f'facG_{t}.pic')
-            name_indx = os.path.join(self.path_save_tmp,'indx.pic')
-            if os.path.exists(name_facG) and os.path.exists(name_indx):
-                with open(name_facG, 'rb') as f:
-                    facG = pickle.load(f)
-                with open(name_indx, 'rb') as f:
-                    indx = pickle.load(f)
-        else:
-            # Load basis components Inline
-            facG = self.facG[t]
-            indx = self.indx
-
         # Projection
         if transpose:
             X = X.flatten()
@@ -1273,9 +1213,7 @@ class Basis_bm:
         else:
             phi = np.zeros((self.nphys,))
 
-        self._proj(phi, X, t, facG, indx, transpose)
-
-
+        self._proj(phi, X, t, transpose)
         
         # Reshaping
         if not transpose:
@@ -1343,6 +1281,8 @@ class Basis_bmaux:
         self.distortion_eq_law = config.BASIS.distortion_eq_law
         self.lat_distortion_eq = config.BASIS.lat_distortion_eq
         self.name_mod_var = config.BASIS.name_mod_var
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
 
         # Dictionnaries to save wave coefficients and indexes for repeated runs
         self.path_save_tmp = config.EXP.tmp_DA_path
@@ -1526,6 +1466,14 @@ class Basis_bmaux:
             
         nwave = iwave+1
         Q = Q[:nwave]
+
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values
+        else:
+            Xb = np.zeros_like(Q)
         
         
         self.lon1d = lon1d
@@ -1548,7 +1496,7 @@ class Basis_bmaux:
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
         
         if return_q:
-            return Q
+            return Xb, Q
         
 
     def operg(self, X, t, transpose=False,State=None):
@@ -1729,6 +1677,8 @@ class BASIS_ls:
         self.tdec_lw = config.BASIS.tdec_lw
         self.fcor = config.BASIS.fcor
         self.std_lw = config.BASIS.std_lw
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
 
         # Grid params
         self.nphys= State.lon.size
@@ -1795,6 +1745,14 @@ class BASIS_ls:
                 iwave += 1
                 Q[iwave] = (varHlw/(self.facnls*self.facnlt))**.5
         self.P_wavebounds[P+1] = iwave +1
+
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values
+        else:
+            Xb = np.zeros_like(Q)
         
         self.DX=DX
         self.ENSLON=ENSLON
@@ -1807,7 +1765,7 @@ class BASIS_ls:
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
         
         if return_q:
-            return Q
+            return Xb, Q
     
     def operg(self, t, X, transpose=False,State=None):
         
@@ -1893,14 +1851,14 @@ class BASIS_ls:
 
 class Basis_multi:
 
-    def __init__(self,config,State):
+    def __init__(self,config,State,verbose=True):
 
         self.Basis = []
         _config = config.copy()
 
         for _BASIS in config.BASIS:
             _config.BASIS = config.BASIS[_BASIS]
-            self.Basis.append(Basis(_config,State))
+            self.Basis.append(Basis(_config,State,verbose=verbose))
 
     def set_basis(self,time,return_q=False):
 
@@ -1908,18 +1866,20 @@ class Basis_multi:
         self.slice_basis = []
 
         if return_q:
+            Xb = np.array([])
             Q = np.array([])
 
         for B in self.Basis:
-            _Q = B.set_basis(time,return_q=return_q)
+            _Xb,_Q = B.set_basis(time,return_q=return_q)
             self.slice_basis.append(slice(self.nbasis,self.nbasis+B.nbasis))
             self.nbasis += B.nbasis
             
             if return_q:
+                Xb = np.concatenate((Xb,_Xb))
                 Q = np.concatenate((Q,_Q))
         
         if return_q:
-            return Q
+            return Xb,Q
 
     def operg(self, t, X, State=None):
         
@@ -1948,7 +1908,6 @@ class Basis_multi:
             adX = np.concatenate((adX,B.operg_transpose(t, adState=adState)))
 
         return adX
-
 
 
 def mywindow(x): # x must be between -1 and 1

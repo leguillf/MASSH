@@ -10,11 +10,9 @@ import sys
 import numpy as np 
 import os
 import matplotlib.pylab as plt
-import pickle
 from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
-import pandas as pd
 import xarray as xr
 import glob
 from importlib.machinery import SourceFileLoader 
@@ -22,7 +20,9 @@ from importlib.machinery import SourceFileLoader
 from . import grid
 
 
-def Inv(config, State, Model, dict_obs=None, Obsop=None, Basis=None, Bc=None, test=False, *args, **kwargs):
+
+def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, Bc=None, *args, **kwargs):
+
     """
     NAME
         Inv
@@ -32,23 +32,24 @@ def Inv(config, State, Model, dict_obs=None, Obsop=None, Basis=None, Bc=None, te
     """
     
     if config.INV is None:
-        return Inv_forward(config,State,Model,Bc=Bc)
+        return Inv_forward(config, State=State, Model=Model, Bc=Bc)
     
     print(config.INV)
     
     if config.INV.super=='INV_OI':
-        return Inv_oi(config,State,dict_obs)
+        return Inv_oi(config, State=State, dict_obs=dict_obs)
     
     elif config.INV.super=='INV_BFN':
-        return Inv_bfn(config,State,Model,dict_obs,Bc=Bc)
+        return Inv_bfn(config, State=State, Model=Model, dict_obs=dict_obs, Bc=Bc)
     
     elif config.INV.super=='INV_4DVAR':
-        print(test)
-        return Inv_4Dvar(config,State,Model,dict_obs=dict_obs,Obsop=Obsop,Basis=Basis,Bc=Bc,test=test)
+        return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
+
+    elif config.INV.super=='INV_4DVAR_PARALLEL':
+        return Inv_4Dvar_parallel(config, State=State, dict_obs=dict_obs)
     
-    elif config.INV.super=='INV_MIOST':
-        return Inv_miost(config,State,dict_obs)
-    
+    elif config.INV.super=='INV_MOI':
+        return Inv_moi(config, State, dict_obs)
     
     else:
         sys.exit(config.INV.super + ' not implemented yet')
@@ -74,10 +75,11 @@ def Inv_forward(config,State,Model,Bc=None):
     if Bc is not None:
         time_bc = [np.datetime64(time) for time in Model.timestamps[::nstep]]
         t_bc = [t for t in Model.T[::nstep]]
-        var_bc = Bc.interp(time_bc,State.lon,State.lat)
+        var_bc = Bc.interp(time_bc)
         Model.set_bc(t_bc,var_bc)
 
     t = 0
+    Model.init(State,t)
     while present_date < config.EXP.final_date :
         
         State.plot(present_date)
@@ -109,54 +111,56 @@ def Inv_oi(config,State,dict_obs):
     
     from . import obs
     
-    
-    
+    # Initialize variables (normally this step is done in mod.py, but here no Model object is provided)
+    for name in config.INV.name_var:
+        State.var[config.INV.name_var[name]] = np.zeros((State.ny,State.nx))
+
+    # Boundary box
     box = [State.lon.min(),State.lon.max(),State.lat.min(),State.lat.max(),
            None, None]
     
-    ndays = (config.final_date-config.init_date).total_seconds()/3600/24
-    
-    dt = config.saveoutput_time_step.total_seconds()/3600/24
+    # Time parameters
+    ndays = (config.EXP.final_date-config.EXP.init_date).total_seconds()/3600/24
+    dt = config.EXP.saveoutput_time_step.total_seconds()/3600/24
     times = np.arange(0, ndays + dt, dt)
+
+    # Coordinates
     lon1d = State.lon.flatten()
     lat1d = State.lat.flatten()
     
-    State0 = State.copy(free=True)
-    
     # Time loop
-    for i,t in enumerate(times):
-        
-        box[4] = config.init_date + timedelta(days=t-config.oi_Lt)
-        box[5] = config.init_date + timedelta(days=t+config.oi_Lt)
-        
-        obs_val, obs_coords, obs_coords_att = obs.get_obs(dict_obs,box,config.init_date)
-        
-        obs_lon = obs_coords[0]
-        obs_lat = obs_coords[1]
-        obs_time = obs_coords[2]
-        
-        BHt = np.exp(-((t - obs_time[np.newaxis,:])/config.oi_Lt)**2 - 
-                    ((lon1d[:,np.newaxis] - obs_lon[np.newaxis,:])/config.oi_Lx)**2 - 
-                    ((lat1d[:,np.newaxis] - obs_lat[np.newaxis,:])/config.oi_Ly)**2)
-        
-        
-        HBHt = np.exp(-((obs_time[np.newaxis,:] - obs_time[:,np.newaxis])/config.oi_Lt)**2 -
-                    ((obs_lon[np.newaxis,:] - obs_lon[:,np.newaxis])/config.oi_Lx)**2 -
-                    ((obs_lat[np.newaxis,:] - obs_lat[:,np.newaxis])/config.oi_Ly)**2)
-            
-            
-            
-        R = np.diag(np.full((len(obs_val)), config.oi_noise**2))
+    for t in times:
 
-        Coo = HBHt + R
-        Mi = np.linalg.inv(Coo)
-    
-        sol = np.dot(np.dot(BHt, Mi), obs_val).reshape((State.ny,State.nx))
-        
-        # Save output
-        State0.setvar(sol,ind=0)
-        date = config.init_date + timedelta(days=t)
-        State0.save_output(date)
+        for name in config.INV.name_var:
+            
+            # Time boundary
+            box[4] = config.EXP.init_date + timedelta(days=t-config.INV.Lt)
+            box[5] = config.EXP.init_date + timedelta(days=t+config.INV.Lt)
+            
+            # Get obs in (time x lon x lat) cube
+            obs_val, obs_coords, _ = obs.get_obs(dict_obs, box, config.EXP.init_date, name)
+            obs_lon = obs_coords[0]
+            obs_lat = obs_coords[1]
+            obs_time = obs_coords[2]
+            
+            # Perform the optimal interpolation 
+            BHt = np.exp(-((t - obs_time[np.newaxis,:])/config.INV.Lt)**2 - 
+                        ((lon1d[:,np.newaxis] - obs_lon[np.newaxis,:])/config.INV.Lx)**2 - 
+                        ((lat1d[:,np.newaxis] - obs_lat[np.newaxis,:])/config.INV.Ly)**2)
+            HBHt = np.exp(-((obs_time[np.newaxis,:] - obs_time[:,np.newaxis])/config.INV.Lt)**2 -
+                        ((obs_lon[np.newaxis,:] - obs_lon[:,np.newaxis])/config.INV.Lx)**2 -
+                        ((obs_lat[np.newaxis,:] - obs_lat[:,np.newaxis])/config.INV.Ly)**2) 
+            R = np.diag(np.full((len(obs_val)), config.INV.sigma_R**2))
+            Coo = HBHt + R
+            Mi = np.linalg.inv(Coo)
+            sol = np.dot(np.dot(BHt, Mi), obs_val).reshape((State.ny,State.nx))
+            
+            # Set estimated variable
+            State.setvar(sol,name_var=config.INV.name_var[name])
+
+        # Save estimated fields for date t
+        date = config.EXP.init_date + timedelta(days=t)
+        State.save_output(date)
 
     return
     
@@ -224,20 +228,24 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
         ########################
         bfn_obj = bfn.bfn(
             config,init_bfn_date,final_bfn_date,one_time_step,State)
-        
-        ######################################
-        # 3. BOUNDARY AND INITIAL CONDITIONS #
-        ######################################
-        # Boundary conditions
-        Wbc = None
+
+        ##########################
+        # 3. Boundary conditions #
+        ##########################
         if Bc is not None:
-            periods = int((final_bfn_date-init_bfn_date).total_seconds()//\
-                one_time_step.total_seconds() + 1)
-            time_bc = [np.datetime64(time) for time in Model.timestamps[::periods]]
-            t_bc = [t for t in Model.T[::periods]]
-            var_bc = Bc.interp(time_bc,State.lon,State.lat)
-            Wbc = Bc.compute_weight_map(State.lon,State.lat,State.mask)
-            Model.set_bc(t_bc,var_bc,Wbc=Wbc)
+            time0 = np.datetime64(init_bfn_date)
+            tsec0 = (init_bfn_date - config.EXP.init_date).total_seconds()
+            time_bc = []
+            tsec_bc = []
+            while time0<=np.datetime64(final_bfn_date):
+                time_bc.append(time0)
+                tsec_bc.append(tsec0)
+                time0 += np.timedelta64(one_time_step)
+                tsec0 += one_time_step.total_seconds()
+                time_bc.append(time0)
+                tsec_bc.append(tsec0)
+            var_bc = Bc.interp(time_bc)
+            Model.set_bc(tsec_bc,var_bc)
             
 
         ###################
@@ -290,7 +298,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
             while present_date_forward0 < final_bfn_date :
                 
                 # Time
-                t = (present_date_forward0 - init_bfn_date).total_seconds()
+                t = (present_date_forward0 - config.EXP.init_date).total_seconds()
 
                 # Model propagation and apply Nudging
                 Model.step_nudging(State,
@@ -349,7 +357,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
                 while present_date_backward0 > init_bfn_date :
                     
                     # Time
-                    t = (present_date_backward0 - init_bfn_date).total_seconds()
+                    t = (present_date_backward0 - config.EXP.init_date).total_seconds()
 
                     # Propagate the state by nudging the model vorticity towards the 2D observations
                     Model.step_nudging(State,
@@ -491,8 +499,8 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
     return
 
 
+def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
 
-def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,test=False) :
     
     '''
     Run a 4Dvar analysis
@@ -521,18 +529,27 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
 
     # Boundary conditions
     if Bc is not None:
-        var_bc = Bc.interp(time_checkpoints,State.lon,State.lat)
+        var_bc = Bc.interp(time_checkpoints)
         Model.set_bc(t_checkpoints,var_bc)
+    
+    # Process observations
+    if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
+        time_obs = [np.datetime64(date) for date in Obsop.date_obs]
+        var_bc = Bc.interp(time_obs)
+    else:
+        var_bc = None
+    Obsop.process_obs(var_bc)
+    
+    # Initial model state
+    Model.init(State)
+    State.plot(title='Init State')
 
     # Set Reduced Basis
     if Basis is not None:
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in seconds) for which the basis components will be compute (at each timestep_checkpoint)
-        Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
+        Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
-        sys.exit('4Dvar only works with reduced basis!!')
-
-    # Backgroud state 
-    Xb = np.zeros((Q.size,))
+        sys.exit('4Dvar only work with reduced basis!!')
     
     # Covariance matrix
     from .tools_4Dvar import Cov
@@ -550,10 +567,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
     var = Variational(
         config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints)
     
-    if test : 
-        return var
-    
-    # Initial State 
+    # Initial Control vector 
     if config.INV.path_init_4Dvar is None:
         Xopt = np.zeros((Xb.size,))
     else:
@@ -562,7 +576,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
         ds = xr.open_dataset(config.INV.path_init_4Dvar)
         Xopt = ds.res.values
         ds.close()
-    
+
     # Restart mode
     if config.INV.restart_4Dvar:
         tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
@@ -589,15 +603,20 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
             ds.close()
                 
         # Minimization options
-        options = {'disp': True, 'maxiter': config.INV.maxiter}
+        options = {}
+        if verbose:
+            options['disp'] = True
+        else:
+            options['disp'] = False
+        options['maxiter'] = config.INV.maxiter
         if config.INV.gtol is not None:
-            J0 = var.cost(Xopt)
+            _ = var.cost(Xopt)
             g0 = var.grad(Xopt)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
             
         # Run minimization 
-        res = opt.minimize(var.cost,Xopt,
+        res = opt.minimize(var.cost, Xopt,
                         method=config.INV.opt_method,
                         jac=var.grad,
                         options=options,
@@ -615,7 +634,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
 
         Xres = res.x
     else:
-        print('You ask for restart_4Dvar and maxiter==0, so we move directly to the saving of the trajectory')
+        print('You ask for restart_4Dvar and maxiter==0, so we save directly the trajectory')
         Xres = +Xopt
         
     ########################
@@ -634,7 +653,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
     ds.close()
 
     # Init
-    State0 = State.copy(free=True)
+    State0 = State.copy()
     date = config.EXP.init_date
 
     # Forward propagation
@@ -652,7 +671,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
                 np.datetime64(date) + np.timedelta64(step*int(Model.dt),'s')\
                      for step in range(nstep_check)
                      ])
-            var_bc = Bc.interp(times,State.lon,State.lat)
+            var_bc = Bc.interp(times)
             Model.set_bc([t+step*int(Model.dt) for step in range(nstep_check)],var_bc)
 
         # Forward
@@ -661,8 +680,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
             if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                # Save output
-                State0.save_output(date,name_var=Model.var_to_save)
+                Model.ano_bc(t+j*Model.dt,State0,+1) # Get full field from anomaly 
+                State0.save_output(date,name_var=Model.var_to_save) # Save output
+                Model.ano_bc(t+j*Model.dt,State0,-1) # Get anomaly from full field 
 
             # Forward propagation
             Model.step(t=t+j*Model.dt,State=State0,nstep=1)
@@ -672,203 +692,142 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,tes
     if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        State0.save_output(date,name_var=Model.var_to_save)
+        Model.ano_bc(t+nstep_check*Model.dt,State0,+1) # Get full field from anomaly 
+        State0.save_output(date,name_var=Model.var_to_save) # Save output
+        Model.ano_bc(t+nstep_check*Model.dt,State0,-1) # Get anomaly from full field 
         
     del State, State0, Xa, dict_obs, B, R
     gc.collect()
     print()
-    
 
-def Inv_incr4Dvar(config,State,Model,dict_obs=None) :
-    
-    '''
-    Run a 4Dvar analysis
-    '''
+def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :   
 
-    print('\n*** Observation operator ***\n')
-    from .tools_4Dvar import Obsopt
-    H = Obsopt(config,State,dict_obs,Model)
-    
-    print('\n*** Reduced basis ***\n')
-    
-    if config.name_model=='QG1L':
-        from .tools_reduced_basis import RedBasis_BM as RedBasis
-    elif config.name_model=='SW1L':
-        from .tools_reduced_basis import RedBasis_IT as RedBasis
-    elif hasattr(config.name_model,'__len__') and len(config.name_model)==2:
-        from .tools_reduced_basis import RedBasis_BM_IT as RedBasis
-        
-    basis = RedBasis(config)
-    time_basis = H.checkpoint * Model.dt / (24*3600)
-    Q = basis.set_basis(time_basis,State.lon,State.lat,return_q=True)
+    from . import mod, state, obs, obsop, bc, basis
+    from multiprocessing import Process
 
-    print('\n*** Covariances ***\n')
-    from .tools_4Dvar import Cov
-    # Covariance matrix
-    if config.sigma_B is not None:          
-        # Least squares
-        B = Cov(config.sigma_B)
-        R = Cov(config.sigma_R)
-    else:
-        B = Cov(Q)
-        R = Cov(config.sigma_R)
-        
-    print('\n*** Variational ***\n')
-    from .tools_4Dvar import Variational
-    # backgroud state 
-    Xb = np.zeros((basis.nbasis,))
-    # Cost and Grad functions
-    var = Variational(
-        config=config, M=Model, H=H, State=State, B=B, R=R, basis=basis, Xb=Xb)
-
-    # Initial State of the outer loop
-    if config.path_init_4Dvar is None:
-        Xa = var.Xb*0
-    else:
-        # Read previous minimum 
-        print('Read previous minimum:',config.path_init_4Dvar)
-        ds = xr.open_dataset(config.path_init_4Dvar)
-        Xa = ds.res.values
-        ds.close()
-
-    
-    # Restart mode
-    if config.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(config.tmp_DA_path,'X_it-*.nc')))
-        if len(tmp_files)>0:
-            print('Restart at:',tmp_files[-1])
-            ds = xr.open_dataset(tmp_files[-1])
-            Xa = ds.res.values
-            ds.close()
+    # Split full experimental time window in sub windows
+    list_config = []
+    list_State = []
+    proc = []
+    iproc = 0
+    date1 = config.EXP.init_date
+    while iproc<config.INV.nprocs and date1<config.EXP.final_date:
+        # compute subwindow
+        date0 = config.EXP.init_date + iproc * config.INV.window_size_proc * (1-config.INV.overlap_frac)
+        delta_t = (date0 - config.EXP.init_date) %  config.EXP.saveoutput_time_step
+        date0 += delta_t
+        date1 = min(date0 + config.INV.window_size_proc, config.EXP.final_date)
+        if iproc==config.INV.nprocs-1 :
+            date1 = config.EXP.final_date
+        print(f'*** subwindow {iproc+1} from {date0} to {date1} ***')
+        # create config for the subwindow
+        _config = config.copy()
+        _config.EXP = config.EXP.copy()
+        _config.EXP.init_date = date0
+        _config.EXP.final_date = date1
+        _config.EXP.tmp_DA_path += f'/subwindow_{iproc+1}'
+        _config.EXP.path_save += f'/subwindow_{iproc+1}'
+        # append to list
+        list_config.append(_config)
+        iproc += 1
+        # create directories
+        if not os.path.exists(_config.EXP.tmp_DA_path):
+            os.makedirs(_config.EXP.tmp_DA_path)
+        if not os.path.exists(_config.EXP.path_save):
+            os.makedirs(_config.EXP.path_save)
+        # initialize State 
+        _State = state.State(_config, verbose=0)
+        list_State.append(_State)
+        # initialize Model operator 
+        _Model = mod.Model(_config, _State, verbose=0)
+        # initialize Bc 
+        _Bc = bc.Bc(_config, verbose=0)
+        # initialize Obs
+        if dict_obs is not None:
+            _dict_obs = obs._new_dict_obs(dict_obs, _config.EXP.tmp_DA_path, date_min=date0, date_max=date1)
         else:
-            Xa = var.Xb*0
-    
-    
+            _dict_obs = obs.Obs(_config, _State)
+        # initialize Obsop
+        _Obsop = obsop.Obsop(_config, _State, _dict_obs, _Model, verbose=0)
+        # initialize Basis
+        _Basis = basis.Basis(config,_State, verbose=0)
+        # create subprocess instance
+        p = Process(target=Inv_4Dvar, args=(_config, _State, _Model, _dict_obs, _Obsop, _Basis, _Bc, 0))
+        proc.append(p)
         
-    ###################
-    #  Outer loop     #
-    ###################
-    for i in range(config.maxiter_outer):
-        
-        print(f'*** Outer loop {i} ***')
-        
-        ######################
-        #  Model integration #    
-        ######################
-        J = var.cost(Xa)
-        print(f'\ncost: {J}\n')
 
-        ###################
-        #  Inner loop     #
-        ###################
-        # Initial State of the inner loop
-        dX = Xa*0
-        var.X0 = +Xa
-    
-        # Callback function called at every minimization iterations
-        def callback(XX):
-            now = datetime.now()
-            current_time = now.strftime("%Y-%m-%d_%H%M%S")
-            ds = xr.Dataset({'res':(('x',),XX)})
-            ds.to_netcdf(os.path.join(config.tmp_DA_path,f'X{i}_'+current_time+'.nc'))
-            ds.close()
-        # Minimization options
-        options = {'disp': True, 'maxiter': config.maxiter_inner}
-                
-        # Run minimization 
-        res = opt.minimize(var.dcost,dX,
-                        method=config.opt_method,
-                        jac=var.grad,
-                        options=options,
-                        callback=callback)
-        
-        dXa = res.x
-        
-        ###################
-        #    Update       #
-        ###################
-        Xa += dXa
-    
-    
-    # Save minimization trajectory
-    if config.save_minimization:
-        ds = xr.Dataset({'dcost':(('dj'),var.dJ),'cost':(('j'),var.J),'grad':(('g'),var.G)})
-        ds.to_netcdf(os.path.join(config.tmp_DA_path,'minimization_trajectory.nc'))
-        ds.close()
-        
-    ########################
-    #    Saving trajectory #
-    ########################
-    print('\n*** Saving trajectory ***\n')
-    
-    if config.prec:
-        Xa = var.Xb + B.sqr(Xa)
-    else:
-        Xa = var.Xb + Xa
-        
-    # Save minimum for next experiments
-    ds = xr.Dataset({'res':(('x',),Xa)})
-    ds.to_netcdf(os.path.join(config.tmp_DA_path,'Xini.nc'))
-    ds.close()
+    # Run the subprocesses
+    old_stdout = sys.stdout # backup current stdout
+    sys.stdout = open(os.devnull, "w") # prevent printoing outputs
+    # start the processes
+    for p in proc:
+        p.start()
+    # join the processes
+    for p in proc:
+        p.join()
+    sys.stdout = old_stdout # reset old stdout
 
-    # Init
-    State0 = State.copy(free=True)
-    State0.params = np.zeros((Model.nparams,))
-    date = config.init_date
+    # Smooth output trajectories 
+    print('*** Smooth output trajectories ***')
+    date = config.EXP.init_date
+    for i in range(len(list_config)-1):
+        config1 = list_config[i]
+        config2 = list_config[i+1]
+        State1 = list_State[i]
+        State2 = list_State[i+1]
+        while date<=config1.EXP.final_date:
+            ds1 = State1.load_output(date)
+            if date>=config2.EXP.init_date:
+                ds2 = State2.load_output(date)
+                # Weight coefficients
+                W1 = (config1.EXP.final_date - date) / (config.INV.window_size_proc * config.INV.overlap_frac)
+                W2 = (date - config2.EXP.init_date)  / (config.INV.window_size_proc * config.INV.overlap_frac)
+                # Interpolation 
+                for name in ds1.keys():
+                    State.setvar(W1*ds1[name].values + W2*ds2[name].values, name)
+            else:
+                for name in ds1.keys():
+                    State.setvar(ds1[name].values, name)
+            # Save output
+            State.save_output(date)
+            date += config.EXP.saveoutput_time_step
+    # Last subwindow 
+    while date<=config2.EXP.final_date:
+        ds2 = State2.load_output(date)
+        for name in ds2.keys():
+            State.setvar(ds2[name].values, name)
+        State.save_output(date)
+        date += config.EXP.saveoutput_time_step
 
-    # Forward propagation
-    while date<config.final_date:
-        # current time in secondes
-        t = (date - config.init_date).total_seconds()
-        
-        # Reduced basis
-        basis.operg(Xa,t/3600/24,State=State0)
-        
-        # Forward
-        for j in range(config.checkpoint):
             
-            Model.step(t+j*config.dtmodel,State0,nstep=1)
-    
-            date += timedelta(seconds=config.dtmodel)
-            
-            if (((date - config.init_date).total_seconds()
-                 /config.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>config.init_date) & (date<=config.final_date) :
-                
-                # Save output
-                State0.save_output(date,mdt=Model.mdt)
+    return 
 
-        
-    del State, State0, res, Xa, dict_obs, B, R
-    gc.collect()
-    print()
-    
 
-def Inv_miost(config,State,dict_obs=None):
+def Inv_moi(config,State,dict_obs=None):
     
     
-    if config.dir_miost is None:
-        dir_miost = os.path.realpath(
-            os.path.join(os.path.dirname(os.path.realpath(__file__)),'miost'))
+    if config.INV.dir is None:
+        dir_moi = os.path.realpath(
+            os.path.join(os.path.dirname(os.path.realpath(__file__)),'moi'))
     else:
-        dir_miost = config.dir_miost  
-    SourceFileLoader("sparse_inversion",dir_miost + "/sparse_inversion.py").load_module() 
-    SourceFileLoader("allcomps",dir_miost + "/allcomps.py").load_module() 
-    SourceFileLoader("tools",dir_miost + "/tools.py").load_module() 
-    SourceFileLoader("rw",dir_miost + "/rw.py").load_module() 
-    SourceFileLoader("comp_iw",dir_miost + "/comp_iw.py").load_module() 
-    miost = SourceFileLoader("miost",dir_miost + "/miost.py").load_module() 
-    grid_miost = SourceFileLoader("miost",dir_miost + "/grid.py").load_module()
-    comp_geo3 = SourceFileLoader("miost",dir_miost + "/comp_geo3.py").load_module()    
-    obs = SourceFileLoader("miost",dir_miost + "/obs.py").load_module()    
+        dir_moi = config.INV.dir  
+    SourceFileLoader("sparse_inversion",dir_moi + "/sparse_inversion.py").load_module() 
+    SourceFileLoader("allcomps",dir_moi + "/allcomps.py").load_module() 
+    SourceFileLoader("tools",dir_moi + "/tools.py").load_module() 
+    SourceFileLoader("rw",dir_moi + "/rw.py").load_module() 
+    SourceFileLoader("comp_iw",dir_moi + "/comp_iw.py").load_module() 
+    moi = SourceFileLoader("miost",dir_moi + "/miost.py").load_module() 
+    grid_moi = SourceFileLoader("miost",dir_moi + "/grid.py").load_module()
+    comp_geo3 = SourceFileLoader("miost",dir_moi + "/comp_geo3.py").load_module()    
+    obs = SourceFileLoader("miost",dir_moi + "/obs.py").load_module()    
     
     
     # Save grid 
-    if config.path_mdt is not None and os.path.exists(config.path_mdt):                      
-        ds = xr.open_dataset(config.path_mdt).squeeze()
+    if config.INV.path_mdt is not None and os.path.exists(config.INV.path_mdt):                      
+        ds = xr.open_dataset(config.INV.path_mdt).squeeze()
         
         mdt = grid.interp2d(ds,
-                            config.name_var_mdt,
+                            config.INV.name_var_mdt,
                             State.lon,
                             State.lat)
         flag_mdt = True
@@ -878,316 +837,213 @@ def Inv_miost(config,State,dict_obs=None):
     grd = xr.Dataset({'lon':(('lon',),State.lon[State.ny//2,:]),
                       'lat':(('lat',),State.lat[:,State.nx//2]),
                       'mdt':(('lat','lon'),mdt)})
-    name_grd = os.path.join(config.tmp_DA_path,'grd.nc')
+    name_grd = os.path.join(config.EXP.tmp_DA_path,'grd.nc')
     grd.to_netcdf(name_grd)
     
     dlon =  (State.lon[:,1:] - State.lon[:,:-1]).max()
     dlat =  (State.lat[1:,:] - State.lat[:-1,:]).max()
     
      # Flag initialization
-    miost_first_window = True
-    miost_last_window = False
+    moi_first_window = True
+    moi_last_window = False
     
-    # MIOST middle date initialization
-    middle_miost_date = config.init_date
-    
-    # Main time loop
-    while (middle_miost_date <= config.final_date) and not miost_last_window :
-        time0 = datetime.now()
-        #############
-        # 1. SET-UP #
-        #############
-        # MIOST time period
-        init_miost_date = max(config.init_date, middle_miost_date - config.miost_window_size/2)
-        init_miost_date += timedelta(seconds=(init_miost_date - config.init_date).total_seconds()\
-                         / config.saveoutput_time_step.total_seconds()%1)
-        middle_miost_date = max(middle_miost_date, config.init_date + config.miost_window_size/2)
-        if ((middle_miost_date + config.miost_window_size/2) >= config.final_date):
-            miost_last_window = True
-            final_miost_date = config.final_date
-        else:
-            final_miost_date = init_miost_date + config.miost_window_size
-        
-            
-        # CONFIG MIOST
-        PHYS_COMP = []
-        if config.miost_geo3ss6d:
-            PHYS_COMP.append(
-                comp_geo3.Comp_geo3ss6d(
-                    facns= 1., #factor for wavelet spacing= space
-                    facnlt= 2.,
-                    npsp= 3.5, # Defines the wavelet shape
-                    facpsp= 1.5, #1.5 # factor to fix df between wavelets
-                    lmin= config.lmin, # !!!
-                    lmax= config.lmax,
-                    cutRo= 1.6,
-                    factdec= 15,
-                    tdecmin= config.tdecmin, # !!!
-                    tdecmax= config.tdecmax,
-                    tssr= 0.5,
-                    facRo= 8.,
-                    Romax= 150.,
-                    facQ= config.facQ, # TO INCREASE ENERGY
-                    depth1= 0.,
-                    depth2= 30.,
-                    distortion_eq= 2.,
-                    lat_distortion_eq= 5.,
-                    distortion_eq_law= 2.,
-                    file_aux= config.file_aux,
-                    filec_aux= config.filec_aux,
-                    write= True,
-                    Hvarname= 'Hss')
-            )
-        
-        if config.miost_geo3ls:
-            PHYS_COMP.append(
-                comp_geo3.Comp_geo3ls(
-                    facnls= 3., #factor for large-scale wavelet spacing
-                    facnlt= 3.,
-                    tdec_lw= 25.,
-                    std_lw= 0.04,
-                    lambda_lw= 970, #768.05127036
-                    file_aux= config.file_aux,
-                    filec_aux= config.filec_aux,
-                    write= True,
-                    Hvarname= 'Hls')
-            )
+    # MOI middle date initialization
+    middle_moi_date = config.EXP.init_date
 
-        config_miost = dict(
-        
-            RUN_NAME = '', # Set automatically with filename
-            PATH = dict(OUTPUT= config.tmp_DA_path),
+    # Loop on variables to map
+    for name in config.INV.name_var:
+
+        print(f'Mapping {name}...')
+
+        # Initialization (normally this step is done in mod.py, but here no Model object is provided)
+        State.var[config.INV.name_var[name]] = np.zeros((State.ny,State.nx))
+    
+        # Main time loop
+        while (middle_moi_date <= config.EXP.final_date) and not moi_last_window :
+            time0 = datetime.now()
+            # MIOST time period
+            init_moi_date = max(config.EXP.init_date, middle_moi_date - config.INV.window_size/2)
+            init_moi_date += timedelta(seconds=(init_moi_date - config.EXP.init_date).total_seconds()\
+                            / config.EXP.saveoutput_time_step.total_seconds()%1)
+            middle_moi_date = max(middle_moi_date, config.EXP.init_date + config.INV.window_size/2)
+            if ((middle_moi_date + config.INV.window_size/2) >= config.EXP.final_date):
+                moi_last_window = True
+                final_moi_date = config.EXP.final_date
+            else:
+                final_moi_date = init_moi_date + config.INV.window_size
             
-            ALGO = dict(
-                USE_MPI= False,
-                store_gtranspose= False, # only if USE_MPI
-                INV_METHOD= 'PCG_INV',
-                NITER= 800  , # Maximum number of iterations in the variational loop
-                EPSPILLON_REST= 1.e-7,
-                gsize_max = 5000000000 ,
-                float_type= 'f8',
-                int_type= 'i8'),
-            
-            GRID = grid_miost.Grid_msit(
-                TEMPLATE_FILE= name_grd,
-                LON_NAME= 'lon',
-                LAT_NAME= 'lat',
-                MDT_NAME= 'mdt',
-                FLAG_MDT= flag_mdt,
-                DATE_MIN= init_miost_date.strftime("%Y-%m-%d"),
-                DATE_MAX= final_miost_date.strftime("%Y-%m-%d"),
-                TIME_STEP= config.saveoutput_time_step.total_seconds()/(24*3600),
-                NSTEPS_NC= int((24*3600)//config.saveoutput_time_step.total_seconds()),
-                TIME_STEP_LF= 10000., # For internal tides with seasons
-                LON_MIN= State.lon.min()-dlon,
-                LON_MAX= State.lon.max()+dlon,
-                LAT_MIN= State.lat.min()-dlat,
-                LAT_MAX= State.lat.max()+dlat,
-                tref_iw= 15340.),
-            
-            PHYS_COMP=PHYS_COMP,
-            
-            OBS_COMP=[
-            
-                ],
-            
-            
-            OBS=[
-            
-                obs.MASSH(
-                    name=config.name_experiment,
-                    dict_obs= dict_obs,
-                    subsampling= config.subsampling,
-                    noise=config.sigma_R
-                    ),
                 
-                    ]
+            # CONFIG MIOST
+            PHYS_COMP = []
+            if config.INV.set_geo3ss6d:
+                PHYS_COMP.append(
+                    comp_geo3.Comp_geo3ss6d(
+                        facns= 1., #factor for wavelet spacing= space
+                        facnlt= 2.,
+                        npsp= 3.5, # Defines the wavelet shape
+                        facpsp= 1.5, #1.5 # factor to fix df between wavelets
+                        lmin= config.INV.lmin, #
+                        lmax= config.INV.lmax,
+                        cutRo= 1.6,
+                        factdec= 15,
+                        tdecmin= config.INV.tdecmin, # !!!
+                        tdecmax= config.INV.tdecmax,
+                        tssr= 0.5,
+                        facRo= 8.,
+                        Romax= 150.,
+                        facQ= config.INV.facQ, # TO INCREASE ENERGY
+                        depth1= 0.,
+                        depth2= 30.,
+                        distortion_eq= 2.,
+                        lat_distortion_eq= 5.,
+                        distortion_eq_law= 2.,
+                        file_aux= config.INV.file_aux,
+                        filec_aux= config.INV.filec_aux,
+                        write= True,
+                        Hvarname= 'Hss')
+                )
             
-            )
-        
-        # RUN MIOST
-        miost.run_miost(config_miost)
-        
-        # READ OUTPUTS AND REFORMAT
-        ds = xr.open_mfdataset(os.path.join(config.tmp_DA_path,'_ms_analysis*.nc'),
-                               combine='by_coords')
-        if config.miost_geo3ss6d and config.miost_geo3ls:              
-            ssh = ds['Hss'] + ds['Hls']
-        elif config.miost_geo3ss6d:
-            ssh = ds['Hss']
-        else:
-            ssh = ds['Hls']
+            if config.INV.set_geo3ls:
+                PHYS_COMP.append(
+                    comp_geo3.Comp_geo3ls(
+                        facnls= 3., #factor for large-scale wavelet spacing
+                        facnlt= 3.,
+                        tdec_lw= 25.,
+                        std_lw= 0.04,
+                        lambda_lw= 970, #768.05127036
+                        file_aux= config.INV.file_aux,
+                        filec_aux= config.INV.filec_aux,
+                        write= True,
+                        Hvarname= 'Hls')
+                )
+
+            config_moi = dict(
             
-        # SAVE OUTPUTS 
-        # Set the saving temporal window
-        if miost_first_window:
-            write_date_min = init_miost_date
-            write_date_max = init_miost_date + config.miost_window_size/2 + config.miost_window_output/2
-        elif miost_last_window:
-            write_date_min = middle_miost_date - config.miost_window_output/2
-            write_date_max = final_miost_date
-        else:
-            write_date_min = middle_miost_date - config.miost_window_output/2
-            write_date_max = middle_miost_date + config.miost_window_output/2
-            
-        State_tmp = State.copy(free=True)
-        date = init_miost_date
-        i = 0
-        while date<=final_miost_date:
-            if (date >= write_date_min) & (date <= write_date_max) :
+                RUN_NAME = '', # Set automatically with filename
+                PATH = dict(OUTPUT= config.EXP.tmp_DA_path),
                 
-                if config.miost_window_overlap and not miost_first_window and\
-                        date<=middle_miost_date:
-                    # weight coefficients
-                    W1 = max((middle_miost_date - date)
-                             / (config.miost_window_output/2), 0)
-                    W2 = min((date - write_date_min)
-                             / (config.miost_window_output/2), 1)
-                    # Read previous output at this timestamp
-                    ds1 = State.load_output(date)
-                    ssh1 = ds1[config.name_mod_var[State.get_indsave()]].data
-                    ds1.close()
-                    del ds1
-                    # Update state
-                    State_tmp.setvar(W1*ssh1 + W2*ssh[i].values,ind=0)
-                else:
-                    State_tmp.setvar(ssh[i].values,ind=0)
+                ALGO = dict(
+                    USE_MPI= False,
+                    store_gtranspose= False, # only if USE_MPI
+                    INV_METHOD= 'PCG_INV',
+                    NITER= 800  , # Maximum number of iterations in the variational loop
+                    EPSPILLON_REST= 1.e-7,
+                    gsize_max = 5000000000 ,
+                    float_type= 'f8',
+                    int_type= 'i8'),
+                
+                GRID = grid_moi.Grid_msit(
+                    TEMPLATE_FILE= name_grd,
+                    LON_NAME= 'lon',
+                    LAT_NAME= 'lat',
+                    MDT_NAME= 'mdt',
+                    FLAG_MDT= flag_mdt,
+                    DATE_MIN= init_moi_date.strftime("%Y-%m-%d"),
+                    DATE_MAX= final_moi_date.strftime("%Y-%m-%d"),
+                    TIME_STEP= config.EXP.saveoutput_time_step.total_seconds()/(24*3600),
+                    NSTEPS_NC= int((24*3600)//config.EXP.saveoutput_time_step.total_seconds()),
+                    TIME_STEP_LF= 10000., # For internal tides with seasons
+                    LON_MIN= State.lon.min()-dlon,
+                    LON_MAX= State.lon.max()+dlon,
+                    LAT_MIN= State.lat.min()-dlat,
+                    LAT_MAX= State.lat.max()+dlat,
+                    tref_iw= 15340.),
+                
+                PHYS_COMP=PHYS_COMP,
+                
+                OBS_COMP=[
+                
+                    ],
+                
+                
+                OBS=[
+                
+                    obs.MASSH(
+                        name=config.EXP.name_experiment,
+                        dict_obs= dict_obs,
+                        name_var=name,
+                        noise=config.INV.sigma_R
+                        ),
                     
-                # Save output
-                if config.saveoutputs:
-                    if flag_mdt:
-                        State_tmp.save_output(date,mdt=mdt)
-                    else:
-                        State_tmp.save_output(date)
+                        ]
                 
-            date += config.saveoutput_time_step
-            i += 1
-        
-        if config.miost_window_overlap:
-            window_lag = config.miost_window_output/2
-        else:
-            window_lag = config.miost_window_output
+                )
+            
+            # RUN MOI
+            moi.run_miost(config_moi)
+            
+            # READ OUTPUTS AND REFORMAT
+            ds = xr.open_mfdataset(os.path.join(config.EXP.tmp_DA_path,'_ms_analysis*.nc'),
+                                combine='by_coords')
+            if config.INV.set_geo3ss6d and config.INV.set_geo3ls:              
+                ssh = ds['Hss'] + ds['Hls']
+            elif config.INV.set_geo3ss6d:
+                ssh = ds['Hss']
+            else:
+                ssh = ds['Hls']
+                
+            # SAVE OUTPUTS 
+            # Set the saving temporal window
+            if moi_first_window:
+                write_date_min = init_moi_date
+                write_date_max = init_moi_date + config.INV.window_size/2 + config.INV.window_output/2
+            elif moi_last_window:
+                write_date_min = middle_moi_date - config.INV.window_output/2
+                write_date_max = final_moi_date
+            else:
+                write_date_min = middle_moi_date - config.INV.window_output/2
+                write_date_max = middle_moi_date + config.INV.window_output/2
+                
+            State_tmp = State.copy(free=True)
+            date = init_moi_date
+            i = 0
+            while date<=final_moi_date:
+                if (date >= write_date_min) & (date <= write_date_max) :
+                    
+                    if config.INV.window_overlap and not moi_first_window and\
+                            date<=middle_moi_date:
+                        # weight coefficients
+                        W1 = max((middle_moi_date - date)
+                                / (config.INV.window_output/2), 0)
+                        W2 = min((date - write_date_min)
+                                / (config.INV.window_output/2), 1)
+                        # Read previous output at this timestamp
+                        ds1 = State.load_output(date)
+                        ssh1 = ds1[config.INV.name_var[name]].data
+                        ds1.close()
+                        del ds1
+                        # Update state
+                        State_tmp.setvar(W1*ssh1 + W2*ssh[i].values + mdt, config.INV.name_var[name])
+                    else:
+                        State_tmp.setvar(ssh[i].values + mdt, config.INV.name_var[name])
+                        
+                    # Save output
+                    if config.EXP.saveoutputs:
+                        State_tmp.save_output(date)
+                    
+                date += config.EXP.saveoutput_time_step
+                i += 1
+            
+            if config.INV.window_overlap:
+                window_lag = config.INV.window_output/2
+            else:
+                window_lag = config.INV.window_output
 
-        if miost_first_window:
-            middle_miost_date = config.init_date + config.miost_window_size/2 + window_lag
-            miost_first_window = False
-        else:
-            middle_miost_date += window_lag
-        
-        ds.close()
-        del ds
-        
-        cmd = 'rm ' + os.path.join(config.tmp_DA_path,'_ms_analysis*.nc')
-        os.system(cmd)
-        
-        time1 = datetime.now()
-        print('Loop from',init_miost_date.strftime("%Y-%m-%d"),'to',
-              final_miost_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
+            if moi_first_window:
+                middle_moi_date = config.EXP.init_date + config.INV.window_size/2 + window_lag
+                moi_first_window = False
+            else:
+                middle_moi_date += window_lag
+            
+            ds.close()
+            del ds
+            
+            cmd = 'rm ' + os.path.join(config.EXP.tmp_DA_path,'_ms_analysis*.nc')
+            os.system(cmd)
+            
+            time1 = datetime.now()
+            print('Loop from',init_moi_date.strftime("%Y-%m-%d"),'to',
+                final_moi_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
          
 
-def Inv_harm(config,State,dict_obs=None):
-    
-    if config.detrend:
-        from . import obs
-        obs.detrend_obs(dict_obs)
-    
-    time = []
-    ssh = np.array([])
-    for date in dict_obs:
-        time.append((date - config.init_date).total_seconds())
-        path = dict_obs[date]['obs_name'][0]
-        sat = dict_obs[date]['satellite'][0]
-        ds = xr.open_dataset(path).squeeze()
-        ssh = np.append(ssh,ds[sat.name_obs_var[0]].values)
-        
-    time = np.asarray(time)
-    ssh = np.asarray(ssh)
-
-    # Harmonic analysis
-    nt,ny,nx = ssh.shape
-    G = np.empty((nt,2))
-    eta1 = np.empty((2, ny,nx))
-    
-    w = config.w_igws[0]
-    G[:,0] = np.cos(w*time)
-    G[:,1] = np.sin(w*time)
-    
-    M = np.dot(np.linalg.inv(np.dot(G.T,G)) , G.T)
-    
-    for ix in range(nx):
-        for iy in range(ny):
-            eta1[:, iy, ix] = np.dot(M, ssh[:,iy,ix])
-    
-    
-    
-    # Save outputs
-    State0 = State.copy(free=True)
-    date = config.init_date
-    while date <= config.final_date:
-        t = (date - config.init_date).total_seconds()
-        ssh0 = eta1[0,:,:] * np.cos(w*t) + eta1[1,:,:] * np.sin(w*t)
-        State0.setvar(ssh0,ind=0)
-        State0.save_output(date)
-        date += config.saveoutput_time_step
-    
-    
-def solve_pcg(G, comp_Qinv, obs_invnois2,eps_rest=1.e-7,niter=800):
-
-    comp_CFAC = comp_Qinv**-0.5
-    
-    comp_rest = G.T.dot(obs_invnois2) * comp_CFAC
-
-    comp_p = 1*comp_rest
-    comp_x = np.zeros_like((comp_rest))
-
-    rest = np.inner(comp_rest, comp_rest)
-    rest0 = +rest
-
-    itr = int(-1)
-    rest2 = 0
-    while ((rest / rest0 > eps_rest) & (itr < niter)):
-        itr += 1
-        ###########################################
-        # Compute A*p
-        ###########################################
-        cvec = G.T.dot(G.dot(comp_p * comp_CFAC) * obs_invnois2)
-        comp_Ap =  comp_p * comp_Qinv * comp_CFAC**2 + cvec * comp_CFAC
-
-        if itr >0: rest = +rest2
-
-        tmp = np.inner(comp_p, comp_Ap)
-        alphak = rest / tmp
-
-        ###########################################
-        # New state
-        ###########################################
-        comp_x += alphak * comp_p
-
-        # ###########################################
-        # New direction of descent
-        ###########################################
-        rest2 = np.inner(comp_rest - alphak * comp_Ap, comp_rest - alphak * comp_Ap)
-        betak = rest2 / rest
-
-        # Loop updates
-        comp_p *= betak
-        comp_p += comp_rest - alphak * comp_Ap 
-        comp_rest += -alphak * comp_Ap      
-            
-    return comp_x * comp_CFAC
-
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-    
-        
-        
-        
         

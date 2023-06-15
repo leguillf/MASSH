@@ -86,24 +86,24 @@ class Qgm:
         self.f01d=np.zeros((_np))
         self.dx1d=np.zeros((_np))
         self.dy1d=np.zeros((_np))
-        self.indi=np.zeros((_np), dtype=np.int)
-        self.indj=np.zeros((_np), dtype=np.int)
-        self.vp1=np.zeros((_np1), dtype=np.int)
-        self.vp2=np.zeros((_np2), dtype=np.int)
-        self.vp2=np.zeros((_np2), dtype=np.int)
-        self.vp2n=np.zeros((_np2), dtype=np.int)
-        self.vp2nn=np.zeros((_np2), dtype=np.int)
-        self.vp2s=np.zeros((_np2), dtype=np.int)
-        self.vp2ss=np.zeros((_np2), dtype=np.int)
-        self.vp2e=np.zeros((_np2), dtype=np.int)
-        self.vp2ee=np.zeros((_np2), dtype=np.int)
-        self.vp2w=np.zeros((_np2), dtype=np.int)
-        self.vp2ww=np.zeros((_np2), dtype=np.int)
-        self.vp2nw=np.zeros((_np2), dtype=np.int)
-        self.vp2ne=np.zeros((_np2), dtype=np.int)
-        self.vp2se=np.zeros((_np2), dtype=np.int)
-        self.vp2sw=np.zeros((_np2), dtype=np.int)
-        self.indp=np.zeros((ny,nx), dtype=np.int)
+        self.indi=np.zeros((_np), dtype=int)
+        self.indj=np.zeros((_np), dtype=int)
+        self.vp1=np.zeros((_np1), dtype=int)
+        self.vp2=np.zeros((_np2), dtype=int)
+        self.vp2=np.zeros((_np2), dtype=int)
+        self.vp2n=np.zeros((_np2), dtype=int)
+        self.vp2nn=np.zeros((_np2), dtype=int)
+        self.vp2s=np.zeros((_np2), dtype=int)
+        self.vp2ss=np.zeros((_np2), dtype=int)
+        self.vp2e=np.zeros((_np2), dtype=int)
+        self.vp2ee=np.zeros((_np2), dtype=int)
+        self.vp2w=np.zeros((_np2), dtype=int)
+        self.vp2ww=np.zeros((_np2), dtype=int)
+        self.vp2nw=np.zeros((_np2), dtype=int)
+        self.vp2ne=np.zeros((_np2), dtype=int)
+        self.vp2se=np.zeros((_np2), dtype=int)
+        self.vp2sw=np.zeros((_np2), dtype=int)
+        self.indp=np.zeros((ny,nx), dtype=int)
         
         p=-1
         for i in range(ny):
@@ -188,9 +188,6 @@ class Qgm:
             self.vminusbar = 0.5*(self.vbar[2:-2,2:-2]+self.vbar[3:-1,2:-2])
         
             
-        
-
-        
     
     def h2uv(self,h,ubc=None,vbc=None):
         """ SSH to U,V
