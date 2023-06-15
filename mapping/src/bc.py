@@ -96,7 +96,6 @@ class Bc_ext:
         self.var = {}
         for name in config.BC.name_var:
             self.var[name] = ds[config.BC.name_var[name]].load()
-
         ds.close()        
             
     def interp(self,time):
@@ -137,7 +136,6 @@ class Bc_ext:
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
 
             _var_interp[np.isnan(_var_interp)] = 0
-            
             var_interp[name] = _var_interp
         
         return var_interp

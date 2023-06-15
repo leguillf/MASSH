@@ -686,6 +686,21 @@ BASIS_BM = dict(
 
 )
 
+# Constant basis 
+BASIS_CONSTANT = dict(
+
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    name_mod_var = None, # Name of the related model variable 
+
+    tdec = 20 # Decorrelation time of the constant wavelet 
+
+)
+
 # Balanced Motions with auxilliary data 
 BASIS_BMaux = dict(
 

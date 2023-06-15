@@ -20,7 +20,9 @@ from importlib.machinery import SourceFileLoader
 from . import grid
 
 
+
 def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, Bc=None, *args, **kwargs):
+
     """
     NAME
         Inv
@@ -42,7 +44,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
     
     elif config.INV.super=='INV_4DVAR':
         return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
-    
+
     elif config.INV.super=='INV_4DVAR_PARALLEL':
         return Inv_4Dvar_parallel(config, State=State, dict_obs=dict_obs)
     
@@ -498,6 +500,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
 
 
 def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
+
     
     '''
     Run a 4Dvar analysis
@@ -696,7 +699,6 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     del State, State0, Xa, dict_obs, B, R
     gc.collect()
     print()
-
 
 def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :   
 
