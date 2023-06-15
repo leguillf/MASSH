@@ -92,7 +92,7 @@ def Exp(path_config):
     """
     
     _dir,_config = os.path.split(path_config)
-    sys.path.append(_dir)
+    sys.path.insert(0,_dir)
     if _config[-3:]=='.py':
         _config = _config[:-3]
     else:
@@ -102,6 +102,7 @@ def Exp(path_config):
     # Merge with default config file
     from . import config_default as config_def
     config = Config({})
+    config.name_file = path_config
 
     # EXP
     config.EXP = {}
@@ -121,6 +122,9 @@ def Exp(path_config):
     config.BASIS = merge_configs(config_exp,config_def,'NAME_BASIS')
     config.INV = merge_configs(config_exp,config_def,'NAME_INV')
     config.DIAG = merge_configs(config_exp,config_def,'NAME_DIAG')
+
+    del config_exp
+    sys.modules.pop(_config)
 
     # temporary directory
     if not os.path.exists(config.EXP.tmp_DA_path):
