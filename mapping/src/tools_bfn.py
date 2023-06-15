@@ -250,8 +250,8 @@ def bfn_select_obs_temporal_window(dict_obs, dt_start, dt_end,
 
     while date < dt_end:
         if pd.to_datetime(date) in dict_obs:
-            sat_info_list = dict_obs[date]['satellite']
-            obs_file_list = dict_obs[date]['obs_name']
+            sat_info_list = dict_obs[date]['attributes']
+            obs_file_list = dict_obs[date]['obs_path']
             # Loop on each satellite
             for sat_info, obs_file in zip(sat_info_list,obs_file_list):
                 if nudging_name in sat_info:
@@ -263,18 +263,18 @@ def bfn_select_obs_temporal_window(dict_obs, dt_start, dt_end,
                         sigma = nudging_params['sigma']
                         if date in dict_obs_sel:
                             if (sigma,Tau) in dict_obs_sel[date]:
-                                dict_obs_sel[date][(sigma,Tau)]['sat_info'].append(sat_info)
-                                dict_obs_sel[date][(sigma,Tau)]['obs_name'].append(obs_file)
+                                dict_obs_sel[date][(sigma,Tau)]['attributes'].append(sat_info)
+                                dict_obs_sel[date][(sigma,Tau)]['obs_path'].append(obs_file)
                                 dict_obs_sel[date][(sigma,Tau)]['K'].append(K)
                             else:
-                                dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
-                                                                'obs_name':[obs_file],
+                                dict_obs_sel[date][(sigma,Tau)] = {'attributes':[sat_info],
+                                                                'obs_path':[obs_file],
                                                                 'K':[K]
                                                                 }
                         else:
                             dict_obs_sel[date] = {}
-                            dict_obs_sel[date][(sigma,Tau)] = {'sat_info':[sat_info],
-                                                            'obs_name':[obs_file],
+                            dict_obs_sel[date][(sigma,Tau)] = {'attributes':[sat_info],
+                                                            'obs_path':[obs_file],
                                                             'K':[K]
                                                             }
         date += time_step
@@ -322,8 +322,8 @@ def bfn_projections(varname, dict_obs_var, State, dist_scale,
         for key in dict_obs_var[date]:
             # listes of satellites that are associated with
             # this nudging window at this date
-            sat_info_list = dict_obs_var[date][key]['sat_info']
-            obs_name_list = dict_obs_var[date][key]['obs_name']
+            sat_info_list = dict_obs_var[date][key]['attributes']
+            obs_file_list = dict_obs_var[date][key]['obs_path']
             nudging_coeff_list = dict_obs_var[date][key]['K']
             if np.all(np.array(nudging_coeff_list) == 0):
                 continue
@@ -362,7 +362,7 @@ def bfn_projections(varname, dict_obs_var, State, dist_scale,
                     # If no, compute the projections and save them
                     obs_projected, nudging_coeff_projected =\
                           bfn_merge_projections(varname, sat_info_list,
-                                                obs_name_list,
+                                                obs_file_list,
                                                 State,
                                                 flag_plot,
                                                 nudging_coeff_list,
@@ -375,7 +375,7 @@ def bfn_projections(varname, dict_obs_var, State, dist_scale,
             else:
                 obs_projected, nudging_coeff_projected =\
                        bfn_merge_projections(varname, sat_info_list,
-                                             obs_name_list,
+                                             obs_file_list,
                                              State,
                                              flag_plot,
                                              nudging_coeff_list,
@@ -660,8 +660,8 @@ def bfn_construct_ground_pixel_tree(lon, lat):
     # construct KD-tree
     ground_pixel_tree = spatial.cKDTree(grid.geo2cart(coords))
     subdomain = grid.geo2cart(coords)[0:100]
-    `eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
-    dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])`
+    eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
+    dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
 
     return ground_pixel_tree, dist_threshold
 

@@ -65,24 +65,31 @@ class Bc_ext:
         dlat = np.nanmean(self.lat[1:,:]-self.lat[:-1,:])
 
         # Read netcdf
-        ds = xr.open_mfdataset(config.BC.file)
+        _ds = xr.open_mfdataset(config.BC.file)
 
-        # Convert longitude to 0,360
-        ds = ds.assign_coords(
-            {
-            config.BC.name_lon:((config.BC.name_lon,
-                                 ds[config.BC.name_lon].data%360))
-            })
-        ds = ds.sortby(ds[config.BC.name_lon])
+        # Convert longitude 
+        if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':
+            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, _ds[config.BC.name_lon].data % 360))})
+        elif np.sign(_ds[config.BC.name_lon].data.min())==1 and State.lon_unit=='-180_180':
+            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180))})
+        _ds = _ds.sortby(_ds[config.BC.name_lon])    
+
+        # Copy dataset
+        ds = _ds.copy()
+        _ds.close()
         
         # Select study domain
+        time_bc = ds[config.BC.name_time].values
         lon_bc = ds[config.BC.name_lon].values
         lat_bc = ds[config.BC.name_lat].values
         dlon += np.nanmean(lon_bc[1:]-lon_bc[:-1])
         dlat += np.nanmean(lat_bc[1:]-lat_bc[:-1])
+        dtime = time_bc[1]-time_bc[0]
         ds = ds.sel({
+            config.BC.name_time:slice(np.datetime64(config.EXP.init_date)-dtime,np.datetime64(config.EXP.final_date)+dtime),
             config.BC.name_lon:slice(lon_min-dlon,lon_max+2*dlon),
-            config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)})
+            config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)
+            })
         
         # Get BC coordinates
         self.lon_bc = ds[config.BC.name_lon].values 
@@ -120,12 +127,20 @@ class Bc_ext:
         var_interp = {}
         for name in self.var:
             if self.time_bc is not None and self.time_bc.size>1:
-                grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, self.var[name].T)
+                var = +self.var[name]
+                grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
+                # Remove NaN
+                if np.isnan(var).any():
+                    _, var = pyinterp.fill.gauss_seidel(grid_source)
+                    grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
+                # Interpolate
                 _var_interp = pyinterp.trivariate(grid_source,
                                             x_target.flatten(),
                                             y_target.flatten(),
                                             z_target.flatten(),
                                             bounds_error=False).reshape(x_target.shape).T
+                for t in range(len(time)):
+                    _var_interp[t][self.mask] = np.nan
             else:
                 grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, self.var[name].T)
                 _var_interp = pyinterp.bivariate(grid_source,
@@ -134,8 +149,8 @@ class Bc_ext:
                                                 bounds_error=False).reshape(x_target[:,:,0].shape).T
 
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
+                _var_interp[self.mask] = np.nan
 
-            _var_interp[np.isnan(_var_interp)] = 0
             var_interp[name] = _var_interp
         
         return var_interp
