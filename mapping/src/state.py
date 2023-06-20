@@ -82,7 +82,7 @@ class State:
                 self.lon_unit = '0_360'
 
             # Mask
-            self.ini_mask(config.GRID)
+            self.ini_mask(config)
 
             # Compute cartesian grid 
             DX,DY = grid.lonlat2dxdy(self.lon,self.lat)
@@ -223,14 +223,18 @@ class State:
             and apply to state variable
         """
 
+        self.mask = {}
+
         # Read mask
-        if config.name_init_mask is not None and os.path.exists(config.name_init_mask):
-            ds = xr.open_dataset(config.name_init_mask).squeeze()
-            name_lon = config.name_var_mask['lon']
-            name_lat = config.name_var_mask['lat']
-            name_var = config.name_var_mask['var']
+        if config.GRID.name_init_mask is not None and os.path.exists(config.GRID.name_init_mask):
+            ds = xr.open_dataset(config.GRID.name_init_mask).squeeze()
+            name_lon = config.GRID.name_var_mask['lon']
+            name_lat = config.GRID.name_var_mask['lat']
+            name_var = config.GRID.name_var_mask['var']
         else:
-            self.mask = (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
+            # mask by default 
+            mask = (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
+            self.set_mask(mask,config)
             return
 
         # Convert longitudes
@@ -244,7 +248,7 @@ class State:
         dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
         dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
         dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
-       
+
         ds = ds.sel(
             {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
              name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
@@ -271,14 +275,54 @@ class State:
                                         
         # Convert to bool if float type     
         if mask_interp.dtype!=bool : 
-            self.mask = np.empty((self.ny,self.nx),dtype='bool')
+            mask = np.empty((self.ny,self.nx),dtype='bool')
             ind_mask = (np.isnan(mask_interp)) | (mask_interp==1) | (np.abs(mask_interp)>10)
-            self.mask[ind_mask] = True
-            self.mask[~ind_mask] = False
+            mask[ind_mask] = True
+            mask[~ind_mask] = False
         else:
-            self.mask = mask_interp.copy()
-        
-        self.mask += (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
+            mask = mask_interp.copy()
+
+        mask += (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
+
+        self.set_mask(mask,config)
+
+    def set_mask(self,mask,config): 
+        for varname in config.MOD.name_var:
+            if varname == "SSH" : 
+                self.mask[config.MOD.name_var[varname]] = mask
+            elif varname == "U" :
+                self.mask[config.MOD.name_var[varname]] = (mask[:,:-1]*mask[:,1:]).astype('bool') # mask for "U" grid 
+            elif varname == "V" : 
+                self.mask[config.MOD.name_var[varname]] = (mask[:-1,:]*mask[1:,:]).astype('bool') # mask for "V" grid 
+            elif varname == "SST" : 
+                self.mask[config.MOD.name_var[varname]] = mask
+
+        # setting mask for parameters
+        if config.MOD.super == "MOD_SW1L_JAX":
+            self.mask["He"] = mask 
+            # x boundary conditions mask #
+            shapehbcx = [len(np.asarray(config.MOD.w_waves)), # tide frequencies
+                        2, # South/North
+                        2, # cos/sin
+                        config.MOD.Ntheta*2+1, # Angles
+                        self.nx # NX
+                        ]
+            mask_hbcx = np.zeros((shapehbcx),dtype="bool")
+            mask_hbcx[:,0,:,:,mask[0,:]==True] = True # South frontier 
+            mask_hbcx[:,1,:,:,mask[-1,:]==True] = True # North frontier 
+            self.mask["hbcx"] = mask_hbcx
+
+            # y boundary conditions mask #
+            shapehbcy = [len(np.asarray(config.MOD.w_waves)), # tide frequencies
+                          2, # West/East
+                          2, # cos/sin
+                          config.MOD.Ntheta*2+1, # Angles
+                          self.ny # NY
+                          ]
+            mask_hbcy = np.zeros((shapehbcy),dtype="bool")
+            mask_hbcy[:,0,:,:,mask[:,0]==True] = True # West frontier 
+            mask_hbcy[:,1,:,:,mask[:,-1]==True] = True # East frontier 
+            self.mask["hbcy"] = mask_hbcy
             
     def save_output(self,date,name_var=None):
         
@@ -424,10 +468,10 @@ class State:
         other = self.copy(free=True)
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
-            other.var[name][self.mask] = np.nan
+            other.var[name][self.mask[name]] = np.nan
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape).astype('float64')
-            other.params[name][self.mask] = np.nan
+            other.params[name][self.mask[name]] = np.nan 
         return other
     
     
