@@ -662,7 +662,7 @@ class Model_qg1l_jax(M):
                                    State.lon,
                                    State.lat)
 
-            if
+
             self.c[np.isnan(self.c)] = np.nanmean(self.c)
             
             if config.MOD.cmin is not None:
@@ -1373,6 +1373,9 @@ class Model_sw1l_jax(M):
         self.f = State.f
         f0 = np.nanmean(self.f)
         self.f[np.isnan(self.f)] = f0
+
+        # Gravity
+        self.g = State.g
              
         # Equivalent depth
         if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
