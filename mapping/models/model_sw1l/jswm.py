@@ -12,36 +12,41 @@ class Swm:
     #                             Initialization                              #
     ###########################################################################
     
-    def __init__(self,X=None,Y=None,dt=None,bc_kind='1d',g=9.81,f=1e-4,Heb=0.7,**arr_kwargs):
+    def __init__(self,Model,State):
+                 
+                 #X=None,Y=None,dt=None,bc_kind='1d',g=9.81,f=1e-4,Heb=0.7,omegas=None,bc_theta=None,name_params=None,slice_params=None,shape_params=None,**arr_kwargs):
         
-        self.X = X
-        self.Y = Y
-        self.Xu = self.rho_on_u(X)
-        self.Yu = self.rho_on_u(Y)
-        self.Xv = self.rho_on_v(X)
-        self.Yv = self.rho_on_v(Y)
-        self.dt = dt
-        self.bc_kind = bc_kind
-        self.g = g
-        if hasattr(f, "__len__") and f.shape==self.X.shape:
-            self.f = f
+        self.X = State.X
+        self.Y = State.Y
+        self.Xu = self.rho_on_u(self.X) # X coordinates on the u grid 
+        self.Yu = self.rho_on_u(self.Y) # Y coordinates on the u grid
+        self.Xv = self.rho_on_v(self.X) # X coordinates on the v grid
+        self.Yv = self.rho_on_v(self.Y) # Y coordinates on the v grid
+        self.dt = Model.dt
+        self.bc_kind = Model.bc_kind
+        self.omegas = Model.omegas
+        self.bc_theta = Model.bc_theta
+        self.g = Model.g
+        if hasattr(Model.f, "__len__") and Model.f.shape==self.X.shape:
+            self.f = Model.f
         else: 
-            self.f = f * jnp.ones_like(self.X)
+            self.f = Model.f * jnp.ones_like(self.X)
         
-        if hasattr(Heb, "__len__") and f.shape==self.X.shape:
-            self.Heb = Heb
+        if hasattr(Model.Heb, "__len__") and Model.f.shape==self.X.shape:
+            self.Heb = Model.Heb
         else: 
-            self.Heb = Heb * jnp.ones_like(self.X)
+            self.Heb = Model.Heb * jnp.ones_like(self.X)
         
         self.ny,self.nx = self.X.shape
-                
+ 
         self.nu = self.Xu.size
         self.nv = self.Xv.size
         self.nh = self.X.size
         self.nstates = self.nu + self.nv + self.nh
+
         self.nHe = self.nh
         self.nBc = 2*(self.ny + self.nx)
-        self.nparams = self.nHe + self.nBc
+        self.nparams = Model.nparams
         
         self.sliceu = slice(0,
                             self.nu)
@@ -49,16 +54,21 @@ class Swm:
                             self.nu+self.nv)
         self.sliceh = slice(self.nu+self.nv,
                             self.nu+self.nv+self.nh)
-        self.sliceHe = slice(self.nu+self.nv+self.nh,
-                             self.nu+self.nv+self.nh+self.nHe)
-        self.sliceBc = slice(self.nu+self.nv+self.nh+self.nHe,
-                             self.nu+self.nv+self.nh+self.nHe+self.nBc)
         
+        self.name_params = Model.name_params # list of all parameters name
+        self.slice_params = Model.slice_params # dictionary containing slices of all parameters 
+        self.shape_params = Model.shape_params # dictionary containing shapes of all parameters
+        
+        #self.sliceHe = slice(self.nu+self.nv+self.nh,
+        #                     self.nu+self.nv+self.nh+self.nHe)
+        #self.sliceBc = slice(self.nu+self.nv+self.nh+self.nHe,
+        #                     self.nu+self.nv+self.nh+self.nHe+self.nBc)
+
         self.shapeu = self.Xu.shape
         self.shapev = self.Xv.shape
         self.shapeh = self.X.shape
-        self.shapeHe = self.X.shape
-        
+        #self.shapeHe = self.X.shape
+        #self.shapeitg = self.X.shape
         
         # JAX compiling
         self.u_on_v_jit = jit(self.u_on_v)
@@ -67,40 +77,49 @@ class Swm:
         self.rhs_v_jit = jit(self.rhs_v)
         self.rhs_h_jit = jit(self.rhs_h)
         self.obcs_jit = jit(self.obcs)
-        self.step_rk4_jit = jit(self.step_rk4)
+        self._compute_w1_IT_jit = jit(self._compute_w1_IT)
+
+        self.step_euler_jit = jit(self.step_euler)
         self.step_euler_tgl_jit = jit(self.step_euler_tgl)
         self.step_euler_adj_jit = jit(self.step_euler_adj)
+
+        self.step_rk4_jit = jit(self.step_rk4)
         self.step_rk4_tgl_jit = jit(self.step_rk4_tgl)
         self.step_rk4_adj_jit = jit(self.step_rk4_adj)
-        
-        
-        
-        
-        
-        
         
     ###########################################################################
     #                           Spatial scheme                                #
     ###########################################################################
     
     def rho_on_u(self,rho):
-        
+        """
+        DESCRIPTION 
+        Returns the expression of density rho on the u grid. 
+        """
         return (rho[:,1:] + rho[:,:-1])/2 
     
     def rho_on_v(self,rho):
-        
+        """
+        DESCRIPTION 
+        Returns the expression of density rho on the v grid. 
+        """
         return (rho[1:,:] + rho[:-1,:])/2 
     
     def u_on_v(self,u):
-        
+        """
+        DESCRIPTION 
+        Returns the expression of velocity u on the v grid. 
+        """
         um = 0.25 * (u[2:-1,:-1] + u[2:-1,1:] + u[1:-2,:-1] + u[1:-2,1:])
         
         return um
     
     def v_on_u(self,v):
-        
+        """
+        DESCRIPTION 
+        Returns the expression of velocity v on the u grid. 
+        """
         vm = 0.25 * (v[:-1,2:-1] + v[:-1,1:-2] + v[1:,2:-1] + v[1:,1:-2])
-        
         return vm
     
     ###########################################################################
@@ -137,7 +156,127 @@ class Swm:
     ###########################################################################
     #                      Open Boundary Conditions                           #
     ###########################################################################
-    
+
+    def _compute_w1_IT(self,t,He,h_SN,h_WE):
+        """
+        Compute first characteristic variable w1 for internal tides from external 
+        data
+
+        Parameters
+        ----------
+        t : float 
+            time in seconds
+        He : 2D array
+        h_SN : ND array
+            amplitude of SSH for southern/northern borders
+        h_WE : ND array
+            amplitude of SSH for western/eastern borders
+
+        Returns
+        -------
+        w1ext: 1D array
+            flattened  first characteristic variable (South/North/West/East)
+        """
+        
+        if self.bc_kind=='1d':
+            t = t + self.dt
+
+        # South
+        HeS = (He[0,:]+He[1,:])/2
+        fS = (self.f[0,:]+self.f[1,:])/2
+        w1S = jnp.zeros(self.nx)
+        for j,w in enumerate(self.omegas):
+            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
+            for i,theta in enumerate(self.bc_theta):
+                kx = jnp.sin(theta) * k
+                ky = jnp.cos(theta) * k
+                kxy = kx*self.Xv[0,:] + ky*self.Yv[0,:]
+                
+                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
+                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
+                v = self.g/(w**2-fS**2)*( \
+                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
+                                - fS*kx*jnp.sin(w*t-kxy)
+                                    ) +\
+                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
+                                + fS*kx*jnp.cos(w*t-kxy)
+                                    )
+                        )
+                
+                
+                
+                w1S += v + jnp.sqrt(self.g/HeS) * h
+         
+        # North
+        fN = (self.f[-1,:]+self.f[-2,:])/2
+        HeN = (He[-1,:]+He[-2,:])/2
+        w1N = jnp.zeros(self.nx)
+        for j,w in enumerate(self.omegas):
+            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
+            for i,theta in enumerate(self.bc_theta):
+                kx = jnp.sin(theta) * k
+                ky = -jnp.cos(theta) * k
+                kxy = kx*self.Xv[-1,:] + ky*self.Yv[-1,:]
+                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
+                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
+                v = self.g/(w**2-fN**2)*(\
+                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
+                                - fN*kx*jnp.sin(w*t-kxy)
+                                    ) +\
+                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
+                                + fN*kx*jnp.cos(w*t-kxy)
+                                    )
+                        )
+                w1N += v - jnp.sqrt(self.g/HeN) * h
+
+        # West
+        fW = (self.f[:,0]+self.f[:,1])/2
+        HeW = (He[:,0]+He[:,1])/2
+        w1W = jnp.zeros(self.ny)
+        for j,w in enumerate(self.omegas):
+            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
+            for i,theta in enumerate(self.bc_theta):
+                kx = jnp.cos(theta)* k
+                ky = jnp.sin(theta)* k
+                kxy = kx*self.Xu[:,0] + ky*self.Yu[:,0]
+                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
+                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
+                u = self.g/(w**2-fW**2)*(\
+                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
+                              + fW*ky*jnp.sin(w*t-kxy)
+                                  ) +\
+                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
+                              - fW*ky*jnp.cos(w*t-kxy)
+                                  )
+                        )
+                w1W += u + jnp.sqrt(self.g/HeW) * h
+
+        
+        # East
+        HeE = (He[:,-1]+He[:,-2])/2
+        fE = (self.f[:,-1]+self.f[:,-2])/2
+        w1E = jnp.zeros(self.ny)
+        for j,w in enumerate(self.omegas):
+            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
+            for i,theta in enumerate(self.bc_theta):
+                kx = -jnp.cos(theta)* k
+                ky = jnp.sin(theta)* k
+                kxy = kx*self.Xu[:,-1] + ky*self.Yu[:,-1]
+                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
+                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
+                u = self.g/(w**2-fE**2)*(\
+                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
+                                + fE*ky*jnp.sin(w*t-kxy)
+                                    ) +\
+                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
+                              - fE*ky*jnp.cos(w*t-kxy)
+                                  )
+                        )
+                w1E += u - jnp.sqrt(self.g/HeE) * h
+        
+        return w1S,w1N,w1W,w1E   
+
+
     def obcs(self,u,v,h,u0,v0,h0,He,w1ext):
         
         g = self.g
@@ -378,32 +517,35 @@ class Swm:
         
         return u,v,h
     
-    
-    
     ###########################################################################
     #                            One time step                                #
     ###########################################################################
             
     def step_euler(self,X0):
         
+        t,X1 = X0[0],jnp.asarray(+X0[1:])
+        
         #######################
         #       Reshaping     #
         #######################
-        u0 = X0[self.sliceu].reshape(self.shapeu)
-        v0 = X0[self.slicev].reshape(self.shapev)
-        h0 = X0[self.sliceh].reshape(self.shapeh)
+        u0 = X1[self.sliceu].reshape(self.shapeu)
+        v0 = X1[self.slicev].reshape(self.shapev)
+        h0 = X1[self.sliceh].reshape(self.shapeh)
         
-        if X0.size==(self.nstates+self.nparams):
-            He = X0[self.sliceHe].reshape(self.shapeHe)
-            Bc = X0[self.sliceBc]
-            w1ext = (Bc[:self.nx],
-                     Bc[self.nx:2*self.nx],
-                     Bc[2*self.nx:2*self.nx+self.ny],
-                     Bc[2*self.nx+self.ny:2*self.nx+2*self.ny])
-        else:
-            He = self.Heb
-            w1ext = None
-            
+        params = X1[self.nstates:]
+
+        He = self.Heb # value of He by default 
+
+        if 'He' in self.name_params:
+            He = params[self.slice_params['He']].reshape(self.shape_params['He'])
+        elif 'itg' in self.name_params:
+            itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
+        elif 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
+            hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
+            hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
+            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(t,He,hbcx,hbcy)
+
+
         #######################
         #   Init local state  #
         #######################
@@ -428,24 +570,26 @@ class Swm:
         #######################
         # Boundary conditions #
         #######################
-        if w1ext is not None:
-            u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext)
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params:  
+            u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
         
         #######################
         #      Flattening     #
         #######################
-        X1 = jnp.concatenate((u.flatten(),v.flatten(),h.flatten()))
+        _X1 = jnp.concatenate((u.flatten(),v.flatten(),h.flatten()))
         
-        if X0.size==(self.nstates+self.nparams):
-            X1 = jnp.concatenate((X1,He.flatten(),Bc))
+        if X1.size==(self.nstates+self.nparams):
+            _X1 = jnp.concatenate((_X1,params))
         
-        return X1
+        _X1 = jnp.append(jnp.array(t+self.dt),_X1)
+
+        return _X1
     
 
     def step_rk4(self,X0):
         
         
-        X0 = jnp.asarray(X0)
+        t,X1 = X0[0],jnp.asarray(+X0[1:])
         
         #######################
         #       Reshaping     #
@@ -454,25 +598,26 @@ class Swm:
         v0 = X0[self.slicev].reshape(self.shapev)
         h0 = X0[self.sliceh].reshape(self.shapeh)
         
-        if X0.size==(self.nstates+self.nparams):
-            He = X0[self.sliceHe].reshape(self.shapeHe)
-            Bc = X0[self.sliceBc]
-            w1ext = (Bc[:self.nx],
-                     Bc[self.nx:2*self.nx],
-                     Bc[2*self.nx:2*self.nx+self.ny],
-                     Bc[2*self.nx+self.ny:2*self.nx+2*self.ny])
-        else:
-            He = self.Heb
-            w1ext = None
-        
+        params = X1[self.nstates:]
+
+        He = self.Heb # value of He by default 
+
+        if 'He' in self.name_params:
+            He = params[self.slice_params['He']].reshape(self.shape_params['He'])
+        if 'itg' in self.name_params:
+            itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
+            hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
+            hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
+            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(t,He,hbcx,hbcy)
+
         #######################
         #   Init local state  #
         #######################
         u1 = +u0
         v1 = +v0
         h1 = +h0
-        
-                    
+                 
         #######################
         #  Right hand sides   #
         #######################
@@ -504,19 +649,20 @@ class Swm:
         #######################
         # Boundary conditions #
         #######################
-        if w1ext is not None:
-            u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext)
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params:  
+            u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
         
         #######################
         #      Flattening     #
         #######################
-        X1 = jnp.concatenate((u.flatten(),v.flatten(),h.flatten()))
+        _X1 = jnp.concatenate((u.flatten(),v.flatten(),h.flatten()))
+
+        if X1.size==(self.nstates+self.nparams):
+            _X1 = jnp.concatenate((_X1,params))
         
-        if X0.size==(self.nstates+self.nparams):
-            X1 = jnp.concatenate((X1,He.flatten(),Bc))
+        _X1 = jnp.append(jnp.array(t+self.dt),_X1)
         
-        
-        return X1
+        return _X1
     
     
     def step_euler_tgl(self,dX0,X0):
