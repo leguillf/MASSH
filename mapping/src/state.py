@@ -287,6 +287,17 @@ class State:
         self.set_mask(mask,config)
 
     def set_mask(self,mask,config): 
+        """
+        NAME
+            set_mask
+
+        ARGUMENT 
+            mask : mask to set 
+    
+        DESCRIPTION
+            Sets the mask attribute of the State object. The mask is a dictionnary containing the masks of all variables and parameters.  
+        """
+
         for varname in config.MOD.name_var:
             if varname == "SSH" : 
                 self.mask[config.MOD.name_var[varname]] = mask
@@ -299,7 +310,10 @@ class State:
 
         # setting mask for parameters
         if config.MOD.super == "MOD_SW1L_JAX":
+
+            # equivalent height He mask # 
             self.mask["He"] = mask 
+
             # x boundary conditions mask #
             shapehbcx = [len(np.asarray(config.MOD.w_waves)), # tide frequencies
                         2, # South/North
@@ -323,6 +337,9 @@ class State:
             mask_hbcy[:,0,:,:,mask[:,0]==True] = True # West frontier 
             mask_hbcy[:,1,:,:,mask[:,-1]==True] = True # East frontier 
             self.mask["hbcy"] = mask_hbcy
+
+            # internal tide generation mask #
+            self.mask["itg"] = mask 
             
     def save_output(self,date,name_var=None):
         
