@@ -409,6 +409,8 @@ MOD_SW1L_JAX = dict(
 
     name_init_var = [],
 
+    name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+
     dir_model = None,
 
     var_to_save = None,
@@ -419,7 +421,7 @@ MOD_SW1L_JAX = dict(
 
     bc_kind = '1d', # Either 1d or 2d
 
-    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
+    w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
 
     He_init = 0.9, # Mean height (in m)
 
