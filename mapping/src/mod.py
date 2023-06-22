@@ -29,6 +29,8 @@ from . import  grid
 
 from .exp import Config as Config
 
+import warnings 
+
 
 def Model(config, State, verbose=True):
     """
@@ -1361,7 +1363,7 @@ class Model_sw1l_jax(M):
         
         swm = SourceFileLoader("swm", 
                                 dir_model + "/jswm.py").load_module()
-        model = swm.Swm
+        
         
         self.time_scheme = config.MOD.time_scheme
 
@@ -1376,29 +1378,35 @@ class Model_sw1l_jax(M):
 
         # Gravity
         self.g = State.g
+
+        # Variables and parameters names arguments 
+        self.name_var = config.MOD.name_var
+        self.var_to_save = [self.name_var['SSH']] # ssh
+        self.name_params = config.MOD.name_params
              
         # Equivalent depth
-        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-            ds = xr.open_dataset(config.MOD.He_data['path'])
-            self.Heb = ds[config.MOD.He_data['var']].values
-        else:
-            self.Heb = config.MOD.He_init
-            
-            
-        if config.MOD.Ntheta>0:
-            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-        else:
-            self.bc_theta = np.array([0])
+        if 'He' in self.name_params : 
+            if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
+                ds = xr.open_dataset(config.MOD.He_data['path'])
+                self.Heb = ds[config.MOD.He_data['var']].values
+            else:
+                self.Heb = config.MOD.He_init
+        
+        # Entering waves BC 
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params :
+            if config.MOD.Ntheta>0:
+                theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
+                self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
+            else:
+                self.bc_theta = np.array([0])
+        elif 'hbcx' in config.MOD.name_params or 'hbcy' in config.MOD.name_params :
+            warnings.warn("Only partly controlling boundary conditions (either just x or y)", Warning)
             
         self.omegas = np.asarray(config.MOD.w_waves)
         self.bc_kind = config.MOD.bc_kind
 
         
         # Initialize model state
-        self.name_var = config.MOD.name_var
-        self.var_to_save = [self.name_var['SSH']] # ssh
-
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
             dsin = xr.open_dataset(config.GRID.path_init_grid)
             for name in self.name_var:
@@ -1427,46 +1435,18 @@ class Model_sw1l_jax(M):
                 elif name=='SSH':
                     State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
 
-        
-        # Model Parameters (OBC & He)
-        self.shapeHe = [State.ny,State.nx]
-        self.shapehbcx = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.nx # NX
-                          ]
-        self.shapehbcy = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.ny # NY
-                          ]
-        self.sliceHe = slice(0,np.prod(self.shapeHe))
-        self.slicehbcx = slice(np.prod(self.shapeHe),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx))
-        self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
-        self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
-        State.params['He'] = np.zeros((self.shapeHe))
-        State.params['hbcx'] = np.zeros((self.shapehbcx))
-        State.params['hbcy'] = np.zeros((self.shapehbcy))
-        
+        # Initializing model params
+        self.init_params(State,config.MOD.name_params,config)
+
         # Model initialization
-        self.swm = model(X=State.X,
-                        Y=State.Y,
-                        dt=self.dt,
-                        bc=self.bc_kind,
-                        omegas=self.omegas,
-                        bc_theta=self.bc_theta,
-                        f=self.f)
-        
+        self.swm = swm.Swm(Model = self,
+                           State = State) 
         
         # Compile jax-related functions
         self._jstep_jit = jit(self._jstep)
         self._jstep_tgl_jit = jit(self._jstep_tgl)
         self._jstep_adj_jit = jit(self._jstep_adj)
-        self._compute_w1_IT_jit = jit(self._compute_w1_IT)
+        #self._compute_w1_IT_jit = jit(self._compute_w1_IT)
         # Functions related to time_scheme
         if self.time_scheme=='Euler':
             self.swm_step = self.swm.step_euler_jit
@@ -1483,7 +1463,60 @@ class Model_sw1l_jax(M):
             print('Adjoint test:')
             adjoint_test(self,State,nstep=10)
 
+    def init_params(self,State,name_params,config) :
+        """
+        NAME
+            init_params
+        
+        ARGUMENT : 
+            param : parameter to initialize among 
+        #       - He : Equivalent Height 
+        #       - hbcx : SSH boundary condition for x 
+        #       - hbcy : SSH boundary condition for y 
+        #       - itg : Internal Tide Generation 
     
+        DESCRIPTION
+            Initializes the parameter of the object State + sets parameters characteristics in Model object. 
+        """
+        self.shape_params = {}
+        self.slice_params = {}
+
+        # Setting the shapes of parameters
+        for param in name_params : 
+            if param not in ['He', 'hbcx', 'hbcy', 'itg'] : 
+                sys.exit(param+" not implemented. Please choose parameters among ['He', 'hbcx', 'hbcy', 'itg'].")
+            elif param =='He' : 
+                self.shape_params['He'] = [State.ny,State.nx]
+            elif param =='hbcx' : 
+                self.shape_params['hbcx'] = [len(self.omegas), # tide frequencies
+                                            2, # North/South
+                                            2, # cos/sin
+                                            len(self.bc_theta), # Angles
+                                            State.nx # NX
+                                            ]
+            elif param =='hbcy' :
+                self.shape_params['hbcy'] = [len(self.omegas), # tide frequencies
+                                            2, # North/South
+                                            2, # cos/sin
+                                            len(self.bc_theta), # Angles
+                                            State.ny # NY
+                                            ]
+            elif param =='itg' :
+                self.shape_params['itg'] = [State.ny,State.nx]
+        
+        # Setting number of parameters 
+        self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))
+
+        # Setting slices of parameters
+        idx = 0 
+        for param in name_params : 
+            self.slice_params[param] = slice(idx, idx + np.prod(self.shape_params[param]))
+            idx = np.prod(self.shape_params[param])
+
+        # Initializing the parameters of the object State
+        for param in name_params :     
+            State.params[param] = np.zeros((self.shape_params[param]))
+
     def step(self,State,nstep=1,t=0):
 
         # Get state variable
@@ -1497,8 +1530,9 @@ class Model_sw1l_jax(M):
 
         # Get params in physical space
         if State.params is not None:
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))
+            for param in self.name_params : 
+                params = +State.getparams(param,vect=True)
+                X0 = np.concatenate((X0,params))
 
         # Init
         X1 = +X0
@@ -1523,43 +1557,10 @@ class Model_sw1l_jax(M):
             self.name_var['SSH']])
         
     def _jstep(self,X0):
-        
-        t,X1 = X0[0],jnp.asarray(+X0[1:])
-        
-        # Get He,obcs parameters
-        params = None
-        if X1.size==self.swm.nstates+self.nparams:
-            params = X1[self.swm.nstates:]
-            He = +params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = +params[self.slicehbcy].reshape(self.shapehbcy)        
-        
-        # Time propagation
-        _X1 = +X1[:self.swm.nstates]
-        if params is not None:
-            # First characteristic variables w1 from external data
-            if self.bc_kind=='1d':
-                tbc = t + self.dt
-            else:
-                tbc = t
-
-            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
-            
-            w1ext = jnp.concatenate((w1S,w1N,w1W,w1E))
-            _X1 = jnp.concatenate((_X1, # State variables
-                                   He.flatten(),w1ext)) # Model parameters 
         # One forward step
-        _X1 = self.swm_step(_X1)
+        X0 = self.swm_step(X0)
+        return X0
         
-        # Retrieve inital form
-        X1 = X1.at[:self.swm.nstates].set(_X1[:self.swm.nstates])
-        
-        if params is not None:
-            X1 = X1.at[self.swm.nstates:].set(params)
-        
-        X1 = jnp.append(jnp.array(t+self.dt),X1)
-    
-        return X1
         
     def step_tgl(self,dState,State,nstep=1,t=0):
         
@@ -1575,9 +1576,9 @@ class Model_sw1l_jax(M):
         
         # Get params in physical space
         if State.params is not None:
-            dparams = +dState.getparams(['He','hbcx','hbcy'],vect=True)
+            dparams = +dState.getparams(self.name_params,vect=True)
             dX0 = np.concatenate((dX0,dparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
+            params = +State.getparams(self.name_params,vect=True)
             X0 = np.concatenate((X0,params))         
 
         # Init
@@ -1630,9 +1631,9 @@ class Model_sw1l_jax(M):
         
         # Get params in physical space
         if State.params is not None:
-            adparams = +adState.getparams(['He','hbcx','hbcy'],vect=True)
+            adparams = +adState.getparams(self.name_params,vect=True)
             adX0 = np.concatenate((adX0,adparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
+            params = +State.getparams(self.name_params,vect=True)
             X0 = np.concatenate((X0,params))         
         
         # Init
@@ -1666,9 +1667,10 @@ class Model_sw1l_jax(M):
         adv1 = np.array(adX1[self.swm.slicev]).reshape(self.swm.shapev)
         adh1 = np.array(adX1[self.swm.sliceh]).reshape(self.swm.shapeh)
         adparams = np.array(adX1[self.swm.nstates:])
-        adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
-        adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
-        adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
+
+        #adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
+        #adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
+        #adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
         
         # Update state
         adu1[np.isnan(adu1)] = 0
@@ -1680,131 +1682,18 @@ class Model_sw1l_jax(M):
             self.name_var['SSH']])
         
         # Update parameters
-        adState.params['He'] = adHe
-        adState.params['hbcx'] = adhbcx
-        adState.params['hbcy'] = adhbcy
+        for param in self.name_params : 
+            adState.params[param]=+adparams[self.slice_params[param]].reshape(self.shape_params[param])
+        #adState.params['He'] = adHe
+        #adState.params['hbcx'] = adhbcx
+        #adState.params['hbcy'] = adhbcy
     
     def _jstep_adj(self,adX0,X0):
         
         _, adf = vjp(self._jstep_jit, X0)
         
         return adf(adX0)[0]
-
-    def _compute_w1_IT(self,t,He,h_SN,h_WE):
-        """
-        Compute first characteristic variable w1 for internal tides from external 
-        data
-
-        Parameters
-        ----------
-        t : float 
-            time in seconds
-        He : 2D array
-        h_SN : ND array
-            amplitude of SSH for southern/northern borders
-        h_WE : ND array
-            amplitude of SSH for western/eastern borders
-
-        Returns
-        -------
-        w1ext: 1D array
-            flattened  first characteristic variable (South/North/West/East)
-        """
-        
-        # South
-        HeS = (He[0,:]+He[1,:])/2
-        fS = (self.f[0,:]+self.f[1,:])/2
-        w1S = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[0,:] + ky*self.swm.Yv[0,:]
-                
-                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
-                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fS**2)*( \
-                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fS*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fS*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                
-                
-                
-                w1S += v + jnp.sqrt(self.g/HeS) * h
-         
-        # North
-        fN = (self.f[-1,:]+self.f[-2,:])/2
-        HeN = (He[-1,:]+He[-2,:])/2
-        w1N = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = -jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[-1,:] + ky*self.swm.Yv[-1,:]
-                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
-                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fN**2)*(\
-                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fN*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fN*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                w1N += v - jnp.sqrt(self.g/HeN) * h
-
-        # West
-        fW = (self.f[:,0]+self.f[:,1])/2
-        HeW = (He[:,0]+He[:,1])/2
-        w1W = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,0] + ky*self.swm.Yu[:,0]
-                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fW**2)*(\
-                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
-                              + fW*ky*jnp.sin(w*t-kxy)
-                                  ) +\
-                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fW*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1W += u + jnp.sqrt(self.g/HeW) * h
-
-        
-        # East
-        HeE = (He[:,-1]+He[:,-2])/2
-        fE = (self.f[:,-1]+self.f[:,-2])/2
-        w1E = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
-            for i,theta in enumerate(self.bc_theta):
-                kx = -jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,-1] + ky*self.swm.Yu[:,-1]
-                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fE**2)*(\
-                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
-                                + fE*ky*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fE*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1E += u - jnp.sqrt(self.g/HeE) * h
-        
-        return w1S,w1N,w1W,w1E     
+  
 
 
 ###############################################################################
