@@ -1510,7 +1510,7 @@ class Model_sw1l_jax(M):
         idx = 0 
         for param in name_params : 
             self.slice_params[param] = slice(idx, idx + np.prod(self.shape_params[param]))
-            idx = np.prod(self.shape_params[param])
+            idx += np.prod(self.shape_params[param])
 
         # Initializing the parameters of the object State
         for param in name_params :     
@@ -1550,7 +1550,6 @@ class Model_sw1l_jax(M):
         u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
         v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
         h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        print(type(u1))
         
         State.setvar([u1,v1,h1],[
             self.name_var['U'],
