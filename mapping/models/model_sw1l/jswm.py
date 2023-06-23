@@ -25,8 +25,12 @@ class Swm:
         self.dt = Model.dt
         self.bc_kind = Model.bc_kind
         self.omegas = Model.omegas
-        self.bc_theta = Model.bc_theta
+        
+        if "hbcx" in Model.name_params and "hbcy" in Model.name_params : 
+            self.bc_theta = Model.bc_theta
+
         self.g = Model.g
+
         if hasattr(Model.f, "__len__") and Model.f.shape==self.X.shape:
             self.f = Model.f
         else: 
@@ -36,6 +40,7 @@ class Swm:
             self.Heb = Model.Heb
         else: 
             self.Heb = Model.Heb * jnp.ones_like(self.X)
+        
         
         self.ny,self.nx = self.X.shape
  
