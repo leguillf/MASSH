@@ -5,6 +5,7 @@ from jax.config import config
 config.update("jax_enable_x64", True)
 
 import matplotlib.pylab as plt
+import numpy as np
 
 class Swm: 
     
@@ -539,17 +540,16 @@ class Swm:
         
         params = X1[self.nstates:]
 
-        He = self.Heb # value of He by default 
-
         if 'He' in self.name_params:
-            He = params[self.slice_params['He']].reshape(self.shape_params['He'])
-        elif 'itg' in self.name_params:
+            He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
+        else : 
+            He = self.Heb # value of He by default 
+        if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
-        elif 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
             hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
             hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
             w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(t,He,hbcx,hbcy)
-
 
         #######################
         #   Init local state  #
@@ -577,6 +577,8 @@ class Swm:
         #######################
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params:  
             u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
+
+        print(type(u))
         
         #######################
         #      Flattening     #
@@ -599,16 +601,18 @@ class Swm:
         #######################
         #       Reshaping     #
         #######################
-        u0 = X0[self.sliceu].reshape(self.shapeu)
-        v0 = X0[self.slicev].reshape(self.shapev)
-        h0 = X0[self.sliceh].reshape(self.shapeh)
+        u0 = X1[self.sliceu].reshape(self.shapeu)
+        v0 = X1[self.slicev].reshape(self.shapev)
+        h0 = X1[self.sliceh].reshape(self.shapeh)
         
         params = X1[self.nstates:]
 
         He = self.Heb # value of He by default 
 
         if 'He' in self.name_params:
-            He = params[self.slice_params['He']].reshape(self.shape_params['He'])
+            He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
+        else : 
+            He = self.Heb # value of He by default 
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
