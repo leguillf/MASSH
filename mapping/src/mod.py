@@ -1385,12 +1385,11 @@ class Model_sw1l_jax(M):
         self.name_params = config.MOD.name_params
              
         # Equivalent depth
-        if 'He' in self.name_params : 
-            if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-                ds = xr.open_dataset(config.MOD.He_data['path'])
-                self.Heb = ds[config.MOD.He_data['var']].values
-            else:
-                self.Heb = config.MOD.He_init
+        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
+            ds = xr.open_dataset(config.MOD.He_data['path'])
+            self.Heb = ds[config.MOD.He_data['var']].values
+        else:
+            self.Heb = config.MOD.He_init
         
         # Entering waves BC 
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params :
@@ -1538,11 +1537,12 @@ class Model_sw1l_jax(M):
         X1 = +X0
         # Add time in control vector (for JAX)
         X1 = np.append(t,X1)
+
         # Time stepping
         for _ in range(nstep):
             # One time step
             X1 = self._jstep_jit(X1)
-        
+
         # Remove time in control vector
         X1 = X1[1:]
         
@@ -1550,6 +1550,7 @@ class Model_sw1l_jax(M):
         u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
         v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
         h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
+        print(type(u1))
         
         State.setvar([u1,v1,h1],[
             self.name_var['U'],
