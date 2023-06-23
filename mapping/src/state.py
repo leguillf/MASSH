@@ -483,6 +483,7 @@ class State:
     
     def random(self,ampl=1):
         other = self.copy(free=True)
+        np.random.seed(seed=1306)
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
             other.var[name][self.mask[name]] = np.nan
