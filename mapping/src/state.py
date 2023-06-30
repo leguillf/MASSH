@@ -103,7 +103,7 @@ class State:
             
             # Gravity
             self.g = 9.81
-            
+
     def ini_geo_grid(self,config):
         """
         NAME
@@ -113,11 +113,13 @@ class State:
             Create state grid, regular in (lon,lat) 
             Args:
                 config (module): configuration module
-        """
+        """     
         self.geo_grid = True
         lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) 
         lat = np.arange(config.lat_min, config.lat_max + config.dlat, config.dlat) 
         lon,lat = np.meshgrid(lon,lat)
+        self.dlon = config.dlon
+        self.dlon = config.dlat
         self.lon = lon
         self.lat = lat
         self.present_date = config.init_date
@@ -339,7 +341,7 @@ class State:
             self.mask["hbcy"] = mask_hbcy
 
             # internal tide generation mask #
-            self.mask["itg"] = mask 
+            self.mask["itg"] = np.repeat(np.expand_dims(mask,axis=0),repeats=2,axis=0) 
             
     def save_output(self,date,name_var=None):
         
@@ -483,7 +485,6 @@ class State:
     
     def random(self,ampl=1):
         other = self.copy(free=True)
-        np.random.seed(seed=1306)
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
             other.var[name][self.mask[name]] = np.nan
