@@ -2,6 +2,7 @@ import jax.numpy as jnp
 from jax import jit
 from jax import jvp,vjp
 from jax.config import config
+from jax import debug
 config.update("jax_enable_x64", True)
 
 import matplotlib.pylab as plt
@@ -135,10 +136,11 @@ class Swm:
     def rhs_u(self,vm,h):
         
         rhs_u = jnp.zeros(self.Xu.shape)
-        
+        #rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
+        #    self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
         rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
             self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
-        
+
         return rhs_u
 
     def rhs_v(self,um,h):
@@ -150,12 +152,13 @@ class Swm:
             
         return rhs_v
     
-    def rhs_h(self,u,v,He):
+    def rhs_h(self,u,v,He,rhs_itg):
         rhs_h = jnp.zeros_like(self.X)
         rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
                 (u[1:-1,1:] - u[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
-                (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1])))
-          
+                (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
+                rhs_itg[1:-1,1:-1])
+
         return rhs_h
     
     
@@ -540,12 +543,20 @@ class Swm:
         
         params = X1[self.nstates:]
 
+        # He equivalent height parameter 
         if 'He' in self.name_params:
             He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
         else : 
             He = self.Heb # value of He by default 
+
+        # ITG Internal Tide Generation parameter 
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
+            rhs_itg = jnp.cos(self.omegas[0]*jnp.array(t))*itg[0,:]+jnp.sin(self.omegas[0]*jnp.array(t))*itg[1,:]
+        else : 
+            rhs_itg = jnp.zeros_like(self.shape_params['itg'])
+
+        # hbcx and hbcy : BC parameter 
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
             hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
             hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
@@ -563,7 +574,7 @@ class Swm:
         #######################
         ku = self.rhs_u(self.v_on_u(v1),h1)
         kv = self.rhs_v(self.u_on_v(u1),h1)
-        kh = self.rhs_h(u1,v1,He)
+        kh = self.rhs_h(u1,v1,He,rhs_itg)
         
         #######################
         #  Time propagation   #
@@ -577,8 +588,6 @@ class Swm:
         #######################
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params:  
             u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
-
-        print(type(u))
         
         #######################
         #      Flattening     #
@@ -613,8 +622,14 @@ class Swm:
             He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
         else : 
             He = self.Heb # value of He by default 
+
+        # ITG Internal Tide Generation parameter 
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
+            rhs_itg = jnp.cos(self.omegas[0]*jnp.array(t))*itg[0,:]+jnp.sin(self.omegas[0]*jnp.array(t))*itg[1,:]
+        else : 
+            rhs_itg = jnp.zeros_like(self.shape_params['itg'])
+
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
             hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
             hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
@@ -633,19 +648,19 @@ class Swm:
         # k1
         ku1 = self.rhs_u_jit(self.v_on_u_jit(v1),h1)*self.dt
         kv1 = self.rhs_v_jit(self.u_on_v_jit(u1),h1)*self.dt
-        kh1 = self.rhs_h_jit(u1,v1,He)*self.dt
+        kh1 = self.rhs_h_jit(u1,v1,He,rhs_itg)*self.dt
         # k2
         ku2 = self.rhs_u_jit(self.v_on_u_jit(v1+0.5*kv1),h1+0.5*kh1)*self.dt
         kv2 = self.rhs_v_jit(self.u_on_v_jit(u1+0.5*ku1),h1+0.5*kh1)*self.dt
-        kh2 = self.rhs_h_jit(u1+0.5*ku1,v1+0.5*kv1,He)*self.dt
+        kh2 = self.rhs_h_jit(u1+0.5*ku1,v1+0.5*kv1,He,rhs_itg)*self.dt
         # k3
         ku3 = self.rhs_u_jit(self.v_on_u_jit(v1+0.5*kv2),h1+0.5*kh2)*self.dt
         kv3 = self.rhs_v_jit(self.u_on_v_jit(u1+0.5*ku2),h1+0.5*kh2)*self.dt
-        kh3 = self.rhs_h_jit(u1+0.5*ku2,v1+0.5*kv2,He)*self.dt
+        kh3 = self.rhs_h_jit(u1+0.5*ku2,v1+0.5*kv2,He,rhs_itg)*self.dt
         # k4
         ku4 = self.rhs_u_jit(self.v_on_u_jit(v1+kv3),h1+kh3)*self.dt
         kv4 = self.rhs_v_jit(self.u_on_v_jit(u1+ku3),h1+kh3)*self.dt
-        kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,He)*self.dt
+        kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,He,rhs_itg)*self.dt
         
         
         #######################
