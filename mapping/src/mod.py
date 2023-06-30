@@ -1501,7 +1501,9 @@ class Model_sw1l_jax(M):
                                             State.ny # NY
                                             ]
             elif param =='itg' :
-                self.shape_params['itg'] = [State.ny,State.nx]
+                self.shape_params['itg'] = [2, # A and B, coefficient in front of cos and sin 
+                                            State.ny, #NY
+                                            State.nx] #NX
         
         # Setting number of parameters 
         self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))
@@ -1668,10 +1670,6 @@ class Model_sw1l_jax(M):
         adh1 = np.array(adX1[self.swm.sliceh]).reshape(self.swm.shapeh)
         adparams = np.array(adX1[self.swm.nstates:])
 
-        #adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
-        #adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
-        #adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
-        
         # Update state
         adu1[np.isnan(adu1)] = 0
         adv1[np.isnan(adv1)] = 0
@@ -1684,9 +1682,6 @@ class Model_sw1l_jax(M):
         # Update parameters
         for param in self.name_params : 
             adState.params[param]=+adparams[self.slice_params[param]].reshape(self.shape_params[param])
-        #adState.params['He'] = adHe
-        #adState.params['hbcx'] = adhbcx
-        #adState.params['hbcy'] = adhbcy
     
     def _jstep_adj(self,adX0,X0):
         
