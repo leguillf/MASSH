@@ -487,7 +487,7 @@ NAME_BC = None # For now, only BC_EXT is available
 # External boundary conditions
 BC_EXT = dict(
 
-    file = None, # netcdf file(s) in whihch the boundary conditions fields are stored
+    file = None, # netcdf file(s) in which the boundary conditions fields are stored
 
     name_lon = 'lon',
 
