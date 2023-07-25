@@ -220,7 +220,7 @@ class Model_diffusion(M):
     def _apply_bc(self,State,t0,t):
 
         for name in self.name_var:
-            if t in self.bc[name]:
+            if t not in self.bc[name]:
                 State.var[self.name_var[name]] +=\
                     self.Wbc * (self.bc[name][t]-self.bc[name][t0]) 
 
@@ -661,12 +661,6 @@ class Model_qg1l_jax(M):
                                    config.MOD.name_var_c,
                                    State.lon,
                                    State.lat)
-
-            if np.any(np.isnan(self.c)):
-                if config.MOD.cmin is not None:
-                    self.c[np.isnan(self.c)] = config.MOD.cmin
-                else:
-                    self.c[np.isnan(self.c)] = np.nanmean(self.c)
             
             if config.MOD.cmin is not None:
                 self.c[self.c<config.MOD.cmin] = config.MOD.cmin
@@ -751,15 +745,16 @@ class Model_qg1l_jax(M):
                          Wbc=self.Wbc,
                          Kdiffus=config.MOD.Kdiffus,
                          Kdiffus_trac=config.MOD.Kdiffus_trac,
-                         bc_trac=config.MOD.bc_trac)
+                         bc_trac=config.MOD.bc_trac,
+                         split_in_bins=config.MOD.split_in_bins,
+                         lenght_bins=config.MOD.lenght_bins,
+                         facbin=config.MOD.facbin)
 
         # Model functions initialization
-        if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
-            self.qgm_step = self.qgm.step_jit
-            self.qgm_step_tgl = self.qgm.step_tgl_jit
-            self.qgm_step_adj = self.qgm.step_adj_jit
-        else:
-            self.qgm_step = self.qgm.step_jit
+        self.qgm_step = self.qgm.step_jit
+        self.qgm_step_tgl = self.qgm.step_tgl_jit
+        self.qgm_step_adj = self.qgm.step_adj_jit
+
         
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
@@ -790,7 +785,6 @@ class Model_qg1l_jax(M):
                     for i,t in enumerate(time_bc):
                         var_bc_t = +var_bc[_name_var_bc][i]
                         # Remove nan
-                        var_bc_t[self.qgm.mask==0] = 0.
                         var_bc_t[np.isnan(var_bc_t)] = 0.
                         # Fill bc dictionnary
                         self.bc[_name_var_mod][t] = var_bc_t
@@ -814,6 +808,8 @@ class Model_qg1l_jax(M):
 
         if 'SSH' not in self.bc:
             return Xb
+        elif len(self.bc['SSH'].keys())==0:
+             return Xb
         elif t0 not in self.bc['SSH']:
             # Find closest time
             t_list = np.array(list(self.bc['SSH'].keys()))
@@ -883,7 +879,7 @@ class Model_qg1l_jax(M):
         # Get anomaly from full field
         self.ano_bc(t1,State,-1)
     
-    def step_tgl(self,dState,State,nstep=1,t=None):
+    def step_tgl(self,dState,State,nstep=1,t=0):
 
         # Get full field from anomaly 
         self.ano_bc(t,State,+1)
@@ -932,7 +928,7 @@ class Model_qg1l_jax(M):
         # Get anomaly from full field
         self.ano_bc(t,State,-1)
 
-    def step_adj(self,adState,State,nstep=1,t=None):
+    def step_adj(self,adState,State,nstep=1,t=0):
         
         # Get full field from anomaly 
         self.ano_bc(t,State,+1)

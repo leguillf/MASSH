@@ -2155,9 +2155,6 @@ That could be due to non regular grid or bad written netcdf file')
         if self.compare_to_baseline:
             var_bas_interp = np.ma.masked_where(msk, var_bas_interp).compressed()
  
- 
-
-        
         ##########################
         # compute segments
         ##########################

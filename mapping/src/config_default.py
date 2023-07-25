@@ -326,6 +326,12 @@ MOD_QG1L_JAX = dict(
 
     bc_trac = 'OBC', # Either OBC or fixed
 
+    split_in_bins = False, # Whether to split the spatial domain in bins, each of them being associated with constant c & f
+
+    lenght_bins = 1000, # Length of one spatial bin (in km). 
+
+    facbin = 1
+
 )
 
 MOD_QG1L_JAX_FULL = dict(
@@ -699,11 +705,15 @@ INV_4DVAR_JAX = dict(
 
 INV_4DVAR_PARALLEL = dict(
 
-    nprocs = 1,
+    nprocs = 1, # Number of parallelized processes
 
-    overlap_frac = .5,
+    space_window_size_proc = 10, # Space window size of one process (in °). Set to None for no split in space.
 
-    window_size_proc = timedelta(days=30),
+    space_overlap_frac = .5, # Overlap fraction of two succesive space windows 
+
+    time_window_size_proc = 30, # Time window size of one process (days). Set to None for no split in time.
+
+    time_overlap_frac = .5, # Overlap fraction of two succesive time windows 
 
     compute_test = False, # TLM, ADJ & GRAD tests
 
@@ -827,7 +837,7 @@ BASIS_BM = dict(
 
     tdecmax = 40., # maximum time of decorrelation 
 
-    facQ= 1, # factor to be multiplied to the estimated Q
+    facQ = 1, # factor to be multiplied to the estimated Q
 
     Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
@@ -964,7 +974,7 @@ BASIS_BM_JAX = dict(
 )
 
 # Balanced Motions with auxilliary data 
-BASIS_BMaux = dict(
+BASIS_MIOST = dict(
 
     name_mod_var = None, # Name of the related model variable
     
@@ -1011,6 +1021,48 @@ BASIS_BMaux = dict(
     Romax = 150.,
 
     cutRo =  1.6,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
+BASIS_BMaux = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    facns = 1., #factor for wavelet spacing in space
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    file_aux = '', # Name of auxilliary file in which are stored the std and tdec for each locations at different wavelengths.
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    depth1 = 0.,
+
+    depth2 = 30.,
 
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
@@ -1092,6 +1144,8 @@ DIAG_OSSE = dict(
     time_min = None,
 
     time_max = None,
+
+    time_step = None,
 
     lon_min = None,
 

@@ -52,7 +52,7 @@ class Bc_ext:
         # Get grid coordinates
         self.lon = State.lon
         self.lat = State.lat
-        self.mask = +State.mask
+        self.mask = State.mask
 
         # Study domain borders
         lon_min = np.nanmin(self.lon)
@@ -80,6 +80,7 @@ class Bc_ext:
         
         # Select study domain
         time_bc = ds[config.BC.name_time].values
+        self.name_time_bc = config.BC.name_time
         lon_bc = ds[config.BC.name_lon].values
         lat_bc = ds[config.BC.name_lat].values
         dlon += np.nanmean(lon_bc[1:]-lon_bc[:-1])
@@ -92,7 +93,7 @@ class Bc_ext:
             })
         
         # Get BC coordinates
-        self.lon_bc = ds[config.BC.name_lon].values 
+        self.lon_bc = ds[config.BC.name_lon].values
         self.lat_bc = ds[config.BC.name_lat].values
         if config.BC.name_time is not None:
             self.time_bc = ds[config.BC.name_time].values
@@ -102,17 +103,24 @@ class Bc_ext:
         # Get BC variables
         self.var = {}
         for name in config.BC.name_var:
-            self.var[name] = ds[config.BC.name_var[name]].load()
+            self.var[name] = ds[config.BC.name_var[name]]#.load()
 
         ds.close()        
             
     def interp(self,time):
 
+        # Select timestamps
+        if self.time_bc is not None and self.time_bc.size>1:
+            dtbc = self.time_bc[1] - self.time_bc[0]
+            time0 = time[0] - dtbc
+            time1 = time[-1] + dtbc
+            time_bc = self.time_bc[(self.time_bc>=time0) & (self.time_bc<=time1)]
+            
         # Define source grid
         x_source_axis = pyinterp.Axis(self.lon_bc, is_circle=True)
         y_source_axis = pyinterp.Axis(self.lat_bc)
         if self.time_bc is not None and self.time_bc.size>1:
-            z_source_axis = pyinterp.TemporalAxis(self.time_bc)
+            z_source_axis = pyinterp.TemporalAxis(time_bc)
 
         # Define target grid
         if self.time_bc is not None and self.time_bc.size>1:
@@ -128,12 +136,12 @@ class Bc_ext:
         var_interp = {}
         for name in self.var:
             if self.time_bc is not None and self.time_bc.size>1:
-                var = +self.var[name]
+                var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)})
                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
                 # Remove NaN
-                if np.isnan(var).any():
-                    _, var = pyinterp.fill.gauss_seidel(grid_source)
-                    grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
+                #if np.isnan(var).any():
+                #    _, var = pyinterp.fill.gauss_seidel(grid_source)
+                #    grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
                 # Interpolate
                 _var_interp = pyinterp.trivariate(grid_source,
                                             x_target.flatten(),
