@@ -103,8 +103,7 @@ class Bc_ext:
         # Get BC variables
         self.var = {}
         for name in config.BC.name_var:
-            self.var[name] = ds[config.BC.name_var[name]]#.load()
-
+            self.var[name] = ds[config.BC.name_var[name]]
         ds.close()        
             
     def interp(self,time):
