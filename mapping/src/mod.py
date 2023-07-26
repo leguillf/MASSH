@@ -1404,6 +1404,9 @@ class Model_sw1l_jax(M):
         self.omegas = np.asarray(config.MOD.w_waves)
         self.bc_kind = config.MOD.bc_kind
 
+        # Setting Model mask # 
+        self.mask = {}
+        self.set_mask(State.mask,config)
         
         # Initialize model state
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
@@ -1418,21 +1421,10 @@ class Model_sw1l_jax(M):
                     dsin.close()
                     del dsin
                     State.var[self.name_var[name]] = var_init.values
-                else:
-                    if name=='U':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                    elif name=='V':
-                        State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                    elif name=='SSH':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
         else:
-            for name in self.name_var:  
-                if name=='U':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                elif name=='V':
-                    State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                elif name=='SSH':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+            for name in self.name_var:
+                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float')
+                State.var[self.name_var[name]][State.mask] = np.nan
 
         # Initializing model params
         self.init_params(State,config.MOD.name_params,config)
@@ -1521,10 +1513,11 @@ class Model_sw1l_jax(M):
     def step(self,State,nstep=1,t=0):
 
         # Get state variable
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
+        u0 = State.getvar(self.name_var['U'])[:,:-1].ravel()
+        v0 = State.getvar(self.name_var['V'])[:-1,:].ravel()
+        h0 = State.getvar(self.name_var['SSH'],vect = True)
+
+        X0 = np.concatenate((u0,v0,h0))
         
         # Remove NaN
         X0[np.isnan(X0)] = np.nan
@@ -1552,6 +1545,10 @@ class Model_sw1l_jax(M):
         u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
         v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
         h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
+
+        # Adding a blank row and column to fit the State grid 
+        u1 = np.concatenate((u1,np.zeros((State.ny,1))),axis=1)
+        v1 = np.concatenate((v1,np.zeros((1,State.nx))),axis=0)
         
         State.setvar([u1,v1,h1],[
             self.name_var['U'],
@@ -1688,6 +1685,69 @@ class Model_sw1l_jax(M):
         _, adf = vjp(self._jstep_jit, X0)
         
         return adf(adX0)[0]
+    
+    def _detect_coast(self,mask,axis):
+        """
+        NAME
+            _detect_coast
+
+        ARGUMENT 
+            mask : mask of continents (N,n) shaped array
+            axis : either "x" or "y"
+    
+        DESCRIPTION
+            Detects coast between pixels. 
+
+        RETURNS 
+            (N-1,n) or (N,n-1) array with True if it is a coast (transisition continent - ocean) False otherwise. 
+        """
+        if axis == "x": 
+            a1 = mask[:,1:]
+            a2 = mask[:,:-1]
+        elif axis == "y": 
+            a1 = mask[1:,:]
+            a2 = mask[:-1,:]
+        p1 = np.logical_and(a1,np.invert(a2))
+        p2 = np.logical_and(a2,np.invert(a1))
+        return np.logical_or(p1,p2)
+
+    def set_mask(self,mask,config) : 
+        """
+        NAME
+            set_mask
+
+        ARGUMENT 
+            mask : mask to set 
+    
+        DESCRIPTION
+            Sets the mask attribute of the Model object. The mask is a dictionnary containing the masks of variables, represented by an int (0,1 or Nane). 
+            For "SSH" the mask is : 
+                - 1 if ocean 
+                - 999 if continent (NaN value)
+            For "U" and "V" the mask is : 
+                - 1 if ocean 
+                - 999 if continent (NaN value)
+                - 0 if normal to the coast    
+        """
+
+        for varname in config.MOD.name_var:
+
+            if varname == "SSH" : 
+                mask_ssh = np.ones(mask.shape,dtype='float')
+                mask_ssh[mask==True]=np.nan
+                self.mask[config.MOD.name_var[varname]] = mask_ssh
+
+            elif varname == "U" :
+                mask_u = np.ones(mask[:,1:].shape,dtype='float')
+                mask_u[np.logical_and(mask[:,1:],mask[:,:-1])]=np.nan
+                mask_u[self._detect_coast(mask,"x")]=0
+                self.mask[config.MOD.name_var[varname]] = mask_u
+
+            elif varname == "V" : 
+                mask_v = np.ones(mask[1:,:].shape,dtype='float')
+                mask_v[np.logical_and(mask[1:,:],mask[:-1,:])]=np.nan
+                mask_v[self._detect_coast(mask,"y")]=0
+                self.mask[config.MOD.name_var[varname]] = mask_v
   
 
 
