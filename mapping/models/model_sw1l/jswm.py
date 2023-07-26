@@ -62,21 +62,43 @@ class Swm:
         self.sliceh = slice(self.nu+self.nv,
                             self.nu+self.nv+self.nh)
         
+        self.name_var = Model.name_var 
         self.name_params = Model.name_params # list of all parameters name
         self.slice_params = Model.slice_params # dictionary containing slices of all parameters 
         self.shape_params = Model.shape_params # dictionary containing shapes of all parameters
         
-        #self.sliceHe = slice(self.nu+self.nv+self.nh,
-        #                     self.nu+self.nv+self.nh+self.nHe)
-        #self.sliceBc = slice(self.nu+self.nv+self.nh+self.nHe,
-        #                     self.nu+self.nv+self.nh+self.nHe+self.nBc)
-
         self.shapeu = self.Xu.shape
         self.shapev = self.Xv.shape
         self.shapeh = self.X.shape
-        #self.shapeHe = self.X.shape
-        #self.shapeitg = self.X.shape
+
+        # Masks # 
+        self.mask = Model.mask # mask for integration 
+
+        # Coastal values # 
         
+        #  - Indexes 
+        self.idxS = np.where( np.invert(State.mask[1:,:])  * State.mask[:-1,:] )
+        self.idxN = np.where( np.invert(State.mask[:-1,:]) * State.mask[1:,:]  )
+        self.idxW = np.where( np.invert(State.mask[:,1:])  * State.mask[:,:-1] ) 
+        self.idxE = np.where( np.invert(State.mask[:,:-1]) * State.mask[:,1:]  )
+
+        # - Values 
+        # -- SSH -- # 
+        self.sshS = jnp.zeros(self.idxS[0].shape)
+        self.sshN = jnp.zeros(self.idxN[0].shape)
+        self.sshW = jnp.zeros(self.idxW[0].shape)
+        self.sshE = jnp.zeros(self.idxE[0].shape)
+        # -- U -- # 
+        self.uS = jnp.zeros(self.idxS[0].shape)
+        self.uN = jnp.zeros(self.idxN[0].shape)
+        self.uW = jnp.zeros(self.idxW[0].shape)
+        self.uE = jnp.zeros(self.idxE[0].shape)
+        # -- V -- # 
+        self.vS = jnp.zeros(self.idxS[0].shape)
+        self.vN = jnp.zeros(self.idxN[0].shape)
+        self.vW = jnp.zeros(self.idxW[0].shape)
+        self.vE = jnp.zeros(self.idxE[0].shape)
+
         # JAX compiling
         self.u_on_v_jit = jit(self.u_on_v)
         self.v_on_u_jit = jit(self.v_on_u)
@@ -93,6 +115,8 @@ class Swm:
         self.step_rk4_jit = jit(self.step_rk4)
         self.step_rk4_tgl_jit = jit(self.step_rk4_tgl)
         self.step_rk4_adj_jit = jit(self.step_rk4_adj)
+
+        self.coastbcs_jit = jit(self.coastbcs)
         
     ###########################################################################
     #                           Spatial scheme                                #
@@ -136,10 +160,18 @@ class Swm:
     def rhs_u(self,vm,h):
         
         rhs_u = jnp.zeros(self.Xu.shape)
+
         #rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
         #    self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+
+        ### Test with coast ##
+        h_right = h.copy() # right side of SSH 
+        h_left = h.copy() # left side of SSH
+        h_right = h_right.at[self.idxE].set(self.sshE) 
+        h_left = h_left.at[self.idxW].set(self.sshW)
+        
         rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
-            self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+            self.g * (h_right[1:-1,2:-1] - h_left[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
 
         return rhs_u
 
@@ -147,16 +179,42 @@ class Swm:
         
         rhs_v = jnp.zeros_like(self.Xv)
         
+        #rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
+        #    self.g * (h[2:-1,1:-1] - h[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
+        
+        ### Test with coast ##
+        h_up = h.copy() # upper side of SSH 
+        h_down = h.copy() # down side of SSH 
+        h_up = h_up.at[self.idxN].set(self.sshN)
+        h_down = h_down.at[self.idxS].set(self.sshS)
+
         rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
-            self.g * (h[2:-1,1:-1] - h[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
-            
+            self.g * (h_up[2:-1,1:-1] - h_down[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
+
         return rhs_v
     
     def rhs_h(self,u,v,He,rhs_itg):
         rhs_h = jnp.zeros_like(self.X)
+
+        #rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
+        #        (u[1:-1,1:] - u[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
+        #        (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
+        #        rhs_itg[1:-1,1:-1])
+
+        ### Test with coast ### 
+        u_right = u.copy() # right side of u 
+        u_left = u.copy() # left side of u
+        v_up = v.copy() # upper side of v
+        v_down = v.copy() # dow side of v
+        
+        u_right.at[self.idxE].set(self.uE)
+        u_left.at[self.idxW].set(self.uW)
+        v_up.at[self.idxN].set(self.vN)
+        v_down.at[self.idxS].set(self.vS)
+
         rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
-                (u[1:-1,1:] - u[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
-                (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
+                (u_right[1:-1,1:] - u_left[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
+                (v_up[1:,1:-1] - v_down[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
                 rhs_itg[1:-1,1:-1])
 
         return rhs_h
@@ -297,7 +355,7 @@ class Swm:
         cS = jnp.sqrt(g*HeS)
         if self.bc_kind=='1d':
             cS *= self.dt/(self.Y[1,:]-self.Y[0,:])
-      
+
         # 1. w1
         w1extS = +w1ext[0]
         
@@ -339,7 +397,7 @@ class Swm:
 
         # 4. Values on BC
         uS = w2S
-        vS = (w1S + w3S)/2 
+        vS = (w1S + w3S)/2
         hS = jnp.sqrt(HeS/g) *(w1S - w3S)/2
         
         #######################################################################
@@ -525,7 +583,226 @@ class Swm:
     
         
         return u,v,h
-    
+
+    def coastbcs(self,u,v,h,u0,v0,h0,He):
+
+        g = self.g
+
+        #######################################################################
+        # South 
+        #######################################################################
+        for k,(i,j) in enumerate(zip(self.idxS[0],self.idxS[1])) :  
+
+            HeS = He[i+1,j] # = equivalent height of the upper pixel 
+            cS = jnp.sqrt(g*HeS)
+            if self.bc_kind=='1d':
+                cS *= self.dt/(self.Y[i+1,j]-self.Y[i,j])
+
+            # 1. w1 
+            w1extS = 0 # because no entering wave at the coast
+            
+            if self.bc_kind=='1d': 
+                w1S = w1extS 
+            elif self.bc_kind=='2d':
+                # dw1dy0
+                w10 = v0[i,j]+jnp.sqrt(g/HeS)*(h0[i,j]+h0[i+1,j])/2
+                w10_ = (v0[i,j]+v0[i+1,j])/2 + jnp.sqrt(g/HeS)*h0[i+1,j]
+                _w10 = w1extS 
+                dw1dy0 = (w10_ - _w10)/self.dy
+                # dudx0
+                dudx0 = ((u0[i,j+1]+u0[i+1,j+1]-u0[i,j]-u0[i+1,j])/2)/self.dx
+                w1S = w10 - self.dt*cS*(dw1dy0+dudx0)
+
+            # 2. w2 
+            w20 = (u0[i,j] + u0[i+1,j])/2
+            if self.bc_kind=='1d': 
+                w2S = w20 
+            elif self.bc_kind=='2d' : 
+                dhdx0 = ((h0[i,j+1]+h0[i+1,j+1]-h0[i,j]-h0[i+1,j])/2)/self.dx
+                w2S = w20 - self.dt*g*dhdx0 
+
+            # 3. w3 
+            if self.bc_kind=='1d': 
+                _vS = (1-3/2*cS)*v0[i,j] + cS/2*(4*v0[i+1,j]-v0[i+2,j])
+                _hS = (1/2+cS)*h0[i+1,j]+(1/2-cS)*h0[i,j]
+                w3S = _vS - jnp.sqrt(g/HeS) * _hS 
+            elif self.bc_kind=='2d':    
+                w30 = v0[i,j] + jnp.sqrt(g/HeS)*(h0[i,j]+h0[i+1,j])/2
+                w30_ = (v0[i,j]-v0[i+1,j])/2 + jnp.sqrt(g/HeS)*h0[i+1,j]
+                w30__ = v0[i+1,j] + jnp.sqrt(g/HeS)*(h0[i+1,j]+h0[i+2,j])/2
+                dw3dy0 = -(3*w30 - 4*w30_ + w30__)/(self.dy/2)
+                w3S = w30 + self.dt*cS* (dw3dy0 + dudx0)
+
+            # 4. Values on BC
+            uS = w2S
+            vS = (w1S + w3S)/2 
+            hS = jnp.sqrt(HeS/g) *(w1S - w3S)/2
+
+            # 5. Assigning values 
+            self.uS = self.uS.at[k].set(2* uS - u[i+1,j])
+            self.vS = self.vS.at[k].set(vS)
+            self.sshS = self.sshS.at[k].set(2*hS - h[i+1,j])
+        
+        #######################################################################
+        # North 
+        #######################################################################
+        for k,(i,j) in enumerate(zip(self.idxN[0],self.idxN[1])) :  
+
+            HeN = He[i-1,j]
+            cN = jnp.sqrt(g*HeN)
+            if self.bc_kind=='1d':
+                cN *= self.dt/(self.Y[i,j]-self.Y[i-1,j])
+
+            # 1. w1 
+            w1extN = 0 # because no entering wave at the coast
+
+            if self.bc_kind == '1d' : 
+                w1N = w1extN 
+            elif self.bc_kind == '2d' :
+                w10 = v0[i,j] - jnp.sqrt(g/HeN)*(h0[i,j]+h0[i-1,j])/2
+                w10_ = (v0[i,j]+v0[i-1,j])/2 - jnp.sqrt(g/HeN)*h0[i-1,j]
+                _w10 = 0 # variable to keep similar structure to obcs 
+                dw1dy0 = (_w10 - w10_)/self.dy
+                dudx0 = ((u0[i,j+1]+u0[i-1,j+1]-u0[i,j]-u0[i-1,j])/2)/self.dx
+                w1N = w10 + self.dt*cN*(dw1dy0 + dudx0)
+
+            # 2. w2 
+            w20 = (u0[i,j]+u0[i-1,j])/2
+            if self.bc_kind == '1d': 
+                w2N = w20
+            elif self.bc_lind == '2d':  
+                dhdx0 = ((h0[i,j+1]+h0[i-1,j+1]-h0[i,j]-h0[i-1,j])/2)/self.dx
+                w2N = w20 - self.dt*g*dhdx0
+            
+            # 3. w3 
+            if self.bc_kind == '1d' : 
+                _vN = (1-3/2*cN)*v0[i,j]+cN/2*(4*v0[i-1,j]-v0[i-2,j])
+                _hN = (1/2+cN)*h0[i-1,j]+(1/2-cN)*h0[i,j]
+                w3N = _vN + jnp.sqrt(g/HeN) * _hN
+            if self.bc_kind =='2d': 
+                w30 = v0[i,j] + jnp.sqrt(g/HeN)*(h0[i,j]-h0[i-1,j])/2
+                w30_ = (v0[i,j]+v0[i-1,j])/2 + jnp.sqrt(g/HeN)*h0[i-1,j]
+                w30__ = v0[i-1,j] + jnp.sqrt(g/HeN)*(h0[i-1,j]+h0[i-2,j])/2
+                dw3dy0 = (3*w30 - 4*w30_ +w30__)/(self.dy/2)
+                w3N = w30 - self.dt*cN*(dw3dy0+dudx0)
+            
+            # 4. Values on BC 
+            uN = w2N 
+            vN = (w1N + w3N)/2
+            hN = jnp.sqrt(HeN/g) *(w3N - w1N)/2
+
+            # 5. Assigning values 
+            self.uN = self.uN.at[k].set(2*uN - u[i-1,j])
+            self.vN = self.vN.at[k].set(vN)
+            self.sshN = self.sshN.at[k].set(2*hN - h[i-1,j])
+
+        #######################################################################
+        # West 
+        #######################################################################
+        for k,(i,j) in enumerate(zip(self.idxW[0],self.idxW[1])) :  
+
+            HeW = He[i,j+1]
+            cW = jnp.sqrt(g*HeW)
+            if self.bc_kind == '1d' : 
+                cW *= self.dt/(self.X[i,j+1]-self.X[i,j])
+            
+            # 1. w1 
+            w1extW = 0 # because no entering wave at the coast
+
+            if self.bc_kind == '1d' : 
+                w1W = w1extW 
+            elif self.bc_kind == '2d' : 
+                w10 = u0[i,j]+jnp.sqrt(g/HeW)*(h0[i,j]+h0[i,j+1])/2
+                w10_ = (u0[i,j]+u0[i,j+1])/2 + jnp.sqrt(g/HeW)* h0[i,j+1]
+                _w10 = w1extW 
+                dw1dx0 = (w10_ - _w10)/self.dx 
+                dvdy0 = ((v0[i+1,j]+v0[i+1,j+1]-v0[i,j]-v0[i,j+1])/2)/self.dy
+                w1W = w10 - self.dt*cW*(dw1dx0 + dvdy0)
+            
+            # 2. w2 
+            w20 = (v0[i,j]+v0[i,j+1])/2
+            if self.bc_kind == '1d': 
+                w2W = w20 
+            elif self.bc_kind == '2d': 
+                dhdy0 = ((h0[i+1,j]+h0[i+1,j+1]-h0[i,j]-h0[i,j+1])/2)
+                w2W = w20 - self.dt*g*dhdy0
+            
+            # 3. w3 
+            if self.bc_kind == '1d' : 
+                _uW = (1-3/2*cW)*u0[i,j]+cW/2*(4*u0[i,j+1]-u0[i,j+2])
+                _hW = (1/2+cW)*h0[i,j+1] + (1/2-cW)*h0[i,j]
+                w3W = _uW - jnp.sqrt(g/HeW)* _hW 
+            elif self.bc_kind == '2d' : 
+                w30 = u0[i,j] - jnp.sqrt(g/HeW)* (h0[i,j]+h0[i,j+1])/2
+                w30_ = (u0[i,j]+u0[i,j+1])/2 - jnp.sqrt(g/HeW)* h0[i,j+1]
+                w30__ = u0[i,j+1] - jnp.sqrt(g/HeW)* (h0[i,j+1]+h0[i,j+2])/2
+                dw3dx0 = -(3*w30 - 4*w30_ + w30__)/(self.dx/2)
+                w3W = w30 + self.dt*cW*(dw3dx0+dvdy0)
+            
+            # 4. Values on BC 
+            uW = (w1W + w3W)/2
+            vW = w2W 
+            hW = jnp.sqrt(HeW/g)*(w1W-w3W)/2
+
+            # 5. Assigning values 
+            self.uW = self.uW.at[k].set(uW)
+            self.vW = self.vW.at[k].set(2*vW - v[i,j+1])
+            self.sshW = self.sshW.at[k].set(2*hW - h[i,j+1])
+
+        #######################################################################
+        # East 
+        #######################################################################
+        for k,(i,j) in enumerate(zip(self.idxE[0],self.idxE[1])) : 
+
+            HeE = He[i,j-1]
+            cE = jnp.sqrt(g*HeE)
+            if self.bc_kind == '1d' :
+                cE *= self.dt/(self.X[i,j]-self.X[i,j-1])
+
+            # 1. w1
+            w1extE = 0 # because no entering wave at the coast
+
+            if self.bc_kind == '1d' : 
+                w1E = w1extE 
+            elif self.bc_kind == '2d' : 
+                w10 = u0[i,j] - jnp.sqrt(g/HeE)* (h0[i,j]+h0[i,j-1])/2
+                w10_ = (u0[i,j]+u0[i,j-1])/2 - jnp.sqrt(g/HeE)* h0[i,j-1]
+                _w10 = w1extE
+                dw1dx0 = (_w10 - w10_)/self.dx
+                dvdy0 = ((v0[i+1,j]+v0[i+1,j-1]-h0[i,j]-h0[i,j-1])/2)/self.dy
+                w1E = w10 + self.dt*cE*( dw1dx0 + dvdy0)
+            
+            # 2. w2 
+            w20 = (v0[i,j]+v0[i,j-1])/2
+            if self.bc_kind == '1d' : 
+                w2E = w20 
+            elif self.bc_kind == '2d' : 
+                dhdy0 = ((h0[i+1,j]+h0[i+1,j-1]-h0[i,j]-h0[i,j-1])/2)/self.dy
+                w2E = w20 - self.dt*g*dhdy0
+            
+            # 3. w3 
+            if self.bc_kind == '1d' : 
+                _uE = (1-3/2*cE)* u0[i,j] + cE/2* (4*u0[i,j-1]-u0[i,j-2])
+                _hE = ((1/2 + cE)*h0[i,j-1]+(1/2 - cE)*h0[i,j])
+                w3E = _uE +jnp.sqrt(g/HeE)* _hE
+            elif self.bc_kind == '2d' : 
+                w30 = u0[i,j] + jnp.sqrt(g/HeE)* (h0[i,j]+h0[i,j-1])/2
+                w30_ = (u0[i,j]+u0[i,j-1])/2 + jnp.sqrt(g/HeE)* h0[i,j-1]
+                w30__ = u0[i,j-1] + jnp.sqrt(g/HeE)* (h0[i,j-1]+h0[i,j-2])/2
+                dw3dx0 = (3*w30 - 4*w30_ + w30__)/(self.dx/2)
+                w3E = w30 - self.dt*cE* (dw3dx0 + dvdy0) 
+
+            # 4. Values on BC
+            uE = (w1E + w3E)/2 
+            vE = w2E
+            hE = jnp.sqrt(HeE/g)*(w3E - w1E)/2
+
+            # 5. Assigning values
+            self.uE = self.uE.at[k].set(uE)
+            self.vE = self.vE.at[k].set(2*vE - v[i,j-1])
+            self.sshE = self.sshE.at[k].set(2*hE - h[i,j-1])
+
+
     ###########################################################################
     #                            One time step                                #
     ###########################################################################
@@ -543,20 +820,26 @@ class Swm:
         
         params = X1[self.nstates:]
 
-        # He equivalent height parameter 
+        ###################################
+        ### Equivalent height parameter ###
+        ###################################
         if 'He' in self.name_params:
             He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
         else : 
             He = self.Heb # value of He by default 
 
-        # ITG Internal Tide Generation parameter 
+        ##############################################
+        ### ITG Internal Tide Generation parameter ###
+        ############################################## 
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
             rhs_itg = jnp.cos(self.omegas[0]*jnp.array(t))*itg[0,:]+jnp.sin(self.omegas[0]*jnp.array(t))*itg[1,:]
         else : 
             rhs_itg = jnp.zeros_like(self.shape_params['itg'])
 
-        # hbcx and hbcy : BC parameter 
+        ###########################################
+        ### Height Boundary Condition parameter ### 
+        ###########################################
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
             hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
             hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
@@ -586,8 +869,12 @@ class Swm:
         #######################
         # Boundary conditions #
         #######################
-        if 'hbcx' in self.name_params and 'hbcy' in self.name_params:  
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params: #if external boundary conditions are controled 
             u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
+        elif 'itg' in self.name_params : #if itg is controled and not external boundary conditions, entering wave in set to zero 
+            w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
+            u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
+
         
         #######################
         #      Flattening     #
@@ -616,20 +903,26 @@ class Swm:
         
         params = X1[self.nstates:]
 
-        He = self.Heb # value of He by default 
-
+        ###################################
+        ### Equivalent height parameter ###
+        ###################################
         if 'He' in self.name_params:
             He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
         else : 
             He = self.Heb # value of He by default 
 
-        # ITG Internal Tide Generation parameter 
+        ##############################################
+        ### ITG Internal Tide Generation parameter ###
+        ############################################## 
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
             rhs_itg = jnp.cos(self.omegas[0]*jnp.array(t))*itg[0,:]+jnp.sin(self.omegas[0]*jnp.array(t))*itg[1,:]
         else : 
             rhs_itg = jnp.zeros_like(self.shape_params['itg'])
 
+        ###########################################
+        ### Height Boundary Condition parameter ### 
+        ###########################################
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
             hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
             hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
@@ -641,6 +934,13 @@ class Swm:
         u1 = +u0
         v1 = +v0
         h1 = +h0
+
+        ######################
+        # Masking conditions #
+        ######################
+        #u1 = u1*jnp.asarray(self.mask[self.name_var["U"]])
+        #v1 = v1*jnp.asarray(self.mask[self.name_var["V"]])
+        #h1 = h1*jnp.asarray(self.mask[self.name_var["SSH"]])
                  
         #######################
         #  Right hand sides   #
@@ -649,19 +949,37 @@ class Swm:
         ku1 = self.rhs_u_jit(self.v_on_u_jit(v1),h1)*self.dt
         kv1 = self.rhs_v_jit(self.u_on_v_jit(u1),h1)*self.dt
         kh1 = self.rhs_h_jit(u1,v1,He,rhs_itg)*self.dt
+
+        #ku1 = jnp.nan_to_num(ku1)*jnp.asarray(self.mask[self.name_var["U"]])
+        #kv1 = jnp.nan_to_num(kv1)*jnp.asarray(self.mask[self.name_var["V"]])
+        #kh1 = kh1*jnp.asarray(self.mask[self.name_var["SSH"]])
+
         # k2
         ku2 = self.rhs_u_jit(self.v_on_u_jit(v1+0.5*kv1),h1+0.5*kh1)*self.dt
         kv2 = self.rhs_v_jit(self.u_on_v_jit(u1+0.5*ku1),h1+0.5*kh1)*self.dt
         kh2 = self.rhs_h_jit(u1+0.5*ku1,v1+0.5*kv1,He,rhs_itg)*self.dt
+
+        #ku2 = jnp.nan_to_num(ku2)*jnp.asarray(self.mask[self.name_var["U"]])
+        #kv2 = jnp.nan_to_num(kv2)*jnp.asarray(self.mask[self.name_var["V"]])
+        #kh2 = kh2*jnp.asarray(self.mask[self.name_var["SSH"]])
+
         # k3
         ku3 = self.rhs_u_jit(self.v_on_u_jit(v1+0.5*kv2),h1+0.5*kh2)*self.dt
         kv3 = self.rhs_v_jit(self.u_on_v_jit(u1+0.5*ku2),h1+0.5*kh2)*self.dt
         kh3 = self.rhs_h_jit(u1+0.5*ku2,v1+0.5*kv2,He,rhs_itg)*self.dt
+
+        #ku3 = jnp.nan_to_num(ku3)*jnp.asarray(self.mask[self.name_var["U"]])
+        #kv3 = jnp.nan_to_num(kv3)*jnp.asarray(self.mask[self.name_var["V"]])
+        #kh3 = kh3*jnp.asarray(self.mask[self.name_var["SSH"]])
+
         # k4
         ku4 = self.rhs_u_jit(self.v_on_u_jit(v1+kv3),h1+kh3)*self.dt
         kv4 = self.rhs_v_jit(self.u_on_v_jit(u1+ku3),h1+kh3)*self.dt
         kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,He,rhs_itg)*self.dt
-        
+
+        #ku4 = jnp.nan_to_num(ku4)*jnp.asarray(self.mask[self.name_var["U"]])
+        #kv4 = jnp.nan_to_num(kv4)*jnp.asarray(self.mask[self.name_var["V"]])
+        #kh4 = kh4*jnp.asarray(self.mask[self.name_var["SSH"]])
         
         #######################
         #   Time propagation  #
@@ -673,9 +991,18 @@ class Swm:
         #######################
         # Boundary conditions #
         #######################
-        if 'hbcx' in self.name_params and 'hbcy' in self.name_params:  
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params: #if external boundary conditions are controled 
             u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
-        
+        elif 'itg' in self.name_params : #if itg is controled and not external boundary conditions, entering wave in set to zero 
+            w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
+            u,v,h = self.obcs_jit(u,v,h,u1,v1,h1,He,w1ext=(w1S,w1N,w1W,w1E))
+
+        ######################    
+        #   Coastal values   # 
+        ######################
+        if np.any(self.idxN) == True or np.any(self.idxS) == True or np.any(self.idxW) == True or np.any(self.idxE) == True :
+            u,v = self.coastbcs_jit(u,v,h,u1,v1,h1,He)
+
         #######################
         #      Flattening     #
         #######################
