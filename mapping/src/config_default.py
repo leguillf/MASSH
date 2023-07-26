@@ -53,7 +53,9 @@ EXP = dict(
 
     compute_obs = False, # force computing observations 
 
-    path_obs = None # if set to None, observations are saved in *tmp_DA_path*
+    path_obs = None, # if set to None, observations are saved in *tmp_DA_path*
+
+    coriolis_force = True # if set to False, coriolis force is set to 0 (for idealized case for instance)
 
 )
 
@@ -93,7 +95,9 @@ GRID_GEO = dict(
 
     name_init_mask = None,
 
-    name_var_mask = {'lon':'','lat':'','var':''}
+    name_var_mask = {'lon':'','lat':'','var':''},
+
+    interp_method_mask = "nearest", # mask interpolation method between "bivariate", "nearest" and "inverse_distance_weighting" 
 
 )
 
@@ -114,7 +118,9 @@ GRID_CAR = dict(
 
     name_init_mask = None,
 
-    name_var_mask = {'lon':'','lat':'','var':''}
+    name_var_mask = {'lon':'','lat':'','var':''},
+
+    interp_method_mask = "nearest", # mask interpolation method between "bivariate", "nearest" and "inverse_distance_weighting" 
 
 )
 
@@ -1204,7 +1210,7 @@ DIAG_OSSE_UV = dict(
 
     name_mask = None,
 
-    name_var_mask = {'lon':'','lat':'','var':''}
+    name_var_mask = {'lon':'','lat':'','var':''},
 
 )
 
