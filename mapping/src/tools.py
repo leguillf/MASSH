@@ -201,13 +201,21 @@ def read_auxdata_varcit(file_aux):
     return finterpVARIANCE   
 
 
-def read_auxdata_mdt(filemdt_aux,name_var):
+def read_auxdata_mdt(filemdt_aux,name_var,lon_unit):
 
-    # Read spectrum database
-    fcid = Dataset(filemdt_aux, 'r')
-    lon = np.array(fcid.variables[name_var['lon']][:])
-    lat = np.array(fcid.variables[name_var['lat']][:])
-    mdt = np.array(fcid.variables[name_var['mdt']]).squeeze()
+    # Read MDT database
+    ds = xr.open_dataset(filemdt_aux)
+    
+    if np.sign(ds[name_var['lon']].data.min())==-1 and lon_unit=='0_360':
+        ds = ds.assign_coords({name_var['lon']:((name_var['lon'], ds[name_var['lon']].data % 360))})
+    elif np.sign(ds[name_var['lon']].data.min())==1 and lon_unit=='-180_180':
+        ds = ds.assign_coords({name_var['lon']:((name_var['lon'], (ds[name_var['lon']].data + 180) % 360 - 180))})
+    ds = ds.sortby(ds[name_var['lon']])    
+    
+    lon = ds[name_var['lon']].values
+    lat = ds[name_var['lat']].values
+    mdt = ds[name_var['mdt']].values.squeeze()
+    
     if mdt.shape[1]==lon.size:
         mdt = mdt.transpose()
     if len(lon.shape)==1:

@@ -151,9 +151,10 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
-            ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
+        ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
     elif np.sign(ds[obs_attr.name_lon].data.min())==1 and lon_unit=='-180_180':
         ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
+    #ds = ds.sortby(ds[obs_attr.name_lon])    
     
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
@@ -163,7 +164,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
     # MDT 
     if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:
-        finterpmdt = read_auxdata_mdt(obs_attr.path_mdt,obs_attr.name_var_mdt)
+        finterpmdt = read_auxdata_mdt(obs_attr.path_mdt,obs_attr.name_var_mdt, lon_unit)
     else:
         finterpmdt = None
     
@@ -189,8 +190,6 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
         
-
-
         if is_obs:
             # Save the selected dataset in a new nc file
             varobs = {}
