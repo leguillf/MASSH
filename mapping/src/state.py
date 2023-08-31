@@ -46,10 +46,10 @@ class State:
             os.makedirs(self.EXP.path_save)
         self.flag_plot = config.EXP.flag_plot
 
-        #  Initialize state variables dictonary
+        #  Initialize state variables dictionary
         self.var = {}
 
-        # Initialize controle parameters dictonary
+        # Initialize controle parameters dictionary
         self.params = {}
 
         # Initialize grid
@@ -432,7 +432,7 @@ class State:
             other.var[name][self.mask] = np.nan
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape).astype('float64')
-            other.params[name][self.mask] = np.nan
+            #other.params[name][self.mask] = np.nan
         return other
     
     
@@ -540,7 +540,7 @@ class State:
                     self.var[name_var] += var
                 else:
                     self.var[name_var] = deepcopy(var)
-    
+
     def scalar(self,coeff,copy=False):
         if copy:
             State1 = self.copy()
