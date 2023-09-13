@@ -246,7 +246,7 @@ class Basis_bm:
                     for (lon,lat) in zip(_ENSLON,_ENSLAT):
                         indphys = np.where(
                             (np.abs((self.lon1d - lon) / self.km2deg * np.cos(lat * np.pi / 180.)) <= .5/ff[iff]) &
-                            (np.abs((self.lat1d - lat) / self.km2deg) <= .9/ff[iff])
+                            (np.abs((self.lat1d - lat) / self.km2deg) <= .5/ff[iff])
                             )[0]
                         if not np.all(self.mask1d[indphys]):
                             _ENSLON1.append(lon)
@@ -638,11 +638,14 @@ class Basis_bmaux:
                 for i in range(tt.size-1):
                     tmp[i+1] = tmp[i] + self.window(tt[i]/tdec[iff][P])*(tt[i+1]-tt[i])
                 norm_fact[iff][P] = tmp.max()
-            tdec_max[iff] = np.max(tdec[iff])
             
-            # Time coordinates, uniform for all points, set with the minimum tdec
-            tdec_min = np.min(tdec[iff]) 
-            enst[iff] = np.arange(-tdec_min/self.facnlt,deltat+tdec_min/self.facnlt , tdec_min/self.facnlt)
+            if len(tdec[iff])>0:
+                tdec_max[iff] = np.max(tdec[iff])
+                # Time coordinates, uniform for all points, set with the minimum tdec
+                tdec_min = np.min(tdec[iff]) 
+                enst[iff] = np.arange(-tdec_min/self.facnlt,deltat+tdec_min/self.facnlt , tdec_min/self.facnlt)
+            else:
+                enst[iff] = []
                 
         # Fill the Q diagonal matrix (expected variance for each wavelet)     
         Q = np.array([]) 

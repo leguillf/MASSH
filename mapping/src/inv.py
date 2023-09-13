@@ -623,11 +623,12 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
 
         # Callback function called at every minimization iterations
         def callback(XX):
-            now = datetime.now()
-            current_time = now.strftime("%Y-%m-%d_%H%M%S")
-            ds = xr.Dataset({'res':(('x',),XX)})
-            ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
-            ds.close()
+            if config.INV.save_minimization:
+                now = datetime.now()
+                current_time = now.strftime("%Y-%m-%d_%H%M%S")
+                ds = xr.Dataset({'res':(('x',),XX)})
+                ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
+                ds.close()
                 
         # Minimization options
         options = {}
@@ -1074,6 +1075,7 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
             ip1 += 1 # +1 to exit the loop
         ip1 = min(ip1+config.INV.nprocs, len(proc))
     sys.stdout = old_stdout # reset old stdout
+
 
     # Merge output trajectories 
     from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
