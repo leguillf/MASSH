@@ -1057,6 +1057,7 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
 
     # Run the subprocesses
     if 'JAX' in config.MOD.super: # Avoid preallocating GPU memory for multi JAX processes
+        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
         os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(proc),config.INV.nprocs))
     old_stdout = sys.stdout # backup current stdout
     sys.stdout = open(os.devnull, "w") # prevent printoing outputs
@@ -1118,8 +1119,8 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
                     if State.mask is not None and np.any(State.mask):
                         _var2[State.mask] = np.nan
                     # Weight coefficients
-                    W1 = (list_config[i][0].EXP.final_date - date)  / (config.INV.time_window_size_proc * config.INV.time_overlap_frac)
-                    W2 = (date - list_config[i+1][0].EXP.init_date) / (config.INV.time_window_size_proc * config.INV.time_overlap_frac)
+                    W1 = (list_config[i][0].EXP.final_date - date).days  / (config.INV.time_window_size_proc * config.INV.time_overlap_frac)
+                    W2 = (date - list_config[i+1][0].EXP.init_date).days / (config.INV.time_window_size_proc * config.INV.time_overlap_frac)
                     # Interpolation 
                     State.setvar(W1*_var1 + W2*_var2, name)
                 else:

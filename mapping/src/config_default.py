@@ -200,8 +200,6 @@ OBS_SSH_SWATH = dict(
     
     name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH)
 
-    varmax = 1e2, # Maximal value of observations considered 
-
     sigma_noise = None, # Value of (constant) measurement error 
 
     add_mdt = None, # Whether to add MDT or not (if observations are SLA and dynamical model works with SSH)

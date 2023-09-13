@@ -84,6 +84,14 @@ def Obs(config, State, *args, **kwargs):
 
         print(f'\n{name_obs}:\n{OBS}')
         
+        # Preprocessing function to select only variables of interest
+        def preprocess(ds):
+            name_var = [OBS.name_time, OBS.name_lon, OBS.name_lat]
+            for key in OBS.name_var:
+                name_var.append(OBS.name_var[key])
+            ds = ds[name_var]
+            return ds
+        
         # Read observation files
         if '.nc' in OBS.path and '*' not in OBS.path:
             _ds = xr.open_dataset(OBS.path)
@@ -91,11 +99,11 @@ def Obs(config, State, *args, **kwargs):
             if '*' in OBS.path:
                 path = OBS.path
             else:
-                path = f'{OBS.path}*.nc'
+                path = f'{OBS.path}*.nc'    
             try:
-                _ds = xr.open_mfdataset(path)
+                _ds = xr.open_mfdataset(path,preprocess=preprocess,compat='override',coords='minimal')
             except ValueError:
-                print('ValueError: opening with comnine==nested')
+                print('ValueError: opening with combine==nested')
                 files = glob.glob(path)
 
                 # Get time dimension to concatenate
@@ -104,7 +112,8 @@ def Obs(config, State, *args, **kwargs):
                 _ds0 = xr.open_dataset(files[0])
                 name_time_dim = _ds0[OBS.name_time].dims[0]
                 _ds0.close()
-                _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim)
+                # Open nested files
+                _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,preprocess=preprocess,compat='override',coords='minimal')
             except:
                 print('Error: unable to open multiple netcdf files')
                 continue

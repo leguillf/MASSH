@@ -16,6 +16,8 @@ import pandas as pd
 import subprocess
 from .tools import read_auxdata_mdt
 from . import grid
+from . import switchvar
+import cmocean
 
 
 def Diag(config,State):
@@ -1632,11 +1634,11 @@ class Diag_ose():
         self.name_ref_lon = config.DIAG.name_ref_lon
         self.name_ref_lat = config.DIAG.name_ref_lat
         self.name_ref_var = config.DIAG.name_ref_var
-        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref)[self.name_ref_var]
+        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref)
         if np.sign(ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
-            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, ref[self.name_ref_lon].data % 360))})
+            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_time, ref[self.name_ref_lon].data % 360))})
         elif np.sign(ref[self.name_ref_lon].data.min())==1 and State.lon_unit=='-180_180':
-            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, (ref[self.name_ref_lon].data + 180) % 360 - 180))})
+            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_time, (ref[self.name_ref_lon].data + 180) % 360 - 180))})
         ref = ref.swap_dims({ref[self.name_ref_time].dims[0]:self.name_ref_time})
         lon_ref = ref[self.name_ref_lon] 
         lat_ref = ref[self.name_ref_lat]
@@ -1649,13 +1651,14 @@ class Diag_ose():
         except:
             ref = ref.where((ref[self.name_ref_time]<=np.datetime64(self.time_max)) &\
                         (ref[self.name_ref_time]>=np.datetime64(self.time_min)),drop=True)
-        self.ref = ref.load()
+        self.ref = ref[self.name_ref_var].load()
         ref.close()
 
         # Add MDT to reference data
         if config.DIAG.add_mdt_to_ref:
-            finterpmdt = read_auxdata_mdt(config.DIAG.path_mdt,config.DIAG.name_var_mdt)
-            mdt_on_ref = finterpmdt((self.ref[self.name_ref_lon], self.ref[self.name_ref_lat]))
+            finterpmdt = read_auxdata_mdt(config.DIAG.path_mdt,config.DIAG.name_var_mdt,State.lon_unit)
+            mdt_on_ref = finterpmdt((ref[self.name_ref_lon] , ref[self.name_ref_lat]))
+            print(mdt_on_ref.shape, self.ref.data.shape)
             self.ref.data += mdt_on_ref
         self.ref[np.abs(self.ref)>10.] = np.nan
 
@@ -2372,7 +2375,105 @@ That could be due to non regular grid or bad written netcdf file')
         return list_lon_segment, list_lat_segment, list_ssh_alongtrack_segment, list_ssh_map_interp_segment, npt 
         
     def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
-        # Not implemented yet"
+        
+        # For memory leak when saving multiple png files...
+        import matplotlib
+        matplotlib.use('Agg')
+        
+        # Experimental data
+        ssh_exp = self.exp.values
+        lon_exp = self.exp[self.name_exp_lon].values
+        lat_exp = self.exp[self.name_exp_lat].values
+        if len(lon_exp.shape)==1:
+            lon_exp,lat_exp = np.meshgrid(lon_exp,lat_exp)
+        u_exp,v_exp = switchvar.ssh2uv(ssh_exp,lon=lon_exp,lat=lat_exp)
+        U_exp = np.sqrt(u_exp**2+v_exp**2)
+        rv_exp = switchvar.ssh2rv(ssh_exp,lon=lon_exp,lat=lat_exp)
+
+        # Ranges
+        ssh_min = np.nanmin(ssh_exp)
+        ssh_max = np.nanmax(ssh_exp)
+        U_min = 0
+        U_max = np.nanmax(U_exp)
+        rv_min = -.8*np.nanmax(np.abs(rv_exp))
+        rv_max = .8*np.nanmax(np.abs(rv_exp))
+
+        # Baseline data
+        if self.compare_to_baseline:
+            bas_interp = self.bas.interp({self.name_bas_time:self.exp[self.name_bas_time]})    # time interpolation of baseline
+            ssh_bas = bas_interp.values
+            lon_bas = self.bas[self.name_bas_lon].values
+            lat_bas = self.bas[self.name_bas_lat].values
+            if len(lon_bas.shape)==1:
+                lon_bas,lat_bas = np.meshgrid(lon_bas,lat_bas)
+            u_bas,v_bas = switchvar.ssh2uv(ssh_bas,lon=lon_bas,lat=lat_bas)
+            U_bas = np.sqrt(u_bas**2+v_bas**2)
+            rv_bas = switchvar.ssh2rv(ssh_bas,lon=lon_bas,lat=lat_bas)
+
+        # Compute frames
+        for t in range(self.exp[self.name_exp_time].size):
+
+            if self.compare_to_baseline:
+                fig, axs = plt.subplots(2,3,figsize=(15,10))
+            else: 
+                fig, axs = plt.subplots(1,3,figsize=(15,5))
+                axs = axs[np.newaxis,:]
+
+            fig.suptitle(str(self.exp[self.name_exp_time][t].values)[:13])
+
+            im0 = axs[0,0].pcolormesh(lon_exp,lat_exp,ssh_exp[t],cmap=cmocean.cm.deep_r,vmin=ssh_min,vmax=ssh_max)
+            axs[0,0].set_title(r'SSH$_{exp}$ [m]')
+            plt.colorbar(im0,ax=axs[0,0])
+
+            im1 = axs[0,1].pcolormesh(lon_exp,lat_exp,U_exp[t],cmap=cmocean.cm.speed,vmin=U_min,vmax=U_max)
+            axs[0,1].set_title(r'U$_{exp}$ [m/s]')
+            plt.colorbar(im1,ax=axs[0,1])
+
+            im2 = axs[0,2].pcolormesh(lon_exp,lat_exp,rv_exp[t],cmap=cmocean.cm.diff,vmin=rv_min,vmax=rv_max)
+            axs[0,2].set_title(r'$\xi_{exp}$ [s$^{-1}$]')
+            plt.colorbar(im2,ax=axs[0,2])
+
+            # Baseline variables 
+            if self.compare_to_baseline:
+                im0 = axs[1,0].pcolormesh(lon_bas,lat_bas,ssh_bas[t],cmap=cmocean.cm.deep_r,vmin=ssh_min,vmax=ssh_max)
+                plt.colorbar(im0,ax=axs[1,0])
+                axs[1,0].set_title(r'SSH$_{baseline}$ [m]')
+                im1 = axs[1,1].pcolormesh(lon_bas,lat_bas,U_bas[t],cmap=cmocean.cm.speed,vmin=U_min,vmax=U_max)
+                axs[1,1].set_title(r'U$_{baseline}$ [m/s]')
+                plt.colorbar(im1,ax=axs[1,1])
+                im2 = axs[1,2].pcolormesh(lon_bas,lat_bas,rv_bas[t],cmap=cmocean.cm.diff,vmin=rv_min,vmax=rv_max)
+                axs[1,2].set_title(r'$\xi_{baseline}$ [s$^{-1}$]')
+                plt.colorbar(im2,ax=axs[1,2])
+
+            fig.savefig(f'{self.dir_output}/frame_{str(t).zfill(5)}.png',dpi=100)
+
+            plt.close(fig)
+            del fig
+            gc.collect(2)
+
+        # Create movie
+        sourcefolder = self.dir_output
+        moviename = 'movie.mp4'
+        frame_pattern = 'frame_*.png'
+        ffmpeg_options="-c:v libx264 -preset veryslow -crf 15 -pix_fmt yuv420p"
+
+        command = 'ffmpeg -f image2 -r %i -pattern_type glob -i %s -y %s -r %i %s' % (
+                framerate,
+                os.path.join(sourcefolder, frame_pattern),
+                ffmpeg_options,
+                framerate,
+                os.path.join(self.dir_output, moviename),
+            )
+        print(command)
+
+        _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
+
+        # Delete frames
+        os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+
+        # Display movie
+        if Display:
+            Video(os.path.join(self.dir_output, moviename),embed=True)
         return 
     
     def Leaderboard(self):
