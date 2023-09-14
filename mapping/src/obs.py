@@ -84,6 +84,14 @@ def Obs(config, State, *args, **kwargs):
 
         print(f'\n{name_obs}:\n{OBS}')
         
+        # Preprocessing function to select only variables of interest
+        def preprocess(ds):
+            name_var = [OBS.name_time, OBS.name_lon, OBS.name_lat]
+            for key in OBS.name_var:
+                name_var.append(OBS.name_var[key])
+            ds = ds[name_var]
+            return ds
+        
         # Read observation files
         if '.nc' in OBS.path and '*' not in OBS.path:
             _ds = xr.open_dataset(OBS.path)
@@ -91,11 +99,11 @@ def Obs(config, State, *args, **kwargs):
             if '*' in OBS.path:
                 path = OBS.path
             else:
-                path = f'{OBS.path}*.nc'
+                path = f'{OBS.path}*.nc'    
             try:
-                _ds = xr.open_mfdataset(path)
+                _ds = xr.open_mfdataset(path,preprocess=preprocess,compat='override',coords='minimal')
             except ValueError:
-                print('ValueError: opening with comnine==nested')
+                print('ValueError: opening with combine==nested')
                 files = glob.glob(path)
 
                 # Get time dimension to concatenate
@@ -104,7 +112,8 @@ def Obs(config, State, *args, **kwargs):
                 _ds0 = xr.open_dataset(files[0])
                 name_time_dim = _ds0[OBS.name_time].dims[0]
                 _ds0.close()
-                _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim)
+                # Open nested files
+                _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,preprocess=preprocess,compat='override',coords='minimal')
             except:
                 print('Error: unable to open multiple netcdf files')
                 continue
@@ -151,9 +160,10 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
-            ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
+        ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
     elif np.sign(ds[obs_attr.name_lon].data.min())==1 and lon_unit=='-180_180':
         ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
+    #ds = ds.sortby(ds[obs_attr.name_lon])    
     
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
@@ -163,7 +173,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
     # MDT 
     if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:
-        finterpmdt = read_auxdata_mdt(obs_attr.path_mdt,obs_attr.name_var_mdt)
+        finterpmdt = read_auxdata_mdt(obs_attr.path_mdt,obs_attr.name_var_mdt, lon_unit)
     else:
         finterpmdt = None
     
@@ -189,8 +199,6 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
         
-
-
         if is_obs:
             # Save the selected dataset in a new nc file
             varobs = {}
