@@ -168,9 +168,11 @@ That could be due to non regular grid or bad written netcdf file')
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
                 )
             try:
+                dlon = self.bas[self.name_bas_lon[1:]] - self.bas[self.name_bas_lon[:-1]]
+                dlat = self.bas[self.name_bas_lat[1:]] - self.bas[self.name_bas_lat[:-1]]
                 self.bas = self.bas.sel(
-                    {self.name_bas_lon:slice(self.lon_min,self.lon_max),
-                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}
+                    {self.name_bas_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
+                    self.name_bas_lat:slice(self.lat_min-dlat,self.lat_max+dlat)}
                 )
             except:
                 print('Warning: unable to select study region in the baseline fields.')
