@@ -1107,7 +1107,7 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
                 if State.mask is not None and np.any(State.mask):
                     _var1[State.mask] = np.nan
                 # Time smoothing (except last window)
-                if len(list_date)>1 and i<len(list_date)-1 and date>=list_config[i+1][0].EXP.init_date and config.INV.time_overlap_frac>0:
+                if len(list_date)>1 and i<len(list_date)-1 and date>=list_config[i+1][0].EXP.init_date and config.INV.time_overlap_frac>0 and date>=list_config[i+1][0].EXP.init_date:
                     # Space smoothing for second time window
                     _var2 = np.zeros((State.ny, State.nx))
                     for j in range(len(list_lonlat)):
@@ -1121,8 +1121,8 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
                     if State.mask is not None and np.any(State.mask):
                         _var2[State.mask] = np.nan
                     # Weight coefficients
-                    W1 = (list_config[i][0].EXP.final_date - date).days  / (config.INV.time_window_size_proc * config.INV.time_overlap_frac)
-                    W2 = (date - list_config[i+1][0].EXP.init_date).days / (config.INV.time_window_size_proc * config.INV.time_overlap_frac)
+                    W1 = (list_config[i][0].EXP.final_date - date).total_seconds()  / (24*3600*config.INV.time_window_size_proc * config.INV.time_overlap_frac)
+                    W2 = (date - list_config[i+1][0].EXP.init_date).total_seconds() / (24*3600*config.INV.time_window_size_proc * config.INV.time_overlap_frac)
                     # Interpolation 
                     State.setvar(W1*_var1 + W2*_var2, name)
                 else:
