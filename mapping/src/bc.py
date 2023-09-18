@@ -70,7 +70,7 @@ class Bc_ext:
         # Convert longitude 
         if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':
             _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, _ds[config.BC.name_lon].data % 360))})
-        elif np.sign(_ds[config.BC.name_lon].data.min())==1 and State.lon_unit=='-180_180':
+        elif np.sign(_ds[config.BC.name_lon].data.min())>=0 and State.lon_unit=='-180_180':
             _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180))})
         _ds = _ds.sortby(_ds[config.BC.name_lon])    
 

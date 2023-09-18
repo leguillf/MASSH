@@ -236,7 +236,7 @@ class State:
         # Convert longitudes
         if np.sign(ds[name_lon].data.min())==-1 and self.lon_unit=='0_360':
             ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
-        elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
+        elif np.sign(ds[name_lon].data.min())>=0 and self.lon_unit=='-180_180':
             ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
         ds = ds.sortby(ds[name_lon])    
 
