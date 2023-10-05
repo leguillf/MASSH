@@ -1299,9 +1299,9 @@ DIAG_OSE = dict(
 
     name_var_mdt = None,
     
-    delta_t_ref = 0.9434, # s
+    delta_t_ref = None, # s
 
-    velocity_ref = 6.77, # km/s
+    velocity_ref = None, # km/s
 
     lenght_scale = 1000, # km
 

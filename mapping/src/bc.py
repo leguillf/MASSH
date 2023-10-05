@@ -90,7 +90,7 @@ class Bc_ext:
             config.BC.name_time:slice(np.datetime64(config.EXP.init_date)-dtime,np.datetime64(config.EXP.final_date)+dtime),
             config.BC.name_lon:slice(lon_min-dlon,lon_max+2*dlon),
             config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)
-            })
+            }).load()
         
         # Get BC coordinates
         self.lon_bc = ds[config.BC.name_lon].values

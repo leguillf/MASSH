@@ -662,8 +662,21 @@ class Obsop_interp_l4(Obsop_interp):
                         var_obs_interp, err_obs_interp = pickle.load(f)
                 else:
                     # Grid interpolation: performing spatial interpolation now
-                    var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
-                    err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
+                    if self.interp_method=='hybrid':
+                        # We perform first nearest, then linear, and then cubic interpolations
+                        var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='nearest')
+                        err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='nearest')
+                        var_obs_interp_linear = griddata(coords_obs, var_obs[name], self.coords_geo, method='linear')
+                        err_obs_interp_linear = griddata(coords_obs, err_obs[name], self.coords_geo, method='linear')
+                        var_obs_interp[~np.isnan(var_obs_interp_linear)] = var_obs_interp_linear[~np.isnan(var_obs_interp_linear)]
+                        err_obs_interp[~np.isnan(err_obs_interp_linear)] = err_obs_interp_linear[~np.isnan(err_obs_interp_linear)]
+                        var_obs_interp_cubic = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
+                        err_obs_interp_cubic = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
+                        var_obs_interp[~np.isnan(var_obs_interp_cubic)] = var_obs_interp_linear[~np.isnan(var_obs_interp_cubic)]
+                        err_obs_interp[~np.isnan(err_obs_interp_cubic)] = err_obs_interp_linear[~np.isnan(err_obs_interp_cubic)]
+                    else:
+                        var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
+                        err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
                     # Save operator if asked
                     if self.write_op:
                         with open(file_L4, "wb") as f:
