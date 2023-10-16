@@ -1470,7 +1470,7 @@ class Model_sw1l_jax(M):
                 self.auxvar["hE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
                 
         # Initializing model params
-        self.init_params(State,config.MOD.name_params,config)
+        self.init_params(State,config.MOD.name_params)
 
         # Model initialization
         self.swm = swm.Swm(Model = self,
@@ -1492,7 +1492,7 @@ class Model_sw1l_jax(M):
             adjoint_test(self,State,nstep=100)
 
 
-    def init_params(self,State,name_params,config) :
+    def init_params(self,State,name_params) :
 
         """
         NAME
@@ -1548,208 +1548,6 @@ class Model_sw1l_jax(M):
         # Initializing the parameters of the object State
         for param in name_params :     
             State.params[param] = np.zeros((self.shape_params[param]),dtype='float64')
-
-    """
-    def step(self,State,nstep=1,t=0):
-
-        # Get state variable
-        u0 = State.getvar(self.name_var['U'])[:,:-1].ravel()
-        v0 = State.getvar(self.name_var['V'])[:-1,:].ravel()
-        h0 = State.getvar(self.name_var['SSH'],vect = True)
-
-        # Get auxiliary variables - coastal values 
-        varcoast = State.getauxvar(["uN","vN","hN","uS","vS","hS","uW","vW","hW","uE","vE","hE"],concat=True)
-
-        X0 = np.concatenate((u0,v0,h0,varcoast))
-
-        # Get params in physical space
-        if State.params is not None:
-            for param in self.name_params : 
-                params = +State.getparams(param,vect=True)
-                X0 = np.concatenate((X0,params))
-
-        # Init
-        X1 = +X0
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-
-        # Time stepping
-        for _ in range(nstep):
-            # One time step
-            X1 = self._jstep_jit(X1)
-
-        ### TO DO ###
-        #X1 = self.svm_step(X1, nstep) # from the jswm.py step function 
-
-        # Remove time in control vector
-        X1 = X1[1:]
-        
-        # Convert to numpy and reshape
-        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
-        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
-
-        uN = np.array(X1[self.swm.sliceuN])
-        vN = np.array(X1[self.swm.sliceuN])
-        hN = np.array(X1[self.swm.slicehN])
-
-        uS = np.array(X1[self.swm.sliceuS])
-        vS = np.array(X1[self.swm.sliceuS])
-        hS = np.array(X1[self.swm.slicehS])
-
-        uW = np.array(X1[self.swm.sliceuW])
-        vW = np.array(X1[self.swm.sliceuW])
-        hW = np.array(X1[self.swm.slicehW])
-
-        uE = np.array(X1[self.swm.sliceuE])
-        vE = np.array(X1[self.swm.sliceuE])
-        hE = np.array(X1[self.swm.slicehE])
-
-        # Adding a blank row and column to fit the State grid 
-        u1 = np.concatenate((u1,np.zeros((State.ny,1))),axis=1)
-        v1 = np.concatenate((v1,np.zeros((1,State.nx))),axis=0)
-        
-        # Saving variables in State class 
-        State.setvar([u1,v1,h1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        State.setauxvar([uN,vN,hN,uS,vS,hS,uW,vW,hW,uE,vE,hE],["uN","vN","hN","uS","vS","hS","uW","vW","hW","uE","vE","hE"])
-    
-        
-    def _jstep(self,X0):
-        # One forward step
-        X0 = self.swm_step(X0)
-        return X0
-        
-        
-    def step_tgl(self,dState,State,nstep=1,t=0):
-        
-        # Get state variable
-        dX0 = +dState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Get params in physical space
-        if State.params is not None:
-            dparams = +dState.getparams(self.name_params,vect=True)
-            dX0 = np.concatenate((dX0,dparams))
-            params = +State.getparams(self.name_params,vect=True)
-            X0 = np.concatenate((X0,params))         
-
-        # Init
-        dX1 = +dX0
-        X1 = +X0
-        # Add time in control vector (for JAX)
-        dX1 = np.append(t,dX1)
-        X1 = np.append(t,X1)
-        # Time stepping
-        for i in range(nstep):
-            # One timestep
-            dX1 = self._jstep_tgl_jit(dX1,X1)
-            if i<nstep-1:
-                X1 = self._jstep_jit(X1)
-                
-        # Remove time in control vector
-        dX1 = dX1[1:]
-        
-        # Reshaping
-        du1 = np.array(dX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        dv1 = np.array(dX1[self.swm.slicev]).reshape(self.swm.shapev)
-        dh1 = np.array(dX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        dState.setvar([du1,dv1,dh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def _jstep_tgl(self,dX0,X0):
-        
-        _,dX1 = jvp(self._jstep_jit, (X0,), (dX0,))
-        
-        return dX1
-    
-    def step_adj(self,adState, State, nstep=1,t=0):
-        
-        # Get state variable
-        adX0 = +adState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
-        adX0[np.isnan(adX0)] = np.nan
-        
-        # Get params in physical space
-        if State.params is not None:
-            adparams = +adState.getparams(self.name_params,vect=True)
-            adX0 = np.concatenate((adX0,adparams))
-            params = +State.getparams(self.name_params,vect=True)
-            X0 = np.concatenate((X0,params))         
-        
-        # Init
-        adX1 = +adX0
-        X1 = +X0
-        
-        # Current trajectory
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        traj = [X1]
-        if nstep>1:
-            for i in range(nstep):
-                # One timestep
-                X1 = self._jstep_jit(X1)
-                if i<nstep-1:
-                    traj.append(+X1)
-            
-        # Reversed time propagation
-        # Add time in control vector (for JAX)
-        adX1 = np.append(traj[-1][0],adX1)
-        for i in reversed(range(nstep)):
-            X1 = traj[i]
-            # One timestep
-            adX1 = self._jstep_adj_jit(adX1,X1)
-        ### TO DO ###
-        # adX1 = self.swm_step_adj(adX1,X1,nstep=)
-        
-        # Remove time in control vector
-        adX1 = adX1[1:]
-        
-        # Reshaping
-        adu1 = np.array(adX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        adv1 = np.array(adX1[self.swm.slicev]).reshape(self.swm.shapev)
-        adh1 = np.array(adX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        adparams = np.array(adX1[self.swm.nstates:])
-
-        # Update state
-        adu1[np.isnan(adu1)] = 0
-        adv1[np.isnan(adv1)] = 0
-        adh1[np.isnan(adh1)] = 0
-        adState.setvar([adu1,adv1,adh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-        # Update parameters
-        for param in self.name_params : 
-            adState.params[param]=+adparams[self.slice_params[param]].reshape(self.shape_params[param])
-    
-    def _jstep_adj(self,adX0,X0):
-        
-        _, adf = vjp(self._jstep_jit, X0)
-        
-        return adf(adX0)[0]
-    """
 
     def _detect_coast(self,mask,axis):
         """
@@ -1814,9 +1612,6 @@ class Model_sw1l_jax(M):
                 mask_v[np.logical_and(mask[1:,:],mask[:-1,:])]=np.nan
                 mask_v[self._detect_coast(mask,"y")]=0
                 self.mask[config.MOD.name_var[varname]] = mask_v
-    
-
-    # New implementation of step # 
 
     def step(self,State,nstep=1,t=0):
 
