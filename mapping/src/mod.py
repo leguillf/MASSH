@@ -1366,6 +1366,7 @@ class Model_sw1l_jax(M):
         
         
         self.time_scheme = config.MOD.time_scheme
+        self.bc_island = config.MOD.bc_island # boundary condition type in the island 
 
         # grid
         self.ny = State.ny
@@ -1423,9 +1424,51 @@ class Model_sw1l_jax(M):
                     State.var[self.name_var[name]] = var_init.values
         else:
             for name in self.name_var:
-                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float')
+                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float64')
                 State.var[self.name_var[name]][State.mask] = np.nan
 
+        # Initialize auxiliary variables and values)
+        # - coastal pixel indexes 
+        self.idxcoast = {}
+        # - coastal pixel values 
+        self.auxvar = {}
+        
+        # -- Indexes of coastal pixels -- # 
+        if State.mask is not None : 
+
+            idxcoastN = np.where( np.invert(State.mask[:-1,:]) * State.mask[1:,:]  )
+            idxcoastS = np.where( np.invert(State.mask[1:,:])  * State.mask[:-1,:] )
+            idxcoastW = np.where( np.invert(State.mask[:,1:])  * State.mask[:,:-1] )
+            idxcoastE = np.where( np.invert(State.mask[:,:-1]) * State.mask[:,1:]  )
+
+            # NORTH coastal indexes # 
+            self.idxcoast["vN"] = idxcoastN
+            self.idxcoast["hN"] = (idxcoastN[0]+1,idxcoastN[1])
+            # SOUTH coast variables # 
+            self.idxcoast["vS"] = idxcoastS
+            self.idxcoast["hS"] = (idxcoastS[0],idxcoastS[1])
+            # WEST coast variables #  
+            self.idxcoast["uW"] = idxcoastW
+            self.idxcoast["hW"] = (idxcoastW[0],idxcoastW[1])
+            # EAST coast variables # 
+            self.idxcoast["uE"] = idxcoastE
+            self.idxcoast["hE"] = (idxcoastE[0],idxcoastE[1]+1)
+
+            if self.bc_island == "radiative" : 
+            # Auxiliary variables to store ghost pixels (ssh at the coast and orthogonal values) 
+                # NORTH coastal indexes # 
+                self.auxvar["vN"] = np.zeros(idxcoastN[0].shape,dtype='float64')
+                self.auxvar["hN"] = np.zeros(idxcoastN[0].shape,dtype='float64')
+                # SOUTH coastal indexes # 
+                self.auxvar["vS"] = np.zeros(idxcoastS[0].shape,dtype='float64')
+                self.auxvar["hS"] = np.zeros(idxcoastS[0].shape,dtype='float64')
+                # WEST coastal indexes # 
+                self.auxvar["uW"] = np.zeros(idxcoastW[0].shape,dtype='float64')
+                self.auxvar["hW"] = np.zeros(idxcoastW[0].shape,dtype='float64')
+                # EAST coastal indexes # 
+                self.auxvar["uE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
+                self.auxvar["hE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
+                
         # Initializing model params
         self.init_params(State,config.MOD.name_params,config)
 
@@ -1433,28 +1476,24 @@ class Model_sw1l_jax(M):
         self.swm = swm.Swm(Model = self,
                            State = State) 
         
-        # Compile jax-related functions
-        self._jstep_jit = jit(self._jstep)
-        self._jstep_tgl_jit = jit(self._jstep_tgl)
-        self._jstep_adj_jit = jit(self._jstep_adj)
-        #self._compute_w1_IT_jit = jit(self._compute_w1_IT)
-        # Functions related to time_scheme
-        if self.time_scheme=='Euler':
-            self.swm_step = self.swm.step_euler_jit
-            self.swm_step_tgl = self.swm.step_euler_tgl_jit
-            self.swm_step_adj = self.swm.step_euler_adj_jit
-        elif self.time_scheme=='rk4':
-            self.swm_step = self.swm.step_rk4_jit
-            self.swm_step_tgl = self.swm.step_rk4_tgl_jit
-            self.swm_step_adj = self.swm.step_rk4_adj_jit
-        
+        # Model functions initialization
+        if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
+            self.swm_step = self.swm.step_jit
+            self.swm_step_tgl = self.swm.step_tgl_jit
+            self.swm_step_adj = self.swm.step_adj_jit
+        else:
+            self.swm_step = self.swm.step_jit
+
+        # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            tangent_test(self,State,nstep=10)
+            tangent_test(self,State,nstep=100)
             print('Adjoint test:')
-            adjoint_test(self,State,nstep=10)
+            adjoint_test(self,State,nstep=100)
+
 
     def init_params(self,State,name_params,config) :
+
         """
         NAME
             init_params
@@ -1500,7 +1539,7 @@ class Model_sw1l_jax(M):
         # Setting number of parameters 
         self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))
 
-        # Setting slices of parameters
+        # Setting slice information of parameters
         idx = 0 
         for param in name_params : 
             self.slice_params[param] = slice(idx, idx + np.prod(self.shape_params[param]))
@@ -1508,8 +1547,9 @@ class Model_sw1l_jax(M):
 
         # Initializing the parameters of the object State
         for param in name_params :     
-            State.params[param] = np.zeros((self.shape_params[param]))
+            State.params[param] = np.zeros((self.shape_params[param]),dtype='float64')
 
+    """
     def step(self,State,nstep=1,t=0):
 
         # Get state variable
@@ -1517,10 +1557,10 @@ class Model_sw1l_jax(M):
         v0 = State.getvar(self.name_var['V'])[:-1,:].ravel()
         h0 = State.getvar(self.name_var['SSH'],vect = True)
 
-        X0 = np.concatenate((u0,v0,h0))
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
+        # Get auxiliary variables - coastal values 
+        varcoast = State.getauxvar(["uN","vN","hN","uS","vS","hS","uW","vW","hW","uE","vE","hE"],concat=True)
+
+        X0 = np.concatenate((u0,v0,h0,varcoast))
 
         # Get params in physical space
         if State.params is not None:
@@ -1538,6 +1578,9 @@ class Model_sw1l_jax(M):
             # One time step
             X1 = self._jstep_jit(X1)
 
+        ### TO DO ###
+        #X1 = self.svm_step(X1, nstep) # from the jswm.py step function 
+
         # Remove time in control vector
         X1 = X1[1:]
         
@@ -1546,14 +1589,33 @@ class Model_sw1l_jax(M):
         v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
         h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
 
+        uN = np.array(X1[self.swm.sliceuN])
+        vN = np.array(X1[self.swm.sliceuN])
+        hN = np.array(X1[self.swm.slicehN])
+
+        uS = np.array(X1[self.swm.sliceuS])
+        vS = np.array(X1[self.swm.sliceuS])
+        hS = np.array(X1[self.swm.slicehS])
+
+        uW = np.array(X1[self.swm.sliceuW])
+        vW = np.array(X1[self.swm.sliceuW])
+        hW = np.array(X1[self.swm.slicehW])
+
+        uE = np.array(X1[self.swm.sliceuE])
+        vE = np.array(X1[self.swm.sliceuE])
+        hE = np.array(X1[self.swm.slicehE])
+
         # Adding a blank row and column to fit the State grid 
         u1 = np.concatenate((u1,np.zeros((State.ny,1))),axis=1)
         v1 = np.concatenate((v1,np.zeros((1,State.nx))),axis=0)
         
+        # Saving variables in State class 
         State.setvar([u1,v1,h1],[
             self.name_var['U'],
             self.name_var['V'],
             self.name_var['SSH']])
+        State.setauxvar([uN,vN,hN,uS,vS,hS,uW,vW,hW,uE,vE,hE],["uN","vN","hN","uS","vS","hS","uW","vW","hW","uE","vE","hE"])
+    
         
     def _jstep(self,X0):
         # One forward step
@@ -1657,6 +1719,8 @@ class Model_sw1l_jax(M):
             X1 = traj[i]
             # One timestep
             adX1 = self._jstep_adj_jit(adX1,X1)
+        ### TO DO ###
+        # adX1 = self.swm_step_adj(adX1,X1,nstep=)
         
         # Remove time in control vector
         adX1 = adX1[1:]
@@ -1685,7 +1749,8 @@ class Model_sw1l_jax(M):
         _, adf = vjp(self._jstep_jit, X0)
         
         return adf(adX0)[0]
-    
+    """
+
     def _detect_coast(self,mask,axis):
         """
         NAME
@@ -1710,6 +1775,7 @@ class Model_sw1l_jax(M):
         p1 = np.logical_and(a1,np.invert(a2))
         p2 = np.logical_and(a2,np.invert(a1))
         return np.logical_or(p1,p2)
+    
 
     def set_mask(self,mask,config) : 
         """
@@ -1748,7 +1814,175 @@ class Model_sw1l_jax(M):
                 mask_v[np.logical_and(mask[1:,:],mask[:-1,:])]=np.nan
                 mask_v[self._detect_coast(mask,"y")]=0
                 self.mask[config.MOD.name_var[varname]] = mask_v
-  
+    
+
+    # New implementation of step # 
+
+    def step(self,State,nstep=1,t=0):
+
+        ############################
+        ###   INITIALIZATION    ####
+        ############################
+
+        X0 = self.init_array(State,t)
+
+        #############################
+        ###   TIME PROPAGATION   ####
+        #############################
+
+        X1 = self.swm_step(X0,nstep=nstep)
+        
+        # Remove time in output array
+        X1 = X1[1:]
+
+        ##################
+        ###   SAVING   ###
+        ##################
+        
+        self.save_array(State, X1)
+
+    def step_tgl(self,dState,State,nstep=1,t=0):
+        
+        ############################
+        ###   INITIALIZATION    ####
+        ############################
+
+        X0 = self.init_array(State,t)
+        dX0 = self.init_array(dState,t)
+
+        #############################
+        ###   TIME PROPAGATION   ####
+        #############################
+
+        dX1 = self.swm_step_tgl(dX0,X0,nstep=nstep)
+
+        # Convert to numpy and reshape
+        dX1 = np.array(dX1).astype('float64')
+
+        # Remove time in control vector
+        dX1 = dX1[1:]
+
+        ##################
+        ###   SAVING   ###
+        ##################
+
+        self.save_array(dState,dX1)
+
+        return 
+
+    def step_adj(self,adState,State,nstep=1,t=0): 
+
+        ############################
+        ###   INITIALIZATION    ####
+        ############################
+
+        X0 = self.init_array(State,t)
+        adX0 = self.init_array(adState,t)
+
+        #print("X0 : ",X0)
+        #print("adX0 : ",adX0)
+
+        #############################
+        ###   TIME PROPAGATION   ####
+        #############################
+
+        adX1 = self.swm_step_adj(adX0,X0,nstep=nstep)
+
+        #print("adX1 : ",adX1)
+
+        # Convert to numpy and reshape
+        adX1 = np.array(adX1).astype('float64')
+
+        # Remove time in control vector
+        adX1 = adX1[1:]
+        
+        ##################
+        ###   SAVING   ###
+        ##################
+
+        self.save_array(adState,adX1)
+
+    def init_array(self,State,t=0):
+
+        # - Get state variable
+        u0 = State.getvar(self.name_var['U'])[:,:-1].ravel()
+        v0 = State.getvar(self.name_var['V'])[:-1,:].ravel()
+        h0 = State.getvar(self.name_var['SSH'],vect = True)
+
+        # - test - # 
+        u0[np.isnan(u0)]=0
+        v0[np.isnan(v0)]=0
+        h0[np.isnan(h0)]=0
+
+        # - Get auxiliary variables - coastal values
+        # if dirichlet condition : all auxiliary variables set to zero
+        len_varcoast = self.idxcoast["vN"][0].size + self.idxcoast["hN"][0].size +\
+                       self.idxcoast["vS"][0].size + self.idxcoast["hS"][0].size +\
+                       self.idxcoast["uW"][0].size + self.idxcoast["hW"][0].size +\
+                       self.idxcoast["uE"][0].size + self.idxcoast["hE"][0].size 
+        varcoast = np.zeros((len_varcoast,),dtype='float64')
+        # if radiative conditions : auxiliary variables are stored in self.auxvar
+        if self.bc_island == "radiative": 
+            varcoast = np.concatenate(list(self.auxvar.values()))
+        
+        # - Create state vector X0 
+        X0 = np.concatenate((u0,v0,h0,varcoast))
+
+        # - Get parameters variable 
+        if State.params is not None:
+            for param in self.name_params : 
+                params = +State.getparams(param,vect=True)
+                X0 = np.concatenate((X0,params))
+
+        # - Add time in input array
+        X0 = np.append(t,X0)
+
+        return X0
+
+    def save_array(self,State, X1):
+
+        # - u, v, and h   
+        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
+        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
+        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
+
+        # Adding a blank row and column to fit the State grid 
+        u1 = np.concatenate((u1,np.zeros((State.ny,1))),axis=1)
+        v1 = np.concatenate((v1,np.zeros((1,State.nx))),axis=0)
+
+        #print("u :",u1,"\n")
+        #print("v :",v1,"\n")
+        #print("h :",h1,"\n")
+
+        # Masking the variables 
+        u1[State.mask] = np.nan
+        v1[State.mask] = np.nan
+        h1[State.mask] = np.nan
+
+        # setting u, v, and h in State 
+        State.setvar([u1,v1,h1],[
+            self.name_var['U'],
+            self.name_var['V'],
+            self.name_var['SSH']])
+
+        # setting coastal variables 
+        self.auxvar["vN"] = np.array(X1[self.swm.slicevN])
+        self.auxvar["hN"] = np.array(X1[self.swm.slicehN])
+
+        self.auxvar["vS"] = np.array(X1[self.swm.slicevS])
+        self.auxvar["hS"] = np.array(X1[self.swm.slicehS])
+
+        self.auxvar["uW"] = np.array(X1[self.swm.sliceuW])
+        self.auxvar["hW"] = np.array(X1[self.swm.slicehW])
+
+        self.auxvar["uE"] = np.array(X1[self.swm.sliceuE])
+        self.auxvar["hE"] = np.array(X1[self.swm.slicehE])
+
+        #setting params 
+        params = X1[self.swm.nstates:]
+        for param in self.name_params :     
+            State.params[param] = params[self.slice_params[param]].reshape(self.shape_params[param])
+
 
 
 ###############################################################################
@@ -1854,7 +2088,7 @@ class Model_tracadv_ssh(M):
         elif self.init_from_bc:
             for name in self.name_var: 
                 if t0 in self.bc[name]:
-                     State.setvar(self.bc[name][t0], self.name_var[name])
+                    State.setvar(self.bc[name][t0], self.name_var[name])
 
     def set_bc(self,time_bc,var_bc):
 
@@ -3048,7 +3282,7 @@ def adjoint_test(M,State,t0=0,nstep=1):
     # Perturbation
     dState = State.random()
     dX0 = np.concatenate((dState.getvar(vect=True),dState.getparams(vect=True)))
-    
+
     # Adjoint
     adState = State.random()
     adX0 = np.concatenate((adState.getvar(vect=True),adState.getparams(vect=True)))
@@ -3061,6 +3295,10 @@ def adjoint_test(M,State,t0=0,nstep=1):
     M.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
     adX1 = np.concatenate((adState.getvar(vect=True),adState.getparams(vect=True)))
     
+    #print(dState.var["ssh"])
+
+    #print(adState.var["ssh"])
+
     mask = np.isnan(adX0+dX0)
     
     ps1 = np.inner(dX1[~mask],adX0[~mask])
