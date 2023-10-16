@@ -427,6 +427,8 @@ MOD_SW1L_JAX = dict(
 
     bc_kind = '1d', # Either 1d or 2d
 
+    bc_island = "dirichlet", # Either "dirichlet" (orthogonal velocity forced to zero) or "radiative" (dissipative boundaries)
+
     w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
 
     He_init = 0.9, # Mean height (in m)
