@@ -6,7 +6,7 @@ Created on Wed Jan  6 19:20:42 2021
 @author: vbellemin
 """
 
-name_experiment = 'config_hawaii_generation'
+name_experiment = 'config_tiny'
 
 #################################################################################################################################
 # Global libraries     
@@ -30,21 +30,19 @@ EXP = dict(
 
     tmp_DA_path = f"../scratch/{name_experiment}", # temporary data assimilation directory path,
 
-    init_date = datetime(2012,6,5,0), # initial date (yyyy,mm,dd,hh) 
+    init_date = datetime(2012,6,1,0), # initial date (yyyy,mm,dd,hh) 
 
-    final_date = datetime(2012,6,10,0),  # final date (yyyy,mm,dd,hh) 
+    final_date = datetime(2012,6,2,0),  # final date (yyyy,mm,dd,hh) 
 
     assimilation_time_step = timedelta(hours=1),  
 
     saveoutput_time_step = timedelta(hours=1),  # time step at which the states are saved 
 
-    flag_plot = 4,
+    flag_plot = 0,
 
     write_obs = True, # the observation files are very low to process, so we decide to save the extracted informations in *path_obs* to read it for several experiments
 
-    path_obs = f'../obs/2022a_4DVARQG',
-
-    coriolis_force = False
+    path_obs = f'../obs/2022a_4DVARQG'
 
 )
     
@@ -57,19 +55,19 @@ myGRID = dict(
 
     super = 'GRID_GEO',
 
-    lon_min = 185.,                                         # domain min longitude
+    lon_min = 0.,                                         # domain min longitude
 
-    lon_max = 205,                                         # domain max longitude
+    lon_max = 2.,                                         # domain max longitude
 
-    lat_min = 15.,                                          # domain min latitude
+    lat_min = 0.,                                          # domain min latitude
 
-    lat_max = 35.,                                          # domain max latitude
+    lat_max = 5.,                                          # domain max latitude
 
-    dlon = 1/12,                                           # zonal grid spatial step (in degree)
+    dlon = 1,                                           # zonal grid spatial step (in degree)
 
-    dlat = 1/12,
+    dlat = 1,
 
-    name_init_mask = "./mask/mask_square.nc",#"./mask/mask_round.nc",
+    name_init_mask = "./mask/mask_tiny.nc",
 
     name_var_mask = {'lon':'longitude','lat':'latitude','var':'mask'}
 
@@ -91,8 +89,6 @@ myMOD1 = dict(
     dtmodel = 300, # model timestep
 
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
-
-    bc_island = "dirichlet",
 
     bc_kind = '1d', # Either 1d or 2d
 

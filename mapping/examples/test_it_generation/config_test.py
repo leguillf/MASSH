@@ -57,11 +57,11 @@ myGRID = dict(
 
     lon_min = 0.,                                         # domain min longitude
 
-    lon_max = 9.,                                         # domain max longitude
+    lon_max = 11.,                                         # domain max longitude
 
     lat_min = 0.,                                          # domain min latitude
 
-    lat_max = 9.,                                          # domain max latitude
+    lat_max = 11.,                                          # domain max latitude
 
     dlon = 1,                                           # zonal grid spatial step (in degree)
 
@@ -84,11 +84,13 @@ myMOD1 = dict(
 
     name_var = {'U':'u', 'V':'v', 'SSH':'ssh'},
 
-    name_params = ['itg'],
+    name_params = ['itg','He'],
 
     dtmodel = 300, # model timestep
 
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
+
+    bc_island = "dirichlet",
 
     bc_kind = '1d', # Either 1d or 2d
 
@@ -178,7 +180,7 @@ myINV = dict(
 
     super = 'INV_4DVAR',
 
-    compute_test = False, # TLM, ADJ & GRAD tests
+    compute_test = True, # TLM, ADJ & GRAD tests
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
