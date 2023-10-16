@@ -92,7 +92,7 @@ myMOD1 = dict(
 
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
 
-    bc_island = "dirichlet",
+    bc_island = "dirichlet", 
 
     bc_kind = '1d', # Either 1d or 2d
 
@@ -182,7 +182,7 @@ myINV = dict(
 
     super = 'INV_4DVAR',
 
-    compute_test = False, # TLM, ADJ & GRAD tests
+    compute_test = True, # TLM, ADJ & GRAD tests
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
