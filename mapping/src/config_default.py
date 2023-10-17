@@ -481,6 +481,30 @@ MOD_TRACADV_VEL = dict(
 
 )
 
+MOD_TRACADV = dict(
+
+    name_var = {'SST':'sst'}, # Dictionnary of variable name (need to be at least one tracer e.g SST and optionaly velocity variables.)
+
+    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
+
+    path_vel = '',
+
+    name_var_vel = {'time':'', 'lon':'', 'lat':'', 'u':'', 'v':''},
+
+    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
+
+    upwind = 3, # Order of the upwind scheme for tracer advection (either 1,2 or 3)
+
+    time_scheme = 'Euler', # Either Euler, rk2 or rk4
+
+    dtmodel = 300, # model timestep
+
+    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
+
+    Kdiffus = None
+
+)
+
 #################################################################################################################################
 # BOUNDARY CONDITIONS
 #################################################################################################################################
