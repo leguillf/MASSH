@@ -1080,6 +1080,10 @@ BASIS_IT = dict(
 
     sigma_B_bc = 1e-2, # Background variance for bc
 
+    sigma_B_itg = 1e-2, # Background variance for itg
+
+    reduced_basis_itg = False, # True if internal tide generation parameter needs to be decomposed on a reduced basis 
+
     facgauss = 3.5,  # factor for gaussian spacing= both space/time
 
     D_He = 200, # Space scale of gaussian decomposition for He (in km)
@@ -1089,6 +1093,8 @@ BASIS_IT = dict(
     D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
 
     T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
 
     facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
 
