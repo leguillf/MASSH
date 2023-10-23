@@ -86,7 +86,7 @@ myMOD1 = dict(
 
     name_var = {'U':'u', 'V':'v', 'SSH':'ssh'},
 
-    name_params = ['itg'],
+    name_params = ['He','hbcx','hbcy','itg'],
 
     dtmodel = 300, # model timestep
 
@@ -158,6 +158,10 @@ myBASIS1 = dict(
 
     sigma_B_bc = 1e-2, # Background variance for bc
 
+    sigma_B_itg = 1e-2, # Background variance for itg
+
+    reduced_basis_itg = False, # True if internal tide generation parameter needs to be decomposed on a reduced basis 
+
     facgauss = 3.5,  # factor for gaussian spacing= both space/time
 
     D_He = 200, # Space scale of gaussian decomposition for He (in km)
@@ -167,6 +171,8 @@ myBASIS1 = dict(
     D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
 
     T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    D_itg = 200
 
 )
 
@@ -182,7 +188,7 @@ myINV = dict(
 
     super = 'INV_4DVAR',
 
-    compute_test = True, # TLM, ADJ & GRAD tests
+    compute_test = False, # TLM, ADJ & GRAD tests
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
