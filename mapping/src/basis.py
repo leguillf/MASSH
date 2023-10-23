@@ -2173,9 +2173,13 @@ class Basis_it:
         self.T_He = config.BASIS.T_He
         self.D_bc = config.BASIS.D_bc
         self.T_bc = config.BASIS.T_bc
+        # for itg (internal tide generation)
+        self.D_itg = config.BASIS.D_itg
+        self.reduced_basis_itg = config.BASIS.reduced_basis_itg
         
         self.sigma_B_He = config.BASIS.sigma_B_He
         self.sigma_B_bc = config.BASIS.sigma_B_bc
+        self.sigma_B_itg = config.BASIS.sigma_B_itg
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
         
@@ -2201,6 +2205,8 @@ class Basis_it:
         self.lonN = State.lon[-1,:]
         self.latE = State.lat[:,0]
         self.latW = State.lat[:,-1]
+
+        self.name_params = config.MOD.name_params 
     
     def set_basis(self,time,return_q=False):
         
@@ -2213,7 +2219,77 @@ class Basis_it:
         if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
 
         self.time = time
+
+        self.bc_gauss = {} # gaussian basis for boundary conditions 
+        self.shape_params = {} # dictionary with the shapes in the reduced space of each of the parameters 
+        self.shape_params_phys = {} # dictionary with the shapes in the physical space of each of the parameters 
+ 
+        for name in self.name_params : 
+            if name == "He": 
+                self.shape_params["He"], self.shape_params_phys["He"] = self.set_He(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX) 
+
+            if name == "hbcx":  
+                self.shape_params["hbcS"], self.shape_params["hbcN"], self.shape_params_phys["hbcS"], self.shape_params_phys["hbcN"] = self.set_hbcx(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
+
+            if name == "hbcy": 
+                self.shape_params["hbcE"], self.shape_params["hbcW"], self.shape_params_phys["hbcE"], self.shape_params_phys["hbcW"] = self.set_hbcy(time, LAT_MIN, LAT_MAX, TIME_MIN, TIME_MAX)
+
+            if name == "itg": 
+                self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX)
         
+        self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) # dictionary with the number of each of the parameters in reduced space 
+        self.n_params_phys = dict(zip(self.shape_params_phys.keys(), map(np.prod, self.shape_params_phys.values()))) # dictionary with the number of each of the parameters in physical space
+        
+        self.nbasis = sum(self.n_params.values()) # total number of parameters in the reduced space
+        self.nphys = sum(self.n_params_phys.values()) # total number of parameters in the physical space
+
+        interval = 0 ; interval_phys = 0 
+        self.slice_params = {} # dictionary with the slices of each of the parameters in the reduced space
+        self.slice_params_phys = {} # dictionary with the slices of each of the parameters in the physical space
+        for name in self.shape_params.keys() :
+            self.slice_params[name]=slice(interval,interval+self.n_params[name])
+            self.slice_params_phys[name]=slice(interval_phys,interval_phys+self.n_params_phys[name])
+            interval += self.n_params[name]; interval_phys += self.n_params_phys[name]
+            
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\nreduced factor: {int(time.size * self.nphys/self.nbasis)}')
+    
+        if return_q :
+            if None not in [self.sigma_B_He, self.sigma_B_bc, self.sigma_B_itg]:
+                Q = np.zeros((self.nbasis,))
+                for name in self.slice_params.keys() :
+                    if name == "He" : 
+                        Q[self.slice_params[name]]=self.sigma_B_He
+                    if name in ["hbcS","hbcN","hbcW","hbcE"] : 
+                        if hasattr(self.sigma_B_bc,'__len__'):
+                            if len(self.sigma_B_bc)==self.Nwaves:
+                                # Different background values for each frequency
+                                nw = self.nbc//self.Nwaves
+                                for iw in range(self.Nwaves):
+                                    slicew = slice(iw*nw,(iw+1)*nw)
+                                    Q[self.slice_params[name]][slicew]=self.sigma_B_bc[iw]
+                            else:
+                                # Not the right number of frequency prescribed in the config file 
+                                # --> we use only the first one
+                                Q[self.slice_params[name]]=self.sigma_B_bc[0]
+                        else:
+                            Q[self.slice_params[name]]=self.sigma_B_bc
+                    if name == "itg" : 
+                        Q[self.slice_params[name]]=self.sigma_B_itg
+            else:
+                Q = None
+
+            # Background
+            if self.path_background is not None and os.path.exists(self.path_background):
+                with xr.open_dataset(self.path_background) as ds:
+                    print(f'Load background from file: {self.path_background}')
+                    Xb = ds[self.var_background].values
+            else:
+                Xb = np.zeros_like(Q)
+
+            return Xb, Q
+
+    def set_He(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
+                    
         ##########################
         # He 
         ##########################
@@ -2261,19 +2337,16 @@ class Basis_it:
         
         self.He_xy_gauss = He_xy_gauss
         self.He_t_gauss = He_t_gauss
-        self.nHe = ENST_He.size * ENSLAT_He.size
-        self.sliceHe = slice(0,self.nHe)
-        self.shapeHe = [ENST_He.size,ENSLAT_He.size]
-        print('nHe:',self.nHe)
+
+        shapeHe = [ENST_He.size,ENSLAT_He.size]
+        shapeHe_phys = (self.ny,self.nx)
+
+        print('nHe:',np.prod(shapeHe))
+
+        return shapeHe, shapeHe_phys
         
-        ##########################
-        # bc 
-        ##########################
-        ## in space
-        ENSLAT = np.arange(
-            LAT_MIN - self.D_bc*(1-1./self.facns)*self.km2deg,
-            LAT_MAX + 1.5*self.D_bc/self.facns*self.km2deg, 
-            self.D_bc/self.facns*self.km2deg)
+    
+    def set_hbcx(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
         
         # South
         ENSLON_S = np.mod(
@@ -2300,7 +2373,36 @@ class Basis_it:
             iobs = np.where((np.abs((np.mod(self.lonN - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)) <= self.D_bc))[0] 
             xx = (np.mod(self.lonN[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)     
             bc_N_gauss[i,iobs] = mywindow(xx / self.D_bc) 
+
+        self.bc_gauss["hbcS"] = bc_S_gauss
+        self.bc_gauss["hbcN"] = bc_N_gauss
+
+        ## in time
+        ENST_bc = np.arange(-self.T_bc*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_bc/self.facnlt , self.T_bc/self.facnlt)
+        bc_t_gauss = np.zeros((ENST_bc.size,time.size))
+        for i,time0 in enumerate(ENST_bc):
+            iobs = np.where(abs(time-time0) < self.T_bc)
+            bc_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_bc)
         
+        self.bc_t_gauss = bc_t_gauss
+
+        shapehbcS = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_S_gauss.shape[0]]
+        shapehbcN = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_N_gauss.shape[0]]
+
+        shapehbcS_phys = shapehbcN_phys = [self.Nwaves, 2, self.Ntheta, self.nx]
+        
+        print('nbcx:',np.prod(shapehbcS)+np.prod(shapehbcN))
+
+        return shapehbcS, shapehbcN, shapehbcS_phys, shapehbcN_phys
+
+
+    def set_hbcy(self,time, LAT_MIN, LAT_MAX, TIME_MIN, TIME_MAX): 
+    
+        ENSLAT = np.arange(
+            LAT_MIN - self.D_bc*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_bc/self.facns*self.km2deg, 
+            self.D_bc/self.facns*self.km2deg)
+
         # East
         bc_E_gauss = np.zeros((ENSLAT.size,self.ny))
         for i,lat0 in enumerate(ENSLAT):
@@ -2315,11 +2417,8 @@ class Basis_it:
             yy = (self.latW[iobs] - lat0) / self.km2deg
             bc_W_gauss[i,iobs] = mywindow(yy / self.D_bc) 
 
-        
-        self.bc_S_gauss = bc_S_gauss
-        self.bc_N_gauss = bc_N_gauss
-        self.bc_E_gauss = bc_E_gauss
-        self.bc_W_gauss = bc_W_gauss
+        self.bc_gauss["hbcE"] = bc_E_gauss
+        self.bc_gauss["hbcW"] = bc_W_gauss
         
         ## in time
         ENST_bc = np.arange(-self.T_bc*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_bc/self.facnlt , self.T_bc/self.facnlt)
@@ -2327,184 +2426,147 @@ class Basis_it:
         for i,time0 in enumerate(ENST_bc):
             iobs = np.where(abs(time-time0) < self.T_bc)
             bc_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_bc)
+        
         self.bc_t_gauss = bc_t_gauss
         
-        self.nbcS = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_S_gauss.shape[0]
-        self.nbcN = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_N_gauss.shape[0]
-        self.nbcE = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_E_gauss.shape[0]
-        self.nbcW = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_W_gauss.shape[0]
-        self.nbc = self.nbcS + self.nbcN + self.nbcE + self.nbcW
-        print('nbc:',self.nbc)
-        
-        
-        self.shapehbcS = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_S_gauss.shape[0]]
-        self.shapehbcN = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_N_gauss.shape[0]]
-        self.shapehbcE = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_E_gauss.shape[0]]
-        self.shapehbcW = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_W_gauss.shape[0]]
-        
-        self.slicebcS = slice(self.nHe,
-                              self.nHe + self.nbcS)
-        self.slicebcN = slice(self.nHe+ self.nbcS,
-                              self.nHe + self.nbcS + self.nbcN)
-        self.slicebcE = slice(self.nHe+ self.nbcS + self.nbcN,
-                              self.nHe + self.nbcS + self.nbcN + self.nbcE)
-        self.slicebcW = slice(self.nHe+ self.nbcS + self.nbcN + self.nbcE,
-                              self.nHe + self.nbcS + self.nbcN + self.nbcE + self.nbcW)
-        self.slicebc = slice(self.nHe,
-                             self.nHe + self.nbc)
-        
-        self.nbasis = self.nHe + self.nbc
-        
-        # OUTPUT SHAPES (physical space)
-        self.shapeHe_phys = (self.ny,self.nx)
-        self.shapehbcx_phys = [self.Nwaves, # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          self.Ntheta, # Angles
-                          self.nx # NX
-                          ]
-        self.shapehbcy_phys = [self.Nwaves, # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          self.Ntheta, # Angles
-                          self.ny # NY
-                          ]
-        self.nphys = np.prod(self.shapeHe_phys) + np.prod(self.shapehbcx_phys) + np.prod(self.shapehbcy_phys)
-        self.sliceHe_phys = slice(0,np.prod(self.shapeHe_phys))
-        self.slicehbcx_phys = slice(np.prod(self.shapeHe_phys),
-                               np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys))
-        self.slicehbcy_phys = slice(np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys),
-                               np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys)+np.prod(self.shapehbcy_phys))
-        
-        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
-        
-        # Fill Q matrix
-        if return_q:
-            if None not in [self.sigma_B_He, self.sigma_B_bc]:
-                Q = np.zeros((self.nbasis,)) 
-                # variance on He
-                Q[self.sliceHe] = self.sigma_B_He 
-                if hasattr(self.sigma_B_bc,'__len__'):
-                    if len(self.sigma_B_bc)==self.Nwaves:
-                        # Different background values for each frequency
-                        nw = self.nbc//self.Nwaves
-                        for iw in range(self.Nwaves):
-                                slicew = slice(iw*nw,(iw+1)*nw)
-                                Q[self.slicebc][slicew] = self.sigma_B_bc[iw]
-                    else:
-                        # Not the right number of frequency prescribed in the config file 
-                        # --> we use only the first one
-                        Q[self.slicebc] = self.sigma_B_bc[0]
-                else:
-                    Q[self.slicebc] = self.sigma_B_bc
-            else:
-                Q = None
-            
-            # Background
-            if self.path_background is not None and os.path.exists(self.path_background):
-                with xr.open_dataset(self.path_background) as ds:
-                    print(f'Load background from file: {self.path_background}')
-                    Xb = ds[self.var_background].values
-            else:
-                Xb = np.zeros_like(Q)
+        shapehbcE = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_E_gauss.shape[0]]
+        shapehbcW = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_W_gauss.shape[0]]
 
-            return Xb, Q
+        shapehbcE_phys = shapehbcW_phys = [self.Nwaves, 2, self.Ntheta, self.ny]
+
+        print('nbcy:',np.prod(shapehbcE)+np.prod(shapehbcW))
+
+        return shapehbcE, shapehbcW, shapehbcE_phys, shapehbcW_phys
+    
+    def set_itg(self,LAT_MIN, LAT_MAX, LON_MIN, LON_MAX):
+
+        if not self.reduced_basis_itg :
+            ### if no reduced basis for the itg parameters ###
+            shapeitg = (2,self.nx,self.ny)
+            shapeitg_phys = (2,self.nx,self.ny)
+
+            print('nitg:',np.prod(shapeitg))
+
+            return shapeitg, shapeitg_phys
         
+        ENSLAT1 = np.arange(
+            LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
+        ENSLAT_itg = []
+        ENSLON_itg = []
+        for I in range(len(ENSLAT1)):
+            ENSLON1 = np.mod(
+                np.arange(
+                    LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+                360)
+            ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+            ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
+        self.ENSLAT_itg = ENSLAT_itg
+        self.ENSLON_itg = ENSLON_itg
+
+        # Gaussian functions in space
+        itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
+        for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
+            iobs = np.where(
+                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
+                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg)
+                    )[0]
+            xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+            yy = (self.lat1d[iobs] - lat0) / self.km2deg
+            
+            itg_xy_gauss[i,iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
+
+        itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
+        #itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
+        #itg_xy_gauss = np.repeat(np.expand_dims(itg_xy_gauss,axis=1),axis=1,repeats=2)
+
+        self.itg_xy_gauss = itg_xy_gauss
+
+        shapeitg = [2,ENSLAT_itg.size]
+        shapeitg_phys = (2,self.nx,self.ny)
+        
+        print('nitg:',np.prod(shapeitg))
+
+        return shapeitg, shapeitg_phys
         
     def operg(self,t,X,State=None):
-        """
-            Project to physicial space
-        """
-        
-        # Get variables in reduced space
-        X_He = X[self.sliceHe].reshape(self.shapeHe)
-        X_bcS = X[self.slicebcS].reshape(self.shapehbcS)
-        X_bcN = X[self.slicebcN].reshape(self.shapehbcN)
-        X_bcE = X[self.slicebcE].reshape(self.shapehbcE)
-        X_bcW = X[self.slicebcW].reshape(self.shapehbcW)
-        
-        # Project to physical space
-        indt = np.argmin(np.abs(self.time-t))        
-        He = np.tensordot(
-            np.tensordot(X_He,self.He_xy_gauss,(1,0)),
-                                self.He_t_gauss[:,indt],(0,0))
-    
-        hbcx = np.zeros(self.shapehbcx_phys)
-        hbcy = np.zeros(self.shapehbcy_phys)
-        
-        hbcx[:,0] = np.tensordot(
-            np.tensordot(X_bcS,self.bc_S_gauss,(-1,0)),
-                                 self.bc_t_gauss[:,indt],(-2,0))
-        hbcx[:,1] = np.tensordot(
-            np.tensordot(X_bcN,self.bc_N_gauss,(-1,0)),
-                                 self.bc_t_gauss[:,indt],(-2,0))
-        hbcy[:,0] = np.tensordot(
-            np.tensordot(X_bcE,self.bc_E_gauss,(-1,0)),
-                                 self.bc_t_gauss[:,indt],(-2,0))
-        hbcy[:,1] = np.tensordot(
-            np.tensordot(X_bcW,self.bc_W_gauss,(-1,0)),
-                                 self.bc_t_gauss[:,indt],(-2,0))
-        
+
+        indt = np.argmin(np.abs(self.time-t))   
+
+        phi = np.zeros((self.nphys,))
+
+        for name in self.slice_params_phys.keys():
+            if name == "He":
+                phi[self.slice_params_phys[name]] = np.tensordot(
+                                                        np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.He_xy_gauss,(1,0)),
+                                                        self.He_t_gauss[:,indt],(0,0)).flatten()
+            if name in ["hbcS","hbcN","hbcW","hbcE"]:
+                phi[self.slice_params_phys[name]] = np.tensordot(
+                                                        np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.bc_gauss[name],(-1,0)),
+                                                        self.bc_t_gauss[:,indt],(-2,0)).flatten()
+            if name == "itg": 
+                if not self.reduced_basis_itg : 
+                    phi[self.slice_params_phys[name]] = X[self.slice_params[name]].reshape(self.shape_params[name]).flatten()
+                else : 
+                    phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
+
         if State is not None:
-            State.params['He'] = +He
-            State.params['hbcx'] = +hbcx
-            State.params['hbcy'] = +hbcy
-        else:
-            phi = np.concatenate((He.flatten(),hbcx.flatten(),hbcy.flatten()))
+            for name in self.name_params : 
+                if name == "hbcx" : 
+                    State.params['hbcx'] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcS"]].reshape(self.shape_params_phys["hbcS"]),axis=1),
+                                                           np.expand_dims(phi[self.slice_params_phys["hbcN"]].reshape(self.shape_params_phys["hbcN"]),axis=1)),axis=1)
+                elif name == "hbcy" : 
+                    State.params['hbcy'] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcE"]].reshape(self.shape_params_phys["hbcE"]),axis=1),
+                                                           np.expand_dims(phi[self.slice_params_phys["hbcW"]].reshape(self.shape_params_phys["hbcW"]),axis=1)),axis=1)
+                else : 
+                    State.params[name] = phi[self.slice_params_phys[name]].flatten()
+        else: 
             return phi
 
-
     def operg_transpose(self,t,phi=None,adState=None):
-        """
-            Project to reduced space
-        """
-        
+
+        param = {} # dictionary containing the values of alle the params 
         # Get variable in physical space
         if phi is not None:
-            He = phi[self.sliceHe_phys].reshape(self.shapeHe_phys)
-            hbcx = phi[self.slicehbcx_phys].reshape(self.shapehbcx_phys)
-            hbcy = phi[self.slicehbcy_phys].reshape(self.shapehbcy_phys)
+            for name in self.slice_params_phys.keys():
+                param[name] = phi[self.slice_params_phys[name]].reshape(self.shape_params_phys[name])
         elif adState is not None:
-            He = +adState.params['He'].reshape(self.shapeHe_phys)
-            hbcx = +adState.params['hbcx'].reshape(self.shapehbcx_phys)
-            hbcy = +adState.params['hbcy'].reshape(self.shapehbcy_phys)
-            adState.params['He'] *= 0
-            adState.params['hbcx'] *= 0
-            adState.params['hbcy'] *= 0
-
-        else:
+            for name in self.name_params:
+                if name == "hbcx" : 
+                    param["hbcS"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcS"])
+                    param["hbcN"] = adState.params[name][:,1,:,:,:].reshape(self.shape_params_phys["hbcN"])
+                elif name == "hbcy" : 
+                    param["hbcE"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcE"])
+                    param["hbcW"] = adState.params[name][:,1,:,:,:].reshape(self.shape_params_phys["hbcW"])
+                else : 
+                    param[name] = adState.params[name].reshape(self.shape_params_phys[name])
+        else: 
             sys.exit('Provide either phi or adState')
-        
-        # Project to reduced space
-        indt = np.argmin(np.abs(self.time-t))   
-        
-        adX_He = np.tensordot(
-            He[:,:,np.newaxis]*self.He_t_gauss[:,indt],
-                                   self.He_xy_gauss[:,:,:],([0,1],[1,2])) 
-        adX_bcS = np.tensordot(
-               hbcx[:,0,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
-                                              self.bc_S_gauss,(-2,-1))
-        adX_bcN = np.tensordot(
-               hbcx[:,1,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
-                                              self.bc_N_gauss,(-2,-1))
-        adX_bcE = np.tensordot(
-               hbcy[:,0,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
-                                              self.bc_E_gauss,(-2,-1))
-        adX_bcW = np.tensordot(
-               hbcy[:,1,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
-                                              self.bc_W_gauss,(-2,-1))
-        
-        adX = np.concatenate((adX_He.flatten(),
-                              adX_bcS.flatten(),
-                              adX_bcN.flatten(),
-                              adX_bcE.flatten(),
-                              adX_bcW.flatten()))
-            
-        return adX
 
+        # Project to reduced space
+        indt = np.argmin(np.abs(self.time-t)) 
+
+        adX = np.zeros((self.nbasis,))  
+
+        for name in self.slice_params.keys():
+            if name == "He":
+                adX[self.slice_params[name]] = np.tensordot(param[name][:,:,np.newaxis]*self.He_t_gauss[:,indt],
+                                                            self.He_xy_gauss[:,:,:],([0,1],[1,2])).flatten()
+            if name in ["hbcS","hbcN","hbcW","hbcE"]:
+                adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
+                                                            self.bc_gauss[name],(-2,-1)).flatten()
+            if name == "itg":
+                if not self.reduced_basis_itg :
+                    adX[self.slice_params[name]] = param[name].flatten()
+                else : 
+                    adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis],
+                                                            self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
+
+        return adX
         
     def test_operg(self, t, State):
-
 
         State0 = State.random()
         phi0 = np.random.random((self.nbasis,))
