@@ -92,7 +92,7 @@ class Obsop_interp:
 
         # Mask land
         if State.mask is not None:
-            self.ind_mask = np.where(State.mask["ssh"])
+            self.ind_mask = np.where(State.mask)
         else:
             self.ind_mask = []
         
