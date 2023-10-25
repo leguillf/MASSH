@@ -756,12 +756,16 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
     Model.init(State)
     State.plot(title='Init State')
 
+    print("Model init : done")
+
     # Set Reduced Basis
     if Basis is not None:
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in seconds) for which the basis components will be compute (at each timestep_checkpoint)
         Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
         sys.exit('4Dvar only work with reduced basis!!')
+
+    print("Basis set : done")
     
     # Covariance matrix
     from .tools_4Dvar import Cov
