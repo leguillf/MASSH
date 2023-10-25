@@ -19,6 +19,9 @@ from jax.experimental import sparse
 import jax.numpy as jnp 
 from jax import jit
 import jax
+import datetime
+from joblib import Parallel
+from joblib import delayed as jb_delayed
 jax.config.update("jax_enable_x64", True)
 
 def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
@@ -555,6 +558,11 @@ class Obsop_interp_l3_geocur(Obsop_interp_l3):
             adState.setvar(adu, self.name_mod_var['U'])      
             adState.setvar(adv, self.name_mod_var['V'])      
 
+def unwrap_process_obs_step(Obsop,t,i,var_bc):
+    return Obsop.process_obs_step(t,i,var_bc)
+
+def func(Obsop,t,i): 
+    return t,i
 
 class Obsop_interp_l4(Obsop_interp):
 
@@ -596,26 +604,27 @@ class Obsop_interp_l4(Obsop_interp):
 
         self.name_H += f'_L4_{config.OBSOP.interp_method}'
 
+        self.n_workers = config.EXP.n_workers 
+
     def process_obs(self, var_bc=None):
 
-        self.varobs = {}
-        self.errobs = {}
+        # Concatenate obs from different sensors
+        lon_obs = {}
+        lat_obs = {}
+        var_obs = {}
+        err_obs = {}
 
-        for i,t in enumerate(self.date_obs):
+        for t in self.date_obs:
 
-            self.varobs[t] = {}
-            self.errobs[t] = {}
+            # Concatenate obs from different sensors
+            lon_obs[t] = {}
+            lat_obs[t] = {}
+            var_obs[t] = {}
+            err_obs[t] = {}
 
             sat_info_list = self.dict_obs[t]['attributes']
             obs_file_list = self.dict_obs[t]['obs_path']
             obs_name_list = self.dict_obs[t]['obs_name']
-
-        
-            # Concatenate obs from different sensors
-            lon_obs = {}
-            lat_obs = {}
-            var_obs = {}
-            err_obs = {}
 
             for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
 
@@ -641,40 +650,66 @@ class Obsop_interp_l4(Obsop_interp):
                         else:
                             err = np.ones_like(var)                        
                         if name in lon_obs:
-                            var_obs[name] = np.concatenate((var_obs[name],var))
-                            err_obs[name] = np.concatenate((err_obs[name],err))
-                            lon_obs[name] = np.concatenate((lon_obs[name],lon))
-                            lat_obs[name] = np.concatenate((lat_obs[name],lat))
+                            var_obs[t][name] = np.concatenate((var_obs[name],var))
+                            err_obs[t][name] = np.concatenate((err_obs[name],err))
+                            lon_obs[t][name] = np.concatenate((lon_obs[name],lon))
+                            lat_obs[t][name] = np.concatenate((lat_obs[name],lat))
                         else:
-                            var_obs[name] = +var
-                            err_obs[name] = +err
-                            lon_obs[name] = +lon
-                            lat_obs[name] = +lat
-            
-            for name in lon_obs:
-                coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
-                ################
-                # Process L4 obs
-                ################
+                            var_obs[t][name] = +var
+                            err_obs[t][name] = +err
+                            lon_obs[t][name] = +lon
+                            lat_obs[t][name] = +lat
+        
+        ########################
+        # Interpolating L4 obs #
+        ########################
+        for name in lon_obs[self.date_obs[0]]:
+
+            t_unsave = []
+
+            ### Loading saved variables ### 
+            for t in self.date_obs : 
                 file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
                 if not self.compute_op and self.write_op and os.path.exists(file_L4):
                     with open(file_L4, "rb") as f:
-                        var_obs_interp, err_obs_interp = pickle.load(f)
-                else:
-                    # Grid interpolation: performing spatial interpolation now
-                    var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
-                    err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
-                    # Save operator if asked
+                        var_obs[t][name], err_obs[t][name] = pickle.load(f)
+                else : 
+                    t_unsave.append(t)
+            
+            ### Computing unsaved variables ### 
+            if self.n_workers>1 : 
+                var_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(jb_delayed(griddata)(np.column_stack((lon_obs[t][name], lat_obs[t][name])), 
+                                                                                                            var_obs[t][name], 
+                                                                                                            self.coords_geo, 
+                                                                                                            method=self.interp_method) for t in t_unsave)
+                err_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(jb_delayed(griddata)(np.column_stack((lon_obs[t][name], lat_obs[t][name])), 
+                                                                                                            err_obs[t][name], 
+                                                                                                            self.coords_geo, 
+                                                                                                            method=self.interp_method) for t in t_unsave)
+                for i,t in enumerate(t_unsave) :
+                    var_obs[t][name] = var_interp[i]
+                    err_obs[t][name] = err_interp[i]
                     if self.write_op:
+                        file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
                         with open(file_L4, "wb") as f:
-                            pickle.dump((var_obs_interp,err_obs_interp), f)
+                            pickle.dump((var_obs[t][name],err_obs[t][name]), f) 
+                    if var_bc is not None and name in var_bc:
+                        var_obs[t][name] -= var_bc[name][self.date_obs.index(t)].flatten()
+                    
+            else: 
+                for t in t_unsave : 
+                    var_obs[t][name] = griddata(np.column_stack((lon_obs[t][name], lat_obs[t][name])), var_obs[t][name], self.coords_geo, method=self.interp_method)
+                    err_obs[t][name] = griddata(np.column_stack((lon_obs[t][name], lat_obs[t][name])), err_obs[t][name], self.coords_geo, method=self.interp_method)
+                    if self.write_op:
+                        file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
+                        with open(file_L4, "wb") as f:
+                            pickle.dump((var_obs[t][name],err_obs[t][name]), f)
+                    if var_bc is not None and name in var_bc:
+                        var_obs[t][name] -= var_bc[name][self.date_obs.index(t)].flatten()
 
-                if var_bc is not None and name in var_bc:
-                    var_obs_interp -= var_bc[name][i].flatten()
-
-                # Fill dictionnaries
-                self.varobs[t][name] = var_obs_interp
-                self.errobs[t][name] = err_obs_interp
+        # Fill dictionnaries
+        self.varobs = var_obs
+        self.errobs = err_obs
 
     def misfit(self,t,State):
 
@@ -855,3 +890,5 @@ class Obsop_interp_jax(Obsop_interp):
             misfit = jnp.concatenate((misfit,_inverr*_misfit))
 
         return misfit
+
+
