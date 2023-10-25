@@ -55,7 +55,9 @@ EXP = dict(
 
     path_obs = None, # if set to None, observations are saved in *tmp_DA_path*
 
-    coriolis_force = True # if set to False, coriolis force is set to 0 (for idealized case for instance)
+    coriolis_force = True, # if set to False, coriolis force is set to 0 (for idealized case for instance)
+
+    n_workers = 1 # number of workers to parallelize experiment preparation (like Obsop, ...)
 
 )
 
