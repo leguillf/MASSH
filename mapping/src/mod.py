@@ -17,6 +17,7 @@ import os
 from math import pi
 from datetime import timedelta
 import matplotlib.pylab as plt 
+import pyinterp
 
 import jax.numpy as jnp 
 from jax import jit
@@ -59,6 +60,8 @@ def Model(config, State, verbose=True):
             return Model_sw1l_np(config,State)
         elif config.MOD.super=='MOD_SW1L_JAX':
             return Model_sw1l_jax(config,State)
+        elif config.MOD.super=='MOD_TRACADV':
+            return Model_tracadv(config,State)
         elif config.MOD.super=='MOD_TRACADV_SSH':
             return Model_tracadv_ssh(config,State)
         elif config.MOD.super=='MOD_TRACADV_VEL':
@@ -1806,6 +1809,507 @@ class Model_sw1l_jax(M):
 ###############################################################################
 #                        Tracer Advection Models                              #
 ###############################################################################
+
+class Model_tracadv(M):
+
+    def __init__(self,config,State):
+
+        super().__init__(config,State)
+
+        # Initialize model state variables
+        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
+            dsin = xr.open_dataset(config.GRID.path_init_grid)
+            for name in self.name_var:
+                if name in config.MOD.name_init_var:
+                    var_init = dsin[config.MOD.name_init_var[name]]
+                    if len(var_init.shape)==3:
+                        var_init = var_init[0,:,:]
+                    if config.GRID.subsampling is not None:
+                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
+                    dsin.close()
+                    del dsin
+                    State.var[self.name_var[name]] = var_init.values
+                else:
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+        else:
+            for name in self.name_var:  
+                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+                if State.mask is not None:
+                    State.var[self.name_var[name]][State.mask] = np.nan
+            
+
+        # Initialize grid spacing
+        self.dx = State.DX
+        self.dy = State.DY
+        self.ny, self.nx = State.ny, State.nx
+
+        # Spatial scheme
+        self.upwind = config.MOD.upwind
+
+        # Time scheme
+        self.time_scheme = config.MOD.time_scheme
+
+        # Diffusion
+        self.Kdiffus = config.MOD.Kdiffus
+
+        # Initialize model parameters (Flux/Forcing)
+        for name in self.name_var:
+            State.params[self.name_var[name]] = np.zeros((State.ny,State.nx))
+
+        #########################
+        # Input Velocity fields
+        #########################
+
+        # Open dataset
+        ds = xr.open_mfdataset(config.MOD.path_vel)
+
+        # Convert longitude 
+        if np.sign(ds[config.MOD.name_var_vel['lon']].data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({config.MOD.name_var_vel['lon']:((config.MOD.name_var_vel['lon'], ds[config.MOD.name_var_vel['lon']].data % 360))})
+        elif np.sign(ds[config.MOD.name_var_vel['lon']].data.min())>=0 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({config.MOD.name_var_vel['lon']:((config.MOD.name_var_vel['lon'], (ds[config.MOD.name_var_vel['lon']].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds[config.MOD.name_var_vel['lon']])    
+
+        # Select study domain
+        time_vel = ds[config.MOD.name_var_vel['time']].values
+        lon_vel = ds[config.MOD.name_var_vel['lon']].values
+        lat_vel = ds[config.MOD.name_var_vel['lat']].values
+
+        # Grid spacing
+        dlon = np.nanmean(State.lon[:,1:]-State.lon[:,:-1])
+        dlat = np.nanmean(State.lat[1:,:]-State.lat[:-1,:])
+        dlon += np.nanmean(lon_vel[1:]-lon_vel[:-1])
+        dlat += np.nanmean(lat_vel[1:]-lat_vel[:-1])
+        dtime = time_vel[1]-time_vel[0]
+        ds = ds.sel({
+            config.MOD.name_var_vel['time']:slice(np.datetime64(config.EXP.init_date)-dtime,np.datetime64(config.EXP.final_date)+dtime),
+            config.MOD.name_var_vel['lon']:slice(State.lon_min-dlon,State.lon_max+2*dlon),
+            config.MOD.name_var_vel['lat']:slice(State.lat_min-dlat,State.lat_max+2*dlat)
+            }).load()
+        time_vel = ds[config.MOD.name_var_vel['time']].values
+        lon_vel = ds[config.MOD.name_var_vel['lon']].values
+        lat_vel = ds[config.MOD.name_var_vel['lat']].values
+
+        # Define source/target grids for space/time interpolation
+        x_source_axis = pyinterp.Axis(lon_vel, is_circle=True)
+        y_source_axis = pyinterp.Axis(lat_vel)
+        z_source_axis = pyinterp.Axis((time_vel - np.datetime64(config.EXP.init_date))/np.timedelta64(1,'s'))
+        self.grid_source_u = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, ds[config.MOD.name_var_vel['u']].T)
+        self.grid_source_v = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, ds[config.MOD.name_var_vel['v']].T)
+        self.x_target = np.repeat(State.lon.transpose()[:,:,np.newaxis],1,axis=2)
+        self.y_target = np.repeat(State.lat.transpose()[:,:,np.newaxis],1,axis=2)
+
+        # Initialize u,v dictionnaries
+        self.u = {}
+        self.v = {}
+
+        #########################
+
+
+        # Initialize boundary condition dictionnary for each model variable
+        self.bc = {}
+        for _name_var_mod in self.name_var:
+            self.bc[_name_var_mod] = {}
+        self.init_from_bc = config.MOD.init_from_bc
+
+
+        self._step_jax_jit = jit(self._step_jax, static_argnums=5)  
+        self._step_jax_tgl_jit = jit(self._step_jax_tgl, static_argnums=6)  
+        self._step_jax_adj_jit = jit(self._step_jax_adj, static_argnums=6)    
+
+        # Tests tgl & adj
+        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+            print('Tangent test:')
+            tangent_test(self,State,nstep=100)
+            print('Adjoint test:')
+            adjoint_test(self,State,nstep=100)
+
+    def init(self, State, t0=0):
+
+        if type(self.init_from_bc)==dict:
+            for name in self.init_from_bc:
+                if self.init_from_bc[name] and t0 in self.bc[name]:
+                    State.setvar(self.bc[name][t0], self.name_var[name])
+        elif self.init_from_bc:
+            for name in self.name_var: 
+                if t0 in self.bc[name]:
+                     State.setvar(self.bc[name][t0], self.name_var[name])
+
+    def set_bc(self,time_bc,var_bc):
+
+        for _name_var_bc in var_bc:
+            for _name_var_mod in self.name_var:
+                if _name_var_bc==_name_var_mod:
+                    for i,t in enumerate(time_bc):
+                        self.bc[_name_var_mod][t] = var_bc[_name_var_bc][i]
+    
+    def _get_vel_data(self,t):
+
+        if t in self.u and t in self.v:
+            u = self.u[t]
+            v = self.v[t]
+        else:
+            z_target = np.tile([t],(self.nx,self.ny,1))
+            u = pyinterp.trivariate(self.grid_source_u,
+                                    self.x_target.flatten(),
+                                    self.y_target.flatten(),
+                                    z_target.flatten(),
+                                    bounds_error=False).reshape(self.x_target.shape).T[0]
+
+            v = pyinterp.trivariate(self.grid_source_v,
+                                    self.x_target.flatten(),
+                                    self.y_target.flatten(),
+                                    z_target.flatten(),
+                                    bounds_error=False).reshape(self.x_target.shape).T[0]
+            self.u[t] = u
+            self.v[t] = v
+        
+        return u,v
+    
+    def _get_trac_bc(self,t,name):
+        
+        if t not in self.bc[name]:
+            # Find closest time
+            t_list = np.array(list(self.bc[name].keys()))
+            idx_closest = np.argmin(np.abs(t_list-t))
+            tc = t_list[idx_closest]
+            return self.bc[name][tc]
+        else:
+            return self.bc[name][t]
+
+    def _adv(self,u,v,c0):
+
+        """
+            main function for upwind advection schemes
+        """
+
+        #  Interpolate velocities on T-points
+        up = 0.5*(u[1:-1, 1:-1]+u[1:-1, 2:])
+        um = 0.5*(u[1:-1, 1:-1]+u[1:-1, 2:])
+        vp = 0.5*(v[1:-1, 1:-1]+v[2:, 1:-1])
+        vm = 0.5*(v[1:-1, 1:-1]+v[2:, 1:-1])
+        
+        # Upwind velocities
+        up = jnp.where(up < 0, 0, up)
+        um = jnp.where(um > 0, 0, um)
+        vp = jnp.where(vp < 0, 0, vp)
+        vm = jnp.where(vm > 0, 0, vm)
+
+        # Advection
+        res = jnp.zeros_like(c0,dtype='float64')
+        if self.upwind == 1:
+            res = res.at[:,1:-1,1:-1].set(self._adv1(up, vp, um, vm, c0))
+        elif self.upwind == 2:
+            res = res.at[:,2:-2,2:-2].set(self._adv2(up, vp, um, vm, c0))
+        elif self.upwind == 3:
+            res = res.at[:,2:-2,2:-2].set(self._adv3(up, vp, um, vm, c0))
+        
+        # Diffusion 
+        if self.Kdiffus is not None:
+            res = res.at[:,2:-2,2:-2].set(
+                res[:,2:-2,2:-2] +\
+                self.Kdiffus/(self.dx[2:-2,2:-2]**2)*\
+                    (c0[:,2:-2,3:-1]+c0[:,2:-2,1:-3]-2*c0[:,2:-2,2:-2]) +\
+                self.Kdiffus/(self.dy[2:-2,2:-2]**2)*\
+                    (c0[:,3:-1,2:-2]+c0[:,1:-3,2:-2]-2*c0[:,2:-2,2:-2])
+            )
+        
+        return res
+
+    def _adv1(self, up, vp, um, vm, c0):
+
+        """
+            1st-order upwind scheme
+        """
+        
+        
+        res = \
+            - up  / self.dx[1:-1, 1:-1] * (c0[:, 1:-1, 1:-1] - c0[:, 1:-1, :-2]) \
+            + um  / self.dx[1:-1, 1:-1] * (c0[:, 1:-1, 1:-1] - c0[:, 1:-1, 2:])  \
+            - vp  / self.dy[1:-1, 1:-1] * (c0[:, 1:-1, 1:-1] - c0[:, :-2, 1:-1]) \
+            + vm  / self.dy[1:-1, 1:-1] * (c0[:, 1:-1, 1:-1] - c0[:, 2:, 1:-1])
+
+        return res
+
+    def _adv2(self, up, vp, um, vm, c0):
+
+        """
+            2nd-order upwind scheme
+        """
+
+        res = \
+            - up[1:-1, 1:-1] * 1 / (2 * self.dx[2:-2,2:-2]) * \
+                (3 * c0[:, 2:-2, 2:-2] - 4 * c0[:, 2:-2, 1:-3] + c0[:, 2:-2, :-4]) \
+            + um[1:-1, 1:-1] * 1 / (2 * self.dx[2:-2,2:-2]) * \
+                (c0[:, 2:-2, 4:] - 4 * c0[:, 2:-2, 3:-1] + 3 * c0[:, 2:-2, 2:-2]) \
+            - vp[1:-1, 1:-1] * 1 / (2 * self.dy[2:-2,2:-2]) * \
+                (3 * c0[:, 2:-2, 2:-2] - 4 * c0[:, 1:-3, 2:-2] + c0[:, :-4, 2:-2]) \
+            + vm[1:-1, 1:-1] * 1 / (2 * self.dy[2:-2,2:-2]) * \
+                (c0[:, 4:, 2:-2] - 4 * c0[:, 3:-1, 2:-2] + 3 * c0[:, 2:-2, 2:-2])
+
+        return res
+
+    def _adv3(self, up, vp, um, vm, c0):
+        """
+            3rd-order upwind scheme
+        """
+
+        res = \
+            - up[1:-1, 1:-1] * 1 / (6 * self.dx[2:-2,2:-2]) * \
+            (2 * c0[:, 2:-2, 3:-1] + 3 * c0[:, 2:-2, 2:-2] - 6 * c0[:, 2:-2, 1:-3] + c0[:, 2:-2, :-4]) \
+            + um[1:-1, 1:-1] * 1 / (6 * self.dx[2:-2,2:-2]) * \
+            (c0[:, 2:-2, 4:] - 6 * c0[:, 2:-2, 3:-1] + 3 * c0[:, 2:-2, 2:-2] + 2 * c0[:, 2:-2, 1:-3]) \
+            - vp[1:-1, 1:-1] * 1 / (6 * self.dy[2:-2,2:-2]) * \
+            (2 * c0[:, 3:-1, 2:-2] + 3 * c0[:, 2:-2, 2:-2] - 6 * c0[:, 1:-3, 2:-2] + c0[:, :-4, 2:-2]) \
+            + vm[1:-1, 1:-1] * 1 / (6 * self.dy[2:-2,2:-2]) * \
+            (c0[:, 4:, 2:-2] - 6 * c0[:, 3:-1, 2:-2] + 3 * c0[:, 2:-2, 2:-2] + 2 * c0[:, 1:-3, 2:-2])
+
+        return res
+    
+    def _bc(self,u,v,c0,c1,cb):
+        
+        if self.upwind==1:
+            # Compute adimensional coefficients fro OBC
+            r1_S = 1/2 * self.dt/self.dy[0,:] * (v[1,:]  + jnp.abs(v[1,:] ))
+            r2_S = 1/2 * self.dt/self.dy[0,:] * (v[1,:]  - jnp.abs(v[1,:] ))
+            r1_N = 1/2 * self.dt/self.dy[-1,:] * (v[-1,:]  + jnp.abs(v[-1,:] ))
+            r2_N = 1/2 * self.dt/self.dy[-1,:] * (v[-1,:]  - jnp.abs(v[-1,:] ))
+            r1_W = 1/2 * self.dt/self.dx[:,0] * (u[:,1] + jnp.abs(u[:,1]))
+            r2_W = 1/2 * self.dt/self.dx[:,0] * (u[:,1] - jnp.abs(u[:,1]))
+            r1_E = 1/2 * self.dt/self.dx[:,-1] * (u[:,-1] + jnp.abs(u[:,-1]))
+            r2_E = 1/2 * self.dt/self.dx[:,-1] * (u[:,-1] - jnp.abs(u[:,-1]))
+
+            # South
+            c1 = c1.at[:,0,:].set(
+                c0[:,0,:] - (r1_S*(c0[:,0,:]-cb[:,0,:]) + r2_S*(c0[:,1,:]-c0[:,0,:])))
+
+            # North
+            c1 = c1.at[:,-1,:].set(
+                c0[:,-1,:] - (r1_N*(c0[:,-1,:]-c0[:,-2,:]) + r2_N*(cb[:,-1,:]-c0[:,-1,:])))
+            
+            # West
+            c1 = c1.at[:,:,0].set(
+                c0[:,:,0] - (r1_W*(c0[:,:,0]-cb[:,:,0]) + r2_W*(c0[:,:,1]-c0[:,:,0])))
+            
+            # East
+            c1 = c1.at[:,:,-1].set(
+                c0[:,:,-1] - (r1_E*(c0[:,:,-1]-c0[:,:,-2]) + r2_E*(cb[:,:,-1]-c0[:,:,-1])))
+        else:
+            # BC value on borders
+            c1 = c1.at[:,0,:].set(cb[:,0,:])
+            c1 = c1.at[:,-1,:].set(cb[:,-1,:])
+            c1 = c1.at[:,:,0].set(cb[:,:,0])
+            c1 = c1.at[:,:,-1].set(cb[:,:,-1])
+            # OBC on inner pixels
+            r1_S = 1/2 * self.dt/self.dy[1,:] * (v[2,:]  + jnp.abs(v[2,:] ))
+            r2_S = 1/2 * self.dt/self.dy[1,:] * (v[2,:]  - jnp.abs(v[2,:] ))
+            r1_N = 1/2 * self.dt/self.dy[-2,:] * (v[-2,:]  + jnp.abs(v[-2,:] ))
+            r2_N = 1/2 * self.dt/self.dy[-2,:] * (v[-2,:]  - jnp.abs(v[-2,:] ))
+            r1_W = 1/2 * self.dt/self.dx[:,1] * (u[:,2] + jnp.abs(u[:,2]))
+            r2_W = 1/2 * self.dt/self.dx[:,1] * (u[:,2] - jnp.abs(u[:,2]))
+            r1_E = 1/2 * self.dt/self.dx[:,-2] * (u[:,-2] + jnp.abs(u[:,-2]))
+            r2_E = 1/2 * self.dt/self.dx[:,-2] * (u[:,-2] - jnp.abs(u[:,-2]))
+
+            # South
+            c1 = c1.at[:,1,:].set(
+                c0[:,1,:] - (r1_S*(c0[:,1,:]-cb[:,1,:]) + r2_S*(c0[:,2,:]-c0[:,1,:])))
+
+            # North
+            c1 = c1.at[:,-2,:].set(
+                c0[:,-2,:] - (r1_N*(c0[:,-2,:]-c0[:,-3,:]) + r2_N*(cb[:,-2,:]-c0[:,-2,:])))
+            
+            # West
+            c1 = c1.at[:,:,1].set(
+                c0[:,:,1] - (r1_W*(c0[:,:,1]-cb[:,:,1]) + r2_W*(c0[:,:,2]-c0[:,:,1])))
+            
+            # East
+            c1 = c1.at[:,:,-2].set(
+                c0[:,:,-2] - (r1_E*(c0[:,:,-2]-c0[:,:,-3]) + r2_E*(cb[:,:,-2]-c0[:,:,-2])))
+        
+        return c1
+
+    def _one_step_for_scan(self,X0,X):
+
+        
+        c0 = X0[0]
+        u = X0[1]
+        v = X0[2]
+        cb0 = X0[3]
+        cb1 = X0[4]
+        nstep = X0[5]
+        step = X0[6]
+
+        if len(c0.shape)==2:
+            c0 = c0[jnp.newaxis,:,:]
+        
+        # Spatial scheme
+        rhs = self._adv(u,v,c0)
+
+        # Time scheme
+        if self.time_scheme=='Euler':
+            # Euler 
+            c1 = c0 + self.dt * rhs
+        elif self.time_scheme=='rk2':
+            # rk2
+            c12 = c0 + 0.5*rhs*self.dt
+            rhs12 = self._adv(u,v,c12)
+            c1 = c0 + self.dt * rhs12
+        elif self.time_scheme=='rk4':
+            # rk4
+            ## k1
+            k1 = rhs * self.dt
+            ## k2
+            c2 = c0 + 0.5*k1
+            rhs2 = self._adv(u,v,c2)
+            k2 = rhs2*self.dt
+            ## k3
+            c3 = c0 + 0.5*k2
+            rhs3 = self._adv(u,v,c3)
+            k3 = rhs3*self.dt
+            ## k4
+            c4 = c0 + k2
+            rhs4 = self._adv(u,v,c4) 
+            k4 = rhs4*self.dt
+            # q increment
+            c1 = c0 + (k1 + 2 * k2 + 2 * k3 + k4) / 6.
+        
+        # Boundary condition
+        cb = (1-(step+1)/nstep) * cb0 + (step+1)/nstep * cb1 # linear interpolation
+        c1 = self._bc(u,v,c0,c1,cb)
+            
+        X = (c1,u,v,cb0,cb1,nstep,step+1)
+
+        return X, X
+
+    def _step_jax(self,X0,u,v,cb0,cb1,nstep):
+
+        # Add static arguments in X dynamic variables for scan function
+        step = 0
+        X0 = (X0, u, v, cb0, cb1, nstep, step)
+
+        # Run scan
+        X1, _ = scan(self._one_step_for_scan, init=X0, xs=jnp.zeros(nstep))
+
+        # Get dynamic variables 
+        X1, _, _, _, _, _, _ = X1
+        
+        return X1
+    
+    def _step_jax_tgl(self,dX0,X0,u,v,cb0,cb1,nstep):
+
+        _, dX1 = jvp(partial(self._step_jax_jit, u=u, v=v, cb0=cb0, cb1=cb1, nstep=nstep), (X0,), (dX0,))
+
+        return dX1
+
+    def _step_jax_adj(self,adX0,X0,u,v,cb0,cb1,nstep):
+        
+        _, adf = vjp(partial(self._step_jax_jit, u=u, v=v, cb0=cb0, cb1=cb1, nstep=nstep), X0)
+        
+        return adf(adX0)[0]
+    
+    def step(self,State,nstep=1,t=0):
+
+        # Initialize control vector of tracer data
+        c0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        cb0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        cb1 = np.zeros((len(self.name_var),State.ny,State.nx))
+        for i,name in enumerate(self.name_var):
+            _c0 = State.getvar(name_var=self.name_var[name])
+            # Fill array
+            c0[i] = _c0
+            cb0[i] = self._get_trac_bc(t, name)
+            cb1[i] = self._get_trac_bc(t+nstep*self.dt, name)
+
+        # Get (u,v) current velocity components
+        u,v = self._get_vel_data(t)
+
+        # Convert to JAX
+        X0 = jnp.array(c0)
+
+        # Forward propagation 
+        X1 = self._step_jax_jit(X0,u,v,cb0,cb1,nstep)
+
+        # Back to numpy
+        c1 = np.array(X1) # advected tracer concentrations
+        
+        # Update state
+        for i,name in enumerate(self.name_var):
+            Fc = State.params[self.name_var[name]] # Forcing term for tracer
+            c1[i] += nstep*self.dt/(3600*24) * Fc
+            State.setvar(c1[i], name_var=self.name_var[name])
+    
+    def step_tgl(self,dState,State,nstep=1,t=None):
+
+        # Initialize control vector of tracer data
+        dc0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        c0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        cb0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        cb1 = np.zeros((len(self.name_var),State.ny,State.nx))
+        for i,name in enumerate(self.name_var):
+            _dc0 = dState.getvar(name_var=self.name_var[name])
+            _c0 = State.getvar(name_var=self.name_var[name])
+            # Fill array
+            dc0[i] = _dc0
+            c0[i] = _c0
+            cb0[i] = self._get_trac_bc(t, name)
+            cb1[i] = self._get_trac_bc(t+nstep*self.dt, name)
+
+        # Get (u,v) current velocity components
+        u,v = self._get_vel_data(t)
+
+        # Convert to JAX
+        dX0 = jnp.array(dc0)
+        X0 = jnp.array(c0)
+
+        # Time propagation
+        dX1 = self._step_jax_tgl_jit(dX0,X0,u,v,cb0,cb1,nstep)
+
+        # Back to numpy
+        dc1 = np.array(dX1) # advected tracer concentrations
+        
+        # Update state
+        for i,name in enumerate(self.name_var):
+            dFc = dState.params[self.name_var[name]] # Forcing term for tracer
+            dc1[i] += nstep*self.dt/(3600*24) * dFc
+            dState.setvar(dc1[i], name_var=self.name_var[name])
+
+    def step_adj(self,adState,State,nstep=1,t=None):
+
+        # Initialize control vector of tracer data
+        adc0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        c0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        cb0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        cb1 = np.zeros((len(self.name_var),State.ny,State.nx))
+        for i,name in enumerate(self.name_var):
+            _adc0 = adState.getvar(name_var=self.name_var[name])
+            _c0 = State.getvar(name_var=self.name_var[name])
+            # Fill array
+            adc0[i] = _adc0
+            c0[i] = _c0
+            cb0[i] = self._get_trac_bc(t, name)
+            cb1[i] = self._get_trac_bc(t+nstep*self.dt, name)
+            # Init parameters
+            adF = nstep*self.dt/(3600*24) * _adc0
+            adState.params[self.name_var[name]] += adF
+
+        # Get (u,v) current velocity components
+        u,v = self._get_vel_data(t)
+
+        # Convert to JAX
+        adX0 = jnp.array(adc0)
+        X0 = jnp.array(c0)
+
+        # Time propagation
+        adX1 = self._step_jax_adj_jit(adX0,X0,u,v,cb0,cb1,nstep)
+        
+        # Back to numpy
+        adc1 = np.array(adX1) 
+        adc1[np.isnan(adc1)] = 0
+
+        # Update tracers
+        for i,name in enumerate(self.name_var):
+            adState.setvar(adc1[i], name_var=self.name_var[name])
+
 
 class Model_tracadv_ssh(M):
 
