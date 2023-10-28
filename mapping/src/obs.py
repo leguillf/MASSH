@@ -151,7 +151,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
-            ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
+        ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
     elif np.sign(ds[obs_attr.name_lon].data.min())==1 and lon_unit=='-180_180':
         ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
     

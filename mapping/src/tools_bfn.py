@@ -36,7 +36,7 @@ def bfn(config,dt_start,dt_end,one_time_step,State):
         pathsaveproj = None
 
 
-    if config.MOD.super=='MOD_QG1L_NP':
+    if config.MOD.super in ['MOD_QG1L', 'MOD_QG1L_NP']:
         return bfn_qg1l(dt_start,
                         dt_end,
                         config.EXP.assimilation_time_step,
@@ -140,10 +140,10 @@ class bfn_qg1l(object):
         ssh = model_state.getvar(self.name_mod_var['SSH']) # 1st variable (ssh)
 
         # Get observations and nudging parameters
-        obs_ssh, nudging_coeff_ssh, sigma_ssh =\
+        obs_ssh, nudging_coeff_ssh =\
             bfn_get_data_at_t(date,
                               self.dict_proj_ssh)
-        obs_rv, nudging_coeff_rv, sigma_rv =\
+        obs_rv, nudging_coeff_rv =\
             bfn_get_data_at_t(date,
                               self.dict_proj_rv)
 
@@ -161,8 +161,6 @@ class bfn_qg1l(object):
                 if np.any(indNoNan):
                     # Filter model state for spectral nudging
                     rv_ls = rv.copy()
-                    if sigma_rv[iobs] is not None and sigma_rv[iobs]>0:
-                        rv_ls = gaussian_filter(rv_ls,sigma=sigma_rv[iobs])
                     N['rv'][indNoNan] += nudging_coeff_rv[iobs,indNoNan] *\
                         (obs_rv[iobs,indNoNan]-rv_ls[indNoNan])
 
@@ -174,16 +172,8 @@ class bfn_qg1l(object):
                 if np.any(indNoNan):
                     # Filter model state for spectral nudging
                     ssh_ls = ssh.copy()
-                    if sigma_ssh[iobs] is not None and sigma_ssh[iobs]>0:
-                        ssh_ls = gaussian_filter(ssh_ls,sigma=sigma_ssh[iobs])
                     N['ssh'][indNoNan] += nudging_coeff_ssh[iobs,indNoNan] *\
                          (obs_ssh[iobs,indNoNan]-ssh_ls[indNoNan])
-
-        # Mask pixels that are not influenced by observations
-        N['ssh'] = N['ssh'] * self.scalenudg[0]
-        N['rv'] = N['rv'] * self.scalenudg[1]
-        N['ssh'][N['ssh']==0] = np.nan
-        N['rv'][N['rv']==0] = np.nan
 
         return N
 
@@ -260,20 +250,19 @@ def bfn_select_obs_temporal_window(dict_obs, dt_start, dt_end,
                         # Get nudging parameters relative to stretching
                         K = nudging_params['K']
                         Tau = nudging_params['Tau']
-                        sigma = nudging_params['sigma']
                         if date in dict_obs_sel:
-                            if (sigma,Tau) in dict_obs_sel[date]:
-                                dict_obs_sel[date][(sigma,Tau)]['attributes'].append(sat_info)
-                                dict_obs_sel[date][(sigma,Tau)]['obs_path'].append(obs_file)
-                                dict_obs_sel[date][(sigma,Tau)]['K'].append(K)
+                            if Tau in dict_obs_sel[date]:
+                                dict_obs_sel[date][Tau]['attributes'].append(sat_info)
+                                dict_obs_sel[date][Tau]['obs_path'].append(obs_file)
+                                dict_obs_sel[date][Tau]['K'].append(K)
                             else:
-                                dict_obs_sel[date][(sigma,Tau)] = {'attributes':[sat_info],
+                                dict_obs_sel[date][Tau] = {'attributes':[sat_info],
                                                                 'obs_path':[obs_file],
                                                                 'K':[K]
                                                                 }
                         else:
                             dict_obs_sel[date] = {}
-                            dict_obs_sel[date][(sigma,Tau)] = {'attributes':[sat_info],
+                            dict_obs_sel[date][Tau] = {'attributes':[sat_info],
                                                             'obs_path':[obs_file],
                                                             'K':[K]
                                                             }
@@ -522,9 +511,6 @@ def bfn_merge_projections(varname, sat_info_list, obs_file_list,
     return proj_var, proj_nudging_coeff
 
 
-
-
-
 def bfn_project_obsvar_to_state_grid(var, nudging_coeff, lon, lat,
                                      ground_pixel_tree, dist_threshold,
                                      ny, nx, dist_scale):
@@ -718,22 +704,19 @@ def bfn_nudge_smoothing(timestamps, smooth_function, halfwindow):
 def bfn_get_data_at_t(date_t, dict_projections):
     obs_t = []
     nudging_coeff_t = []
-    sigma_t = []
     for date in dict_projections:
-        for sigma, Tau in dict_projections[date]:
+        for Tau in dict_projections[date]:
             if date-Tau < date_t < date+Tau:
                 # Compute smoothing coeff at this time considering
                 # the date of observation and the nudging window
                 smoothing_t = gaspari_cohn(abs((date_t-date).total_seconds()),
                                            Tau.total_seconds())
                 # Append to list
-                obs_t.append(dict_projections[date][sigma, Tau]['obs'])
+                obs_t.append(dict_projections[date][Tau]['obs'])
                 nudging_coeff_t.append(smoothing_t *
-                                       dict_projections[date][sigma, Tau]['K'])
-                sigma_t.append(sigma)
+                                       dict_projections[date][Tau]['K'])
     # Convert to numpy array
     obs_t = np.asarray(obs_t)
     nudging_coeff_t = np.asarray(nudging_coeff_t)
-    sigma_t = np.asarray(sigma_t)
 
-    return obs_t, nudging_coeff_t, sigma_t
+    return obs_t, nudging_coeff_t

@@ -424,10 +424,12 @@ class State:
         other = self.copy(free=True)
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
-            other.var[name][self.mask] = np.nan
+            if np.all(self.mask.shape==other.var[name].shape):
+                other.var[name][self.mask] = np.nan
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape).astype('float64')
-            other.params[name][self.mask] = np.nan
+            if np.all(self.mask.shape==other.params[name].shape):
+                other.params[name][self.mask] = np.nan
         return other
     
     
@@ -601,13 +603,19 @@ class State:
         else:
             for ax,name_var in zip(axs,self.params):
                 ax.set_title(name_var)
-                if np.sign(np.nanmin(self.params[name_var]))!=np.sign(np.nanmax(self.params[name_var])):
-                    cmap_range = np.nanmax(np.absolute(self.params[name_var]))
-                    im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
-                                    shading='auto', vmin = -cmap_range, vmax = cmap_range)
-                else:
-                    im = ax.pcolormesh(self.params[name_var],shading='auto')
-                plt.colorbar(im,ax=ax)
+                try:
+                    if len(self.params[name_var].shape)==2:
+                        if np.sign(np.nanmin(self.params[name_var]))!=np.sign(np.nanmax(self.params[name_var])):
+                            cmap_range = np.nanmax(np.absolute(self.params[name_var]))
+                            im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
+                                            shading='auto', vmin = -cmap_range, vmax = cmap_range)
+                        else:
+                            im = ax.pcolormesh(self.params[name_var],shading='auto')
+                        plt.colorbar(im,ax=ax)
+                    else:
+                        plt.plot(self.params[name_var])
+                except:
+                    continue
         
         plt.show()
         

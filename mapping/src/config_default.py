@@ -63,19 +63,6 @@ EXP = dict(
 #################################################################################################################################
 NAME_GRID = 'GRID_GEO'
 
-# Read grid from file
-GRID_FROM_FILE = dict(
-
-    path_init_grid = '', 
-
-    name_init_lon = '',
-
-    name_init_lat = '',
-
-    subsampling = None,
-
-)
-
 # Regular geodetic grid
 GRID_GEO = dict(
 
@@ -118,39 +105,11 @@ GRID_CAR = dict(
 
 )
 
-# Restart from previous run 
-GRID_RESTART = dict(
-
-    name_grid = 'restart',
-
-)
-
 
 #################################################################################################################################
 # OBSERVATIONS 
 #################################################################################################################################
 NAME_OBS = None
-
-# L4 products (has to be on 2D latitude x longitude grids)
-OBS_L4 = dict(
-
-    path = '', # path of observation netcdf file(s)
-
-    name_time = '', # name of time coordinate
-    
-    name_lon = '', # name of longitude coordinate
-
-    name_lat = '', # name of latitude coordinate
-    
-    name_var = {}, # dictionnary of observed variables (keys: variable types [SSH,SST etc...]; values: name of observed variables)
-
-    name_err = {}, # dictionnary of measurement error variables (keys: variable types [SSH,SST etc...]; values: name of error variables)
-
-    subsampling = None, # Subsampling in time (in number of model time step). Set to None for no subsampling
-
-    sigma_noise = None  # Value of (constant) measurement error (will be used if *name_err* is not provided)
-
-)
 
 # Nadir altimetry
 OBS_SSH_NADIR = dict(
@@ -165,7 +124,7 @@ OBS_SSH_NADIR = dict(
     
     name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH)
 
-    varmax = 1e2, # Maximal value of observations considered 
+    varmax = None, # Maximal value of observations considered 
 
     sigma_noise = None, # Value of (constant) measurement error 
 
@@ -200,7 +159,7 @@ OBS_SSH_SWATH = dict(
     
     name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH)
 
-    varmax = 1e2, # Maximal value of observations considered 
+    varmax = None, # Maximal value of observations considered 
 
     sigma_noise = None, # Value of (constant) measurement error 
 
@@ -218,10 +177,11 @@ OBS_SSH_SWATH = dict(
     
 )
 
+
 #################################################################################################################################
 # MODELS
 #################################################################################################################################
-NAME_MOD = None # Either DIFF, QG1L, QG1LM, SW1L, SW1LM    
+NAME_MOD = None # Either DIFF, QG1L, SW1L    
 
 # Diffusion model
 MOD_DIFF = dict(
@@ -288,7 +248,8 @@ MOD_QG1L_NP = dict(
 
 )
 
-MOD_QG1L_JAX = dict(
+# 1.5-layer Quasi-Geostrophic model
+MOD_QG1L = dict(
 
     name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc.)
 
@@ -328,54 +289,8 @@ MOD_QG1L_JAX = dict(
 
 )
 
-MOD_QG1L_JAX_FULL = dict(
-
-    name_var = {'SSH':"ssh"},
-
-    init_from_bc = False,
-
-    name_init_var = {},
-
-    dir_model = None,
-
-    var_to_save = None,
-
-    multiscale = False,
-
-    advect_tracer = False,
-
-    dtmodel = 300, # model timestep
-
-    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk4)
-
-    upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
-
-    upwind_adj = None, # idem but for the adjoint loop
-
-    Reynolds = False, # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
-
-    c0 = 2.7, # If not None, fixed value for phase velocity 
-
-    filec_aux = None, # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
-
-    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
-
-    cmin = None,
-
-    cmax = None,
-
-    only_diffusion = False, # If True, use only diffusion in the QG propagation
-
-    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
-
-    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
-
-    g = 9.81 
-
-)
-
-# 1.5-layer Shallow-Water model
-MOD_SW1L_NP = dict(
+# Linear Shallow-Water model
+MOD_SW1L = dict(
 
     name_var = {'U':'u','V':'v','SSH':'ssh'},
 
@@ -403,79 +318,6 @@ MOD_SW1L_NP = dict(
 
 )
 
-MOD_SW1L_JAX = dict(
-
-    name_var = {'U':'u','V':'v','SSH':'ssh'},
-
-    name_init_var = [],
-
-    dir_model = None,
-
-    var_to_save = None,
-
-    dtmodel = 300, # model timestep
-
-    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
-
-    bc_kind = '1d', # Either 1d or 2d
-
-    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
-
-    He_init = 0.9, # Mean height (in m)
-
-    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
-    g = 9.81
-
-)
-
-# Tracer advection
-
-MOD_TRACADV_SSH = dict(
-
-    name_var = {'SST':'sst','SSH':'ssh'}, # Dictionnary of variable names (need to be at least one tracer e.g SST and SSH variables.)
-
-    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
-
-    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
-
-    upwind = 3, # Order of the upwind scheme for tracer advection (either 1,2 or 3)
-
-    time_scheme = 'Euler', # Either Euler, rk2 or rk4
-
-    dtmodel = 300, # model timestep
-
-    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
-
-    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
-
-    Kdiffus = None
-
-)
-
-MOD_TRACADV_VEL = dict(
-
-    name_var = {'SST':'sst','U':'u','V':'v'}, # Dictionnary of variable name (need to be at least one tracer e.g SST and optionaly velocity variables.)
-
-    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
-
-    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
-
-    upwind = 3, # Order of the upwind scheme for tracer advection (either 1,2 or 3)
-
-    time_scheme = 'Euler', # Either Euler, rk2 or rk4
-
-    dtmodel = 300, # model timestep
-
-    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
-
-    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
-
-    Kdiffus = None
-
-)
 
 #################################################################################################################################
 # BOUNDARY CONDITIONS
@@ -503,6 +345,7 @@ BC_EXT = dict(
 #################################################################################################################################
 NAME_OBSOP = None
 
+# Projections to L3 observations
 OBSOP_INTERP_L3 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
@@ -519,22 +362,7 @@ OBSOP_INTERP_L3 = dict(
 
 )
 
-OBSOP_INTERP_L3_GEOCUR = dict(
-
-    name_obs = None, # List of observation class names. If None, all observation will be considered. 
-
-    write_op = False, # Write operator data to *path_save*
-
-    path_save = None, # Directory where to save observational operator
-
-    compute_op = True, # Force computing H 
-
-    Npix = 4, # Number of pixels to perform projection y=Hx
-
-    mask_borders = False,
-
-)
-
+# Projections to L4 (gridded) observations
 OBSOP_INTERP_L4 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
@@ -550,6 +378,7 @@ OBSOP_INTERP_L4 = dict(
     interp_method = 'linear' # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
 
 )
+
 
 #################################################################################################################################
 # INVERSION METHODS
@@ -602,54 +431,6 @@ INV_BFN = dict(
 
 # 4-Dimensional Variational 
 INV_4DVAR = dict(
-
-    compute_test = False, # TLM, ADJ & GRAD tests
-
-    path_init_4Dvar = None, # To restart the minimization process from a specified control vector
-
-    restart_4Dvar = False, # To restart the minimization process from the last control vector
-
-    gtol = None, # Gradient norm must be less than gtol before successful termination.
-
-    maxiter = 10, # Maximal number of iterations for the minimization process
-
-    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
-
-    save_minimization = False, # save cost function and its gradient at each iteration 
-
-    path_save_control_vectors = None, # Path where to save the control vector at each 4Dvar iteration 
-
-    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
-
-    sigma_R = None, # Observational standard deviation
-
-    sigma_B = None,
-
-    prec = False, # preconditoning
-    
-    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
-
-    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
-
-    path_background = None, # Path to the precribed background on BM basis
-    
-    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
-
-    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
-
-    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
-
-    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
-
-    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
-
-    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
-
-    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
- 
-)
-
-INV_4DVAR_JAX = dict(
 
     compute_test = False, # TLM, ADJ & GRAD tests
 
@@ -751,49 +532,10 @@ INV_4DVAR_PARALLEL = dict(
  
 )
 
-# Multi-scale Optimal Interpolation (Ubelmann et al. 2021) 
-INV_MOI = dict(
-
-    dir = None, # Directory of .py scripts
-
-    name_var = False,
-
-    path_mdt = None, # path of Mean Dynamic Topography (MDT) netcdf file.  
-
-    name_var_mdt = {'lon':'','lat':'','mdt':''}, # name of coordinates and variable of the MDT file
-    
-    window_size = timedelta(days=15),
-
-    window_output = timedelta(days=15),
-
-    window_overlap = True,
-
-    sigma_R = 1e-2, 
-
-    set_geo3ss6d = True, # Estimate small scales balanced motion component
-
-    set_geo3ls = True, # Estimate large scales balanced motion component
-
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
-
-    tdecmin = 2.5, # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    file_aux = None,
-
-    filec_aux = None,
-
-)
 
 #################################################################################################################################
 # REDUCED BASIS
 #################################################################################################################################
-
 NAME_BASIS = None
 
 # Balanced Motions
@@ -847,218 +589,6 @@ BASIS_BM = dict(
 
 )
 
-BASIS_GEOCUR = dict(
-
-    name_mod_u = None, # Name of the related model variable 
-
-    name_mod_v = None, # Name of the related model variable 
-    
-    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
-
-    facns = 1., #factor for wavelet spacing in space
-
-    facnlt = 2., #factor for wavelet spacing in time
-
-    npsp = 3.5, # Defines the wavelet shape
-
-    facpsp = 1.5, # factor to fix df between wavelets
-
-    lmin = 80, # minimal wavelength (in km)
-
-    lmax = 970., # maximal wavelength (in km)
-
-    lmeso = 300, # Largest mesoscale wavelenght 
-
-    tmeso = 20, # Largest mesoscale time of decorrelation 
-
-    sloptdec = -1.28, # Slope such as tdec = lambda^slope where lamda is the wavelength
-
-    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 2.5, # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
-
-    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
-
-    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
-
-    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
-
-    depth1 = 0.,
-
-    depth2 = 30.,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
-
-)
-
-BASIS_GAUSS3D = dict(
-
-    name_mod_var = '', # Name of the related model variable 
-
-    flux = False,
-
-    facns = 1., # Factor for gaussian spacing in space
-
-    facnlt = 2., # Factor for gaussian spacing in time
-
-    sigma_D = 300, # Spatial scale (km)
-
-    sigma_T = 20, # Time scale (days)
-
-    sigma_Q = 0.01, # Standard deviation for matrix Q 
-
-)
-
-BASIS_BM_JAX = dict(
-
-    name_mod_var = None, # Name of the related model variable 
-
-    wavelet_init = True, # Estimate the initial state 
-    
-    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
-
-    save_wave_basis = 'inline', # 'inline' for saving in RAM, 'offline' for saving in tmp_DA_path, False for computing basis component at each time
-
-    facns = 1., #factor for wavelet spacing in space
-
-    facnlt = 2., #factor for wavelet spacing in time
-
-    npsp= 3.5, # Defines the wavelet shape
-
-    facpsp= 1.5, # factor to fix df between wavelets
-
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
-
-    lmeso = 300, # Largest mesoscale wavelenght 
-
-    tmeso = 20, # Largest mesoscale time of decorrelation 
-
-    sloptdec = -1.28, # Slope such as tdec = lambda^slope where lamda is the wavelength
-
-    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 2.5, # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
-
-    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
-
-)
-
-# Constant basis 
-BASIS_CONSTANT = dict(
-
-    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
-
-    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
-
-    facnlt = 2., #factor for wavelet spacing in time
-
-    name_mod_var = None, # Name of the related model variable 
-
-    tdec = 20 # Decorrelation time of the constant wavelet 
-
-)
-
-# Balanced Motions with auxilliary data 
-BASIS_BMaux = dict(
-
-    name_mod_var = None, # Name of the related model variable
-    
-    flux = True,
-
-    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
-
-    wavelet_init = True, # Estimate the initial state 
-
-    facns = 1., #factor for wavelet spacing= space
-
-    facnlt = 2., #factor for wavelet spacing= time
-
-    npsp= 3.5, # Defines the wavelet shape
-
-    facpsp= 1.5, # factor to fix df between wavelets
-
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
-
-    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 2.5, # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    distortion_eq = 2.,
-
-    lat_distortion_eq = 5.,
-
-    distortion_eq_law = 2.,
-
-    file_aux = None,
-
-    filec_aux = None,
-
-    tssr = 0.5,
-
-    facRo = 8.,
-
-    Romax = 150.,
-
-    cutRo =  1.6,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
-
-)
-
-# Large scales 
-BASIS_LS = dict(
-
-    flux = True,
-
-    name_mod_var = None, # Name of the related model variable
-
-    wavelet_init = True,
-
-    facnls= 3., #factor for large-scale wavelet spacing
-        
-    facnlt= 3.,
-        
-    tdec_lw= 25.,
-        
-    std_lw= 0.04,
-        
-    lambda_lw= 970,
-
-    fcor = .5,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
-)
-
 # Internal Tides
 BASIS_IT = dict(
 
@@ -1099,7 +629,7 @@ BASIS_IT = dict(
 #################################################################################################################################
 NAME_DIAG = None
 
-# Observatory System Simulation Experiment 
+# Observatory System Simulation Experiment (validation with simulated data)
 DIAG_OSSE = dict(
 
     dir_output = None,
@@ -1148,65 +678,7 @@ DIAG_OSSE = dict(
 
 )
 
-DIAG_OSSE_UV = dict(
-
-    dir_output = None,
-
-    time_min = None,
-
-    time_max = None,
-
-    lon_min = None,
-
-    lon_max = None,
-
-    lat_min = None,
-
-    lat_max = None,
-
-    name_ref = '',
-
-    name_ref_time = '',
-
-    name_ref_lon = '',
-
-    name_ref_lat = '',
-
-    name_ref_var_u = '',
-
-    name_ref_var_v = '',
-
-    options_ref =  {},
-
-    name_exp_var_ssh = '',
-
-    name_exp_var_u = None,
-
-    name_exp_var_v = None,
-
-    compare_to_baseline = False,
-
-    name_bas = None,
-
-    name_bas_time = None,
-
-    name_bas_lon = None,
-
-    name_bas_lat = None,
-
-    name_bas_var_ssh = None,
-
-    name_bas_var_u = None,
-
-    name_bas_var_v = None,
-
-    name_mask = None,
-
-    name_var_mask = {'lon':'','lat':'','var':''}
-
-)
-
-# Observatory System Experiment (e.g. validation with real data)
+# Observatory System Experiment (validation with real data)
 DIAG_OSE = dict(
 
     dir_output = None,
