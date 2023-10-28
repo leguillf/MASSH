@@ -138,9 +138,9 @@ class Bc_ext:
                 var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)})
                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
                 # Remove NaN
-                #if np.isnan(var).any():
-                #    _, var = pyinterp.fill.gauss_seidel(grid_source)
-                #    grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
+                if np.isnan(var).any():
+                    _, var = pyinterp.fill.gauss_seidel(grid_source)
+                    grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
                 # Interpolate
                 _var_interp = pyinterp.trivariate(grid_source,
                                             x_target.flatten(),

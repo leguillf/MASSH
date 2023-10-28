@@ -201,10 +201,10 @@ def read_auxdata_varcit(file_aux):
     return finterpVARIANCE   
 
 
-def read_auxdata_mdt(filemdt_aux,name_var,lon_unit):
+def read_auxdata(file_aux,name_var,lon_unit):
 
-    # Read MDT database
-    ds = xr.open_dataset(filemdt_aux)
+    # Read database
+    ds = xr.open_dataset(file_aux)
     
     if np.sign(ds[name_var['lon']].data.min())==-1 and lon_unit=='0_360':
         ds = ds.assign_coords({name_var['lon']:((name_var['lon'], ds[name_var['lon']].data % 360))})
@@ -214,13 +214,16 @@ def read_auxdata_mdt(filemdt_aux,name_var,lon_unit):
     
     lon = ds[name_var['lon']].values
     lat = ds[name_var['lat']].values
-    mdt = ds[name_var['mdt']].values.squeeze()
+    if 'data' in name_var:
+        data = ds[name_var['data']].values.squeeze()
+    elif 'mdt' in name_var:
+        data = ds[name_var['mdt']].values.squeeze()
     
-    if mdt.shape[1]==lon.size:
-        mdt = mdt.transpose()
+    if data.shape[1]==lon.size:
+        data = data.transpose()
     if len(lon.shape)==1:
-        finterpMDT = scipy.interpolate.RegularGridInterpolator((lon,lat),mdt,bounds_error=False,fill_value=None)
+        finterp = scipy.interpolate.RegularGridInterpolator((lon,lat),data,bounds_error=False,fill_value=None)
     else:
-        finterpMDT = scipy.interpolate.NearestNDInterpolator(list(zip(lon.ravel(),lat.ravel())),mdt.ravel())
-    return finterpMDT
+        finterp = scipy.interpolate.NearestNDInterpolator(list(zip(lon.ravel(),lat.ravel())),data.ravel())
+    return finterp
 

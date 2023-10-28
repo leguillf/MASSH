@@ -164,6 +164,8 @@ OBS_SSH_NADIR = dict(
     name_lat = '', # name of latitude coordinate
     
     name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH)
+    
+    synthetic_noise = None, # Std of synthetic noise (std in meters) to artificially add to the data
 
     varmax = 1e2, # Maximal value of observations considered 
 
@@ -176,6 +178,10 @@ OBS_SSH_NADIR = dict(
     path_mdt = None, # path of MDT 
 
     name_var_mdt = None, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
+    
+    path_err = None, # path of error file 
+
+    name_var_err = None, # dictionary of error coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
     
     nudging_params_ssh = None, # dictionary of nudging parameters on SSH {'sigma':<float>,'K':<float>,'Tau':<datetime.timedelta>}. Note that 'sigma' parameter is useless now, and will be removed soon,
 
@@ -199,6 +205,8 @@ OBS_SSH_SWATH = dict(
     name_xac = None, # name of across track coordinate (like in SWOTsimulator output files)
     
     name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH)
+    
+    synthetic_noise = None, # Std of synthetic noise (std in meters) to artificially add to the data
 
     sigma_noise = None, # Value of (constant) measurement error 
 
@@ -704,6 +712,8 @@ INV_4DVAR_JAX = dict(
 INV_4DVAR_PARALLEL = dict(
 
     nprocs = 1, # Number of parallelized processes
+    
+    JAX_mem_fraction = None, # GPU Memory fraction (bw [0,1]) used for one process
 
     space_window_size_proc = 10, # Space window size of one process (in °). Set to None for no split in space.
 

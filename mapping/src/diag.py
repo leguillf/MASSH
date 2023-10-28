@@ -14,7 +14,7 @@ from matplotlib.ticker import ScalarFormatter
 import gc
 import pandas as pd 
 import subprocess
-from .tools import read_auxdata_mdt
+from .tools import read_auxdata
 from . import grid
 from . import switchvar
 import cmocean
@@ -1660,7 +1660,7 @@ class Diag_ose():
 
         # Add MDT to reference data
         if config.DIAG.add_mdt_to_ref:
-            finterpmdt = read_auxdata_mdt(config.DIAG.path_mdt,config.DIAG.name_var_mdt,State.lon_unit)
+            finterpmdt = read_auxdata(config.DIAG.path_mdt,config.DIAG.name_var_mdt,State.lon_unit)
             mdt_on_ref = finterpmdt((ref[self.name_ref_lon] , ref[self.name_ref_lat]))
             self.ref.data += mdt_on_ref
 
@@ -1684,6 +1684,11 @@ class Diag_ose():
         except:
             print('Warning: unable to select study region in the experiment fields.\
 That could be due to non regular grid or bad written netcdf file')
+            self.exp = self.exp.where((self.exp.lon>=self.lon_min) & 
+                                      (self.exp.lon<=self.lon_max) & 
+                                      (self.exp.lat>=self.lat_min) & 
+                                      (self.exp.lat<=self.lat_max),
+                                      drop=True)
         exp.close()
 
         # Baseline data
@@ -1707,6 +1712,9 @@ That could be due to non regular grid or bad written netcdf file')
             except:
                 print('Warning: unable to select study region in the baseline fields.')
             bas.close()
+            
+        # Ratio of pannel size for plotting functions
+        self.ratio_fig = (self.lat_max-self.lat_min)/(self.lon_max-self.lon_min)
 
 
     def regrid_exp(self):
@@ -2112,9 +2120,9 @@ That could be due to non regular grid or bad written netcdf file')
 
         if plot:
             if not self.compare_to_baseline:
-                fig, (ax1, ax2) = plt.subplots(1,2,figsize=(10,4))
+                fig, (ax1, ax2) = plt.subplots(1,2,figsize=(2*(100/self.ratio_fig)**.5,1*(self.ratio_fig*100)**.5))
             else:
-                fig,(ax1,ax2,ax3) = plt.subplots(1,3,figsize=(15,4))
+                fig,(ax1,ax2,ax3,ax4) = plt.subplots(1,4,figsize=(4*(100/self.ratio_fig)**.5,1*(self.ratio_fig*100)**.5))
 
             ax1.plot(vmean['time'], rmse_score_exp_t, label='experiment', c='b')
             if self.compare_to_baseline:
@@ -2129,10 +2137,16 @@ That could be due to non regular grid or bad written netcdf file')
                 plt.colorbar(im2,ax=[ax2,ax3])
                 ax3.set_title('baseline')
                 ax2.set_title('experiment')
+                
+                im = ax4.pcolormesh(binning.x, binning.y, 100*(rmse_xy_exp-rmse_xy_bas)/rmse_xy_bas,vmin=-50,vmax=50,cmap='RdBu_r')
+                ax4.set_title('Improvement experiment/baseline')
+                plt.colorbar(im,ax=ax4)
             else:
                 plt.colorbar(im2,ax=ax2)
-
-            fig.savefig(f'{self.dir_output}/rmse.png',dpi=100)
+            
+            plt.show()
+            fig.savefig(f'{self.dir_output}/rmse.png',dpi=200)
+            
 
     def _write_stat(self, nc, group_name, binning):
     
@@ -2253,12 +2267,13 @@ That could be due to non regular grid or bad written netcdf file')
                                                     noverlap=0)
 
             # Append to lists
-            psd_ref.append(_psd_ref)
-            psd_exp.append(_psd_exp)
-            psd_diff_exp.append(_psd_diff_exp)
-            if self.compare_to_baseline:
-                psd_bas.append(_psd_bas)
-                psd_diff_bas.append(_psd_diff_bas)
+            if _psd_ref.size>0:
+                psd_ref.append(_psd_ref)
+                psd_exp.append(_psd_exp)
+                psd_diff_exp.append(_psd_diff_exp)
+                if self.compare_to_baseline:
+                    psd_bas.append(_psd_bas)
+                    psd_diff_bas.append(_psd_diff_bas)
             
         # Average along across track direction
         psd_ref = np.asarray(psd_ref).mean(axis=0)
@@ -2340,9 +2355,12 @@ That could be due to non regular grid or bad written netcdf file')
                             color='r',
                             alpha=0.3, 
                             label=f'baseline: $\lambda$ > {int(res_bas)}km')
+            ax.set_ylim(0,1)
             plt.legend(loc='best', title="resolved scales")
             plt.grid(which='both')
-        
+            
+            
+            plt.show()
             plt.savefig(f'{self.dir_output}/psd.png', dpi=100)
 
 
@@ -2368,7 +2386,10 @@ That could be due to non regular grid or bad written netcdf file')
 
         # cut track when diff time longer than 4*delta_t
         indi = np.where((np.diff(time_alongtrack) > max_delta_t_gap))[0]
-        track_segment_lenght = np.insert(np.diff(indi), [0], indi[0])
+        if len(indi)>0:
+            track_segment_lenght = np.insert(np.diff(indi), [0], indi[0])
+        else:
+            track_segment_lenght = time_alongtrack.size
 
         # Long track >= npt
         selected_track_segment = np.where(track_segment_lenght >= npt)[0]
@@ -2439,15 +2460,15 @@ That could be due to non regular grid or bad written netcdf file')
             lon_exp,lat_exp = np.meshgrid(lon_exp,lat_exp)
         u_exp,v_exp = switchvar.ssh2uv(ssh_exp,lon=lon_exp,lat=lat_exp)
         U_exp = np.sqrt(u_exp**2+v_exp**2)
-        rv_exp = switchvar.ssh2rv(ssh_exp,lon=lon_exp,lat=lat_exp)
+        rv_exp = switchvar.ssh2rv(ssh_exp,lon=lon_exp,lat=lat_exp,norm=True)
 
         # Ranges
         ssh_min = np.nanmin(ssh_exp)
         ssh_max = np.nanmax(ssh_exp)
         U_min = 0
         U_max = np.nanmax(U_exp)
-        rv_min = -.8*np.nanmax(np.abs(rv_exp))
-        rv_max = .8*np.nanmax(np.abs(rv_exp))
+        rv_min = -.5
+        rv_max = .5
 
         # Baseline data
         if self.compare_to_baseline:
@@ -2459,44 +2480,56 @@ That could be due to non regular grid or bad written netcdf file')
                 lon_bas,lat_bas = np.meshgrid(lon_bas,lat_bas)
             u_bas,v_bas = switchvar.ssh2uv(ssh_bas,lon=lon_bas,lat=lat_bas)
             U_bas = np.sqrt(u_bas**2+v_bas**2)
-            rv_bas = switchvar.ssh2rv(ssh_bas,lon=lon_bas,lat=lat_bas)
+            rv_bas = switchvar.ssh2rv(ssh_bas,lon=lon_bas,lat=lat_bas,norm=True)
 
         # Compute frames
         for t in range(self.exp[self.name_exp_time].size):
 
             if self.compare_to_baseline:
-                fig, axs = plt.subplots(2,3,figsize=(15,10))
+                fig, axs = plt.subplots(2,3,figsize=(3*(100/self.ratio_fig)**.5,2*(self.ratio_fig*100)**.5))
             else: 
-                fig, axs = plt.subplots(1,3,figsize=(15,5))
+                fig, axs = plt.subplots(1,3,figsize=(3*(100/self.ratio_fig)**.5,1*(self.ratio_fig*100)**.5))
                 axs = axs[np.newaxis,:]
 
             fig.suptitle(str(self.exp[self.name_exp_time][t].values)[:13])
 
             im0 = axs[0,0].pcolormesh(lon_exp,lat_exp,ssh_exp[t],cmap=cmocean.cm.deep_r,vmin=ssh_min,vmax=ssh_max)
+            axs[0,0].set_xlim(self.lon_min,self.lon_max)
+            axs[0,0].set_ylim(self.lat_min,self.lat_max)
             axs[0,0].set_title(r'SSH$_{exp}$ [m]')
             plt.colorbar(im0,ax=axs[0,0])
 
             im1 = axs[0,1].pcolormesh(lon_exp,lat_exp,U_exp[t],cmap=cmocean.cm.speed,vmin=U_min,vmax=U_max)
+            axs[0,1].set_xlim(self.lon_min,self.lon_max)
+            axs[0,1].set_ylim(self.lat_min,self.lat_max)
             axs[0,1].set_title(r'U$_{exp}$ [m/s]')
             plt.colorbar(im1,ax=axs[0,1])
 
             im2 = axs[0,2].pcolormesh(lon_exp,lat_exp,rv_exp[t],cmap=cmocean.cm.diff,vmin=rv_min,vmax=rv_max)
-            axs[0,2].set_title(r'$\xi_{exp}$ [s$^{-1}$]')
+            axs[0,2].set_xlim(self.lon_min,self.lon_max)
+            axs[0,2].set_ylim(self.lat_min,self.lat_max)
+            axs[0,2].set_title(r'$\xi_{exp}/f$')
             plt.colorbar(im2,ax=axs[0,2])
 
             # Baseline variables 
             if self.compare_to_baseline:
                 im0 = axs[1,0].pcolormesh(lon_bas,lat_bas,ssh_bas[t],cmap=cmocean.cm.deep_r,vmin=ssh_min,vmax=ssh_max)
                 plt.colorbar(im0,ax=axs[1,0])
+                axs[1,0].set_xlim(self.lon_min,self.lon_max)
+                axs[1,0].set_ylim(self.lat_min,self.lat_max)
                 axs[1,0].set_title(r'SSH$_{baseline}$ [m]')
                 im1 = axs[1,1].pcolormesh(lon_bas,lat_bas,U_bas[t],cmap=cmocean.cm.speed,vmin=U_min,vmax=U_max)
+                axs[1,1].set_xlim(self.lon_min,self.lon_max)
+                axs[1,1].set_ylim(self.lat_min,self.lat_max)
                 axs[1,1].set_title(r'U$_{baseline}$ [m/s]')
                 plt.colorbar(im1,ax=axs[1,1])
                 im2 = axs[1,2].pcolormesh(lon_bas,lat_bas,rv_bas[t],cmap=cmocean.cm.diff,vmin=rv_min,vmax=rv_max)
-                axs[1,2].set_title(r'$\xi_{baseline}$ [s$^{-1}$]')
+                axs[1,2].set_xlim(self.lon_min,self.lon_max)
+                axs[1,2].set_ylim(self.lat_min,self.lat_max)
+                axs[1,2].set_title(r'$\xi_{baseline}/f$')
                 plt.colorbar(im2,ax=axs[1,2])
 
-            fig.savefig(f'{self.dir_output}/frame_{str(t).zfill(5)}.png',dpi=100)
+            fig.savefig(f'{self.dir_output}/frame_{str(t).zfill(5)}.png',dpi=200)
 
             plt.close(fig)
             del fig
@@ -2569,6 +2602,7 @@ class Diag_multi:
         for _DIAG in config.DIAG:
             _config.DIAG = config.DIAG[_DIAG]
             _Diag = Diag(_config,State)
+            print()
             _Diag.dir_output = os.path.join(_Diag.dir_output,_DIAG)
             if not os.path.exists(_Diag.dir_output):
                 os.makedirs(_Diag.dir_output)

@@ -52,7 +52,7 @@ def ssh2uv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81):
 
     return u,v
 
-def ssh2rv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81):
+def ssh2rv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81,norm=False):
 
     # if lon and lat are provided, we compute grid spacing. 
     # Otherwise, state grid will be used
@@ -80,11 +80,17 @@ def ssh2rv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81):
     rv[1:-1,1:-1] = g/f[1:-1,1:-1] *\
         ((ssh[2:,1:-1]+ssh[:-2,1:-1]-2*ssh[1:-1,1:-1])/_dy**2 \
         +(ssh[1:-1,2:]+ssh[1:-1,:-2]-2*ssh[1:-1,1:-1])/_dx**2)
+    if norm:
+        rv /= f
+        
     if xac is not None:
         rv = _masked_edge(rv, xac)
+    
 
     if ssh_shapelen == 3:
         rv = np.moveaxis(rv, -1, 0)
+    
+    
 
     return rv
 

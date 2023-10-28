@@ -49,7 +49,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
         return Inv_4Dvar_jax(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
     
     elif config.INV.super=='INV_4DVAR_PARALLEL':
-        return Inv_4Dvar_parallel(config, State=State, dict_obs=dict_obs)
+        return Inv_4Dvar_parallel(config, State=State)
     
     elif config.INV.super=='INV_MOI':
         return Inv_moi(config, State, dict_obs)
@@ -102,6 +102,8 @@ def Inv_forward(config,State,Model,Bc=None):
         # Save
         if config.EXP.saveoutputs:
             Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
+            
+            #State.plot(present_date)
     
     State.plot(title='End of forward integration')
         
@@ -514,7 +516,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
     return
 
 
-def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
+def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
 
     
     '''
@@ -523,6 +525,30 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
 
     if 'JAX' in config.MOD.super:
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+        
+    
+    # Module initializations
+    if Model is None:
+        # initialize Model operator 
+        from . import mod
+        Model = mod.Model(config, State, verbose=verbose)
+    if Bc is None:
+        # initialize Bc 
+        from . import bc
+        Bc = bc.Bc(config, verbose=verbose)
+    if dict_obs is None:
+        # initialize Obs
+        from . import obs
+        dict_obs = obs.Obs(config, State)
+    if Obsop is None:
+        # initialize Obsop
+        from . import obsop
+        Obsop = obsop.Obsop(config, State, dict_obs, Model, verbose=verbose)
+    if Basis is None:
+        # initialize Basis
+        from . import basis
+        Basis = basis.Basis(config, State, verbose=verbose)
+    
     
     # Compute checkpoints when the cost function will be evaluated 
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
@@ -605,17 +631,19 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         os.makedirs(path_save_control_vectors)
 
     # Restart mode
+    maxiter = config.INV.maxiter
     if config.INV.restart_4Dvar:
         tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
             ds = xr.open_dataset(tmp_files[-1])
             Xopt = ds.res.values
+            maxiter = max(config.INV.maxiter - len(tmp_files), 0)
             ds.close()
         else:
             Xopt = var.Xb*0
             
-    if not (config.INV.restart_4Dvar and config.INV.maxiter==0):
+    if not (config.INV.restart_4Dvar and maxiter==0):
         print('\n*** Minimization ***\n')
         ###################
         # Minimization    #
@@ -636,10 +664,10 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
             options['disp'] = True
         else:
             options['disp'] = False
-        options['maxiter'] = config.INV.maxiter
+        options['maxiter'] = maxiter
         if config.INV.gtol is not None:
-            _ = var.cost(Xopt)
-            g0 = var.grad(Xopt)
+            _ = var.cost(Xopt*0)
+            g0 = var.grad(Xopt*0)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
             
@@ -814,7 +842,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
         else:
             Xopt = var.Xb*0
             
-    if not (config.INV.restart_4Dvar and config.INV.maxiter==0):
+    if not (config.INV.restart_4Dvar and maxiter==0):
         print('\n*** Minimization ***\n')
         ###################
         # Minimization    #
@@ -834,7 +862,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
             options['disp'] = True
         else:
             options['disp'] = False
-        options['maxiter'] = config.INV.maxiter
+        options['maxiter'] = maxiter
         if config.INV.gtol is not None:
             _ = var.cost(Xopt)
             g0 = var.grad(Xopt)
@@ -933,9 +961,9 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
 
 
 
-def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :  
-
-    from . import mod, state, obs, obsop, bc, basis
+def Inv_4Dvar_parallel(config, State=None) :  
+    
+    from . import state
     from .tools import gaspari_cohn
     from multiprocessing import Process
     from scipy.interpolate import griddata
@@ -1021,22 +1049,9 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
                     os.makedirs(_config.EXP.path_save)
                 # initialize State 
                 _State = state.State(_config, verbose=0)
-                list_State[i].append(_State)
-                # initialize Model operator 
-                _Model = mod.Model(_config, _State, verbose=0)
-                # initialize Bc 
-                _Bc = bc.Bc(_config, verbose=0)
-                # initialize Obs
-                if dict_obs is not None:
-                    _dict_obs = obs._new_dict_obs(dict_obs, _config.EXP.tmp_DA_path, date_min=date0, date_max=date1)
-                else:
-                    _dict_obs = obs.Obs(_config, _State)
-                # initialize Obsop
-                _Obsop = obsop.Obsop(_config, _State, _dict_obs, _Model, verbose=0)
-                # initialize Basis
-                _Basis = basis.Basis(config,_State, verbose=0)
+                list_State[i].append(_State)   
                 # create subprocess instance
-                p = Process(target=Inv_4Dvar, args=(_config, _State, _Model, _dict_obs, _Obsop, _Basis, _Bc, 0))
+                p = Process(target=Inv_4Dvar, args=(_config, _State, None, None, None, None, None, 0))
                 proc.append(p)
                 # Compute spatial window tappering for merging outputs after inversion
                 if i==0: # Only for first time window (useless to compute it for the others, because is identical)
@@ -1055,11 +1070,14 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
             lon1 = config.GRID.lon_min
         n_wy = 0
         lat1 = config.GRID.lat_min
-
+    
     # Run the subprocesses
     if 'JAX' in config.MOD.super: # Avoid preallocating GPU memory for multi JAX processes
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-        os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(proc),config.INV.nprocs))
+        if config.INV.JAX_mem_fraction is not None and config.INV.JAX_mem_fraction>0:
+            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
+        if len(proc)>0:
+            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(proc),config.INV.nprocs))
     old_stdout = sys.stdout # backup current stdout
     sys.stdout = open(os.devnull, "w") # prevent printoing outputs
     ip0 = 0 # First process index to start in parallel
@@ -1079,6 +1097,7 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
 
 
     # Merge output trajectories 
+    from . import mod
     from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
     import warnings
     warnings.filterwarnings('ignore')
@@ -1098,7 +1117,9 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
                 for j in range(len(list_lonlat)):
                     _State1 = list_State[i][j]
                     _ds1 = _State1.load_output(date)
-                    _var = interpolate_replace_nans(_ds1[name].values, kernel)
+                    _var = _ds1[name].values
+                    if np.any(np.isnan(_var)):
+                        _var = interpolate_replace_nans(_var, kernel)
                     _var_interp = griddata((_ds1.lon.values.ravel(),_ds1.lat.values.ravel()),_var.ravel(),
                                         (State.lon.ravel(),State.lat.ravel()), 
                                         method='linear').reshape(State.lon.shape)
@@ -1113,10 +1134,13 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
                     for j in range(len(list_lonlat)):
                         _State2 = list_State[i+1][j]
                         _ds2 = _State2.load_output(date)
-                        _var = interpolate_replace_nans(_ds2[name].values, kernel)
-                        _var_interp = griddata((_ds1.lon.values.ravel(),_ds1.lat.values.ravel()),_var.ravel(),
+                        _var = _ds2[name].values
+                        if np.any(np.isnan(_var)):
+                            _var = interpolate_replace_nans(_var, kernel)
+                        _var_interp = griddata((_ds2.lon.values.ravel(),_ds2.lat.values.ravel()),_var.ravel(),
                                             (State.lon.ravel(),State.lat.ravel()), 
                                             method='linear').reshape(State.lon.shape)
+                        ind = ~np.isnan(_var_interp)
                         _var2[ind] += (weights_space[j]*_var_interp/weights_space_sum)[ind]
                     if State.mask is not None and np.any(State.mask):
                         _var2[State.mask] = np.nan
@@ -1124,7 +1148,7 @@ def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :
                     W1 = (list_config[i][0].EXP.final_date - date).total_seconds()  / (24*3600*config.INV.time_window_size_proc * config.INV.time_overlap_frac)
                     W2 = (date - list_config[i+1][0].EXP.init_date).total_seconds() / (24*3600*config.INV.time_window_size_proc * config.INV.time_overlap_frac)
                     # Interpolation 
-                    State.setvar(W1*_var1 + W2*_var2, name)
+                    State.setvar((W1*_var1 + W2*_var2)/(W1 + W2), name)
                 else:
                     State.setvar(_var1, name)
                 # Save output

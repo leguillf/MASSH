@@ -664,6 +664,7 @@ class Basis_bmaux:
                     Q_tmp = 10**-10 # Not zero otherwise a ZeroDivisionError exception will be raised
                 else:
                     Q_tmp = np.nanmean(Q_tmp)
+                Q_tmp *= self.facQ
                 # Fill Q
                 _nwavet = 2*len(enst[iff])*ntheta
                 Q = np.concatenate((Q,Q_tmp*np.ones((_nwavet,))))

@@ -14,7 +14,7 @@ from scipy import signal
 import matplotlib.pylab as plt
 import glob 
 
-from .tools import detrendn,read_auxdata_mdt
+from .tools import detrendn,read_auxdata
 from .exp import Config
 
 def Obs(config, State, *args, **kwargs):
@@ -173,10 +173,16 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
     # MDT 
     if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:
-        finterpmdt = read_auxdata_mdt(obs_attr.path_mdt,obs_attr.name_var_mdt, lon_unit)
+        finterpmdt = read_auxdata(obs_attr.path_mdt,obs_attr.name_var_mdt, lon_unit)
     else:
         finterpmdt = None
     
+    # Error file
+    if obs_attr.path_err is not None:
+        finterperr = read_auxdata(obs_attr.path_err,obs_attr.name_var_err, lon_unit)
+    else:
+        finterperr = None
+        
     # Time loop
     count = 0
     for dt_curr in dt_list:
@@ -212,10 +218,18 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     else:
                         sign = -1
                     varobs[name].data = varobs[name].data + sign*mdt_on_obs
+                # Add synthetic noise to the data
+                if 'synthetic_noise' in obs_attr and obs_attr.synthetic_noise is not None:
+                    varobs[name].data = varobs[name].data + np.random.normal(0,obs_attr.synthetic_noise,varobs[name].size).reshape(varobs[name].shape) 
                 # Remove high values
                 if 'varmax' in obs_attr and obs_attr.varmax is not None:
                     varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
-
+                # Error
+                if finterperr is not None:
+                    err_on_obs = finterperr((lon,lat))
+                    varobs[name + '_err'] = varobs[name].copy()
+                    varobs[name + '_err'].data = err_on_obs
+                
             # Build netcdf
             coords = {obs_attr.name_time:_ds[obs_attr.name_time].values}
             coords[obs_attr.name_lon] = _ds[obs_attr.name_lon]
