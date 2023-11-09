@@ -13,7 +13,7 @@ import os
 import xarray as xr 
 import numpy as np 
 import pandas as pd 
-from datetime import timedelta
+from datetime import timedelta,datetime
 from src import grid as grid
 import jax.numpy as jnp 
 import jax.lax as lax
@@ -103,6 +103,8 @@ class Variational:
         else:
             X  = X0 - self.Xb
             Jb = 0
+        
+        print("New evaluation of the COST function : ")
     
         # Observational cost function evaluation
         Jo = 0.
@@ -111,11 +113,17 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
+
+            print(" - Checkpoint ",i)
+            t0=datetime.now()
             
             # 1. Misfit
             if self.H.is_obs(timestamp):
                 misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
+
+            print("    --> MISFIT : ",datetime.now()-t0)
+            t0=datetime.now()
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -123,9 +131,15 @@ class Variational:
             
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoints[i]) + '.nc'))
+            
+            print("    --> REDUCED BASIS : ",datetime.now()-t0)
+            t0=datetime.now()
 
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
+
+            print("    --> MODEL : ",datetime.now()-t0)
+            t0=datetime.now()
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
@@ -136,7 +150,8 @@ class Variational:
         J = 1/2 * (Jo + Jb)
         
         State.plot(title='State variables at the end of cost function evaluation')
-        State.plot(title='Parameters at the end of cost function evaluation',params=True)
+        ### TO DO : HOW TO PLOT THE PARAMETERS ### 
+        #State.plot(title='Parameters at the end of cost function evaluation',params=True)
         
         if self.save_minimization:
             self.J.append(J)
@@ -170,6 +185,8 @@ class Variational:
         if self.H.is_obs(timestamp):
             self.H.adj(timestamp,adState,self.R)
 
+        print("New evaluation of the GRAD function : ")
+
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
             
@@ -177,6 +194,9 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             
+            print(" - Checkpoint ",i)
+            t0=datetime.now()
+
             # Read model state
             State.load(os.path.join(self.tmp_DA_path,
                        'model_state_' + str(self.checkpoints[i]) + '.nc'))
@@ -184,13 +204,22 @@ class Variational:
             # 3. Run adjoint model 
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
             
+            print("    --> ADJOINT MODEL : ",datetime.now()-t0)
+            t0=datetime.now()
+
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
             
+            print("    --> REDUCED BASIS : ",datetime.now()-t0)
+            t0=datetime.now()
+
             # 1. Misfit 
             if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.R)
+
+            print("    --> MISFIT : ",datetime.now()-t0)
+            t0=datetime.now()
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -200,7 +229,9 @@ class Variational:
         
         adState.plot(title='adjoint variables at the end of gradient function evaluation')
         self.basis.operg(t/3600/24,adX,State=State)
-        State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
+
+        ### TO DO : HOW TO PLOT THE PARAMETERS ### 
+        #State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))

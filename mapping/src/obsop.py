@@ -558,12 +558,6 @@ class Obsop_interp_l3_geocur(Obsop_interp_l3):
             adState.setvar(adu, self.name_mod_var['U'])      
             adState.setvar(adv, self.name_mod_var['V'])      
 
-def unwrap_process_obs_step(Obsop,t,i,var_bc):
-    return Obsop.process_obs_step(t,i,var_bc)
-
-def func(Obsop,t,i): 
-    return t,i
-
 class Obsop_interp_l4(Obsop_interp):
 
     def __init__(self,config,State,dict_obs,Model):
