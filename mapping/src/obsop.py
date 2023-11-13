@@ -20,6 +20,7 @@ import jax.numpy as jnp
 from jax import jit
 import jax
 import datetime
+from datetime import datetime 
 from joblib import Parallel
 from joblib import delayed as jb_delayed
 jax.config.update("jax_enable_x64", True)
@@ -713,17 +714,28 @@ class Obsop_interp_l4(Obsop_interp):
         mode = 'w'
         for name in self.name_var_obs[t]:
 
+            t0 = datetime.now()
+
             # Get model state
             X = State.getvar(self.name_mod_var[name]).ravel() 
 
+            print("Get model state :",datetime.now()-t0)
+            t0 = datetime.now()
+
             # Project model state to obs space
             HX = +X
+
+            print("Project model state to obs space :",datetime.now()-t0)
+            t0 = datetime.now()
 
             # Compute misfit & errors
             _misfit = (HX-self.varobs[t][name])
             _inverr = 1/self.errobs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
+
+            print("Compute misfit & errors :",datetime.now()-t0)
+            t0 = datetime.now()
         
             # Save to netcdf
             dsout = xr.Dataset(
@@ -731,6 +743,10 @@ class Obsop_interp_l4(Obsop_interp):
                     "misfit": (("Nobs"), _inverr*_inverr*_misfit),
                     }
                     )
+            
+            print("Create netcdf :",datetime.now()-t0)
+            t0 = datetime.now()
+
             dsout.to_netcdf(
                 os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc"), 
                 mode=mode, 
@@ -739,8 +755,14 @@ class Obsop_interp_l4(Obsop_interp):
             dsout.close()
             mode = 'a'
 
+            print("Save to netcdf :",datetime.now()-t0)
+            t0 = datetime.now()
+
             # Concatenate
             misfit = np.concatenate((misfit,_inverr*_misfit))
+
+            print("Concatenate :",datetime.now()-t0)
+            t0 = datetime.now()
 
         return misfit
 
