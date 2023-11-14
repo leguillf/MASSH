@@ -112,10 +112,10 @@ class Variational:
             Jb = 0
         
         ### EVALUATING TIME OF CALL OF FUNCTIONS ###
-        print("New evaluation of the COST function : ")
-        time_misfit = []
-        time_basis = []
-        time_model = []
+        #print("New evaluation of the COST function : ")
+        #time_misfit = []
+        #time_basis = []
+        #time_model = []
     
         # Observational cost function evaluation
         Jo = 0.
@@ -133,27 +133,25 @@ class Variational:
                 Jo += misfit.dot(self.R.inv(misfit))
 
             # time call to the function #
-            time_misfit.append(datetime.now()-t0)
-            t0=datetime.now()
+            #time_misfit.append(datetime.now()-t0)
+            #t0=datetime.now()
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 self.basis.operg(t/3600/24, X, State=State)
             
             self.States[self.checkpoints[i]] = State
-            #State.save(os.path.join(self.tmp_DA_path,
-            #            'model_state_' + str(self.checkpoints[i]) + '.nc'))
-            
+
             # time call to the function #
-            time_basis.append(datetime.now()-t0)
-            t0=datetime.now()
+            #time_basis.append(datetime.now()-t0)
+            #t0=datetime.now()
 
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
 
             # time call to the function #
-            time_model.append(datetime.now()-t0)
-            t0=datetime.now()
+            #time_model.append(datetime.now()-t0)
+            #t0=datetime.now()
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
@@ -171,9 +169,9 @@ class Variational:
             self.J.append(J)
 
         ### DISPLAYING TIME OF CALL OF FUNCTIONS ###
-        print("   --> MISFIT :",sum(time_misfit,timedelta())/len(time_misfit))
-        print("   --> BASIS :",sum(time_basis,timedelta())/len(time_misfit))
-        print("   --> MODEL :",sum(time_model,timedelta())/len(time_misfit))
+        #print("   --> MISFIT :",sum(time_misfit,timedelta())/len(time_misfit))
+        #print("   --> BASIS :",sum(time_basis,timedelta())/len(time_misfit))
+        #print("   --> MODEL :",sum(time_model,timedelta())/len(time_misfit))
         
         return J
     
@@ -205,10 +203,10 @@ class Variational:
             self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
         ### EVALUATING TIME OF CALL OF FUNCTIONS ###
-        print("New evaluation of the GRAD function : ")
-        time_misfit = []
-        time_basis = []
-        time_model = []
+        #print("New evaluation of the GRAD function : ")
+        #time_misfit = []
+        #time_basis = []
+        #time_model = []
 
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
@@ -220,34 +218,30 @@ class Variational:
             
             t0=datetime.now()
 
-            # Read model state
-            #State.load(os.path.join(self.tmp_DA_path,
-            #           'model_state_' + str(self.checkpoints[i]) + '.nc'))
-
             State = self.States[self.checkpoints[i]]
             
             # 3. Run adjoint model 
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
             
             # time call to the function #
-            time_model.append(datetime.now()-t0)
-            t0=datetime.now()
+            #time_model.append(datetime.now()-t0)
+            #t0=datetime.now()
 
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
             
             # time call to the function #
-            time_basis.append(datetime.now()-t0)
-            t0=datetime.now()
+            #time_basis.append(datetime.now()-t0)
+            #t0=datetime.now()
 
             # 1. Misfit 
             if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
             # time call to the function #
-            time_misfit.append(datetime.now()-t0)
-            t0=datetime.now()
+            #time_misfit.append(datetime.now()-t0)
+            #t0=datetime.now()
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -265,9 +259,9 @@ class Variational:
             self.G.append(np.max(np.abs(g)))
 
         ### DISPLAYING TIME OF CALL OF FUNCTIONS ###
-        print("   --> ADJOINT MODEL :",sum(time_model,timedelta())/len(time_misfit))
-        print("   --> BASIS :",sum(time_basis,timedelta())/len(time_misfit))
-        print("   --> MISFIT :",sum(time_misfit,timedelta())/len(time_misfit))
+        #print("   --> ADJOINT MODEL :",sum(time_model,timedelta())/len(time_misfit))
+        #print("   --> BASIS :",sum(time_basis,timedelta())/len(time_misfit))
+        #print("   --> MISFIT :",sum(time_misfit,timedelta())/len(time_misfit))
         
 
         return g 
