@@ -20,6 +20,7 @@ import jax.lax as lax
 import jax
 from jax.lax import scan
 jax.config.update("jax_enable_x64", True)
+from sys import getsizeof
 
 
 class Cov :
@@ -87,11 +88,17 @@ class Variational:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
 
+        # Dictionnary to save misfits 
+        self.misfits = {}
+
+        # Dictionnary to save States (to avoid storing them with nc)
+        self.States = {}
         
     def cost(self,X0):
                 
         # Initial state
         State = self.State.copy()
+
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
@@ -122,9 +129,10 @@ class Variational:
             
             # 1. Misfit
             if self.H.is_obs(timestamp):
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
 
+            # time call to the function #
             time_misfit.append(datetime.now()-t0)
             t0=datetime.now()
             
@@ -132,21 +140,24 @@ class Variational:
             if self.checkpoints[i]%self.dtbasis==0:
                 self.basis.operg(t/3600/24, X, State=State)
             
-            State.save(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.checkpoints[i]) + '.nc'))
+            self.States[self.checkpoints[i]] = State
+            #State.save(os.path.join(self.tmp_DA_path,
+            #            'model_state_' + str(self.checkpoints[i]) + '.nc'))
             
+            # time call to the function #
             time_basis.append(datetime.now()-t0)
             t0=datetime.now()
 
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
 
+            # time call to the function #
             time_model.append(datetime.now()-t0)
             t0=datetime.now()
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
-            misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
+            misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
@@ -182,7 +193,7 @@ class Variational:
             gb = 0
             
         # Current trajectory
-        State = self.State.copy()
+        #State = self.State.copy()
         
         # Ajoint initialization   
         adState = self.State.copy(free=True)
@@ -191,7 +202,7 @@ class Variational:
         # Last timestamp
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
-            self.H.adj(timestamp,adState,self.R)
+            self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
         ### EVALUATING TIME OF CALL OF FUNCTIONS ###
         print("New evaluation of the GRAD function : ")
@@ -210,12 +221,15 @@ class Variational:
             t0=datetime.now()
 
             # Read model state
-            State.load(os.path.join(self.tmp_DA_path,
-                       'model_state_' + str(self.checkpoints[i]) + '.nc'))
+            #State.load(os.path.join(self.tmp_DA_path,
+            #           'model_state_' + str(self.checkpoints[i]) + '.nc'))
+
+            State = self.States[self.checkpoints[i]]
             
             # 3. Run adjoint model 
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
             
+            # time call to the function #
             time_model.append(datetime.now()-t0)
             t0=datetime.now()
 
@@ -223,13 +237,15 @@ class Variational:
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
             
+            # time call to the function #
             time_basis.append(datetime.now()-t0)
             t0=datetime.now()
 
             # 1. Misfit 
             if self.H.is_obs(timestamp):
-                self.H.adj(timestamp,adState,self.R)
+                self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
+            # time call to the function #
             time_misfit.append(datetime.now()-t0)
             t0=datetime.now()
 
