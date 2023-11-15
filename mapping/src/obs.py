@@ -71,7 +71,7 @@ def Obs(config, State, *args, **kwargs):
     dlon = np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
     dlat = np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
     bbox = [State.lon_min-2*dlon,State.lon_max+2*dlon,State.lat_min-2*dlat,State.lat_max+2*dlat]
-    
+
     # Compute output observation dictionnary
     dict_obs = {}
     assim_dates = []
@@ -95,7 +95,7 @@ def Obs(config, State, *args, **kwargs):
             try:
                 _ds = xr.open_mfdataset(path)
             except ValueError:
-                print('ValueError: opening with comnine==nested')
+                print('ValueError: opening with combine==nested')
                 files = glob.glob(path)
 
                 # Get time dimension to concatenate
@@ -265,7 +265,7 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
             ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_lon, ds[obs_attr.name_lon].data % 360))})
     elif np.sign(ds[obs_attr.name_lon].data.min())==1 and lon_unit=='-180_180':
         ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_lon, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
-    
+
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
     lat_obs = ds[obs_attr.name_lat]
@@ -306,9 +306,11 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
                 # Error variable
                 if obs_attr.name_err is not None and name in obs_attr.name_err:
                     varobs[name+'_err'] = (('y','x'), _ds[obs_attr.name_err[name]].data.squeeze())
+
             # Coords
             varobs[obs_attr.name_lon] = (('y','x'), lon_obs)
             varobs[obs_attr.name_lat] = (('y','x'), lat_obs)
+
             # Save to netcdf
             dsout = xr.Dataset(varobs)
             
@@ -319,6 +321,7 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
             dsout.close()
             _ds.close()
             del dsout,_ds
+
             # Add the path of the new nc file in the dictionnary
             if dt_curr in dict_obs:
                 dict_obs[dt_curr]['obs_name'].append(obs_name)
