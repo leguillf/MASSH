@@ -2242,6 +2242,12 @@ class Basis_it:
         
         self.nbasis = sum(self.n_params.values()) # total number of parameters in the reduced space
         self.nphys = sum(self.n_params_phys.values()) # total number of parameters in the physical space
+        self.nphystot = 0 # total number of parameters in the physical space (for printing reduced order)
+        for param in self.n_params_phys.keys():
+            if param == "itg":
+                self.nphystot += self.n_params_phys[param] 
+            else : 
+                self.nphystot += self.n_params_phys[param]*time.size
 
         interval = 0 ; interval_phys = 0 
         self.slice_params = {} # dictionary with the slices of each of the parameters in the reduced space
@@ -2250,8 +2256,9 @@ class Basis_it:
             self.slice_params[name]=slice(interval,interval+self.n_params[name])
             self.slice_params_phys[name]=slice(interval_phys,interval_phys+self.n_params_phys[name])
             interval += self.n_params[name]; interval_phys += self.n_params_phys[name]
-            
-        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\nreduced factor: {int(time.size * self.nphys/self.nbasis)}')
+
+        # PRINTING REDUCED ORDER : #     
+        print(f'reduced order: {self.nphystot} --> {self.nbasis}\nreduced factor: {int(self.nphystot/self.nbasis)}')
     
         if return_q :
             if None not in [self.sigma_B_He, self.sigma_B_bc, self.sigma_B_itg]:
