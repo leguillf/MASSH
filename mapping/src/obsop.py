@@ -709,7 +709,7 @@ class Obsop_interp_l4(Obsop_interp):
     def misfit(self,t,State):
 
         '''
-        Returns the sum of two decimal numbers in binary digits.
+        Computes the misfit.
 
                 Parameters:
                         t (datetime): time stamp to compute misfit from 

@@ -78,6 +78,12 @@ class Variational:
         
         # For incremental 4Dvar only
         self.X0 = self.Xb*0
+
+        # Dictionnary to save misfits 
+        self.misfits = {}
+
+        # Dictionnary to save States (to avoid storing them with nc)
+        self.States = {}
         
         # Grad test
         if config.INV.compute_test:
@@ -88,11 +94,6 @@ class Variational:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
 
-        # Dictionnary to save misfits 
-        self.misfits = {}
-
-        # Dictionnary to save States (to avoid storing them with nc)
-        self.States = {}
         
     def cost(self,X0):
                 
@@ -125,7 +126,7 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
 
-            t0=datetime.now()
+            #t0=datetime.now()
             
             # 1. Misfit
             if self.H.is_obs(timestamp):
@@ -191,7 +192,7 @@ class Variational:
             gb = 0
             
         # Current trajectory
-        #State = self.State.copy()
+        State = self.State.copy()
         
         # Ajoint initialization   
         adState = self.State.copy(free=True)
@@ -216,7 +217,7 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
             
             
-            t0=datetime.now()
+            #t0=datetime.now()
 
             State = self.States[self.checkpoints[i]]
             
@@ -388,7 +389,7 @@ def grad_test(J, G, X):
     for p in range(10):
         lambd = 10**(-p)
         test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))
-        
+        print(lambd*Gh)
         print(f'{lambd:.1E} , {test:.2E}')
 
 def plot_grad_test(L) :

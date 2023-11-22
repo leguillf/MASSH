@@ -1098,6 +1098,8 @@ BASIS_IT = dict(
 
     D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
 
+    T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
+
     facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
 
     facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided

@@ -832,10 +832,14 @@ class Swm:
 
         params = X1[self.nstates:]
 
+        #print("shape He : ",self.shape_params['He'])
+        #print("size param : ",params.size)
+        #print("slice He : ",self.slice_params['He'])
+
         # - Equivalent height - #
         if 'He' in self.name_params:
             He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
-        else : 
+        else :
             He = self.Heb # value of He by default 
 
         # - ITG : Internal Tide Generation - # 

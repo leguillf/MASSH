@@ -2175,6 +2175,7 @@ class Basis_it:
         self.T_bc = config.BASIS.T_bc
         # for itg (internal tide generation)
         self.D_itg = config.BASIS.D_itg
+        self.T_itg = config.BASIS.T_itg
         self.reduced_basis_itg = config.BASIS.reduced_basis_itg
         
         self.sigma_B_He = config.BASIS.sigma_B_He
@@ -2235,6 +2236,8 @@ class Basis_it:
                 self.shape_params["hbcE"], self.shape_params["hbcW"], self.shape_params_phys["hbcE"], self.shape_params_phys["hbcW"] = self.set_hbcy(time, LAT_MIN, LAT_MAX, TIME_MIN, TIME_MAX)
 
             if name == "itg": 
+                #self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
+                ### UNCOMMENT FOR ITG INDEPENDANT ON TIME ###
                 self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX)
         
         self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) # dictionary with the number of each of the parameters in reduced space 
@@ -2445,6 +2448,65 @@ class Basis_it:
 
         return shapehbcE, shapehbcW, shapehbcE_phys, shapehbcW_phys
     
+    '''
+    ### VERSION OF ITG DEPENDING ON TIME ### 
+    def set_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
+                    
+        # coordinates in space
+        ENSLAT1 = np.arange(
+            LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
+        ENSLAT_itg = []
+        ENSLON_itg = []
+        for I in range(len(ENSLAT1)):
+            ENSLON1 = np.mod(
+                np.arange(
+                    LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+                360)
+            ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+            ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
+        self.ENSLAT_itg = ENSLAT_itg
+        self.ENSLON_itg = ENSLON_itg
+        
+        # coordinates in time
+        ENST_itg = np.arange(-self.T_itg*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_itg/self.facnlt , self.T_itg/self.facnlt)
+        
+        
+        # Gaussian functions in space
+        itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
+        for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
+            iobs = np.where(
+                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
+                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg)
+                    )[0]
+            xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+            yy = (self.lat1d[iobs] - lat0) / self.km2deg
+            
+            itg_xy_gauss[i,iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
+
+        itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
+        
+        # Gaussian functions in time
+        itg_t_gauss = np.zeros((ENST_itg.size,time.size))
+        for i,time0 in enumerate(ENST_itg):
+            iobs = np.where(abs(time-time0) < self.T_itg)
+            itg_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_itg)
+        
+        self.itg_xy_gauss = itg_xy_gauss
+        self.itg_t_gauss = itg_t_gauss
+
+        shapeitg = [2,ENST_itg.size,ENSLAT_itg.size]
+        shapeitg_phys = (2,self.ny,self.nx)
+
+        print('nitg:',np.prod(shapeitg))
+
+        return shapeitg, shapeitg_phys
+    '''
+
+    
+    ### VERSION OF ITG INDEPENDANT ON TIME ### 
     def set_itg(self,LAT_MIN, LAT_MAX, LON_MIN, LON_MAX):
 
         if not self.reduced_basis_itg :
@@ -2497,7 +2559,8 @@ class Basis_it:
         print('nitg:',np.prod(shapeitg))
 
         return shapeitg, shapeitg_phys
-        
+    
+
     def operg(self,t,X,State=None):
 
         indt = np.argmin(np.abs(self.time-t))   
@@ -2513,6 +2576,11 @@ class Basis_it:
                 phi[self.slice_params_phys[name]] = np.tensordot(
                                                         np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.bc_gauss[name],(-1,0)),
                                                         self.bc_t_gauss[:,indt],(-2,0)).flatten()
+            #if name == "itg":
+            #    phi[self.slice_params_phys[name]] = np.tensordot(
+            #                                            np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)),
+            #                                            self.itg_t_gauss[:,indt],(1,0)).flatten()
+            ### UNCOMMENT FOR ITG INDEPENDANT ON TIME ###
             if name == "itg": 
                 if not self.reduced_basis_itg : 
                     phi[self.slice_params_phys[name]] = X[self.slice_params[name]].reshape(self.shape_params[name]).flatten()
@@ -2564,6 +2632,10 @@ class Basis_it:
             if name in ["hbcS","hbcN","hbcW","hbcE"]:
                 adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
                                                             self.bc_gauss[name],(-2,-1)).flatten()
+            #if name == "itg":
+            #    adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],
+            #                                                self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
+            ### UNCOMMENT FOR ITG INDEPENDANT ON TIME ###
             if name == "itg":
                 if not self.reduced_basis_itg :
                     adX[self.slice_params[name]] = param[name].flatten()
