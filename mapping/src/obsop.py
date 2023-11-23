@@ -599,8 +599,9 @@ class Obsop_interp_l4(Obsop_interp):
 
         self.name_H += f'_L4_{config.OBSOP.interp_method}'
 
-        self.n_workers = config.EXP.n_workers 
+        self.n_workers = config.EXP.n_workers
 
+    
     def process_obs(self, var_bc=None):
 
         # Concatenate obs from different sensors
@@ -644,11 +645,11 @@ class Obsop_interp_l4(Obsop_interp):
                             err = sat_info['sigma_noise'] * np.ones_like(var)
                         else:
                             err = np.ones_like(var)                        
-                        if name in lon_obs:
-                            var_obs[t][name] = np.concatenate((var_obs[name],var))
-                            err_obs[t][name] = np.concatenate((err_obs[name],err))
-                            lon_obs[t][name] = np.concatenate((lon_obs[name],lon))
-                            lat_obs[t][name] = np.concatenate((lat_obs[name],lat))
+                        if name in lon_obs[t]:
+                            var_obs[t][name] = np.concatenate((var_obs[t][name],var))
+                            err_obs[t][name] = np.concatenate((err_obs[t][name],err))
+                            lon_obs[t][name] = np.concatenate((lon_obs[t][name],lon))
+                            lat_obs[t][name] = np.concatenate((lat_obs[t][name],lat))
                         else:
                             var_obs[t][name] = +var
                             err_obs[t][name] = +err

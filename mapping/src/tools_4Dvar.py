@@ -507,6 +507,8 @@ def grad_test(J, G, X):
     JX = J(X)
     GX = G(X)
     Gh = h.dot(np.where(np.isnan(GX),0,GX))
+    #print("GX : ",GX)
+    #print("Gh : ",Gh)
     x=[]
     y=[]
     z=[]
@@ -516,11 +518,15 @@ def grad_test(J, G, X):
         x.append(J(X+lambd*h) - JX)
         y.append((lambd*Gh))
         z.append(np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh)))
-        print(lambd*Gh)
         print(f'{lambd:.1E} , {test:.2E}')
+    print("J(X+lambd*h) - JX",x)
+    print("lambd*Gh",y)
+    print("TOT",z)
     plt.plot(x,label="J(X+lambd*h) - JX")
     plt.plot(y,label="lambd*Gh")
     plt.plot(z,label="TOT")
+    plt.yscale("log") 
+    plt.legend()
     plt.show()
     
 
