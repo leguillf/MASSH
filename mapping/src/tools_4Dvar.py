@@ -21,6 +21,7 @@ import jax
 from jax.lax import scan
 jax.config.update("jax_enable_x64", True)
 from sys import getsizeof
+import matplotlib.pyplot as plt 
 
 
 class Cov :
@@ -94,7 +95,126 @@ class Variational:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
 
+    def cost(self,X0):
+                
+        # Initial state
+        State = self.State.copy()
+        # Background cost function evaluation 
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                Jb = np.dot(X0,self.B.inv(X0)) # cost of background term
+        else:
+            X  = X0 - self.Xb
+            Jb = 0
+    
+        # Observational cost function evaluation
+        Jo = 0.
+        for i in range(len(self.checkpoints)-1):
+            
+            timestamp = self.M.timestamps[self.checkpoints[i]]
+            t = self.M.T[self.checkpoints[i]]
+            nstep = self.checkpoints[i+1] - self.checkpoints[i]
+            
+            # 1. Misfit
+            if self.H.is_obs(timestamp):
+                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                Jo += misfit.dot(self.R.inv(misfit))
+            
+            # 2. Reduced basis
+            if self.checkpoints[i]%self.dtbasis==0:
+                self.basis.operg(t/3600/24, X, State=State)
+            
+            State.save(os.path.join(self.tmp_DA_path,
+                        'model_state_' + str(self.checkpoints[i]) + '.nc'))
+
+            # 3. Run forward model
+            self.M.step(t=t,State=State,nstep=nstep)
+
+        timestamp = self.M.timestamps[self.checkpoints[-1]]
+        if self.H.is_obs(timestamp):
+            misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
+            Jo += misfit.dot(self.R.inv(misfit))  
         
+        # Cost function 
+        J = 1/2 * (Jo + Jb)
+        
+        State.plot(title='State variables at the end of cost function evaluation')
+        #State.plot(title='Parameters at the end of cost function evaluation',params=True)
+        
+        if self.save_minimization:
+            self.J.append(J)
+
+        return J
+    
+    def grad(self,X0): 
+                
+        X = +X0 
+        
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                gb = X0      # gradient of background term
+            else:
+                X  = X0 + self.Xb
+                gb = self.B.inv(X0) # gradient of background term
+        else:
+            X  = X0 + self.Xb
+            gb = 0
+            
+        # Current trajectory
+        State = self.State.copy()
+        
+        # Ajoint initialization   
+        adState = self.State.copy(free=True)
+        adX = X*0
+
+        # Last timestamp
+        timestamp = self.M.timestamps[self.checkpoints[-1]]
+        if self.H.is_obs(timestamp):
+            self.H.adj(timestamp,adState,self.R)
+
+        # Time loop
+        for i in reversed(range(0,len(self.checkpoints)-1)):
+            
+            nstep = self.checkpoints[i+1] - self.checkpoints[i]
+            timestamp = self.M.timestamps[self.checkpoints[i]]
+            t = self.M.T[self.checkpoints[i]]
+            
+            # Read model state
+            State.load(os.path.join(self.tmp_DA_path,
+                       'model_state_' + str(self.checkpoints[i]) + '.nc'))
+            
+            # 3. Run adjoint model 
+            self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
+            
+            # 2. Reduced basis
+            if self.checkpoints[i]%self.dtbasis==0:
+                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
+            
+            # 1. Misfit 
+            if self.H.is_obs(timestamp):
+                self.H.adj(timestamp,adState,self.R)
+
+        if self.prec :
+            adX = np.transpose(self.B.sqr(adX)) 
+        
+        g = adX + gb  # total gradient
+
+        
+        adState.plot(title='adjoint variables at the end of gradient function evaluation')
+        self.basis.operg(t/3600/24,adX,State=State)
+        #State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
+        
+        if self.save_minimization:
+            self.G.append(np.max(np.abs(g)))
+
+        return g 
+
+    """    
     def cost(self,X0):
                 
         # Initial state
@@ -266,6 +386,7 @@ class Variational:
         
 
         return g 
+    """
 
 class Variational_jax:
     
@@ -386,11 +507,22 @@ def grad_test(J, G, X):
     JX = J(X)
     GX = G(X)
     Gh = h.dot(np.where(np.isnan(GX),0,GX))
+    x=[]
+    y=[]
+    z=[]
     for p in range(10):
         lambd = 10**(-p)
         test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))
+        x.append(J(X+lambd*h) - JX)
+        y.append((lambd*Gh))
+        z.append(np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh)))
         print(lambd*Gh)
         print(f'{lambd:.1E} , {test:.2E}')
+    plt.plot(x,label="J(X+lambd*h) - JX")
+    plt.plot(y,label="lambd*Gh")
+    plt.plot(z,label="TOT")
+    plt.show()
+    
 
 def plot_grad_test(L) :
     '''

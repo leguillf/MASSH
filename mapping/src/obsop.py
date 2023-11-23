@@ -708,6 +708,70 @@ class Obsop_interp_l4(Obsop_interp):
 
     def misfit(self,t,State):
 
+        # Initialization
+        misfit = np.array([])
+
+        mode = 'w'
+        for name in self.name_var_obs[t]:
+
+            # Get model state
+            X = State.getvar(self.name_mod_var[name]).ravel() 
+
+            # Project model state to obs space
+            HX = +X
+
+            # Compute misfit & errors
+            _misfit = (HX-self.varobs[t][name])
+            _inverr = 1/self.errobs[t][name]
+            _misfit[np.isnan(_misfit)] = 0
+            _inverr[np.isnan(_inverr)] = 0
+        
+            # Save to netcdf
+            dsout = xr.Dataset(
+                    {
+                    "misfit": (("Nobs"), _inverr*_inverr*_misfit),
+                    }
+                    )
+            dsout.to_netcdf(
+                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc"), 
+                mode=mode, 
+                group=name
+                )
+            dsout.close()
+            mode = 'a'
+
+            # Concatenate
+            misfit = np.concatenate((misfit,_inverr*_misfit))
+
+        return misfit
+
+    def adj(self, t, adState, R):
+
+        for name in self.name_var_obs[t]:
+
+            # Read misfit
+            ds = xr.open_dataset(os.path.join(
+                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc")), 
+                group=name)
+            misfit = ds['misfit'].values
+            ds.close()
+            del ds
+
+            # Apply R operator
+            misfit = R.inv(misfit)
+
+            # Read adjoint variable
+            advar = adState.getvar(self.name_mod_var[name])
+
+            # Compute adjoint operation of y = Hx
+            adX = +misfit
+
+            # Update adjoint variable
+            adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])
+    
+    """
+    def misfit(self,t,State):
+
         '''
         Computes the misfit.
 
@@ -754,7 +818,8 @@ class Obsop_interp_l4(Obsop_interp):
             adX = +misfit
 
             # Update adjoint variable
-            adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])      
+            adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])
+    """
 
 
 ###############################################################################
