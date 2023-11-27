@@ -68,6 +68,7 @@ class Variational:
         
         # Wavelet reduced basis
         self.dtbasis = int(config.INV.timestep_checkpoint.total_seconds()//M.dt)
+        print("dtbasis : ",self.dtbasis)
         self.basis = Basis 
         
         # Save cost function and its gradient at each iteration 
@@ -502,6 +503,7 @@ class Variational_jax:
     
     
 def grad_test(J, G, X):
+    np.random.seed(1306)
     h = np.random.random(X.size)
     h /= np.linalg.norm(h)
     JX = J(X)
@@ -515,7 +517,7 @@ def grad_test(J, G, X):
     for p in range(10):
         lambd = 10**(-p)
         test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))
-        x.append(J(X+lambd*h) - JX)
+        x.append(np.abs(J(X+lambd*h) - JX))
         y.append((lambd*Gh))
         z.append(np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh)))
         print(f'{lambd:.1E} , {test:.2E}')

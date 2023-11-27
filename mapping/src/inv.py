@@ -541,17 +541,20 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     time_checkpoints = np.asarray(time_checkpoints)
     print(f'--> {checkpoints.size} checkpoints to evaluate the cost function')
 
+    print("checkpoints : ",checkpoints)
+
     # Boundary conditions
     if Bc is not None:
         var_bc = Bc.interp(time_checkpoints)
         Model.set_bc(t_checkpoints,var_bc)
-    
+
     # Observations operator 
     if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
         time_obs = [np.datetime64(date) for date in Obsop.date_obs]
         var_bc = Bc.interp(time_obs)
     else:
         var_bc = None
+
     Obsop.process_obs(var_bc)
     
     # Initial model state
