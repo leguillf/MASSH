@@ -191,10 +191,15 @@ class Variational:
             
             # 3. Run adjoint model 
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
+
+            #plt.plot(adState.params["itg"].reshape((13122,)))
+            #plt.show()
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
+                #plt.plot(self.basis.operg_transpose(t=t/3600/24,adState=adState))
+                #plt.show()
             
             # 1. Misfit 
             if self.H.is_obs(timestamp):
