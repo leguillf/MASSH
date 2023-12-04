@@ -727,7 +727,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
             if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                State0.save_output(date,name_var=Model.var_to_save) # Save output
+                Model.save_output(State0,date,name_var=Model.var_to_save) # Save output
                 State0.plot(date)
 
             # Forward propagation
@@ -957,9 +957,6 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
     del State, State0, Xa, dict_obs, B, R
     gc.collect()
     print()
-
-
-
 
 def Inv_4Dvar_parallel(config, State=None) :  
     

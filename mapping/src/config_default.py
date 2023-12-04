@@ -296,7 +296,7 @@ MOD_QG1L_NP = dict(
 
 MOD_QG1L_JAX = dict(
 
-    name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc.)
+    name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc. and/or ageostrophic velocities U, V)
 
     name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
 
@@ -305,6 +305,8 @@ MOD_QG1L_JAX = dict(
     var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
     upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
+
+    advect_pv = True,
 
     advect_tracer = False, # Whether or not to advect tracers. If True, need to add tracer variables (e.g. SST) in *name_var*
 
@@ -889,7 +891,9 @@ BASIS_BM = dict(
 
 )
 
-BASIS_GEOCUR = dict(
+BASIS_CURRENT = dict(
+
+    mode = 'geo', # 'geo' or 'ageo'
 
     name_mod_u = None, # Name of the related model variable 
 

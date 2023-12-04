@@ -445,31 +445,33 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
     
     # Initialize weight map
     bc_weight = np.zeros(lon2d.size)
-    #
     keys = np.array(list(dist_mx.keys()))
-    ind_mod = keys[:, 0]
-    dist = np.array(list(dist_mx.values()))
-    dist = np.maximum(dist-0.5*dist_threshold, 0)
-    # Dataframe initialized without nan values in var
-    df = pd.DataFrame({'ind_mod': ind_mod,
-                       'dist': dist,
-                       'weight':np.ones_like(dist)})
-    # Remove external values in the boundary pixels
-    ind_dist = (df.dist == 0)
-    df = df[np.logical_or(ind_dist,
-                          np.isin(df.ind_mod,
-                                  df[ind_dist].ind_mod,
-                                  invert=True))]
-    # Compute tapering
-    df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*dist_scale)**2)))
-    # Nudge values out of pixels
-    df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
-    # Compute weight average and save it
-    df['tapering'] = df['tapering']**10
-    wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
-    dfg = df.groupby('ind_mod')
-    weights = dfg['weight'].apply(wa)
-    bc_weight[weights.index] = np.array(weights)
+
+    if len(keys.shape)>1:
+        ind_mod = keys[:, 0]
+        dist = np.array(list(dist_mx.values()))
+        dist = np.maximum(dist-0.5*dist_threshold, 0)
+        # Dataframe initialized without nan values in var
+        df = pd.DataFrame({'ind_mod': ind_mod,
+                        'dist': dist,
+                        'weight':np.ones_like(dist)})
+        # Remove external values in the boundary pixels
+        ind_dist = (df.dist == 0)
+        df = df[np.logical_or(ind_dist,
+                            np.isin(df.ind_mod,
+                                    df[ind_dist].ind_mod,
+                                    invert=True))]
+        # Compute tapering
+        df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*dist_scale)**2)))
+        # Nudge values out of pixels
+        df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
+        # Compute weight average and save it
+        df['tapering'] = df['tapering']**10
+        wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
+        dfg = df.groupby('ind_mod')
+        weights = dfg['weight'].apply(wa)
+        bc_weight[weights.index] = np.array(weights)
+    
     bc_weight = bc_weight.reshape(lon2d.shape)
     
     return bc_weight
