@@ -41,7 +41,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
         return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
     
     elif config.INV.super=='INV_4DVAR_PARALLEL':
-        return Inv_4Dvar_parallel(config, State=State, dict_obs=dict_obs)
+        return Inv_4Dvar_parallel(config, State=State)
 
     else:
         sys.exit(config.INV.super + ' not implemented yet')
@@ -852,15 +852,38 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
 #                        4-Dimensional Variational                            #
 ###############################################################################
 
-def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
+def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
 
     
     '''
     Run a 4Dvar analysis
     '''
 
-    # For JAX library
+    # For GPU
     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+
+    # Module initializations
+    if Model is None:
+        # initialize Model operator 
+        from . import mod
+        Model = mod.Model(config, State, verbose=verbose)
+    if Bc is None:
+        # initialize Bc 
+        from . import bc
+        Bc = bc.Bc(config, verbose=verbose)
+    if dict_obs is None:
+        # initialize Obs
+        from . import obs
+        dict_obs = obs.Obs(config, State)
+    if Obsop is None:
+        # initialize Obsop
+        from . import obsop
+        Obsop = obsop.Obsop(config, State, dict_obs, Model, verbose=verbose)
+    if Basis is None:
+        # initialize Basis
+        from . import basis
+        Basis = basis.Basis(config, State, verbose=verbose)
+    
     
     # Compute checkpoints when the cost function will be evaluated 
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
@@ -943,17 +966,19 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         os.makedirs(path_save_control_vectors)
 
     # Restart mode
+    maxiter = config.INV.maxiter
     if config.INV.restart_4Dvar:
         tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
             ds = xr.open_dataset(tmp_files[-1])
             Xopt = ds.res.values
+            maxiter = max(config.INV.maxiter - len(tmp_files), 0)
             ds.close()
         else:
             Xopt = var.Xb*0
             
-    if not (config.INV.restart_4Dvar and config.INV.maxiter==0):
+    if not (config.INV.restart_4Dvar and maxiter==0):
         print('\n*** Minimization ***\n')
         ###################
         # Minimization    #
@@ -961,11 +986,12 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
 
         # Callback function called at every minimization iterations
         def callback(XX):
-            now = datetime.now()
-            current_time = now.strftime("%Y-%m-%d_%H%M%S")
-            ds = xr.Dataset({'res':(('x',),XX)})
-            ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
-            ds.close()
+            if config.INV.save_minimization:
+                now = datetime.now()
+                current_time = now.strftime("%Y-%m-%d_%H%M%S")
+                ds = xr.Dataset({'res':(('x',),XX)})
+                ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
+                ds.close()
                 
         # Minimization options
         options = {}
@@ -973,10 +999,10 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
             options['disp'] = True
         else:
             options['disp'] = False
-        options['maxiter'] = config.INV.maxiter
+        options['maxiter'] = maxiter
         if config.INV.gtol is not None:
-            _ = var.cost(Xopt)
-            g0 = var.grad(Xopt)
+            _ = var.cost(Xopt*0)
+            g0 = var.grad(Xopt*0)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
             
@@ -1036,7 +1062,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
             if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+                Model.save_output(State0,date,name_var=Model.var_to_save) # Save output
                 State0.plot(date)
 
             # Forward propagation
@@ -1047,118 +1073,206 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+        State0.save_output(date,name_var=Model.var_to_save) # Save output
     
         
     del State, State0, Xa, dict_obs, B, R
     gc.collect()
     print()
 
-def Inv_4Dvar_parallel(config, State=None, dict_obs=None) :   
-
-    from . import mod, state, obs, obsop, bc, basis
+def Inv_4Dvar_parallel(config, State=None) :  
+    
+    from . import state
+    from .tools import gaspari_cohn
     from multiprocessing import Process
-
-    # Avoid preallocating GPU memory for multi JAX processes
-    os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/config.INV.nprocs)
+    from scipy.interpolate import griddata
 
     # Split full experimental time window in sub windows
     list_config = []
     list_State = []
+    weights_space = [] 
+    weights_space_sum = np.zeros((State.ny, State.nx))
     proc = []
+    list_date = []
+    list_lonlat = []
     iproc = 0
+    n_wt = 0 
+    n_wx = 0
+    n_wy = 0
+
     date1 = config.EXP.init_date
-    while iproc<config.INV.nprocs and date1<config.EXP.final_date:
-        # compute subwindow
-        date0 = config.EXP.init_date + iproc * config.INV.window_size_proc * (1-config.INV.overlap_frac)
-        delta_t = (date0 - config.EXP.init_date) %  config.EXP.saveoutput_time_step
-        date0 += delta_t
-        date1 = min(date0 + config.INV.window_size_proc, config.EXP.final_date)
-        if iproc==config.INV.nprocs-1 :
-            date1 = config.EXP.final_date
-        print(f'*** subwindow {iproc+1} from {date0} to {date1} ***')
-        # create config for the subwindow
-        _config = config.copy()
-        _config.EXP = config.EXP.copy()
-        _config.INV = config.INV.copy()
-        _config.EXP.init_date = date0
-        _config.EXP.final_date = date1
-        _config.EXP.tmp_DA_path += f'/subwindow_{iproc+1}'
-        _config.EXP.path_save += f'/subwindow_{iproc+1}'
-        if _config.INV.path_save_control_vectors is not None:
-            _config.INV.path_save_control_vectors += f'/subwindow_{iproc+1}' 
-        # append to list
-        list_config.append(_config)
-        iproc += 1
-        # create directories
-        if not os.path.exists(_config.EXP.tmp_DA_path):
-            os.makedirs(_config.EXP.tmp_DA_path)
-        if not os.path.exists(_config.EXP.path_save):
-            os.makedirs(_config.EXP.path_save)
-        # initialize State 
-        _State = state.State(_config, verbose=0)
-        list_State.append(_State)
-        # initialize Model operator 
-        _Model = mod.Model(_config, _State, verbose=0)
-        # initialize Bc 
-        _Bc = bc.Bc(_config, verbose=0)
-        # initialize Obs
-        if dict_obs is not None:
-            _dict_obs = obs._new_dict_obs(dict_obs, _config.EXP.tmp_DA_path, date_min=date0, date_max=date1)
+    lat1 = config.GRID.lat_min
+    lon1 = config.GRID.lon_min
+    i = -1
+    while date1<config.EXP.final_date:
+        list_config.append([])
+        list_State.append([])
+        i += 1
+        # compute subwindow time period
+        if config.INV.time_window_size_proc is not None:
+            time_delta = timedelta(days=config.INV.time_window_size_proc)
+            date0 = config.EXP.init_date + n_wt * time_delta * (1-config.INV.time_overlap_frac)
+            delta_t = (date0 - config.EXP.init_date) %  config.EXP.saveoutput_time_step
+            date0 += delta_t
+            date1 = min(date0 + time_delta, config.EXP.final_date)
+            n_wt += 1
         else:
-            _dict_obs = obs.Obs(_config, _State)
-        # initialize Obsop
-        _Obsop = obsop.Obsop(_config, _State, _dict_obs, _Model, verbose=0)
-        # initialize Basis
-        _Basis = basis.Basis(config,_State, verbose=0)
-        # create subprocess instance
-        p = Process(target=Inv_4Dvar, args=(_config, _State, _Model, _dict_obs, _Obsop, _Basis, _Bc, 0))
-        proc.append(p)
-        
+            date0 = config.EXP.init_date
+            date1 = config.EXP.final_date
+        list_date.append(date0 + (date1-date0)/2)
+
+        while lat1<config.GRID.lat_max:
+            # compute subwindow latitude borders
+            if config.INV.space_window_size_proc is not None:
+                lat0 = config.GRID.lat_min + n_wy * config.INV.space_window_size_proc * (1-config.INV.space_overlap_frac)
+                lat1 = min(lat0 + config.INV.space_window_size_proc, config.GRID.lat_max)
+                n_wy += 1
+            else:
+                lat0 = config.GRID.lat_min
+                lat1 = config.GRID.lat_max
+            while lon1<config.GRID.lon_max:
+                # compute subwindow longitude borders
+                if config.INV.space_window_size_proc is not None:
+                    lon0 = config.GRID.lon_min + n_wx * config.INV.space_window_size_proc * (1-config.INV.space_overlap_frac)
+                    lon1 = min(lon0 + config.INV.space_window_size_proc, config.GRID.lon_max)
+                    n_wx += 1
+                else:
+                    lon0 = config.GRID.lon_min
+                    lon1 = config.GRID.lon_max
+                if i==0:
+                    list_lonlat.append(((lon1+lon0)/2,(lat1+lat0)/2))
+                # create config for the subwindow
+                print(f'*** subwindow {iproc+1} from {date0} to {date1}, latitude from {lat0}° to {lat1}°, longitude from {lon0}° to {lon1}° ***')
+                iproc += 1
+                _config = config.copy()
+                _config.EXP = config.EXP.copy()
+                _config.GRID = config.GRID.copy()
+                _config.INV = config.INV.copy()
+                _config.EXP.init_date = date0
+                _config.EXP.final_date = date1
+                _config.GRID.lon_min = lon0
+                _config.GRID.lon_max = lon1
+                _config.GRID.lat_min = lat0
+                _config.GRID.lat_max = lat1
+                name_subwindow = f'{str(list_date[-1])[:10]}_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
+                _config.EXP.tmp_DA_path += f'/subwindow_{name_subwindow}'
+                _config.EXP.path_save += f'/subwindow_{name_subwindow}'
+                if _config.INV.path_save_control_vectors is not None:
+                    _config.INV.path_save_control_vectors += f'/subwindow_{name_subwindow}' 
+                # append to list
+                list_config[i].append(_config)
+                # create directories
+                if not os.path.exists(_config.EXP.tmp_DA_path):
+                    os.makedirs(_config.EXP.tmp_DA_path)
+                if not os.path.exists(_config.EXP.path_save):
+                    os.makedirs(_config.EXP.path_save)
+                # initialize State 
+                _State = state.State(_config, verbose=0)
+                list_State[i].append(_State)   
+                # create subprocess instance
+                p = Process(target=Inv_4Dvar, args=(_config, _State, None, None, None, None, None, 0))
+                proc.append(p)
+                # Compute spatial window tappering for merging outputs after inversion
+                if i==0: # Only for first time window (useless to compute it for the others, because is identical)
+                    winy = np.ones(_State.ny)
+                    winx = np.ones(_State.nx)
+                    winy[:int(_State.ny-_State.ny/2)] = gaspari_cohn(np.arange(0,_State.ny),_State.ny/2)[:int(_State.ny/2)][::-1]
+                    winx[:int(_State.nx-_State.nx/2)] = gaspari_cohn(np.arange(0,_State.nx),_State.nx/2)[:int(_State.nx/2)][::-1]
+                    winy[int(_State.ny/2):] = gaspari_cohn(np.arange(0,_State.ny),_State.ny/2)[:_State.ny-int(_State.ny/2)]
+                    winx[int(_State.nx/2):] = gaspari_cohn(np.arange(0,_State.nx),_State.nx/2)[:_State.nx-int(_State.nx/2)]
+                    _weights_space = winy[:,np.newaxis] * winx[np.newaxis,:]
+                    _weights_space_interp = griddata((_State.lon.ravel(),_State.lat.ravel()), _weights_space.ravel(), (State.lon.ravel(),State.lat.ravel()), method='linear').reshape(State.lon.shape)
+                    ind = ~np.isnan(_weights_space_interp)
+                    weights_space.append(_weights_space_interp)
+                    weights_space_sum[ind] += _weights_space_interp[ind]
+            n_wx = 0
+            lon1 = config.GRID.lon_min
+        n_wy = 0
+        lat1 = config.GRID.lat_min
+    
     # Run the subprocesses
+    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+    if config.INV.JAX_mem_fraction is not None and config.INV.JAX_mem_fraction>0:
+        os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
+    if len(proc)>0:
+        os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(proc),config.INV.nprocs))
     old_stdout = sys.stdout # backup current stdout
     sys.stdout = open(os.devnull, "w") # prevent printoing outputs
-    # start the processes
-    for p in proc:
-        p.start()
-    # join the processes
-    for p in proc:
-        p.join()
+    ip0 = 0 # First process index to start in parallel
+    ip1 = min(config.INV.nprocs, len(proc)) # Last process index to start in parallel
+    while ip0<len(proc):
+        # start the processes
+        for ip in range(ip0,ip1):
+            proc[ip].start()
+        # join the processes
+        for ip in range(ip0,ip1):
+            proc[ip].join()
+        ip0 = ip1
+        if ip1==len(proc):
+            ip1 += 1 # +1 to exit the loop
+        ip1 = min(ip1+config.INV.nprocs, len(proc))
     sys.stdout = old_stdout # reset old stdout
 
-    # Smooth output trajectories 
-    print('*** Smooth output trajectories ***')
+
+    # Merge output trajectories 
+    from . import mod
+    from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    print('*** Merge output trajectories ***')
+    Model = mod.Model(config, State, verbose=0)
+    Model.init(State)
     date = config.EXP.init_date
-    for i in range(len(list_config)-1):
-        config1 = list_config[i]
-        config2 = list_config[i+1]
-        State1 = list_State[i]
-        State2 = list_State[i+1]
-        while date<=config1.EXP.final_date:
-            ds1 = State1.load_output(date)
-            if date>=config2.EXP.init_date:
-                ds2 = State2.load_output(date)
-                # Weight coefficients
-                W1 = (config1.EXP.final_date - date) / (config.INV.window_size_proc * config.INV.overlap_frac)
-                W2 = (date - config2.EXP.init_date)  / (config.INV.window_size_proc * config.INV.overlap_frac)
-                # Interpolation 
-                for name in ds1.keys():
-                    State.setvar(W1*ds1[name].values + W2*ds2[name].values, name)
-            else:
-                for name in ds1.keys():
-                    State.setvar(ds1[name].values, name)
-            # Save output
-            State.save_output(date)
+    kernel = Gaussian2DKernel(x_stddev=1, y_stddev=1)  # Kernel to convolve output maps to replace NaN pixels close to the coast for interpolation
+    # Merge in time and space
+    for i in range(len(list_date)):
+        _config = list_config[i][0]
+        while date<=_config.EXP.final_date:
+            for name in State.var:
+                # Space smoothing for first time window
+                _var1 = np.zeros((State.ny, State.nx)) 
+                for j in range(len(list_lonlat)):
+                    _State1 = list_State[i][j]
+                    _ds1 = _State1.load_output(date)
+                    _var = _ds1[name].values
+                    if np.any(np.isnan(_var)):
+                        _var = interpolate_replace_nans(_var, kernel)
+                    _var_interp = griddata((_ds1.lon.values.ravel(),_ds1.lat.values.ravel()),_var.ravel(),
+                                        (State.lon.ravel(),State.lat.ravel()), 
+                                        method='linear').reshape(State.lon.shape)
+                    ind = ~np.isnan(_var_interp)
+                    _var1[ind] += (weights_space[j]*_var_interp/weights_space_sum)[ind]
+                if State.mask is not None and np.any(State.mask):
+                    _var1[State.mask] = np.nan
+                # Time smoothing (except last window)
+                if len(list_date)>1 and i<len(list_date)-1 and date>=list_config[i+1][0].EXP.init_date and config.INV.time_overlap_frac>0 and date>=list_config[i+1][0].EXP.init_date:
+                    # Space smoothing for second time window
+                    _var2 = np.zeros((State.ny, State.nx))
+                    for j in range(len(list_lonlat)):
+                        _State2 = list_State[i+1][j]
+                        _ds2 = _State2.load_output(date)
+                        _var = _ds2[name].values
+                        if np.any(np.isnan(_var)):
+                            _var = interpolate_replace_nans(_var, kernel)
+                        _var_interp = griddata((_ds2.lon.values.ravel(),_ds2.lat.values.ravel()),_var.ravel(),
+                                            (State.lon.ravel(),State.lat.ravel()), 
+                                            method='linear').reshape(State.lon.shape)
+                        ind = ~np.isnan(_var_interp)
+                        _var2[ind] += (weights_space[j]*_var_interp/weights_space_sum)[ind]
+                    if State.mask is not None and np.any(State.mask):
+                        _var2[State.mask] = np.nan
+                    # Weight coefficients
+                    W1 = (list_config[i][0].EXP.final_date - date).total_seconds()  / (24*3600*config.INV.time_window_size_proc * config.INV.time_overlap_frac)
+                    W2 = (date - list_config[i+1][0].EXP.init_date).total_seconds() / (24*3600*config.INV.time_window_size_proc * config.INV.time_overlap_frac)
+                    # Interpolation 
+                    State.setvar((W1*_var1 + W2*_var2)/(W1 + W2), name)
+                else:
+                    State.setvar(_var1, name)
+                # Save output
+                State.save_output(date,name_var=Model.var_to_save)
+                State.plot(date)
+
             date += config.EXP.saveoutput_time_step
-    # Last subwindow 
-    while date<=config2.EXP.final_date:
-        ds2 = State2.load_output(date)
-        for name in ds2.keys():
-            State.setvar(ds2[name].values, name)
-        State.save_output(date)
-        date += config.EXP.saveoutput_time_step
-
-            
-    return 
-
-      
+                    
+    return     
