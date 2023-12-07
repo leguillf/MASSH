@@ -27,6 +27,7 @@ from jax.lax import scan
 from functools import partial
 
 from . import  grid
+from . import switchvar
 
 from .exp import Config as Config
 
@@ -734,7 +735,14 @@ class Model_qg1l_jax(M):
             self.anomaly_from_bc = False
 
         # Tracer advection flag
+        self.advect_pv = config.MOD.advect_pv
         self.advect_tracer = config.MOD.advect_tracer
+
+        # Ageostrophic velocity flag
+        if 'U' in self.name_var and 'V' in self.name_var:
+            self.ageo_velocities = True
+        else:
+            self.ageo_velocities = False
 
        # Masked array for model initialization
         SSH0 = State.getvar(name_var=self.name_var['SSH'])
@@ -755,7 +763,9 @@ class Model_qg1l_jax(M):
                          bc_trac=config.MOD.bc_trac,
                          split_in_bins=config.MOD.split_in_bins,
                          lenght_bins=config.MOD.lenght_bins,
-                         facbin=config.MOD.facbin)
+                         facbin=config.MOD.facbin,
+                         advect_pv=self.advect_pv,
+                         ageo_velocities=self.ageo_velocities)
 
         # Model functions initialization
         self.qgm_step = self.qgm.step_jit
@@ -770,6 +780,24 @@ class Model_qg1l_jax(M):
             print('Adjoint test:')
             adjoint_test(self,State,nstep=100)
     
+    def save_output(self,State,present_date,name_var=None,t=None):
+        # Add geostrophic current to ageostrophic velocities
+        if self.ageo_velocities:
+            State0 = State.copy()
+            # Get ageostrophic velocites
+            ua = State0.getvar(name_var=self.name_var['U'])
+            va = State0.getvar(name_var=self.name_var['V'])
+            # Compute geostrophic current from ssh
+            ssh = State0.getvar(name_var=self.name_var['SSH'])
+            ug,vg = switchvar.ssh2uv(ssh,State0)
+            # Set total current
+            State0.setvar(ug+ua, name_var=self.name_var['U'])
+            State0.setvar(vg+va, name_var=self.name_var['V'])
+            State0.save_output(present_date,name_var)
+            State0.plot()
+        else:
+            State.save_output(present_date,name_var)
+
     def init(self, State, t0=0):
 
         if self.anomaly_from_bc:
@@ -782,7 +810,6 @@ class Model_qg1l_jax(M):
             for name in self.name_var: 
                 if t0 in self.bc[name]:
                      State.setvar(self.bc[name][t0], self.name_var[name])
-
 
     def set_bc(self,time_bc,var_bc):
 
@@ -826,7 +853,7 @@ class Model_qg1l_jax(M):
         Xb = self.bc['SSH'][t0]
         if self.advect_tracer:
             for name in self.name_var:
-                if name!='SSH':
+                if name!='SSH' and name in self.bc and len(self.bc[name].keys())>0:
                     if t1 in self.bc[name]: 
                         Cb = self.bc[name][t1]
                     else:
@@ -851,8 +878,15 @@ class Model_qg1l_jax(M):
         X0 = State.getvar(name_var=self.name_var['SSH'])
         if self.advect_tracer:
             X0 = X0[np.newaxis,:,:]
+            # Ageostrophic velocities
+            if self.ageo_velocities:
+                U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                V = State.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                X0 = np.append(X0, U, axis=0)
+                X0 = np.append(X0, V, axis=0)
+            # Tracers
             for name in self.name_var:
-                if name!='SSH':
+                if name not in ['SSH', 'U', 'V']:
                     C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
                     X0 = np.append(X0, C0, axis=0)
         
@@ -874,7 +908,7 @@ class Model_qg1l_jax(M):
                 State.setvar(X1[0], name_var=self.name_var['SSH'])
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
-                        Fc = +State.params[self.name_var[name]] # Forcing term for tracer
+                        Fc = +State.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
                         if name in self.forcing and t in self.forcing[name]:
                             Fc[1:-1,1:-1] += (self.forcing[name][t]*(3600*24))[1:-1,1:-1]
                         X1[i] += nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc)
@@ -900,8 +934,19 @@ class Model_qg1l_jax(M):
         if self.advect_tracer:
             dX0 = dX0[np.newaxis,:,:]
             X0 = X0[np.newaxis,:,:]
+            # Ageostrophic velocities
+            if self.ageo_velocities:
+                U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                V = State.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                dU = dState.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                dV = dState.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                X0 = np.append(X0, U, axis=0)
+                X0 = np.append(X0, V, axis=0)
+                dX0 = np.append(dX0, dU, axis=0)
+                dX0 = np.append(dX0, dV, axis=0)
+            # Tracers
             for name in self.name_var:
-                if name!='SSH':
+                if name not in ['SSH', 'U', 'V']:
                     dC0 = dState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
                     dX0 = np.append(dX0, dC0, axis=0)
                     C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
@@ -925,7 +970,7 @@ class Model_qg1l_jax(M):
                 dState.setvar(dX1[0], name_var=self.name_var['SSH'])
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
-                        dFc = dState.params[self.name_var[name]] # Forcing term for tracer
+                        dFc = dState.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
                         dX1[i] +=  nstep*self.dt/(3600*24) * dFc  * (1-self.Wbc)
                         dState.setvar(dX1[i], name_var=self.name_var[name])
             else:
@@ -949,8 +994,19 @@ class Model_qg1l_jax(M):
         if self.advect_tracer:
             adX0 = adSSH0[np.newaxis,:,:].astype('float64')
             X0 = SSH0[np.newaxis,:,:].astype('float64')
+            # Ageostrophic velocities
+            if self.ageo_velocities:
+                U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                V = State.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                adU = adState.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                adV = adState.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                X0 = np.append(X0, U, axis=0)
+                X0 = np.append(X0, V, axis=0)
+                adX0 = np.append(adX0, adU, axis=0)
+                adX0 = np.append(adX0, adV, axis=0)
+            # Tracers
             for name in self.name_var:
-                if name!='SSH':
+                if name not in ['SSH', 'U', 'V']:
                     adC0 = adState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
                     adX0 = np.append(adX0, adC0, axis=0)
                     C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
@@ -2314,7 +2370,6 @@ class Model_tracadv(M):
         for i,name in enumerate(self.name_var):
             adState.setvar(adc1[i], name_var=self.name_var[name])
 
-
 class Model_tracadv_ssh(M):
 
     def __init__(self,config,State):
@@ -2461,16 +2516,21 @@ class Model_tracadv_ssh(M):
                 sshb = np.zeros((self.ny,self.nx))
             else:
                 sshb = +self.bc['SSH'][t]
-            if self.upwind==1:
-                ssh[0,:] = sshb[0,:]
-                ssh[-1,:] = sshb[-1,:]
-                ssh[:,0] = sshb[:,0]
-                ssh[:,-1] = sshb[:,-1]
-            else:
-                ssh[:2,:] = sshb[:2,:]
-                ssh[-2:,:] = sshb[-2:,:]
-                ssh[:,:2] = sshb[:,:2]
-                ssh[:,-2:] = sshb[:,-2:]
+
+            ssh0 = +ssh
+            ssh = self.Wbc * sshb + (1 - self.Wbc) * ssh
+
+            if False:
+                if self.upwind==1:
+                    ssh[0,:] = sshb[0,:]
+                    ssh[-1,:] = sshb[-1,:]
+                    ssh[:,0] = sshb[:,0]
+                    ssh[:,-1] = sshb[:,-1]
+                else:
+                    ssh[:2,:] = sshb[:2,:]
+                    ssh[-2:,:] = sshb[-2:,:]
+                    ssh[:,:2] = sshb[:,:2]
+                    ssh[:,-2:] = sshb[:,-2:]
 
         return ssh
 
@@ -2480,8 +2540,15 @@ class Model_tracadv_ssh(M):
         i = 0
         for name in self.name_var:
             if name!='SSH':
-                if name in self.bc and t in self.bc[name]:
-                    cb[i] = self.bc[name][t]
+                if name in self.bc:
+                    if t in self.bc[name]: 
+                        cb[i] = self.bc[name][t]
+                    else:
+                        # Find closest time
+                        t_list = np.array(list(self.bc[name].keys()))
+                        idx_closest = np.argmin(np.abs(t_list-t))
+                        new_t = t_list[idx_closest]
+                        cb[i] = self.bc[name][new_t]
                     i += 1
         
         return cb
@@ -2604,36 +2671,31 @@ class Model_tracadv_ssh(M):
             c1 = c1.at[:,:,-1].set(
                 c0[:,:,-1] - (r1_E*(c0[:,:,-1]-c0[:,:,-2]) + r2_E*(cb[:,:,-1]-c0[:,:,-1])))
         else:
-            # BC value on borders
-            c1 = c1.at[:,0,:].set(cb[:,0,:])
-            c1 = c1.at[:,-1,:].set(cb[:,-1,:])
-            c1 = c1.at[:,:,0].set(cb[:,:,0])
-            c1 = c1.at[:,:,-1].set(cb[:,:,-1])
-            # OBC on inner pixels
-            r1_S = 1/2 * self.dt/self.dy[1,:] * (v[2,:]  + jnp.abs(v[2,:] ))
-            r2_S = 1/2 * self.dt/self.dy[1,:] * (v[2,:]  - jnp.abs(v[2,:] ))
-            r1_N = 1/2 * self.dt/self.dy[-2,:] * (v[-2,:]  + jnp.abs(v[-2,:] ))
-            r2_N = 1/2 * self.dt/self.dy[-2,:] * (v[-2,:]  - jnp.abs(v[-2,:] ))
-            r1_W = 1/2 * self.dt/self.dx[:,1] * (u[:,2] + jnp.abs(u[:,2]))
-            r2_W = 1/2 * self.dt/self.dx[:,1] * (u[:,2] - jnp.abs(u[:,2]))
-            r1_E = 1/2 * self.dt/self.dx[:,-2] * (u[:,-2] + jnp.abs(u[:,-2]))
-            r2_E = 1/2 * self.dt/self.dx[:,-2] * (u[:,-2] - jnp.abs(u[:,-2]))
+            # OBC 
+            r1_S = 1/2 * self.dt/self.dy[1,1:-1] * (v[1,1:-1]  + jnp.abs(v[1,1:-1] ))
+            r2_S = 1/2 * self.dt/self.dy[1,1:-1] * (v[1,1:-1]  - jnp.abs(v[1,1:-1] ))
+            r1_N = 1/2 * self.dt/self.dy[-1,1:-1] * (v[-1,1:-1]  + jnp.abs(v[-1,1:-1] ))
+            r2_N = 1/2 * self.dt/self.dy[-1,1:-1] * (v[-1,1:-1]  - jnp.abs(v[-1,1:-1] ))
+            r1_W = 1/2 * self.dt/self.dx[1:-1,1] * (u[1:-1,1] + jnp.abs(u[1:-1,1]))
+            r2_W = 1/2 * self.dt/self.dx[1:-1,1] * (u[1:-1,1] - jnp.abs(u[1:-1,1]))
+            r1_E = 1/2 * self.dt/self.dx[1:-1,-1] * (u[1:-1,-1] + jnp.abs(u[1:-1,-1]))
+            r2_E = 1/2 * self.dt/self.dx[1:-1,-1] * (u[1:-1,-1] - jnp.abs(u[1:-1,-1]))
 
             # South
-            c1 = c1.at[:,1,:].set(
-                c0[:,1,:] - (r1_S*(c0[:,1,:]-cb[:,1,:]) + r2_S*(c0[:,2,:]-c0[:,1,:])))
+            c1 = c1.at[:,0,1:-1].set(
+                c0[:,0,1:-1] - (r1_S*(c0[:,0,1:-1]-cb[:,0,1:-1]) + r2_S*(c0[:,1,1:-1]-c0[:,0,1:-1])))
 
             # North
-            c1 = c1.at[:,-2,:].set(
-                c0[:,-2,:] - (r1_N*(c0[:,-2,:]-c0[:,-3,:]) + r2_N*(cb[:,-2,:]-c0[:,-2,:])))
+            c1 = c1.at[:,-1,1:-1].set(
+                c0[:,-1,1:-1] - (r1_N*(c0[:,-1,1:-1]-c0[:,-2,1:-1]) + r2_N*(cb[:,-1,1:-1]-c0[:,-1,1:-1])))
             
             # West
-            c1 = c1.at[:,:,1].set(
-                c0[:,:,1] - (r1_W*(c0[:,:,1]-cb[:,:,1]) + r2_W*(c0[:,:,2]-c0[:,:,1])))
+            c1 = c1.at[:,1:-1,0].set(
+                c0[:,1:-1,0] - (r1_W*(c0[:,1:-1,0]-cb[:,1:-1,0]) + r2_W*(c0[:,1:-1,1]-c0[:,1:-1,0])))
             
             # East
-            c1 = c1.at[:,:,-2].set(
-                c0[:,:,-2] - (r1_E*(c0[:,:,-2]-c0[:,:,-3]) + r2_E*(cb[:,:,-2]-c0[:,:,-2])))
+            c1 = c1.at[:,1:-1,-1].set(
+                c0[:,1:-1,-1] - (r1_E*(c0[:,1:-1,-1]-c0[:,1:-1,-2]) + r2_E*(cb[:,1:-1,-1]-c0[:,1:-1,-1])))
 
         # Sponge
         c1 = self.Wbc * cb + (1 - self.Wbc) * c1
@@ -2752,23 +2814,23 @@ class Model_tracadv_ssh(M):
         X0 = jnp.array(X0)
 
         # Forward propagation 
+        ssh[1:-1,1:-1] += self.dt*self.Kdiffus*(\
+                        (ssh[1:-1,2:]+ssh[1:-1,:-2]-2*ssh[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                        (ssh[2:,1:-1]+ssh[:-2,1:-1]-2*ssh[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
         X1 = self._step_jax_jit(X0,cb0,cb1,nstep)
 
         # Back to numpy
         c1 = np.array(X1)[2:] # advected tracer concentrations
-
-        # SSH boundary conditions
-        ssh = self._apply_bc_ssh(t+nstep*self.dt,ssh)
         
         # Update state
         Fssh = State.params[self.name_var['SSH']] 
-        ssh[2:-2,2:-2] += nstep*self.dt/(3600*24) * Fssh[2:-2,2:-2]
+        ssh += nstep*self.dt/(3600*24) * Fssh  * (1-self.Wbc)
         State.setvar(ssh, name_var=self.name_var['SSH'])
         i = 0
         for name in self.name_var:
             if name!='SSH':
                 Fc = State.params[self.name_var[name]] # Forcing term for tracer
-                c1[i,2:-2,2:-2] += (nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc))[2:-2,2:-2]
+                c1[i] += (nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc))
                 State.setvar(c1[i], name_var=self.name_var[name])
                 i += 1
     
@@ -2818,19 +2880,16 @@ class Model_tracadv_ssh(M):
 
         # Back to numpy
         dc1 = np.array(dX1)[2:] # advected tracer concentrations
-
-        # SSH boundary conditions
-        dssh = self._apply_bc_ssh(t+nstep*self.dt,dssh,tgl=True)
         
         # Update state
         dFssh = dState.params[self.name_var['SSH']] 
-        dssh[2:-2,2:-2] += nstep*self.dt/(3600*24) * dFssh[2:-2,2:-2]
+        dssh += nstep*self.dt/(3600*24) * dFssh * (1-self.Wbc)
         dState.setvar(dssh, name_var=self.name_var['SSH'])
         i = 0
         for name in self.name_var:
             if name!='SSH':
                 dFc = dState.params[self.name_var[name]] # Forcing term for tracer
-                dc1[i,2:-2,2:-2] += nstep*self.dt/(3600*24) * dFc[2:-2,2:-2] * (1-self.Wbc[2:-2,2:-2])
+                dc1 += nstep*self.dt/(3600*24) * dFc * (1-self.Wbc)
                 dState.setvar(dc1[i], name_var=self.name_var[name])
                 i += 1
 
@@ -2869,10 +2928,8 @@ class Model_tracadv_ssh(M):
         for name in self.name_var:
             adF = nstep*self.dt/(3600*24) *\
                     adState.getvar(name_var=self.name_var[name]) 
-            if name!='SSH':
-                adF *= (1-self.Wbc)
-            adState.params[self.name_var[name]][2:-2,2:-2] += adF[2:-2,2:-2]
-
+            adState.params[self.name_var[name]] += adF * (1-self.Wbc)
+ 
         # Convert to JAX
         adX0 = jnp.array(adX0)
         X0 = jnp.array(X0)

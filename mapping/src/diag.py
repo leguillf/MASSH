@@ -3,6 +3,7 @@ import numpy as np
 import xarray as xr
 import pyinterp 
 import pyinterp.fill
+from scipy.interpolate import griddata
 import logging
 import scipy
 import xrft
@@ -332,11 +333,12 @@ That could be due to non regular grid or bad written netcdf file')
             mask = np.isnan(lons) + np.isnan(lats) + np.isnan(data)
             data = data[~mask]
             mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, data)
-            idw, _ = mesh.inverse_distance_weighting(
+            idw, _ = mesh.universal_kriging(
                 np.vstack((lon_target.ravel(), lat_target.ravel())).T,
                 within=False,  # Extrapolation is forbidden
-                k=11,  # We are looking for at most 11 neighbors
-                radius=600000,
+                k=11,
+                covariance='matern_12',
+                alpha=100_000,
                 num_threads=0)
             var_regridded[i,:,:] = idw.reshape(lon_target.shape)
 
@@ -1698,7 +1700,7 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lon = config.DIAG.name_bas_lon
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
-            bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var].load()
+            bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var]
             bas = bas.assign_coords({self.name_bas_lon:bas[self.name_bas_lon]})
             bas = bas.sortby(bas[self.name_bas_lon])
             self.bas = bas.sel(
@@ -1707,7 +1709,7 @@ That could be due to non regular grid or bad written netcdf file')
             try:
                 self.bas = self.bas.sel(
                     {self.name_bas_lon:slice(self.lon_min,self.lon_max),
-                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}
+                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}.load()
                 )
             except:
                 print('Warning: unable to select study region in the baseline fields.')
@@ -1799,13 +1801,19 @@ That could be due to non regular grid or bad written netcdf file')
             mask = np.isnan(lons) + np.isnan(lats) + np.isnan(data)
             data = data[~mask]
             mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, data)
-            idw, _ = mesh.inverse_distance_weighting(
+            idw, _ = mesh.universal_kriging(
                 np.vstack((lon_target.ravel(), lat_target.ravel())).T,
                 within=False,  # Extrapolation is forbidden
-                k=11,  # We are looking for at most 11 neighbors
-                radius=600000,
+                k=11,
+                covariance='matern_12',
+                alpha=100_000,
                 num_threads=0)
             var_regridded[i,:,:] = idw.reshape(lon_target.shape)
+        
+        # Mask
+        lon2d,lat2d = np.meshgrid(lon1d,lat1d)
+        mask_interp = griddata((lons,lats), var[0].data.ravel(), (lon2d.ravel(),lat2d.ravel()),method='nearest').reshape(lon2d.shape)
+        var_regridded[:,np.isnan(mask_interp)] = np.nan
 
         # Save to dataset
         var_regridded = xr.DataArray(
@@ -1816,6 +1824,11 @@ That could be due to non regular grid or bad written netcdf file')
                     },
             dims=[self.name_exp_time, self.name_exp_lat, self.name_exp_lon]
             )
+        
+        dsout = xr.Dataset({self.name_exp_var:var_regridded})
+        dsout = dsout.sel({self.name_exp_lon:slice(self.lon_min,self.lon_max),
+                           self.name_exp_lat:slice(self.lat_min,self.lat_max)})
+        dsout.to_netcdf(f'{self.dir_output}/exp_regridded.nc')
 
         # return regrid_geo output
         return self._regrid_geo(

@@ -48,8 +48,8 @@ def Basis(config, State, verbose=True, *args, **kwargs):
         if config.BASIS.super=='BASIS_BM':
             return Basis_bm(config, State)
 
-        elif config.BASIS.super=='BASIS_GEOCUR':
-            return Basis_geocur(config,State)
+        elif config.BASIS.super=='BASIS_CURRENT':
+            return Basis_current(config,State)
 
         elif config.BASIS.super=='BASIS_GAUSS3D':
             return Basis_gauss3d(config,State)
@@ -852,13 +852,14 @@ class Basis_bmaux:
         
         return adX
   
-class Basis_geocur:
+class Basis_current:
    
     def __init__(self,config,State):
 
         self.km2deg=1./110
         
         # Internal params
+        self.mode = config.BASIS.mode
         self.flux = config.BASIS.flux
         self.facns = config.BASIS.facns 
         self.facnlt = config.BASIS.facnlt
@@ -879,6 +880,14 @@ class Basis_geocur:
         self.name_mod_v = config.BASIS.name_mod_v
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
+        
+        # Mode: geo/ageo
+        if self.mode=='geo':
+            self.angle_u = 0
+            self.angle_v = np.pi/2
+        if self.mode=='ageo':
+            self.angle_u = np.pi/2
+            self.angle_v = np.pi
 
         # Grid params
         self.nphys= State.lon.size
@@ -1065,8 +1074,8 @@ class Basis_geocur:
 
 
         # Compute basis components
-        self.Gx_u, self.Nx = self._compute_component_space(angle=0) # in space
-        self.Gx_v, self.Nx = self._compute_component_space(angle=np.pi/2) # in space
+        self.Gx_u, self.Nx = self._compute_component_space(angle=self.angle_u) # in space
+        self.Gx_v, self.Nx = self._compute_component_space(angle=self.angle_v) # in space
         self.Gt, self.Nt = self._compute_component_time(time) # in time
         
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')

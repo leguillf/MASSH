@@ -445,7 +445,6 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
     
     # Initialize weight map
     bc_weight = np.zeros(lon2d.size)
-    #
     keys = np.array(list(dist_mx.keys()))
     if len(keys.shape)>1:
         ind_mod = keys[:, 0]
@@ -461,6 +460,12 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
                               np.isin(df.ind_mod,
                                       df[ind_dist].ind_mod,
                                       invert=True))]
+        # Remove external values in the boundary pixels
+        ind_dist = (df.dist == 0)
+        df = df[np.logical_or(ind_dist,
+                            np.isin(df.ind_mod,
+                                    df[ind_dist].ind_mod,
+                                    invert=True))]
         # Compute tapering
         df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*dist_scale)**2)))
         # Nudge values out of pixels

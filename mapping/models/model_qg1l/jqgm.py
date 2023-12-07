@@ -80,7 +80,8 @@ class Qgm:
     ###########################################################################
     def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, upwind=3,
                  g=9.81, f=1e-4, time_scheme='Euler', Wbc=None, Kdiffus=None, Kdiffus_trac=None,bc_trac='OBC',
-                 split_in_bins=False,lenght_bins=None,facbin=None):
+                 split_in_bins=False,lenght_bins=None,facbin=None,
+                 ageo_velocities=False,advect_pv=True):
 
         # Grid shape
         ny, nx, = np.shape(dx)
@@ -188,6 +189,12 @@ class Qgm:
         # BC
         self.bc_trac = bc_trac
 
+        # Adect PV flag
+        self.advect_pv = advect_pv
+
+        # Ageostrophic velocities
+        self.ageo_velocities = ageo_velocities
+
         # JIT compiling functions
         self.h2uv_jit = jit(self.h2uv)
         self.h2pv_jit = jit(self.h2pv)
@@ -266,7 +273,7 @@ class Qgm:
 
         return q
 
-    def rhs(self,u,v,var0,way=1):
+    def rhs(self,u,v,ua,va,var0,way=1):
 
         """ increment
 
@@ -290,6 +297,7 @@ class Qgm:
 
         incr = jnp.zeros_like(var0,dtype='float64')
 
+
         #######################
         # Upwind current
         #######################
@@ -303,12 +311,15 @@ class Qgm:
         #######################
         # PV advection
         #######################
-        rhs_q = self._adv_jit(up, vp, um, vm, q0)
-        rhs_q = rhs_q.at[2:-2,2:-2].set(
-                rhs_q[2:-2,2:-2] - way*\
-                    (self.f[3:-1,2:-2]-self.f[1:-3,2:-2])/(2*self.dy)\
-                        *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2]))
-        # Diffusion
+        if self.advect_pv:
+            rhs_q = self._adv_jit(up, vp, um, vm, q0)
+            rhs_q = rhs_q.at[2:-2,2:-2].set(
+                    rhs_q[2:-2,2:-2] - way*\
+                        (self.f[3:-1,2:-2]-self.f[1:-3,2:-2])/(2*self.dy)\
+                            *0.5*(v[2:-2,2:-2]+v[3:-1,2:-2]))
+        else:
+            rhs_q = jnp.zeros_like(q0,dtype='float64')
+        # PV Diffusion
         if self.Kdiffus is not None:
             rhs_q = rhs_q.at[2:-2,2:-2].set(
                 rhs_q[2:-2,2:-2] +\
@@ -321,16 +332,29 @@ class Qgm:
         rhs_q = rhs_q.at[self.ind12].set(0)
         rhs_q = rhs_q.at[self.ind0].set(0)
 
+        
         #######################
         # Tracer advection
         #######################
-        incr = +rhs_q
         if c0 is not None:
-            incr = incr[jnp.newaxis,:,:] # add new axis to concatenate with advected tracer
+            incr = incr.at[0].set(rhs_q)
+
+            #######################
+            # Ageostrophic upwind current
+            #######################
+            ua_on_T = way*0.5*(ua[1:-1,1:-1]+ua[1:-1,2:])
+            va_on_T = way*0.5*(va[1:-1,1:-1]+va[2:,1:-1])
+            uap = jnp.where(ua_on_T < 0, 0, ua_on_T)
+            uam = jnp.where(ua_on_T > 0, 0, ua_on_T)
+            vap = jnp.where(va_on_T < 0, 0, va_on_T)
+            vam = jnp.where(va_on_T > 0, 0, va_on_T)
+            #######################
+            # Advection
+            #######################
             for i in range(c0.shape[0]):
                 rhs_c = jnp.zeros((self.ny,self.nx),dtype='float64')
                 # Advection
-                rhs_c = self._adv_jit(up, vp, um, vm, c0[i])
+                rhs_c = self._adv_jit(up+uap, vp+vap, um+uam, vm+vam, c0[i])
                 # Diffusion
                 if self.Kdiffus_trac is not None:
                     rhs_c = rhs_c.at[2:-2,2:-2].set(
@@ -342,8 +366,10 @@ class Qgm:
                     )
                 rhs_c = jnp.where(jnp.isnan(rhs_c), 0, rhs_c)
                 rhs_c = rhs_c.at[self.ind0].set(0)
-                incr = jnp.append(incr[:,:],rhs_c[jnp.newaxis,:,:],axis=0)
-    
+                incr = incr.at[i+1].set(rhs_c)
+        else:
+            incr = rhs_q
+            
         return incr
     
     def _adv(self,up, vp, um, vm, var0):
@@ -437,7 +463,7 @@ class Qgm:
 
         return var0 + way * self.dt * incr
 
-    def rk2(self, var0, incr, hb, qb, way):
+    def rk2(self, var0, incr, ua, va, hb, qb, way):
 
         # k2
         var12 = var0 + 0.5*incr*self.dt
@@ -454,13 +480,13 @@ class Qgm:
             var12 = jnp.append(q12[jnp.newaxis,:,:],c12,axis=0)
         else:
             var12 = +q12
-        incr12 = self.rhs_jit(u12,v12,var12,way=way)
+        incr12 = self.rhs_jit(u12,v12,ua,va,var12,way=way)
 
         var1 = var0 + self.dt * incr12
 
         return var1
 
-    def rk4(self, q0, rq, hb, qb, way):
+    def rk4(self, q0, rq, ua, va, hb, qb, way):
 
         # k1
         k1 = rq * self.dt
@@ -470,7 +496,7 @@ class Qgm:
         u2,v2 = self.h2uv_jit(h2)
         u2 = jnp.where(jnp.isnan(u2),0,u2)
         v2 = jnp.where(jnp.isnan(v2),0,v2)
-        rq2 = self.qrhs_jit(u2,v2,q2,hb,way=way)
+        rq2 = self.qrhs_jit(u2,v2,ua,vaq2,hb,way=way)
         k2 = rq2*self.dt
         # k3
         q3 = q0 + 0.5*k2
@@ -478,7 +504,7 @@ class Qgm:
         u3,v3 = self.h2uv_jit(h3)
         u3 = jnp.where(jnp.isnan(u3),0,u3)
         v3 = jnp.where(jnp.isnan(v3),0,v3)
-        rq3 = self.qrhs_jit(u3,v3,q3,hb,way=way)
+        rq3 = self.qrhs_jit(u3,v3,ua,vaq3,hb,way=way)
         k3 = rq3*self.dt
         # k4
         q4 = q0 + k2
@@ -486,7 +512,7 @@ class Qgm:
         u4,v4 = self.h2uv_jit(h4)
         u4 = jnp.where(jnp.isnan(u4),0,u4)
         v4 = jnp.where(jnp.isnan(v4),0,v4)
-        rq4 = self.qrhs_jit(u4,v4,q4,hb,way=way)
+        rq4 = self.qrhs_jit(u4,v4,ua,va,q4,hb,way=way)
         k4 = rq4*self.dt
         # q increment
         q1 = q0 + (k1 + 2 * k2 + 2 * k3 + k4) / 6.
@@ -544,7 +570,7 @@ class Qgm:
             
         return var1
 
-    def one_step(self, h0, var0, hb, varb, way=1):
+    def one_step(self, h0, ua, va, var0, hb, varb, way=1):
 
         # Compute geostrophic velocities
         u, v = self.h2uv_jit(h0)
@@ -556,15 +582,15 @@ class Qgm:
             qb = +varb
         
         # Compute increment
-        incr = self.rhs_jit(u,v,var0,way=way)
+        incr = self.rhs_jit(u,v,ua,va,var0,way=way)
         
         # Time integration 
         if self.time_scheme == 'Euler':
             var1 = self.euler_jit(var0, incr, way)
         elif self.time_scheme == 'rk2':
-            var1 = self.rk2_jit(var0, incr, hb, qb, way)
+            var1 = self.rk2_jit(var0, incr, ua, va, hb, qb, way)
         elif self.time_scheme == 'rk4':
-            var1 = self.rk4_jit(var0, incr, hb, qb, way)
+            var1 = self.rk4_jit(var0, incr, ua, va, hb, qb, way)
 
         # Elliptical inversion 
         if len(var1.shape)==3:
@@ -574,15 +600,15 @@ class Qgm:
         h1 = self.pv2h_jit(q1, hb, qb)
 
         # Tracer boundary conditions
-        var1 = self.bc_jit(var1,var0,u,v,varb)
+        var1 = self.bc_jit(var1,var0,u+ua,v+va,varb)
 
         return h1, var1
 
     def one_step_for_scan(self,X0,X):
 
-        h1, var1, hb, varb = X0
-        h1, var1 = self.one_step_jit(h1, var1, hb, varb)
-        X = (h1, var1, hb, varb)
+        h1, ua, va, var1, hb, varb = X0
+        h1, var1 = self.one_step_jit(h1, ua, va, var1, hb, varb)
+        X = (h1, ua, va, var1, hb, varb)
 
         return X,X
 
@@ -605,7 +631,12 @@ class Qgm:
         # Get SSH and tracers
         if len(X0.shape)==3:
             h0 = +X0[0] # SSH field
-            c0 = +X0[1:] # Tracer concentrations
+            if self.ageo_velocities:
+                ua0 = +X0[1]
+                va0 = +X0[2]
+                c0 = +X0[3:] # Tracer concentrations
+            else:
+                c0 = +X0[1:] # Tracer concentrations
             hb = +Xb[0] # Boundary field for SSH
             cb = +Xb[1:] # Boundary fields for tracers
         else:
@@ -626,13 +657,19 @@ class Qgm:
         h1 = +h0
         var1 = +q0
         varb = +qb
+        if self.ageo_velocities:
+            ua = +ua0
+            va = +va0
+        else:
+            ua = jnp.zeros_like(h0)
+            va = jnp.zeros_like(h0)
         if c0 is not None:
             var1 = jnp.append(var1[jnp.newaxis,:,:],c0,axis=0)
             varb = jnp.append(varb[jnp.newaxis,:,:],cb,axis=0)
 
         # Time propagation
-        X1, _ = scan(self.one_step_for_scan_jit, init=(h1, var1, hb, varb), xs=jnp.zeros(nstep))
-        h1, var1, hb, varb = X1
+        X1, _ = scan(self.one_step_for_scan_jit, init=(h1, ua, va, var1, hb, varb), xs=jnp.zeros(nstep))
+        h1, ua, va, var1, hb, varb = X1
 
         # Mask
         h1 = h1.at[self.ind0].set(jnp.nan)
@@ -641,7 +678,10 @@ class Qgm:
 
         # Concatenate
         if len(var1.shape)==3:
-            X1 = jnp.append(h1[jnp.newaxis,:,:],var1[1:],axis=0)
+            if self.ageo_velocities:
+                X1 = jnp.concatenate((h1[jnp.newaxis,:,:],ua0[jnp.newaxis,:,:],va0[jnp.newaxis,:,:],var1[1:]),axis=0)
+            else:
+                X1 = jnp.append(h1[jnp.newaxis,:,:],var1[1:],axis=0)
         else:
             X1 = +h1
 
