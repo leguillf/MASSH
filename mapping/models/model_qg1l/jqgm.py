@@ -158,9 +158,9 @@ class Qgm:
             for i,j in indNan:
                 for p1 in range(-2,3):
                     for p2 in range(-2,3):
-                      itest=i+p1
-                      jtest=j+p2
-                      if ((itest>=0) & (itest<=ny-1) & (jtest>=0) & (jtest<=nx-1)):
+                        itest=i+p1
+                        jtest=j+p2
+                        if ((itest>=0) & (itest<=ny-1) & (jtest>=0) & (jtest<=nx-1)):
                             # mask=1 for coast pixels
                             if (mask[itest,jtest]>=2) and (p1 in [-1,0,1] and p2 in [-1,0,1]):
                                 mask[itest,jtest] = 1   
@@ -172,7 +172,7 @@ class Qgm:
         self.ind0 = mask==0
         self.ind1 = mask==1
         self.ind2 = mask==2
-        self.ind12 = self.ind1+self.ind2
+        self.ind12 = self.ind1 + self.ind2
 
         # Weight map to apply boundary conditions 
         if Wbc is None or np.all(Wbc==0.):

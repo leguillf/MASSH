@@ -715,7 +715,11 @@ class Model_qg1l_jax(M):
         self.init_from_bc = config.MOD.init_from_bc
         self.Wbc = np.zeros((State.ny,State.nx))
         if config.MOD.dist_sponge_bc is not None and State.mask is not None:
-            self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
+            if config.MOD.advect_tracer and config.MOD.bc_trac=='OBC':
+                bc = False # No sponge band for open boundaries
+            else:
+                bc = True
+            self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc, bc=bc)
             if config.EXP.flag_plot>1:
                 plt.figure()
                 plt.pcolormesh(self.Wbc)

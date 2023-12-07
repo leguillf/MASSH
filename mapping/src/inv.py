@@ -633,7 +633,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
     # Restart mode
     maxiter = config.INV.maxiter
     if config.INV.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(config.EXP.tmp_DA_path,'X_it-*.nc')))
+        tmp_files = sorted(glob.glob(os.path.join(path_save_control_vectors,'X_it-*.nc')))
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
             ds = xr.open_dataset(tmp_files[-1])
@@ -655,7 +655,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
                 now = datetime.now()
                 current_time = now.strftime("%Y-%m-%d_%H%M%S")
                 ds = xr.Dataset({'res':(('x',),XX)})
-                ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
+                ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it-'+current_time+'.nc'))
                 ds.close()
                 
         # Minimization options

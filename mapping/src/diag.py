@@ -2234,7 +2234,7 @@ That could be due to non regular grid or bad written netcdf file')
             # spectral analysis
             ##########################
             # Power spectrum density reference field
-            wavenumber, _psd_ref = scipy.signal.welch(np.asarray(ref_segment).flatten(),
+            _wavenumber, _psd_ref = scipy.signal.welch(np.asarray(ref_segment).flatten(),
                                                                 fs=1.0 / self.delta_x,
                                                                 nperseg=npt,
                                                                 scaling='density',
@@ -2268,6 +2268,7 @@ That could be due to non regular grid or bad written netcdf file')
 
             # Append to lists
             if _psd_ref.size>0:
+                wavenumber = _wavenumber
                 psd_ref.append(_psd_ref)
                 psd_exp.append(_psd_exp)
                 psd_diff_exp.append(_psd_diff_exp)
