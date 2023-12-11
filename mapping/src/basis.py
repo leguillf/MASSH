@@ -2563,6 +2563,10 @@ class Basis_it:
 
     def operg(self,t,X,State=None):
 
+        """
+            Project to physicial space
+        """
+
         indt = np.argmin(np.abs(self.time-t))   
 
         phi = np.zeros((self.nphys,))
@@ -2596,11 +2600,15 @@ class Basis_it:
                     State.params['hbcy'] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcE"]].reshape(self.shape_params_phys["hbcE"]),axis=1),
                                                            np.expand_dims(phi[self.slice_params_phys["hbcW"]].reshape(self.shape_params_phys["hbcW"]),axis=1)),axis=1)
                 else : 
-                    State.params[name] = phi[self.slice_params_phys[name]].flatten()
+                    State.params[name] = phi[self.slice_params_phys[name]].reshape(self.shape_params_phys[name])
         else: 
             return phi
 
     def operg_transpose(self,t,phi=None,adState=None):
+
+        """
+            Project to reduced space
+        """
 
         param = {} # dictionary containing the values of alle the params 
         # Get variable in physical space

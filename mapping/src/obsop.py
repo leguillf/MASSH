@@ -600,8 +600,8 @@ class Obsop_interp_l4(Obsop_interp):
         self.name_H += f'_L4_{config.OBSOP.interp_method}'
 
         self.n_workers = config.EXP.n_workers
-
     
+    # NEW VERSION OF PROCESS_OBS L4 #
     def process_obs(self, var_bc=None):
 
         # Concatenate obs from different sensors
@@ -706,7 +706,7 @@ class Obsop_interp_l4(Obsop_interp):
         # Fill dictionnaries
         self.varobs = var_obs
         self.errobs = err_obs
-
+    
     def misfit(self,t,State):
 
         # Initialization

@@ -91,8 +91,10 @@ class Variational:
         if config.INV.compute_test:
             print('Gradient test:')
             if self.prec:
+                np.random.seed(611)
                 X = (np.random.random(self.basis.nbasis)-0.5)
             else:
+                np.random.seed(611)
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
 
@@ -101,6 +103,7 @@ class Variational:
         # Initial state
         State = self.State.copy()
         # Background cost function evaluation 
+        
         if self.B is not None:
             if self.prec :
                 X  = self.B.sqr(X0) + self.Xb
@@ -122,7 +125,7 @@ class Variational:
             
             # 1. Misfit
             if self.H.is_obs(timestamp):
-                misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs   
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Reduced basis
@@ -194,6 +197,10 @@ class Variational:
 
             #plt.plot(adState.params["itg"].reshape((13122,)))
             #plt.show()
+
+            # Saving adState for test
+            adState.save(os.path.join(self.tmp_DA_path,
+                        'adjoint_state_' + str(self.checkpoints[i]) + '.nc'))
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -204,6 +211,8 @@ class Variational:
             # 1. Misfit 
             if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.R)
+
+        #adX = self.basis.operg_transpose(t = self.M.T[self.checkpoints[-1]]/3600/24,adState=adState)
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -441,6 +450,7 @@ class Variational_jax:
                 X = jnp.array(np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = jnp.array(self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb)
+            print(X)
             grad_test(self.cost,self.grad,X)
             
             
@@ -513,18 +523,21 @@ def grad_test(J, G, X):
     h /= np.linalg.norm(h)
     JX = J(X)
     GX = G(X)
+    print("h : ",h)
     Gh = h.dot(np.where(np.isnan(GX),0,GX))
-    #print("GX : ",GX)
-    #print("Gh : ",Gh)
+    print("GX : ",GX)
+    print("Gh : ",Gh)
+    np.save("./GX2.npy",GX)
     x=[]
     y=[]
     z=[]
     for p in range(10):
         lambd = 10**(-p)
-        test = np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh))
-        x.append(np.abs(J(X+lambd*h) - JX))
+        JXlh = J(X+lambd*h)
+        test = np.abs(1. - (JXlh - JX)/(lambd*Gh))
+        x.append(np.abs(JXlh - JX))
         y.append((lambd*Gh))
-        z.append(np.abs(1. - (J(X+lambd*h) - JX)/(lambd*Gh)))
+        z.append(np.abs(1. - (JXlh - JX)/(lambd*Gh)))
         print(f'{lambd:.1E} , {test:.2E}')
     print("J(X+lambd*h) - JX",x)
     print("lambd*Gh",y)

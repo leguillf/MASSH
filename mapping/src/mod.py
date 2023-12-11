@@ -1682,9 +1682,9 @@ class Model_sw1l_jax(M):
         #print("X0 : ",X0)
         #print("adX0 : ",adX0)
 
-        plt.plot(adState.params["itg"].reshape((13122,)))
-        plt.title("Params before swm_step_adj")
-        plt.show()
+        #plt.plot(adState.params["itg"].reshape((13122,)))
+        #plt.title("Params before swm_step_adj")
+        #plt.show()
 
         #############################
         ###   TIME PROPAGATION   ####
@@ -1700,9 +1700,9 @@ class Model_sw1l_jax(M):
         # Remove time in control vector
         adX1 = adX1[1:]
 
-        plt.plot(adX1[self.swm.nstates:][self.slice_params['itg']])
-        plt.title("Params after swm_step_adj")
-        plt.show()
+        #plt.plot(adX1[self.swm.nstates:][self.slice_params['itg']])
+        #plt.title("Params after swm_step_adj")
+        #plt.show()
         
         ##################
         ###   SAVING   ###
