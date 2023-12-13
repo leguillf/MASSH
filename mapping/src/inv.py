@@ -1229,7 +1229,7 @@ def Inv_4Dvar_parallel(config, State=None) :
     for i in range(len(list_date)):
         _config = list_config[i][0]
         while date<=_config.EXP.final_date:
-            for name in State.var:
+            for name in Model.var_to_save:
                 # Space smoothing for first time window
                 _var1 = np.zeros((State.ny, State.nx)) 
                 for j in range(len(list_lonlat)):
@@ -1269,9 +1269,9 @@ def Inv_4Dvar_parallel(config, State=None) :
                     State.setvar((W1*_var1 + W2*_var2)/(W1 + W2), name)
                 else:
                     State.setvar(_var1, name)
-                # Save output
-                State.save_output(date,name_var=Model.var_to_save)
-                State.plot(date)
+            # Save output
+            State.save_output(date,name_var=Model.var_to_save)
+            State.plot(date)
 
             date += config.EXP.saveoutput_time_step
                     
