@@ -205,10 +205,11 @@ class Swm:
         
         rhs_u = jnp.zeros(self.Xu.shape)
 
-        #rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
-        #    self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+        rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
+            self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
 
         ### Test with coast ##
+        '''
         h_right = h.copy() # right side of SSH 
         h_left = h.copy() # left side of SSH
         h_right = h_right.at[self.idxcoast["hE"]].set(hE) 
@@ -216,8 +217,10 @@ class Swm:
         
         rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
             self.g * (h_right[1:-1,2:-1] - h_left[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+        '''
 
         return rhs_u
+        
 
     def rhs_v(self,um,h,hN,hS):
         
@@ -227,6 +230,7 @@ class Swm:
             self.g * (h[2:-1,1:-1] - h[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
 
         ### Test with coast ##
+        '''
         h_up = h.copy() # upper side of SSH 
         h_down = h.copy() # down side of SSH 
         h_up = h_up.at[self.idxcoast["hN"]].set(hN)
@@ -234,8 +238,10 @@ class Swm:
 
         rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
             self.g * (h_up[2:-1,1:-1] - h_down[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
+        '''
 
         return rhs_v
+        
     
     def rhs_h(self,u,v,He,uE,uW,vN,vS,rhs_itg):
         rhs_h = jnp.zeros_like(self.X)
@@ -246,6 +252,7 @@ class Swm:
                 rhs_itg[1:-1,1:-1])
         
         ### Test with coast ### 
+        '''
         u_right = u.copy() # right side of u 
         u_left = u.copy() # left side of u
         v_up = v.copy() # upper side of v
@@ -260,8 +267,10 @@ class Swm:
                 (u_right[1:-1,1:] - u_left[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
                 (v_up[1:,1:-1] - v_down[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
                rhs_itg[1:-1,1:-1])
-
+        '''
+        
         return rhs_h
+        
     
     
     ###########################################################################
@@ -289,9 +298,6 @@ class Swm:
             flattened  first characteristic variable (South/North/West/East)
         """
         
-        if self.bc_kind=='1d':
-            t = t + self.dt
-
         # South
         HeS = (He[0,:]+He[1,:])/2
         fS = (self.f[0,:]+self.f[1,:])/2
@@ -314,10 +320,8 @@ class Swm:
                                     )
                         )
                 
-                
-                
                 w1S += v + jnp.sqrt(self.g/HeS) * h
-         
+        
         # North
         fN = (self.f[-1,:]+self.f[-2,:])/2
         HeN = (He[-1,:]+He[-2,:])/2
@@ -385,8 +389,7 @@ class Swm:
                         )
                 w1E += u - jnp.sqrt(self.g/HeE) * h
         
-        return w1S,w1N,w1W,w1E   
-
+        return w1S,w1N,w1W,w1E     
 
     def obcs(self,u,v,h,u0,v0,h0,He,w1ext):
         
@@ -802,7 +805,7 @@ class Swm:
         ##########################
 
         t,X1 = X0[0],jnp.asarray(+X0[1:])
-        
+
         #########################
         # -- State variables -- #
         #########################
@@ -823,8 +826,6 @@ class Swm:
         vS,hS = X1[self.slicevS],X1[self.slicehS]
         uW,hW = X1[self.sliceuW],X1[self.slicehW]
         uE,hE = X1[self.sliceuE],X1[self.slicehE]
-
-        #debug.print("vN : {x}",x=vN)
 
         ############################
         # -- Control Parameters -- #
@@ -853,7 +854,13 @@ class Swm:
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
             hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
             hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
-            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(t,He,hbcx,hbcy)
+
+            if self.bc_kind=='1d':
+                tbc = t + self.dt
+            else:
+                tbc = t
+
+            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
 
         #######################
         ###   INTEGRATION   ###
@@ -879,6 +886,10 @@ class Swm:
         elif 'itg' in self.name_params :  
             w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
             u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
+
+        #debug.print("u {x} : ",x=u)
+        #debug.print("v {x} : ",x=v)
+        #debug.print("h {x} : ",x=h)
 
         # -- Coastal values -- # 
         #if np.any(self.idxcoast["hN"]) == True or np.any(self.idxcoast["hS"]) == True \
@@ -909,6 +920,9 @@ class Swm:
 
         # Time propagation
         X1, _ = scan(self.one_step_for_scan_jit, init=X0, xs=jnp.zeros(nstep))
+        #for _ in range(nstep):
+            # One time step
+        #    X1 = self.one_step_jit(X0)
         
         return X1
     

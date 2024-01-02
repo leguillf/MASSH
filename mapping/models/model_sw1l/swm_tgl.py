@@ -1,4 +1,4 @@
-from swm import Swm
+from mapping.models.swm import Swm
 import numpy as np
 from copy import deepcopy
 
