@@ -429,7 +429,7 @@ class State:
         other = self.copy(free=True)
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
-            other.var[name][self.mask] = np.nan
+            #other.var[name][self.mask] = np.nan
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape).astype('float64')
             #other.params[name][self.mask] = np.nan

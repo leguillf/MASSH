@@ -566,7 +566,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in days) for which the basis components will be compute (at each timestep_checkpoint)
         Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
-        sys.exit('4Dvar only work with reduced basis!!')
+        sys.exit('4Dvar only works with reduced basis!!')
     
     # Covariance matrix
     from .tools_4Dvar import Cov

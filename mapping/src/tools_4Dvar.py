@@ -138,6 +138,8 @@ class Variational:
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
 
+            #print("End of checkpoint ",self.checkpoints[i],": ",Jo)
+
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
             misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
@@ -198,10 +200,6 @@ class Variational:
             #plt.plot(adState.params["itg"].reshape((13122,)))
             #plt.show()
 
-            # Saving adState for test
-            adState.save(os.path.join(self.tmp_DA_path,
-                        'adjoint_state_' + str(self.checkpoints[i]) + '.nc'))
-            
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
@@ -521,13 +519,18 @@ def grad_test(J, G, X):
     np.random.seed(1306)
     h = np.random.random(X.size)
     h /= np.linalg.norm(h)
-    JX = J(X)
-    GX = G(X)
+    print("X : ",X)
     print("h : ",h)
+    JX = J(X)
+    print("cost J(X) : ",JX)
+    GX = G(X)
+    plt.figure()
+    plt.plot(GX)
+    plt.show()
+    print("grad G(X) : ",GX)
+    print("shape of GX : ",GX.shape)
+    print("mean of G(X) : ",GX.mean())
     Gh = h.dot(np.where(np.isnan(GX),0,GX))
-    print("GX : ",GX)
-    print("Gh : ",Gh)
-    np.save("./GX2.npy",GX)
     x=[]
     y=[]
     z=[]
@@ -542,6 +545,7 @@ def grad_test(J, G, X):
     print("J(X+lambd*h) - JX",x)
     print("lambd*Gh",y)
     print("TOT",z)
+    plt.figure()
     plt.plot(x,label="J(X+lambd*h) - JX")
     plt.plot(y,label="lambd*Gh")
     plt.plot(z,label="TOT")
