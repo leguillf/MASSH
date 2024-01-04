@@ -122,11 +122,12 @@ class Swm:
             
         return rhs_v
     
-    def rhs_h(self,u,v,He):
+    def rhs_h(self,u,v,He,rhs_itg):
         rhs_h = jnp.zeros_like(self.X)
         rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
                 (u[1:-1,1:] - u[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
-                (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1])))
+                (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
+                rhs_itg[1:-1,1:-1])
           
         return rhs_h
     
@@ -396,7 +397,7 @@ class Swm:
                      Bc[self.nx:2*self.nx],
                      Bc[2*self.nx:2*self.nx+self.ny],
                      Bc[2*self.nx+self.ny:2*self.nx+2*self.ny])
-        itg = X0[self.sliceitg].reshape(self.shapeitg)
+        rhs_itg = X0[self.sliceitg].reshape(self.shapeitg)
             
         #######################
         #   Init local state  #
@@ -408,9 +409,9 @@ class Swm:
         #######################
         #  Right hand sides   #
         #######################
-        ku = self.rhs_u(self.v_on_u(v1),h1)
-        kv = self.rhs_v(self.u_on_v(u1),h1)
-        kh = self.rhs_h(u1,v1,He)
+        ku = self.rhs_u_jit(self.v_on_u(v1),h1)
+        kv = self.rhs_v_jit(self.u_on_v(u1),h1)
+        kh = self.rhs_h_jit(u1,v1,He,rhs_itg)
         
         #######################
         #  Time propagation   #
@@ -453,7 +454,7 @@ class Swm:
                      Bc[self.nx:2*self.nx],
                      Bc[2*self.nx:2*self.nx+self.ny],
                      Bc[2*self.nx+self.ny:2*self.nx+2*self.ny])
-        itg = X0[self.sliceitg].reshape(self.shapeitg)
+        rhs_itg = X0[self.sliceitg].reshape(self.shapeitg)
         
         #######################
         #   Init local state  #
@@ -468,20 +469,19 @@ class Swm:
         # k1
         ku1 = self.rhs_u_jit(self.v_on_u_jit(v1),h1)*self.dt
         kv1 = self.rhs_v_jit(self.u_on_v_jit(u1),h1)*self.dt
-        kh1 = self.rhs_h_jit(u1,v1,He)*self.dt
+        kh1 = self.rhs_h_jit(u1,v1,He,rhs_itg)*self.dt
         # k2
         ku2 = self.rhs_u_jit(self.v_on_u_jit(v1+0.5*kv1),h1+0.5*kh1)*self.dt
         kv2 = self.rhs_v_jit(self.u_on_v_jit(u1+0.5*ku1),h1+0.5*kh1)*self.dt
-        kh2 = self.rhs_h_jit(u1+0.5*ku1,v1+0.5*kv1,He)*self.dt
+        kh2 = self.rhs_h_jit(u1+0.5*ku1,v1+0.5*kv1,He,rhs_itg)*self.dt
         # k3
         ku3 = self.rhs_u_jit(self.v_on_u_jit(v1+0.5*kv2),h1+0.5*kh2)*self.dt
         kv3 = self.rhs_v_jit(self.u_on_v_jit(u1+0.5*ku2),h1+0.5*kh2)*self.dt
-        kh3 = self.rhs_h_jit(u1+0.5*ku2,v1+0.5*kv2,He)*self.dt
+        kh3 = self.rhs_h_jit(u1+0.5*ku2,v1+0.5*kv2,He,rhs_itg)*self.dt
         # k4
         ku4 = self.rhs_u_jit(self.v_on_u_jit(v1+kv3),h1+kh3)*self.dt
         kv4 = self.rhs_v_jit(self.u_on_v_jit(u1+ku3),h1+kh3)*self.dt
-        kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,He)*self.dt
-        
+        kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,He,rhs_itg)*self.dt
         
         #######################
         #   Time propagation  #

@@ -707,6 +707,7 @@ class Obsop_interp_l4(Obsop_interp):
         self.varobs = var_obs
         self.errobs = err_obs
     
+    """
     def misfit(self,t,State):
 
         # Initialization
@@ -769,8 +770,8 @@ class Obsop_interp_l4(Obsop_interp):
 
             # Update adjoint variable
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])
-    
     """
+    
     def misfit(self,t,State):
 
         '''
@@ -820,8 +821,7 @@ class Obsop_interp_l4(Obsop_interp):
 
             # Update adjoint variable
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])
-    """
-
+    
 
 ###############################################################################
 #                            Multi-Operators                                  #

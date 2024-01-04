@@ -541,8 +541,6 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     time_checkpoints = np.asarray(time_checkpoints)
     print(f'--> {checkpoints.size} checkpoints to evaluate the cost function')
 
-    print("checkpoints : ",checkpoints)
-
     # Boundary conditions
     if Bc is not None:
         var_bc = Bc.interp(time_checkpoints)

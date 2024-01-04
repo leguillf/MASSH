@@ -68,7 +68,6 @@ class Variational:
         
         # Wavelet reduced basis
         self.dtbasis = int(config.INV.timestep_checkpoint.total_seconds()//M.dt)
-        print("dtbasis : ",self.dtbasis)
         self.basis = Basis 
         
         # Save cost function and its gradient at each iteration 
@@ -91,19 +90,17 @@ class Variational:
         if config.INV.compute_test:
             print('Gradient test:')
             if self.prec:
-                np.random.seed(611)
                 X = (np.random.random(self.basis.nbasis)-0.5)
             else:
-                np.random.seed(611)
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
-
+     
     def cost(self,X0):
                 
         # Initial state
         State = self.State.copy()
+
         # Background cost function evaluation 
-        
         if self.B is not None:
             if self.prec :
                 X  = self.B.sqr(X0) + self.Xb
@@ -122,170 +119,20 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
-            
-            # 1. Misfit
-            if self.H.is_obs(timestamp):
-                misfit = self.H.misfit(timestamp,State) # d=Hx-yobs   
-                Jo += misfit.dot(self.R.inv(misfit))
-            
-            # 2. Reduced basis
-            if self.checkpoints[i]%self.dtbasis==0:
-                self.basis.operg(t/3600/24, X, State=State)
-            
-            State.save(os.path.join(self.tmp_DA_path,
-                        'model_state_' + str(self.checkpoints[i]) + '.nc'))
 
-            # 3. Run forward model
-            self.M.step(t=t,State=State,nstep=nstep)
-
-            #print("End of checkpoint ",self.checkpoints[i],": ",Jo)
-
-        timestamp = self.M.timestamps[self.checkpoints[-1]]
-        if self.H.is_obs(timestamp):
-            misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
-            Jo += misfit.dot(self.R.inv(misfit))  
-        
-        # Cost function 
-        J = 1/2 * (Jo + Jb)
-        
-        State.plot(title='State variables at the end of cost function evaluation')
-        #State.plot(title='Parameters at the end of cost function evaluation',params=True)
-        
-        if self.save_minimization:
-            self.J.append(J)
-
-        return J
-    
-    def grad(self,X0): 
-                
-        X = +X0 
-        
-        if self.B is not None:
-            if self.prec :
-                X  = self.B.sqr(X0) + self.Xb
-                gb = X0      # gradient of background term
-            else:
-                X  = X0 + self.Xb
-                gb = self.B.inv(X0) # gradient of background term
-        else:
-            X  = X0 + self.Xb
-            gb = 0
-            
-        # Current trajectory
-        State = self.State.copy()
-        
-        # Ajoint initialization   
-        adState = self.State.copy(free=True)
-        adX = X*0
-
-        # Last timestamp
-        timestamp = self.M.timestamps[self.checkpoints[-1]]
-        if self.H.is_obs(timestamp):
-            self.H.adj(timestamp,adState,self.R)
-
-        # Time loop
-        for i in reversed(range(0,len(self.checkpoints)-1)):
-            
-            nstep = self.checkpoints[i+1] - self.checkpoints[i]
-            timestamp = self.M.timestamps[self.checkpoints[i]]
-            t = self.M.T[self.checkpoints[i]]
-            
-            # Read model state
-            State.load(os.path.join(self.tmp_DA_path,
-                       'model_state_' + str(self.checkpoints[i]) + '.nc'))
-            
-            # 3. Run adjoint model 
-            self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
-
-            #plt.plot(adState.params["itg"].reshape((13122,)))
-            #plt.show()
-
-            # 2. Reduced basis
-            if self.checkpoints[i]%self.dtbasis==0:
-                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
-                #plt.plot(self.basis.operg_transpose(t=t/3600/24,adState=adState))
-                #plt.show()
-            
-            # 1. Misfit 
-            if self.H.is_obs(timestamp):
-                self.H.adj(timestamp,adState,self.R)
-
-        #adX = self.basis.operg_transpose(t = self.M.T[self.checkpoints[-1]]/3600/24,adState=adState)
-
-        if self.prec :
-            adX = np.transpose(self.B.sqr(adX)) 
-        
-        g = adX + gb  # total gradient
-
-        
-        adState.plot(title='adjoint variables at the end of gradient function evaluation')
-        self.basis.operg(t/3600/24,adX,State=State)
-        #State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
-        
-        if self.save_minimization:
-            self.G.append(np.max(np.abs(g)))
-
-        return g 
-
-    """    
-    def cost(self,X0):
-                
-        # Initial state
-        State = self.State.copy()
-
-        # Background cost function evaluation 
-        if self.B is not None:
-            if self.prec :
-                X  = self.B.sqr(X0) + self.Xb
-                Jb = X0.dot(X0) # cost of background term
-            else:
-                X  = X0 + self.Xb
-                Jb = np.dot(X0,self.B.inv(X0)) # cost of background term
-        else:
-            X  = X0 - self.Xb
-            Jb = 0
-        
-        ### EVALUATING TIME OF CALL OF FUNCTIONS ###
-        #print("New evaluation of the COST function : ")
-        #time_misfit = []
-        #time_basis = []
-        #time_model = []
-    
-        # Observational cost function evaluation
-        Jo = 0.
-        for i in range(len(self.checkpoints)-1):
-            
-            timestamp = self.M.timestamps[self.checkpoints[i]]
-            t = self.M.T[self.checkpoints[i]]
-            nstep = self.checkpoints[i+1] - self.checkpoints[i]
-
-            #t0=datetime.now()
-            
             # 1. Misfit
             if self.H.is_obs(timestamp):
                 misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
-
-            # time call to the function #
-            #time_misfit.append(datetime.now()-t0)
-            #t0=datetime.now()
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 self.basis.operg(t/3600/24, X, State=State)
             
-            self.States[self.checkpoints[i]] = State
-
-            # time call to the function #
-            #time_basis.append(datetime.now()-t0)
-            #t0=datetime.now()
+            self.States[self.checkpoints[i]] = State.copy()
 
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
-
-            # time call to the function #
-            #time_model.append(datetime.now()-t0)
-            #t0=datetime.now()
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
@@ -302,11 +149,6 @@ class Variational:
         if self.save_minimization:
             self.J.append(J)
 
-        ### DISPLAYING TIME OF CALL OF FUNCTIONS ###
-        #print("   --> MISFIT :",sum(time_misfit,timedelta())/len(time_misfit))
-        #print("   --> BASIS :",sum(time_basis,timedelta())/len(time_misfit))
-        #print("   --> MODEL :",sum(time_model,timedelta())/len(time_misfit))
-        
         return J
     
     def grad(self,X0): 
@@ -336,12 +178,6 @@ class Variational:
         if self.H.is_obs(timestamp):
             self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
-        ### EVALUATING TIME OF CALL OF FUNCTIONS ###
-        #print("New evaluation of the GRAD function : ")
-        #time_misfit = []
-        #time_basis = []
-        #time_model = []
-
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
             
@@ -349,33 +185,21 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             
-            
-            #t0=datetime.now()
-
             State = self.States[self.checkpoints[i]]
             
             # 3. Run adjoint model 
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
             
-            # time call to the function #
-            #time_model.append(datetime.now()-t0)
-            #t0=datetime.now()
-
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
             
-            # time call to the function #
-            #time_basis.append(datetime.now()-t0)
-            #t0=datetime.now()
-
             # 1. Misfit 
             if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
-            # time call to the function #
-            #time_misfit.append(datetime.now()-t0)
-            #t0=datetime.now()
+        # evaluating gradient at first step (test for itg)
+        #adX = self.basis.operg_transpose(t=0,adState=adState)
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -392,14 +216,8 @@ class Variational:
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))
 
-        ### DISPLAYING TIME OF CALL OF FUNCTIONS ###
-        #print("   --> ADJOINT MODEL :",sum(time_model,timedelta())/len(time_misfit))
-        #print("   --> BASIS :",sum(time_basis,timedelta())/len(time_misfit))
-        #print("   --> MISFIT :",sum(time_misfit,timedelta())/len(time_misfit))
-        
-
-        return g 
-    """
+        return g
+    
 
 class Variational_jax:
     
@@ -511,48 +329,24 @@ class Variational_jax:
         grad_fun = jax.grad(self.cost)
 
         return grad_fun(X0)
-    
-    
-    
-    
+
+
+   
 def grad_test(J, G, X):
-    np.random.seed(1306)
     h = np.random.random(X.size)
     h /= np.linalg.norm(h)
-    print("X : ",X)
-    print("h : ",h)
     JX = J(X)
-    print("cost J(X) : ",JX)
     GX = G(X)
-    plt.figure()
-    plt.plot(GX)
-    plt.show()
-    print("grad G(X) : ",GX)
-    print("shape of GX : ",GX.shape)
-    print("mean of G(X) : ",GX.mean())
     Gh = h.dot(np.where(np.isnan(GX),0,GX))
-    x=[]
-    y=[]
-    z=[]
+    L = [[],[]]
     for p in range(10):
         lambd = 10**(-p)
         JXlh = J(X+lambd*h)
         test = np.abs(1. - (JXlh - JX)/(lambd*Gh))
-        x.append(np.abs(JXlh - JX))
-        y.append((lambd*Gh))
-        z.append(np.abs(1. - (JXlh - JX)/(lambd*Gh)))
+        L[0].append(lambd)
+        L[1].append(test)
         print(f'{lambd:.1E} , {test:.2E}')
-    print("J(X+lambd*h) - JX",x)
-    print("lambd*Gh",y)
-    print("TOT",z)
-    plt.figure()
-    plt.plot(x,label="J(X+lambd*h) - JX")
-    plt.plot(y,label="lambd*Gh")
-    plt.plot(z,label="TOT")
-    plt.yscale("log") 
-    plt.legend()
-    plt.show()
-    
+    plot_grad_test(L)
 
 def plot_grad_test(L) :
     '''
