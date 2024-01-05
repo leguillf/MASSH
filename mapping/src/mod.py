@@ -1158,7 +1158,7 @@ class Model_sw1l(M):
         params = None
         if X1.size==self.swm.nstates+self.nparams:
             params = X1[self.swm.nstates:]
-            He = +params[self.sliceHe].reshape(self.shapeHe)+self.Heb
+            He = +params[self.sliceHe].reshape(self.shapeHe) + self.Heb
             hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
             hbcy = +params[self.slicehbcy].reshape(self.shapehbcy)        
         
@@ -1620,14 +1620,14 @@ def adjoint_test(M,State,t0=0,nstep=1):
     M.set_bc([t0,t0+nstep*M.dt],var_bc)
     
     # Current trajectory
-    State0 = State.random()
+    State0 = State.random(1e-2)
     
     # Perturbation
-    dState = State.random()
+    dState = State.random(1e-2)
     dX0 = np.concatenate((dState.getvar(vect=True),dState.getparams(vect=True)))
     
     # Adjoint
-    adState = State.random()
+    adState = State.random(1e-2)
     adX0 = np.concatenate((adState.getvar(vect=True),adState.getparams(vect=True)))
     
     # Run TLM

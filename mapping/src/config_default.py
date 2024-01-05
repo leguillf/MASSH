@@ -177,6 +177,26 @@ OBS_SSH_SWATH = dict(
     
 )
 
+# L4 products (has to be on 2D latitude x longitude grids)
+OBS_L4 = dict(
+
+    path = '', # path of observation netcdf file(s)
+
+    name_time = '', # name of time coordinate
+    
+    name_lon = '', # name of longitude coordinate
+
+    name_lat = '', # name of latitude coordinate
+    
+    name_var = {}, # dictionnary of observed variables (keys: variable types [SSH,SST etc...]; values: name of observed variables)
+
+    name_err = {}, # dictionnary of measurement error variables (keys: variable types [SSH,SST etc...]; values: name of error variables)
+
+    subsampling = None, # Subsampling in time (in number of model time step). Set to None for no subsampling
+
+    sigma_noise = None  # Value of (constant) measurement error (will be used if *name_err* is not provided)
+
+)
 
 #################################################################################################################################
 # MODELS

@@ -1045,8 +1045,7 @@ class Basis_it:
                 Xb = np.zeros_like(Q)
 
             return Xb, Q
-        
-        
+             
     def operg(self,t,X,State=None):
         """
             Project to physicial space
@@ -1088,7 +1087,6 @@ class Basis_it:
         else:
             phi = np.concatenate((He.flatten(),hbcx.flatten(),hbcy.flatten()))
             return phi
-
 
     def operg_transpose(self,t,phi=None,adState=None):
         """
