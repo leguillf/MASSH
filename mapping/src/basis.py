@@ -2236,9 +2236,9 @@ class Basis_it:
                 self.shape_params["hbcE"], self.shape_params["hbcW"], self.shape_params_phys["hbcE"], self.shape_params_phys["hbcW"] = self.set_hbcy(time, LAT_MIN, LAT_MAX, TIME_MIN, TIME_MAX)
 
             if name == "itg": 
-                self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
+                #self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
                 ### UNCOMMENT FOR ITG INDEPENDANT ON TIME ###
-                #self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX)
+                self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX)
         
         self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) # dictionary with the number of each of the parameters in reduced space 
         self.n_params_phys = dict(zip(self.shape_params_phys.keys(), map(np.prod, self.shape_params_phys.values()))) # dictionary with the number of each of the parameters in physical space
@@ -2450,6 +2450,7 @@ class Basis_it:
     
     
     ### VERSION OF ITG DEPENDING ON TIME ### 
+    """
     def set_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
                     
         # coordinates in space
@@ -2503,10 +2504,9 @@ class Basis_it:
         print('nitg:',np.prod(shapeitg))
 
         return shapeitg, shapeitg_phys
-
+    """
     
     ### VERSION OF ITG INDEPENDANT ON TIME ### 
-    """
     def set_itg(self,LAT_MIN, LAT_MAX, LON_MIN, LON_MAX):
 
         if not self.reduced_basis_itg :
@@ -2559,7 +2559,6 @@ class Basis_it:
         print('nitg:',np.prod(shapeitg))
 
         return shapeitg, shapeitg_phys
-    """
 
     def operg(self,t,X,State=None):
 
@@ -2580,16 +2579,16 @@ class Basis_it:
                 phi[self.slice_params_phys[name]] = np.tensordot(
                                                         np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.bc_gauss[name],(-1,0)),
                                                         self.bc_t_gauss[:,indt],(-2,0)).flatten()
-            if name == "itg":
-                phi[self.slice_params_phys[name]] = np.tensordot(
-                                                        np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)),
-                                                        self.itg_t_gauss[:,indt],(1,0)).flatten()
+            #if name == "itg":
+            #    phi[self.slice_params_phys[name]] = np.tensordot(
+            #                                            np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)),
+            #                                            self.itg_t_gauss[:,indt],(1,0)).flatten()
             ### UNCOMMENT FOR ITG INDEPENDANT ON TIME ###
-            #if name == "itg": 
-            #    if not self.reduced_basis_itg : 
-            #        phi[self.slice_params_phys[name]] = X[self.slice_params[name]].reshape(self.shape_params[name]).flatten()
-            #    else : 
-            #        phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
+            if name == "itg": 
+                if not self.reduced_basis_itg : 
+                    phi[self.slice_params_phys[name]] = X[self.slice_params[name]].reshape(self.shape_params[name]).flatten()
+                else : 
+                    phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
 
         if State is not None:
             for name in self.name_params : 
@@ -2641,16 +2640,16 @@ class Basis_it:
             if name in ["hbcS","hbcN","hbcW","hbcE"]:
                 adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
                                                             self.bc_gauss[name],(-2,-1)).flatten()
-            if name == "itg":
-                adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],
-                                                            self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
-            ### UNCOMMENT FOR ITG INDEPENDANT ON TIME ###
             #if name == "itg":
-            #    if not self.reduced_basis_itg :
-            #        adX[self.slice_params[name]] = param[name].flatten()
-            #    else : 
-            #        adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis],
+            #    adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],
             #                                                self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
+            ### UNCOMMENT FOR ITG INDEPENDANT ON TIME ###
+            if name == "itg":
+                if not self.reduced_basis_itg :
+                    adX[self.slice_params[name]] = param[name].flatten()
+                else : 
+                    adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis],
+                                                            self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
         
         # Setting adState parameters to 0 
         if adState is not None:
