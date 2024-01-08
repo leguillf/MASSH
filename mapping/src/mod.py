@@ -737,6 +737,14 @@ class Model_qg1l_jax(M):
         # Tracer advection flag
         self.advect_pv = config.MOD.advect_pv
         self.advect_tracer = config.MOD.advect_tracer
+        self.forcing_tracer_from_bc = config.MOD.forcing_tracer_from_bc
+        if self.forcing_tracer_from_bc:
+            for name in self.name_var: 
+                if name!= 'SSH':
+                    State.params[self.name_var[name]+'_bc'] = np.zeros((State.ny,State.nx))
+            # Dictionnaries of mean and std of boundary fields to normalize forcing terms
+            self.bc_mean = {}
+            self.bc_std = {}
 
         # Ageostrophic velocity flag
         if 'U' in self.name_var and 'V' in self.name_var:
@@ -822,6 +830,9 @@ class Model_qg1l_jax(M):
                         var_bc_t[np.isnan(var_bc_t)] = 0.
                         # Fill bc dictionnary
                         self.bc[_name_var_mod][t] = var_bc_t
+                    if self.forcing_tracer_from_bc:
+                        self.bc_mean[_name_var_mod] = np.nanmean(list(self.bc[_name_var_mod].values()))
+                        self.bc_std[_name_var_mod] = np.nanstd(list(self.bc[_name_var_mod].values()))
                 elif _name_var_bc==f'{_name_var_mod}_params':
                     for i,t in enumerate(time_bc):
                         var_bc[_name_var_bc][i][np.isnan(var_bc[_name_var_bc][i])] = 0.
@@ -911,7 +922,14 @@ class Model_qg1l_jax(M):
                         Fc = +State.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
                         if name in self.forcing and t in self.forcing[name]:
                             Fc[1:-1,1:-1] += (self.forcing[name][t]*(3600*24))[1:-1,1:-1]
-                        X1[i] += nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc)
+                        if self.forcing_tracer_from_bc and self.name_var[name]+'_bc' in State.params:
+                            if t not in self.bc[name]:
+                                t_list = np.array(list(self.bc[name].keys()))
+                                idx_closest = np.argmin(np.abs(t_list-t))
+                                t1 = t_list[idx_closest]
+                            else: t1 = t
+                            Fc += State.params[self.name_var[name]+'_bc'] * (self.bc[name][t1] - self.bc_mean[name]) / self.bc_std[name]
+                        X1[i] += nstep*self.dt/(3600*24) * Fc * (1-self.Wbc) 
                         State.setvar(X1[i], name_var=self.name_var[name])
             else:
                 X1 += nstep*self.dt/(3600*24) * Fssh 
@@ -971,6 +989,8 @@ class Model_qg1l_jax(M):
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
                         dFc = dState.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
+                        if self.forcing_tracer_from_bc and self.name_var[name]+'_bc' in dState.params:
+                            dFc += dState.params[self.name_var[name]+'_bc'] * (self.bc[name][t] - self.bc_mean[name]) / self.bc_std[name]
                         dX1[i] +=  nstep*self.dt/(3600*24) * dFc  * (1-self.Wbc)
                         dState.setvar(dX1[i], name_var=self.name_var[name])
             else:
@@ -1033,6 +1053,8 @@ class Model_qg1l_jax(M):
                 if name!='SSH':
                     adparams *= (1-self.Wbc)
                 adState.params[self.name_var[name]] += adparams  
+                if self.forcing_tracer_from_bc and self.name_var[name]+'_bc' in adState.params:
+                    adState.params[self.name_var[name]+'_bc'] += adparams * (self.bc[name][t] - self.bc_mean[name]) / self.bc_std[name]
                 
         if self.advect_tracer:
             adState.setvar(adX1[0],self.name_var['SSH'])
@@ -2963,7 +2985,6 @@ class Model_tracadv_ssh(M):
                 adState.setvar(adc1[i], name_var=self.name_var[name])
                 i += 1
 
-
 class Model_tracadv_vel(M):
 
     def __init__(self,config,State):
@@ -3478,12 +3499,6 @@ class Model_tracadv_vel(M):
 
         State0.save_output(present_date,name_var)
 
-
-                
-    
-
-
-        
 
 ###############################################################################
 #                             Multi-models                                    #
