@@ -334,6 +334,8 @@ MOD_QG1L_JAX = dict(
 
     bc_trac = 'OBC', # Either OBC or fixed
 
+    forcing_tracer_from_bc = False, # Whether to use BC fields to force tracer advection,
+
     split_in_bins = False, # Whether to split the spatial domain in bins, each of them being associated with constant c & f
 
     lenght_bins = 1000, # Length of one spatial bin (in km). 

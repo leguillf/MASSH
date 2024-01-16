@@ -719,7 +719,7 @@ That could be due to non regular grid or bad written netcdf file')
         _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
 
         # Delete frames
-        #os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+        os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
         
         # Display movie
         if Display:
