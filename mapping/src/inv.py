@@ -636,10 +636,17 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         tmp_files = sorted(glob.glob(os.path.join(path_save_control_vectors,'X_it-*.nc')))
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
-            ds = xr.open_dataset(tmp_files[-1])
-            Xopt = ds.res.values
-            maxiter = max(config.INV.maxiter - len(tmp_files), 0)
-            ds.close()
+            try:
+                ds = xr.open_dataset(tmp_files[-1])
+            except:
+                if len(tmp_files)>1:
+                    ds = xr.open_dataset(tmp_files[-2])
+            try:
+                Xopt = ds.res.values
+                maxiter = max(config.INV.maxiter - len(tmp_files), 0)
+                ds.close()
+            except:
+                Xopt = var.Xb*0
         else:
             Xopt = var.Xb*0
             

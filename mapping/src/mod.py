@@ -18,6 +18,7 @@ from math import pi
 from datetime import timedelta
 import matplotlib.pylab as plt 
 import pyinterp
+from copy import deepcopy
 
 import jax.numpy as jnp 
 from jax import jit
@@ -720,7 +721,7 @@ class Model_qg1l_jax(M):
                 bc = False # No sponge band for open boundaries
             else:
                 bc = True
-            self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc, bc=bc)
+            self.Wbc = grid.compute_weight_map(State.lon, State.lat, deepcopy(State.mask), config.MOD.dist_sponge_bc, bc=bc)
             if config.EXP.flag_plot>1:
                 plt.figure()
                 plt.pcolormesh(self.Wbc)
