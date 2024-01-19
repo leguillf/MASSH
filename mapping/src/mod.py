@@ -25,6 +25,8 @@ from jax.lax import scan
 
 from functools import partial
 
+import pyinterp 
+
 from . import  grid
 
 from .exp import Config as Config
@@ -1479,7 +1481,6 @@ class Model_sw1l_jax(M):
         # Initializing model params
         self.init_params(State,config.MOD.name_params)
 
-        
         # Model initialization
         self.swm = swm.Swm(Model = self,
                            State = State) 
@@ -1491,36 +1492,6 @@ class Model_sw1l_jax(M):
             self.swm_step_adj = self.swm.step_adj_jit
         else:
             self.swm_step = self.swm.step_jit
-        
-        """
-        ## FLO VERSION ##
-        model = swm.Swm
-        # Model initialization
-        self.swm = model(X=State.X,
-                        Y=State.Y,
-                        dt=self.dt,
-                        bc=self.bc_kind,
-                        omegas=self.omegas,
-                        bc_theta=self.bc_theta,
-                        f=self.f)
-        
-        
-        # Compile jax-related functions
-        self._jstep_jit = jit(self._jstep)
-        #self._jstep_tgl_jit = jit(self._jstep_tgl)
-        #self._jstep_adj_jit = jit(self._jstep_adj)
-        #self._compute_w1_IT_jit = jit(self._compute_w1_IT)
-        # Functions related to time_scheme
-        if self.time_scheme=='Euler':
-            self.swm_step = self.swm.step_euler_jit
-            #self.swm_step_tgl = self.swm.step_euler_tgl_jit
-            #self.swm_step_adj = self.swm.step_euler_adj_jit
-        elif self.time_scheme=='rk4':
-            self.swm_step = self.swm.step_rk4_jit
-            #self.swm_step_tgl = self.swm.step_rk4_tgl_jit
-            #self.swm_step_adj = self.swm.step_rk4_adj_jit
-        ######################################################
-        """
 
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
@@ -1612,7 +1583,6 @@ class Model_sw1l_jax(M):
         p2 = np.logical_and(a2,np.invert(a1))
         return np.logical_or(p1,p2)
     
-
     def set_mask(self,mask,config) : 
         """
         NAME
@@ -1622,7 +1592,7 @@ class Model_sw1l_jax(M):
             mask : mask to set 
     
         DESCRIPTION
-            Sets the mask attribute of the Model object. The mask is a dictionnary containing the masks of variables, represented by an int (0,1 or Nane). 
+            Sets the mask attribute of the Model object. The mask is a dictionnary containing the masks of variables, represented by an int (0,1 or NaN). 
             For "SSH" the mask is : 
                 - 1 if ocean 
                 - 999 if continent (NaN value)
@@ -1651,90 +1621,59 @@ class Model_sw1l_jax(M):
                 mask_v[self._detect_coast(mask,"y")]=0
                 self.mask[config.MOD.name_var[varname]] = mask_v
 
-    """
-    ## FLO VERSION ##
-    def step(self,State,nstep=1,t=0):
+    def set_bathy(self,config):
 
-        # Get state variable
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
+        """
+        NAME
+            set_bathy
 
-        # Get params in physical space
-        if State.params is not None:
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))
+        DESCRIPTION
+            Read bathymetry file, interpolate it to state grid
+        """
 
-        # Init
-        X1 = +X0
+        # Read mask
+        if config.MOD.file_bathymetry is not None and os.path.exists(config.MOD.file_bathymetry):
+            ds = xr.open_dataset(config.MOD.file_bathymetry).squeeze()
+            name_lon = config.MOD.name_var_bathy['lon']
+            name_lat = config.MOD.name_var_bathy['lat']
+            name_elevation = config.MOD.name_var_bathy['var']
+        else:
+            self.bathymetry = None
+            return
 
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        
-        # Time stepping
-        for _ in range(nstep):
-            # One time step
-            X1 = self._jstep_jit(X1)
-        
-        # Remove time in control vector
-        X1 = X1[1:]
+        # Convert longitudes
+        if np.sign(ds[name_lon].data.min())==-1 and self.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds[name_lon])    
 
-        np.save("/home/bellemva/MASSH_dev/mapping/examples/X1.npy",X1)
+        dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
+        dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
+        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
+        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
         
-        # Convert to numpy and reshape
-        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
-        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        State.setvar([u1,v1,h1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def _jstep(self,X0):
-        
-        t,X1 = X0[0],jnp.asarray(+X0[1:])
-        
-        # Get He,obcs parameters
-        params = None
-        if X1.size==self.swm.nstates+self.nparams:
-            params = X1[self.swm.nstates:]
-            He = +params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = +params[self.slicehbcy].reshape(self.shapehbcy)        
-        
-        # Time propagation
-        _X1 = +X1[:self.swm.nstates]
-        if params is not None:
-            # First characteristic variables w1 from external data
-            if self.bc_kind=='1d':
-                tbc = t + self.dt
-            else:
-                tbc = t
+        ds = ds.sel(
+            {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
+                name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
 
-            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
-            
-            w1ext = jnp.concatenate((w1S,w1N,w1W,w1E))
-            _X1 = jnp.concatenate((_X1, # State variables
-                                   He.flatten(),w1ext)) # Model parameters 
-        # One forward step
-        _X1 = self.swm_step(_X1)
+        lon = ds[name_lon].values
+        lat = ds[name_lat].values
+        elevation = ds[name_elevation]
+
         
-        # Retrieve inital form
-        X1 = X1.at[:self.swm.nstates].set(_X1[:self.swm.nstates])
-        
-        if params is not None:
-            X1 = X1.at[self.swm.nstates:].set(params)
-        
-        X1 = jnp.append(jnp.array(t+self.dt),X1)
-    
-        return X1
-    """
-    
+        # Interpolate to state grid
+        x_source_axis = pyinterp.Axis(lon, is_circle=False)
+        y_source_axis = pyinterp.Axis(lat)
+        x_target = self.lon.T
+        y_target = self.lat.T
+        grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, elevation.T)
+        elevation_interp = pyinterp.bivariate(grid_source,
+                                            x_target.flatten(),
+                                            y_target.flatten(),
+                                            interpolator = config.GRID.interp_method_mask,
+                                            bounds_error=False).reshape(x_target.shape).T
+
     def step(self,State,nstep=1,t=0):
 
         ############################
@@ -1751,8 +1690,6 @@ class Model_sw1l_jax(M):
         
         # Remove time in output array
         X1 = X1[1:]
-
-        np.save("/home/bellemva/MASSH_dev/mapping/examples/X1.npy",X1)
 
         ##################
         ###   SAVING   ###
@@ -1831,6 +1768,20 @@ class Model_sw1l_jax(M):
         self.save_array(adState,adX1)
 
     def init_array(self,State,t=0):
+        """
+        NAME
+            init_array
+
+        ARGUMENT 
+            State : State object 
+            t : time step 
+    
+        DESCRIPTION
+            Initializes the array X0, which is composed by the State variable and State parameters at time step t. 
+
+        RETURNS
+            X0 : array 
+        """
 
         # - Get state variable
         u0 = State.getvar(self.name_var['U'])[:,:-1].flatten()
@@ -1868,6 +1819,17 @@ class Model_sw1l_jax(M):
         return X0
 
     def save_array(self,State, X1):
+        """
+        NAME
+            save_array
+
+        ARGUMENT 
+            State : State object 
+            X1 : array
+    
+        DESCRIPTION
+            Saves the variables of the array X1 (control parameters and state variable) onto the State object.  
+        """
 
         # - u, v, and h   
         u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
@@ -1877,10 +1839,6 @@ class Model_sw1l_jax(M):
         # Adding a blank row and column to fit the State grid 
         u1 = np.concatenate((u1,np.zeros((State.ny,1))),axis=1)
         v1 = np.concatenate((v1,np.zeros((1,State.nx))),axis=0)
-
-        #print("u :",u1,"\n")
-        #print("v :",v1,"\n")
-        #print("h :",h1,"\n")
 
         # Masking the variables 
         u1[State.mask] = np.nan
@@ -1911,7 +1869,8 @@ class Model_sw1l_jax(M):
         for param in self.name_params :     
             State.params[param] = params[self.slice_params[param]].reshape(self.shape_params[param])
 
-## VERSION MODIFIEE DE MODSW1L DE FLO ##
+
+## VERSION MODIFIEE DE MODSW1L A PARTIR DE LA VERSION DE FLO ##
 
 class Model_sw1l(M):
 
@@ -2109,8 +2068,6 @@ class Model_sw1l(M):
         
         # Remove time in control vector
         X1 = X1[1:]
-
-        np.save("/home/bellemva/MASSH/mapping/examples/X1.npy",X1)
         
         # Convert to numpy and reshape
         u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
@@ -2417,471 +2374,7 @@ class Model_sw1l(M):
         
         return w1S,w1N,w1W,w1E     
 
-'''
-## VERSION DE FLO DE MODSW1L ##
-class Model_sw1l(M):
-    def __init__(self,config,State):
 
-        super().__init__(config,State)
-
-        self.config = config
-        # Model specific libraries
-        if config.MOD.dir_model is None:
-            dir_model = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             '..','models'))
-        else:
-            dir_model = config.MOD.dir_model
-        
-        swm = SourceFileLoader("swm", 
-                                dir_model + "/swm.py").load_module()
-        model = swm.Swm
-        
-        self.time_scheme = config.MOD.time_scheme
-
-        # grid
-        self.ny = State.ny
-        self.nx = State.nx
-
-        # Coriolis
-        self.f = State.f
-        f0 = np.nanmean(self.f)
-        self.f[np.isnan(self.f)] = f0
-        
-        # Gravity 
-        self.g = config.MOD.g 
-
-        # Equivalent depth
-        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-            ds = xr.open_dataset(config.MOD.He_data['path'])
-            self.Heb = ds[config.MOD.He_data['var']].values
-        else:
-            self.Heb = config.MOD.He_init
-            
-            
-        if config.MOD.Ntheta>0:
-            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-        else:
-            self.bc_theta = np.array([0])
-            
-        self.omegas = np.asarray(config.MOD.w_waves)
-        self.bc_kind = config.MOD.bc_kind
-
-        # Initialize model state
-        self.name_var = config.MOD.name_var
-        self.var_to_save = [self.name_var['SSH']] # ssh
-
-        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
-            dsin = xr.open_dataset(config.GRID.path_init_grid)
-            for name in self.name_var:
-                if name in config.MOD.name_init_var:
-                    var_init = dsin[config.MOD.name_init_var[name]]
-                    if len(var_init.shape)==3:
-                        var_init = var_init[0,:,:]
-                    if config.GRID.subsampling is not None:
-                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
-                    State.var[self.name_var[name]] = var_init.values
-                else:
-                    if name=='U':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                    elif name=='V':
-                        State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                    elif name=='SSH':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-        else:
-            for name in self.name_var:  
-                if name=='U':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                elif name=='V':
-                    State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                elif name=='SSH':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-
-        # Model Parameters (OBC & He)
-        self.shapeHe = [State.ny,State.nx]
-        self.shapehbcx = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.nx # NX
-                          ]
-        self.shapehbcy = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.ny # NY
-                          ]
-        self.sliceHe = slice(0,np.prod(self.shapeHe))
-        self.slicehbcx = slice(np.prod(self.shapeHe),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx))
-        self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
-        self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
-        State.params['He'] = np.zeros((self.shapeHe))
-        State.params['hbcx'] = np.zeros((self.shapehbcx))
-        State.params['hbcy'] = np.zeros((self.shapehbcy))
-        
-        # Model initialization
-        self.swm = model(X=State.X,
-                        Y=State.Y,
-                        dt=self.dt,
-                        bc=self.bc_kind,
-                        omegas=self.omegas,
-                        bc_theta=self.bc_theta,
-                        f=self.f)
-        
-        
-        # Compile jax-related functions
-        self._jstep_jit = jit(self._jstep)
-        self._jstep_tgl_jit = jit(self._jstep_tgl)
-        self._jstep_adj_jit = jit(self._jstep_adj)
-        self._compute_w1_IT_jit = jit(self._compute_w1_IT)
-        # Functions related to time_scheme
-        if self.time_scheme=='Euler':
-            self.swm_step = self.swm.step_euler_jit
-            self.swm_step_tgl = self.swm.step_euler_tgl_jit
-            self.swm_step_adj = self.swm.step_euler_adj_jit
-        elif self.time_scheme=='rk4':
-            self.swm_step = self.swm.step_rk4_jit
-            self.swm_step_tgl = self.swm.step_rk4_tgl_jit
-            self.swm_step_adj = self.swm.step_rk4_adj_jit
-        
-        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
-            tangent_test(self,State,nstep=10)
-            print('Adjoint test:')
-            adjoint_test(self,State,nstep=10)
-
-    def step(self,State,nstep=1,t=0):
-
-        # Get state variable
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
-
-        # Get params in physical space
-        if State.params is not None:
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))
-
-        # Init
-        X1 = +X0
-
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        
-        # Time stepping
-        for _ in range(nstep):
-            # One time step
-            X1 = self._jstep_jit(X1)
-        
-        # Remove time in control vector
-        X1 = X1[1:]
-
-        np.save("/home/bellemva/MASSH/mapping/examples/X1.npy",X1)
-        
-        # Convert to numpy and reshape
-        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
-        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        State.setvar([u1,v1,h1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def _jstep(self,X0):
-        
-        t,X1 = X0[0],jnp.asarray(+X0[1:])
-        
-        # Get He,obcs parameters
-        params = None
-        if X1.size==self.swm.nstates+self.nparams:
-            params = X1[self.swm.nstates:]
-            He = +params[self.sliceHe].reshape(self.shapeHe)+self.Heb
-            hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = +params[self.slicehbcy].reshape(self.shapehbcy) 
-        
-        # Time propagation
-        _X1 = +X1[:self.swm.nstates]
-
-        if params is not None:
-            # First characteristic variables w1 from external data
-            if self.bc_kind=='1d':
-                tbc = t + self.dt
-            else:
-                tbc = t
-
-            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
-            #w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
-            
-            w1ext = jnp.concatenate((w1S,w1N,w1W,w1E))
-            _X1 = jnp.concatenate((_X1, # State variables
-                                   He.flatten(),w1ext)) # Model parameters 
-
-        # One forward step
-        _X1 = self.swm_step(_X1)
-        
-        # Retrieve inital form
-        X1 = X1.at[:self.swm.nstates].set(_X1[:self.swm.nstates])
-        
-        if params is not None:
-            X1 = X1.at[self.swm.nstates:].set(params)
-        
-        X1 = jnp.append(jnp.array(t+self.dt),X1)
-    
-        return X1
-        
-    def step_tgl(self,dState,State,nstep=1,t=0):
-        
-        # Get state variable
-        dX0 = +dState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Get params in physical space
-        if State.params is not None:
-            dparams = +dState.getparams(['He','hbcx','hbcy'],vect=True)
-            dX0 = np.concatenate((dX0,dparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))         
-
-        # Init
-        dX1 = +dX0
-        X1 = +X0
-        # Add time in control vector (for JAX)
-        dX1 = np.append(t,dX1)
-        X1 = np.append(t,X1)
-        # Time stepping
-        for i in range(nstep):
-            # One timestep
-            dX1 = self._jstep_tgl_jit(dX1,X1)
-            if i<nstep-1:
-                X1 = self._jstep_jit(X1)
-                
-        # Remove time in control vector
-        dX1 = dX1[1:]
-        
-        # Reshaping
-        du1 = np.array(dX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        dv1 = np.array(dX1[self.swm.slicev]).reshape(self.swm.shapev)
-        dh1 = np.array(dX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        dState.setvar([du1,dv1,dh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def _jstep_tgl(self,dX0,X0):
-        
-        _,dX1 = jvp(self._jstep_jit, (X0,), (dX0,))
-        
-        return dX1
-    
-    def step_adj(self,adState, State, nstep=1,t=0):
-        
-        # Get state variable
-        adX0 = +adState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
-        adX0[np.isnan(adX0)] = np.nan
-        
-        # Get params in physical space
-        if State.params is not None:
-            adparams = +adState.getparams(['He','hbcx','hbcy'],vect=True)
-            adX0 = np.concatenate((adX0,adparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))         
-        
-        # Init
-        adX1 = +adX0
-        X1 = +X0
-        
-        # Current trajectory
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        traj = [X1]
-        if nstep>1:
-            for i in range(nstep):
-                # One timestep
-                X1 = self._jstep_jit(X1)
-                if i<nstep-1:
-                    traj.append(+X1)
-            
-        # Reversed time propagation
-        # Add time in control vector (for JAX)
-        adX1 = np.append(traj[-1][0],adX1)
-        for i in reversed(range(nstep)):
-            X1 = traj[i]
-            # One timestep
-            adX1 = self._jstep_adj_jit(adX1,X1)
-        
-        # Remove time in control vector
-        adX1 = adX1[1:]
-        
-        # Reshaping
-        adu1 = np.array(adX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        adv1 = np.array(adX1[self.swm.slicev]).reshape(self.swm.shapev)
-        adh1 = np.array(adX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        adparams = np.array(adX1[self.swm.nstates:])
-        adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
-        adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
-        adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
-        
-        # Update state
-        adu1[np.isnan(adu1)] = 0
-        adv1[np.isnan(adv1)] = 0
-        adh1[np.isnan(adh1)] = 0
-        adState.setvar([adu1,adv1,adh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-        # Update parameters
-        adState.params['He'] = adHe
-        adState.params['hbcx'] = adhbcx
-        adState.params['hbcy'] = adhbcy
-    
-    def _jstep_adj(self,adX0,X0):
-        
-        _, adf = vjp(self._jstep_jit, X0)
-        
-        return adf(adX0)[0]
-
-    def _compute_w1_IT(self,t,He,h_SN,h_WE):
-        """
-        Compute first characteristic variable w1 for internal tides from external 
-        data
-
-        Parameters
-        ----------
-        t : float 
-            time in seconds
-        He : 2D array
-        h_SN : ND array
-            amplitude of SSH for southern/northern borders
-        h_WE : ND array
-            amplitude of SSH for western/eastern borders
-
-        Returns
-        -------
-        w1ext: 1D array
-            flattened  first characteristic variable (South/North/West/East)
-        """
-        
-        # South
-        HeS = (He[0,:]+He[1,:])/2
-        fS = (self.f[0,:]+self.f[1,:])/2
-        w1S = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[0,:] + ky*self.swm.Yv[0,:]
-                
-                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
-                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fS**2)*( \
-                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fS*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fS*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                
-                w1S += v + jnp.sqrt(self.g/HeS) * h
-        
-        # North
-        fN = (self.f[-1,:]+self.f[-2,:])/2
-        HeN = (He[-1,:]+He[-2,:])/2
-        w1N = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = -jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[-1,:] + ky*self.swm.Yv[-1,:]
-                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
-                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fN**2)*(\
-                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fN*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fN*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                w1N += v - jnp.sqrt(self.g/HeN) * h
-
-        # West
-        fW = (self.f[:,0]+self.f[:,1])/2
-        HeW = (He[:,0]+He[:,1])/2
-        w1W = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,0] + ky*self.swm.Yu[:,0]
-                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fW**2)*(\
-                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
-                              + fW*ky*jnp.sin(w*t-kxy)
-                                  ) +\
-                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fW*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1W += u + jnp.sqrt(self.g/HeW) * h
-
-        
-        # East
-        HeE = (He[:,-1]+He[:,-2])/2
-        fE = (self.f[:,-1]+self.f[:,-2])/2
-        w1E = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
-            for i,theta in enumerate(self.bc_theta):
-                kx = -jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,-1] + ky*self.swm.Yu[:,-1]
-                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fE**2)*(\
-                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
-                                + fE*ky*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fE*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1E += u - jnp.sqrt(self.g/HeE) * h
-        
-        return w1S,w1N,w1W,w1E  
-'''
 ###############################################################################
 #                        Tracer Advection Models                              #
 ###############################################################################

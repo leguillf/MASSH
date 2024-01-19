@@ -633,6 +633,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         else:
             options['disp'] = False
         options['maxiter'] = config.INV.maxiter
+
         if config.INV.gtol is not None:
             _ = var.cost(Xopt)
             g0 = var.grad(Xopt)

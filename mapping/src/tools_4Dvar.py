@@ -114,16 +114,29 @@ class Variational:
     
         # Observational cost function evaluation
         Jo = 0.
+
+        # Measuring computation times 
+        #t_misfit = []
+        #t_basis = []
+        #t_model = []
+
         for i in range(len(self.checkpoints)-1):
             
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
 
+            # Measuring computation times
+            #t0 = datetime.now()
+
             # 1. Misfit
             if self.H.is_obs(timestamp):
                 misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
+
+            # Measuring computation times
+            #t_misfit.append(datetime.now()-t0)
+            #t0 = datetime.now()
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -131,8 +144,16 @@ class Variational:
             
             self.States[self.checkpoints[i]] = State.copy()
 
+            # Measuring computation times
+            #t_basis.append(datetime.now()-t0)
+            #t0 = datetime.now()
+
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
+
+            # Measuring computation times
+            #t_model.append(datetime.now()-t0)
+        
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
@@ -148,6 +169,9 @@ class Variational:
         
         if self.save_minimization:
             self.J.append(J)
+
+        # Measuring computation times
+        #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
 
         return J
     
@@ -178,6 +202,11 @@ class Variational:
         if self.H.is_obs(timestamp):
             self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
+        # Measuring computation times 
+        #t_misfit = []
+        #t_basis = []
+        #t_model = []
+
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
             
@@ -185,21 +214,33 @@ class Variational:
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
             
+            # Measuring computation times
+            #t0 = datetime.now()
+
             State = self.States[self.checkpoints[i]]
             
             # 3. Run adjoint model 
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
+
+            # Measuring computation times
+            #t_model.append(datetime.now()-t0)
+            #t0 = datetime.now()
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
+
+            # Measuring computation times
+            #t_basis.append(datetime.now()-t0)
+            #t0 = datetime.now()
             
             # 1. Misfit 
             if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
-        # evaluating gradient at first step (test for itg)
-        #adX = self.basis.operg_transpose(t=0,adState=adState)
+            # Measuring computation times
+            #t_misfit.append(datetime.now()-t0)
+
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -215,6 +256,9 @@ class Variational:
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))
+
+        # Measuring computation times
+        #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
 
         return g
     

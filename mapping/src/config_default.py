@@ -1115,6 +1115,10 @@ BASIS_IT = dict(
 
     sigma_B_itg = 1e-2, # Background variance for itg
 
+    He_time_dependant = True, # True if equivalent height parameter changes in time  
+
+    itg_time_dependant = False, # True if internal tide generation parameter changes in time  
+
     reduced_basis_itg = False, # True if internal tide generation parameter needs to be decomposed on a reduced basis 
 
     facgauss = 3.5,  # factor for gaussian spacing= both space/time
