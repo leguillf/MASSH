@@ -734,8 +734,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
             if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                Model.save_output(State0,date,name_var=Model.var_to_save) # Save output
-                State0.plot(date)
+                Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
 
             # Forward propagation
             Model.step(t=t+j*Model.dt,State=State0,nstep=1)
@@ -745,7 +744,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
     if (((date - config.EXP.init_date).total_seconds()
                  /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
                 & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        State0.save_output(date,name_var=Model.var_to_save) # Save output
+        Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
     
         
     del State, State0, Xa, dict_obs, B, R

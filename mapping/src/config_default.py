@@ -479,6 +479,10 @@ MOD_TRACADV_VEL = dict(
 
     var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
+    add_bc_vel_output = False,
+
+    vel_forcing = 'nio', # Either 'nio' or 'flux'
+
     upwind = 3, # Order of the upwind scheme for tracer advection (either 1,2 or 3)
 
     time_scheme = 'Euler', # Either Euler, rk2 or rk4
@@ -587,7 +591,9 @@ OBSOP_INTERP_L4 = dict(
 
     mask_borders = False,
 
-    interp_method = 'linear' # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
+    interp_method = 'linear', # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
+
+    gradients = False
 
 )
 
@@ -953,15 +959,19 @@ BASIS_GAUSS3D = dict(
 
     flux = False,
 
-    facns = 1., # Factor for gaussian spacing in space
+    facns = 2., # Factor for gaussian spacing in space
 
-    facnlt = 2., # Factor for gaussian spacing in time
+    facnlt = 1., # Factor for gaussian spacing in time
 
     sigma_D = 300, # Spatial scale (km)
 
     sigma_T = 20, # Time scale (days)
 
     sigma_Q = 0.01, # Standard deviation for matrix Q 
+
+    normalize_fact = True,
+
+    time_spinup = None # days
 
 )
 

@@ -590,11 +590,21 @@ class Obsop_interp_l4(Obsop_interp):
                             for name in sat_info['name_var']:
                                 if name not in self.name_var_obs[t]:
                                     self.name_var_obs[t].append(name)
-        
+    
         # For grid interpolation:
         self.interp_method = config.OBSOP.interp_method
 
-        self.name_H += f'_L4_{config.OBSOP.interp_method}'
+        # Misfit on gradients
+        self.gradients = config.OBSOP.gradients
+        if self.gradients:
+            self.DX = State.DX
+            self.DY = State.DY
+            self.name_H += f'_L4_grad_{config.OBSOP.interp_method}'
+        else:
+            self.name_H += f'_L4_{config.OBSOP.interp_method}'
+
+
+        
 
     def process_obs(self, var_bc=None):
 
@@ -684,12 +694,31 @@ class Obsop_interp_l4(Obsop_interp):
 
                 if var_bc is not None and name in var_bc:
                     var_obs_interp -= var_bc[name][i].flatten()
+                
+                if self.gradients:
+                     # Compute gradients
+                    var_obs_interp_reshape = var_obs_interp.reshape(self.DY.shape)
+                    var_obs_interp_grady = np.zeros_like(self.DY)
+                    var_obs_interp_gradx = np.zeros_like(self.DY)
+                    var_obs_interp_grady[1:-1,1:-1] = (var_obs_interp_reshape[2:,1:-1] - var_obs_interp_reshape[:-2,1:-1]) / 2 * self.DY[1:-1,1:-1]
+                    var_obs_interp_gradx[1:-1,1:-1] = (var_obs_interp_reshape[1:-1,2:] - var_obs_interp_reshape[1:-1,:-2]) / 2 * self.DX[1:-1,1:-1]
 
-                # Fill dictionnaries
-                self.varobs[t][name] = var_obs_interp
-                self.errobs[t][name] = err_obs_interp
+                    # Fill dictionnaries
+                    self.varobs[t][name+'_grady'] = var_obs_interp_grady.flatten()
+                    self.varobs[t][name+'_gradx'] = var_obs_interp_gradx.flatten()
+                    self.errobs[t][name] = err_obs_interp
+                else:
+                    # Fill dictionnaries
+                    self.varobs[t][name] = var_obs_interp
+                    self.errobs[t][name] = err_obs_interp
 
     def misfit(self,t,State):
+        if self.gradients:
+            return self._misfit_grad(t, State)
+        else:
+            return self._misfit(t, State)
+
+    def _misfit(self,t,State):
 
         # Initialization
         misfit = np.array([])
@@ -698,7 +727,7 @@ class Obsop_interp_l4(Obsop_interp):
         for name in self.name_var_obs[t]:
 
             # Get model state
-            X = State.getvar(self.name_mod_var[name]).ravel() 
+            X = State.getvar(self.name_mod_var[name]).ravel()
 
             # Project model state to obs space
             HX = +X
@@ -727,8 +756,62 @@ class Obsop_interp_l4(Obsop_interp):
             misfit = np.concatenate((misfit,_inverr*_misfit))
 
         return misfit
+    
+    def _misfit_grad(self,t,State):
 
+        # Initialization
+        misfit = np.array([])
+
+        mode = 'w'
+        for name in self.name_var_obs[t]:
+
+            # Get model state
+            X = State.getvar(self.name_mod_var[name])
+
+            if self.gradients:
+                # Compute gradients
+                HX_grady = np.zeros_like(self.DY)
+                HX_gradx = np.zeros_like(self.DY)
+                HX_grady[1:-1,1:-1] = ((X[2:,1:-1] - X[:-2,1:-1]) / 2 * self.DY[1:-1,1:-1])
+                HX_gradx[1:-1,1:-1] = ((X[1:-1,2:] - X[1:-1,:-2]) / 2 * self.DX[1:-1,1:-1])
+
+
+            # Compute misfit & errors
+            _misfit_grady = (HX_grady.flatten()-self.varobs[t][name+'_grady']) 
+            _misfit_gradx = (HX_gradx.flatten()-self.varobs[t][name+'_gradx']) 
+            _inverr = 1/self.errobs[t][name]
+            _misfit_grady[np.isnan(_misfit_grady)] = 0
+            _misfit_gradx[np.isnan(_misfit_gradx)] = 0
+            _inverr[np.isnan(_inverr)] = 0
+        
+            # Save to netcdf
+            dsout = xr.Dataset(
+                    {
+                    "misfit_grady": (("Nobs"), _inverr*_inverr*_misfit_grady),
+                    "misfit_gradx": (("Nobs"), _inverr*_inverr*_misfit_gradx),
+                    }
+                    )
+            dsout.to_netcdf(
+                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc"), 
+                mode=mode, 
+                group=name
+                )
+            dsout.close()
+            mode = 'a'
+
+            # Concatenate
+            misfit = np.concatenate((misfit,_inverr*_misfit_grady,_inverr*_misfit_gradx))
+
+        return misfit
+    
     def adj(self, t, adState, R):
+
+        if self.gradients:
+            return self._adj_grad(t, adState, R)
+        else:
+            return self._adj(t, adState, R)
+
+    def _adj(self, t, adState, R):
 
         for name in self.name_var_obs[t]:
 
@@ -751,6 +834,36 @@ class Obsop_interp_l4(Obsop_interp):
 
             # Update adjoint variable
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])      
+    
+    def _adj_grad(self, t, adState, R):
+
+        for name in self.name_var_obs[t]:
+
+            # Read misfit
+            ds = xr.open_dataset(os.path.join(
+                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc")), 
+                group=name)
+            misfit_grady = ds['misfit_grady'].values.reshape(self.DY.shape)
+            misfit_gradx = ds['misfit_gradx'].values.reshape(self.DY.shape)
+            ds.close()
+            del ds
+
+            # Apply R operator
+            misfit_grady = R.inv(misfit_grady)
+            misfit_gradx = R.inv(misfit_gradx)
+
+            # Read adjoint variable
+            advar = adState.getvar(self.name_mod_var[name])
+
+            # Compute adjoint operation of y = Hx
+            adX = np.zeros_like(advar)
+            adX[2:,1:-1] += misfit_grady[1:-1,1:-1] / 2 * self.DY[1:-1,1:-1]
+            adX[:-2,1:-1] += -misfit_grady[1:-1,1:-1] / 2 * self.DY[1:-1,1:-1]
+            adX[1:-1,2:] += misfit_gradx[1:-1,1:-1] / 2 * self.DX[1:-1,1:-1]
+            adX[1:-1,:-2] += -misfit_gradx[1:-1,1:-1] / 2 * self.DX[1:-1,1:-1]
+
+            # Update adjoint variable
+            adState.setvar(advar + adX, self.name_mod_var[name])      
 
 
 ###############################################################################

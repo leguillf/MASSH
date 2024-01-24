@@ -1007,13 +1007,15 @@ That could be due to non regular grid or bad written netcdf file')
             self.bas_regridded_v = None     
                 
         if self.mask is not None:
-            self.bas_regridded_u.data[:,self.mask] = np.nan
-            self.bas_regridded_v.data[:,self.mask] = np.nan
+            if self.compare_to_baseline:
+                self.bas_regridded_u.data[:,self.mask] = np.nan
+                self.bas_regridded_v.data[:,self.mask] = np.nan
             self.exp_regridded_u.data[:,self.mask] = np.nan
             self.exp_regridded_v.data[:,self.mask] = np.nan
         else:
-            self.bas_regridded_u.data[np.isnan(self.ref[self.name_ref_var_u].data)] = np.nan
-            self.bas_regridded_v.data[np.isnan(self.ref[self.name_ref_var_v].data)] = np.nan
+            if self.compare_to_baseline:
+                self.bas_regridded_u.data[np.isnan(self.ref[self.name_ref_var_u].data)] = np.nan
+                self.bas_regridded_v.data[np.isnan(self.ref[self.name_ref_var_v].data)] = np.nan
             self.exp_regridded_u.data[np.isnan(self.ref[self.name_ref_var_u].data)] = np.nan
             self.exp_regridded_v.data[np.isnan(self.ref[self.name_ref_var_v].data)] = np.nan
     
