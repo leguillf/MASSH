@@ -51,24 +51,34 @@ def Model(config, State, verbose=True):
     elif config.MOD.super is not None:
         if verbose:
             print(config.MOD)
+
         if config.MOD.super=='MOD_DIFF':
             return Model_diffusion(config,State)
+        
         elif config.MOD.super=='MOD_QG1L_NP':
             return Model_qg1l_np(config,State)
+        
         elif config.MOD.super=='MOD_QG1L_JAX':
             return Model_qg1l_jax(config,State)
+        
         elif config.MOD.super=='MOD_QG1L_JAX_FULL':
             return Model_qg1l_jax_full(config,State)
+        
         elif config.MOD.super=='MOD_SW1L_NP':
             return Model_sw1l_np(config,State)
+        
         elif config.MOD.super=='MOD_SW1L_JAX':
             return Model_sw1l_jax(config,State)
+        
         elif config.MOD.super=='MOD_SW1L':
             return Model_sw1l(config,State)
+        
         elif config.MOD.super=='MOD_TRACADV_SSH':
             return Model_tracadv_ssh(config,State)
+        
         elif config.MOD.super=='MOD_TRACADV_VEL':
             return Model_tracadv_vel(config,State)
+        
         else:
             sys.exit(config.MOD.super + ' not implemented yet')
     else:
@@ -101,10 +111,11 @@ class M:
 
         # Model variables
         self.name_var = config.MOD.name_var
-        if config.MOD.var_to_save is not None:
-            self.var_to_save = config.MOD.var_to_save 
-        else:
-            self.var_to_save = []
+        self.var_to_save = []
+        if config.MOD.var_to_save is not None: # Only specified variables are saved 
+            for name in config.MOD.var_to_save:
+                self.var_to_save.append(self.name_var[name])
+        else: # All variables are saved 
             for name in self.name_var:
                 self.var_to_save.append(self.name_var[name])
 
@@ -134,7 +145,6 @@ class M:
         return
     
     def save_output(self,State,present_date,name_var=None,t=None):
-        
         State.save_output(present_date,name_var)
     
 
@@ -1386,8 +1396,17 @@ class Model_sw1l_jax(M):
 
         # Variables and parameters names arguments 
         self.name_var = config.MOD.name_var
-        self.var_to_save = [self.name_var['SSH']] # ssh
         self.name_params = config.MOD.name_params
+
+        # Variables to save
+        #if config.MOD.var_to_save == None : 
+        #    print('OK!!')
+        #    self.var_to_save == None 
+        #else : 
+        #    self.var_to_save = []
+        #    for var in self.var_to_save : 
+        #        self.var_to_save.append(self.name_var[var])
+
              
         # Equivalent depth
         if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
@@ -1621,7 +1640,7 @@ class Model_sw1l_jax(M):
                 mask_v[self._detect_coast(mask,"y")]=0
                 self.mask[config.MOD.name_var[varname]] = mask_v
 
-    def set_bathy(self,config):
+    def set_bathy(self,State,config):
 
         """
         NAME
@@ -1632,8 +1651,8 @@ class Model_sw1l_jax(M):
         """
 
         # Read mask
-        if config.MOD.file_bathymetry is not None and os.path.exists(config.MOD.file_bathymetry):
-            ds = xr.open_dataset(config.MOD.file_bathymetry).squeeze()
+        if config.MOD.path_bathymetry is not None and os.path.exists(config.MOD.path_bathymetry):
+            ds = xr.open_dataset(config.MOD.path_bathymetry).squeeze()
             name_lon = config.MOD.name_var_bathy['lon']
             name_lat = config.MOD.name_var_bathy['lat']
             name_elevation = config.MOD.name_var_bathy['var']
@@ -1642,37 +1661,26 @@ class Model_sw1l_jax(M):
             return
 
         # Convert longitudes
-        if np.sign(ds[name_lon].data.min())==-1 and self.lon_unit=='0_360':
+        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
             ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
-        elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
+        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
             ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
         ds = ds.sortby(ds[name_lon])    
 
-        dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
-        dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
+        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
+        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
         dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
         dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
         
         ds = ds.sel(
-            {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
-                name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
+            {name_lon:slice(State.lon_min-dlon,State.lon_max+dlon),
+                name_lat:slice(State.lat_min-dlat,State.lat_max+dlat)})
 
-        lon = ds[name_lon].values
-        lat = ds[name_lat].values
-        elevation = ds[name_elevation]
+        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
 
-        
-        # Interpolate to state grid
-        x_source_axis = pyinterp.Axis(lon, is_circle=False)
-        y_source_axis = pyinterp.Axis(lat)
-        x_target = self.lon.T
-        y_target = self.lat.T
-        grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, elevation.T)
-        elevation_interp = pyinterp.bivariate(grid_source,
-                                            x_target.flatten(),
-                                            y_target.flatten(),
-                                            interpolator = config.GRID.interp_method_mask,
-                                            bounds_error=False).reshape(x_target.shape).T
+        ds = ds.where(ds.elevation<0) # masking the outer lands (where ds.elevation>0)
+
+        return ds[name_elevation].values
 
     def step(self,State,nstep=1,t=0):
 
@@ -3485,13 +3493,6 @@ class Model_tracadv_vel(M):
 
         State0.save_output(present_date,name_var)
 
-
-                
-    
-
-
-        
-
 ###############################################################################
 #                             Multi-models                                    #
 ###############################################################################      
@@ -3611,9 +3612,7 @@ class Model_multi:
         
         for name in self.name_var:
             adState.var[self.name_var[name]] *= 0 
-                
-
-        
+                      
 ###############################################################################
 #                       Tangent and Adjoint tests                             #
 ###############################################################################     

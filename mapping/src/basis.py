@@ -2181,6 +2181,10 @@ class Basis_it:
         self.reduced_basis_itg = config.BASIS.reduced_basis_itg
         self.itg_time_dependant = config.BASIS.itg_time_dependant
         self.He_time_dependant = config.BASIS.He_time_dependant
+        self.itg_bathymetry_located = config.BASIS.itg_bathymetry_located
+        self.bathymetry_gradient_threshold = config.BASIS.bathymetry_gradient_threshold
+        if self.bathymetry_gradient_threshold == None and self.itg_bathymetry_located==True: 
+            raise AttributeError('Please prescribe a bathymetry_gradient_threshold if using itg parameter that is bathymetry located.')
         
         self.sigma_B_He = config.BASIS.sigma_B_He
         self.sigma_B_bc = config.BASIS.sigma_B_bc
@@ -2212,6 +2216,52 @@ class Basis_it:
         self.latW = State.lat[:,-1]
 
         self.name_params = config.MOD.name_params 
+
+        # Bathymetry information 
+        self.bathymetry = self.set_bathy(config,State)
+        
+
+    def set_bathy(self,config,State):
+
+        """
+        NAME
+            set_bathy
+
+        DESCRIPTION
+            Read bathymetry file, interpolate it to state grid
+        """
+
+        # Read bathymetry 
+        if config.BASIS.path_bathymetry is not None and os.path.exists(config.BASIS.path_bathymetry):
+            ds = xr.open_dataset(config.BASIS.path_bathymetry).squeeze()
+            name_lon = config.BASIS.name_var_bathy['lon']
+            name_lat = config.BASIS.name_var_bathy['lat']
+            name_elevation = config.BASIS.name_var_bathy['var']
+
+        else: # No bathymetry file prescripted
+            return None 
+
+        # Convert longitudes
+        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds[name_lon])    
+
+        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
+        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
+        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
+        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
+        
+        ds = ds.sel(
+            {name_lon:slice(State.lon_min-dlon,State.lon_max+dlon),
+                name_lat:slice(State.lat_min-dlat,State.lat_max+dlat)})
+
+        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
+
+        ds = ds.where(ds.elevation<0) # masking the outer lands (where ds.elevation>0)
+
+        return ds[name_elevation].values
     
     def set_basis(self,time,return_q=False):
         
@@ -2463,14 +2513,35 @@ class Basis_it:
         
         ###   - CASE WITH NO REDUCED BASIS -   ###
         if not self.reduced_basis_itg :
-            shapeitg = [2,self.nx,self.ny]
-            shapeitg_phys = (2,self.nx,self.ny)
+            # - WITH TOTAL CONTROL OF ITG # 
+            if not self.itg_bathymetry_located : 
+                shapeitg = [2,self.nx,self.ny]
+                shapeitg_phys = (2,self.nx,self.ny)
 
-            print('nitg:',np.prod(shapeitg))
+                print('nitg:',np.prod(shapeitg))
 
-            return shapeitg, shapeitg_phys
-        ######################################
-        
+                return shapeitg, shapeitg_phys
+            # - WITH CONTROL OF ITG DEPENDANT ON BATHYMETRY # 
+            elif self.itg_bathymetry_located :
+                if type(self.bathymetry) is not np.ndarray:
+                    raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_located == True')
+                else : 
+                    grad = np.gradient(self.bathymetry)
+                    norm_grad = np.sqrt(grad[0]**2+grad[1]**2)
+                    norm_grad[np.isnan(self.bathymetry)]=np.nan
+                    threshold_value = self.bathymetry_gradient_threshold 
+                    grad_threshold = np.nanpercentile(norm_grad.flatten(),q=threshold_value)
+                    self.idx_bathy = np.where(norm_grad>=grad_threshold)
+
+                    shapeitg = [2,self.idx_bathy[0].size]
+                    shapeitg_phys = (2,self.nx,self.ny)
+
+                    print('nitg:',np.prod(shapeitg))
+
+                    return shapeitg, shapeitg_phys
+                
+        ################################################
+
         ###############################
         ###   - SPACE DIMENSION -   ###
         ###############################
@@ -2568,7 +2639,16 @@ class Basis_it:
             # - itg 
             if name == "itg":
                 if not self.reduced_basis_itg : 
-                    phi[self.slice_params_phys[name]] = X[self.slice_params[name]].reshape(self.shape_params[name]).flatten()
+                    if not self.itg_bathymetry_located : 
+                        phi[self.slice_params_phys[name]] = X[self.slice_params[name]]#.reshape(self.shape_params[name]).flatten()
+                    else : 
+                        itg = np.zeros(self.shape_params_phys[name]) # ITG IN PHYSICAL SPACE, TO BE FILLED 
+                        X_itg = X[self.slice_params[name]].reshape(self.shape_params[name]) # ITG IN REDUCED SPACE, CONTAINS THE INFORMATION
+                        itg[0][self.idx_bathy] = X_itg[0] # COS PART OF ITG
+                        itg[1][self.idx_bathy] = X_itg[1] # SIN PART OF ITG
+                        phi[self.slice_params_phys[name]] = itg.flatten()
+                        #phi[self.slice_params_phys[name]].reshape(self.shape_params_phys[name])#[:,self.idx_bathy] = X[self.slice_params[name]]
+                        #phi[self.slice_params_phys[name]] = phi[self.slice_params_phys[name]].flatten()
                 else : 
                     if self.itg_time_dependant:
                         phi[self.slice_params_phys[name]] = np.tensordot(
@@ -2644,8 +2724,11 @@ class Basis_it:
             # - itg 
             if name == "itg":
                 if not self.reduced_basis_itg :
-                    adX[self.slice_params[name]] = param[name].flatten()
-
+                    if not self.itg_bathymetry_located : 
+                        adX[self.slice_params[name]] = param[name].flatten()
+                    else : 
+                        adX[self.slice_params[name]] = np.concatenate((param[name][0][self.idx_bathy].flatten(),
+                                                                      param[name][1][self.idx_bathy].flatten()))
                 else : 
                     if self.itg_time_dependant:
                         adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],

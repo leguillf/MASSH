@@ -421,7 +421,7 @@ MOD_SW1L_JAX = dict(
 
     dir_model = None,
 
-    var_to_save = None,
+    var_to_save = None, # Variables to save in output netcdf files 
 
     dtmodel = 300, # model timestep
 
@@ -1120,6 +1120,14 @@ BASIS_IT = dict(
     itg_time_dependant = False, # True if internal tide generation parameter changes in time  
 
     reduced_basis_itg = False, # True if internal tide generation parameter needs to be decomposed on a reduced basis 
+
+    itg_bathymetry_located = False, # True if itg sources are located on highest bathymetry gradients
+
+    bathymetry_gradient_threshold = None, # the percentage of highest gradient pixels to sekect for itg parameter 
+
+    path_bathymetry = None, # path to bathymetry netcdf file.   
+
+    name_var_bathy = {'lon':'','lat':'','var':''},
 
     facgauss = 3.5,  # factor for gaussian spacing= both space/time
 
