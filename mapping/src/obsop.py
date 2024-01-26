@@ -700,8 +700,8 @@ class Obsop_interp_l4(Obsop_interp):
                     var_obs_interp_reshape = var_obs_interp.reshape(self.DY.shape)
                     var_obs_interp_grady = np.zeros_like(self.DY)
                     var_obs_interp_gradx = np.zeros_like(self.DY)
-                    var_obs_interp_grady[1:-1,1:-1] = (var_obs_interp_reshape[2:,1:-1] - var_obs_interp_reshape[:-2,1:-1]) / 2 * self.DY[1:-1,1:-1]
-                    var_obs_interp_gradx[1:-1,1:-1] = (var_obs_interp_reshape[1:-1,2:] - var_obs_interp_reshape[1:-1,:-2]) / 2 * self.DX[1:-1,1:-1]
+                    var_obs_interp_grady[1:-1,1:-1] = (var_obs_interp_reshape[2:,1:-1] - var_obs_interp_reshape[:-2,1:-1]) / (2 * self.DY[1:-1,1:-1])
+                    var_obs_interp_gradx[1:-1,1:-1] = (var_obs_interp_reshape[1:-1,2:] - var_obs_interp_reshape[1:-1,:-2]) / (2 * self.DX[1:-1,1:-1])
 
                     # Fill dictionnaries
                     self.varobs[t][name+'_grady'] = var_obs_interp_grady.flatten()
@@ -772,8 +772,8 @@ class Obsop_interp_l4(Obsop_interp):
                 # Compute gradients
                 HX_grady = np.zeros_like(self.DY)
                 HX_gradx = np.zeros_like(self.DY)
-                HX_grady[1:-1,1:-1] = ((X[2:,1:-1] - X[:-2,1:-1]) / 2 * self.DY[1:-1,1:-1])
-                HX_gradx[1:-1,1:-1] = ((X[1:-1,2:] - X[1:-1,:-2]) / 2 * self.DX[1:-1,1:-1])
+                HX_grady[1:-1,1:-1] = ((X[2:,1:-1] - X[:-2,1:-1]) / (2 * self.DY[1:-1,1:-1]))
+                HX_gradx[1:-1,1:-1] = ((X[1:-1,2:] - X[1:-1,:-2]) / (2 * self.DX[1:-1,1:-1]))
 
 
             # Compute misfit & errors
