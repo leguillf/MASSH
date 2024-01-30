@@ -2565,6 +2565,16 @@ class Basis_it:
                         LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
                         self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
                     360)
+                
+                if self.itg_bathymetry_located == True : # selecting the coordinates locted on bathymetry high gradient points if itg_bathymetry_located == True 
+                    for J in range(len(ENSLON1)):
+                        el_concerned = False # boolean indicating if the reduced basis element is concerned  
+                        for K in range(len(self.idx_bathy)):
+                            if (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) and \
+                                (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg):
+
+                                el_concerned = True 
+
                 # if self.bathymetry_located == True 
                 # check for bathymetry located reduced basis element
                 # create a mask and mask coordinates in ENSLAT_itg and ENSLON_itg  
