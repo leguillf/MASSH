@@ -2511,8 +2511,14 @@ class Basis_it:
     
     def set_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
         
-        ###   - CASE WITH NO REDUCED BASIS -   ###
+        ###############################
+        ###   - SPACE DIMENSION -   ###
+        ###############################
+
+        ###   - NO REDUCED BASIS -   ###
+
         if not self.reduced_basis_itg :
+
             # - WITH TOTAL CONTROL OF ITG # 
             if not self.itg_bathymetry_located : 
                 shapeitg = [2,self.nx,self.ny]
@@ -2521,8 +2527,9 @@ class Basis_it:
                 print('nitg:',np.prod(shapeitg))
 
                 return shapeitg, shapeitg_phys
+            
             # - WITH CONTROL OF ITG DEPENDANT ON BATHYMETRY # 
-            elif self.itg_bathymetry_located :
+            else :
                 if type(self.bathymetry) is not np.ndarray:
                     raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_located == True')
                 else : 
@@ -2540,44 +2547,51 @@ class Basis_it:
 
                     return shapeitg, shapeitg_phys
                 
-        ################################################
-
-        ###############################
-        ###   - SPACE DIMENSION -   ###
-        ###############################
-
-        # - COORDINATES - # 
-        ENSLAT1 = np.arange(
-            LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
-            LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
-        ENSLAT_itg = []
-        ENSLON_itg = []
-        for I in range(len(ENSLAT1)):
-            ENSLON1 = np.mod(
-                np.arange(
-                    LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                    LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                    self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
-                360)
-            ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
-            ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
-        self.ENSLAT_itg = ENSLAT_itg
-        self.ENSLON_itg = ENSLON_itg
+        ###   - WITH REDUCED BASIS -   ###
         
-        # - GAUSSIAN FUNCTIONS - # 
-        itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
-        for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
-            iobs = np.where(
-                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
-                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg)
-                    )[0]
-            xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
-            yy = (self.lat1d[iobs] - lat0) / self.km2deg
-            
-            itg_xy_gauss[i,iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
+        else : 
 
-        itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
-        self.itg_xy_gauss = itg_xy_gauss
+            # - DEFINITION OF THE REDUCED BASIS - #
+            # * coordinates * # 
+            ENSLAT1 = np.arange(
+                LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
+                LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
+            ENSLAT_itg = []
+            ENSLON_itg = []
+            for I in range(len(ENSLAT1)):
+                ENSLON1 = np.mod(
+                    np.arange(
+                        LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                        LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                        self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+                    360)
+                # if self.bathymetry_located == True 
+                # check for bathymetry located reduced basis element
+                # create a mask and mask coordinates in ENSLAT_itg and ENSLON_itg  
+
+                ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+                ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
+            self.ENSLAT_itg = ENSLAT_itg
+            self.ENSLON_itg = ENSLON_itg
+            
+            # * gaussian functions * # 
+            itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
+            for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
+                iobs = np.where(
+                        (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
+                        (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg)
+                        )[0]
+                xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+                yy = (self.lat1d[iobs] - lat0) / self.km2deg
+                
+                itg_xy_gauss[i,iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
+
+            itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
+
+                
+            self.itg_xy_gauss = itg_xy_gauss
+
+                
 
         ##############################
         ###   - TIME DIMENSION -   ###
