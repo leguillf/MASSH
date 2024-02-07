@@ -90,7 +90,7 @@ class Variational:
         if config.INV.compute_test:
             print('Gradient test:')
             if self.prec:
-                X = (np.random.random(self.basis.nbasis)-0.5)
+                X = 1E-3*(np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
@@ -158,7 +158,10 @@ class Variational:
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
             misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobsx
-            Jo += misfit.dot(self.R.inv(misfit))  
+            Jo += misfit.dot(self.R.inv(misfit))
+
+        print("Jo = ",Jo)
+        print("Jb = ",Jb)  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
@@ -225,6 +228,8 @@ class Variational:
             # Measuring computation times
             #t_model.append(datetime.now()-t0)
             #t0 = datetime.now()
+
+            #adState.plot()
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:

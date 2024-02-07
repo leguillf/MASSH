@@ -1115,13 +1115,15 @@ BASIS_IT = dict(
 
     sigma_B_itg = 1e-2, # Background variance for itg
 
+    sigma_B_itg_bathy_modulated = False, # True if sigma_B_itg is modulated by bathymetry gradient 
+
     He_time_dependant = True, # True if equivalent height parameter changes in time  
 
     itg_time_dependant = False, # True if internal tide generation parameter changes in time  
 
     reduced_basis_itg = False, # True if internal tide generation parameter needs to be decomposed on a reduced basis 
 
-    itg_bathymetry_located = False, # True if itg sources are located on highest bathymetry gradients
+    itg_bathymetry_selected = False, # True if itg sources are located on highest bathymetry gradients
 
     bathymetry_gradient_threshold = None, # the percentage of highest gradient pixels to sekect for itg parameter 
 
