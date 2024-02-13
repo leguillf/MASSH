@@ -2186,6 +2186,7 @@ class Basis_it:
         if self.bathymetry_gradient_threshold == None and self.itg_bathymetry_selected==True: 
             raise AttributeError('Please prescribe a bathymetry_gradient_threshold if using itg parameter that is bathymetry located.')
         self.sigma_B_itg_bathy_modulated = config.BASIS.sigma_B_itg_bathy_modulated
+        self.bathymetry_gradient_smooth = config.BASIS.bathymetry_gradient_smooth
         
         self.sigma_B_He = config.BASIS.sigma_B_He
         self.sigma_B_bc = config.BASIS.sigma_B_bc
@@ -2277,7 +2278,8 @@ class Basis_it:
         self.idx_bathy = np.where(norm_grad>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
 
         # Normalizing bathymetry gradient 
-        norm_grad = scipy.signal.convolve2d(norm_grad,(1/9)*np.ones((3,3)),mode="same",boundary="fill")
+        if self.bathymetry_gradient_smooth : 
+            norm_grad = scipy.signal.convolve2d(norm_grad,(1/9)*np.ones((3,3)),mode="same",boundary="fill")
         norm_grad /= np.nanmax(norm_grad)
         self.norm_grad_bathymetry = norm_grad
         

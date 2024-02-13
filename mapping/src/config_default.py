@@ -1117,6 +1117,8 @@ BASIS_IT = dict(
 
     sigma_B_itg_bathy_modulated = False, # True if sigma_B_itg is modulated by bathymetry gradient 
 
+    bathymetry_gradient_smooth = False, # True if bathymetry graident needs to be smoothened by a gaussian kernel 
+
     He_time_dependant = True, # True if equivalent height parameter changes in time  
 
     itg_time_dependant = False, # True if internal tide generation parameter changes in time  
