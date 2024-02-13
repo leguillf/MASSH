@@ -2266,15 +2266,21 @@ class Basis_it:
 
         self.bathymetry = ds[name_elevation].values
 
-        # Calculating bathymetry gradient and segregating itg point locations 
+        # Calculating bathymetry gradient and 
         grad = np.gradient(self.bathymetry)
         norm_grad = np.sqrt(grad[0]**2+grad[1]**2)
         norm_grad[np.isnan(self.bathymetry)]=np.nan
-        threshold_value = self.bathymetry_gradient_threshold 
-        norm_grad /= np.nanmax(norm_grad)
+
+        # Segregating itg point locations 
+        threshold_value = self.bathymetry_gradient_threshold
         grad_threshold = np.nanpercentile(norm_grad.flatten(),q=threshold_value)
+        self.idx_bathy = np.where(norm_grad>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
+
+        # Normalizing bathymetry gradient 
+        norm_grad = scipy.signal.convolve2d(norm_grad,(1/9)*np.ones((3,3)),mode="same",boundary="fill")
+        norm_grad /= np.nanmax(norm_grad)
         self.norm_grad_bathymetry = norm_grad
-        self.idx_bathy = np.where(norm_grad>=grad_threshold)
+        
     
     def set_basis(self,time,return_q=False):
         
@@ -2561,7 +2567,6 @@ class Basis_it:
 
                 return shapeitg, shapeitg_phys
             
-
         else :
 
         ##################################
