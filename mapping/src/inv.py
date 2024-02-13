@@ -635,10 +635,12 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         options['maxiter'] = config.INV.maxiter
 
         if config.INV.gtol is not None:
-            _ = var.cost(Xopt)
+            f0 = var.cost(Xopt)
             g0 = var.grad(Xopt)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
+            # test on ftol #
+            options['ftol'] = 1e-8*f0
             
         # Run minimization 
         res = opt.minimize(var.cost, Xopt,
