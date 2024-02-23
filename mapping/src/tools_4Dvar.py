@@ -90,7 +90,7 @@ class Variational:
         if config.INV.compute_test:
             print('Gradient test:')
             if self.prec:
-                X = 1E-3*(np.random.random(self.basis.nbasis)-0.5)
+                X = (np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
@@ -160,8 +160,8 @@ class Variational:
             misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))
 
-        print("Jo = ",Jo)
-        print("Jb = ",Jb)  
+        #print("Jo = ",Jo)
+        #print("Jb = ",Jb)  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
@@ -229,7 +229,7 @@ class Variational:
             #t_model.append(datetime.now()-t0)
             #t0 = datetime.now()
 
-            #adState.plot()
+            adState.plot(title=f'adjoint variables at i = {i}')
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -315,7 +315,6 @@ class Variational_jax:
                 X = jnp.array(np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = jnp.array(self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb)
-            print(X)
             grad_test(self.cost,self.grad,X)
             
             

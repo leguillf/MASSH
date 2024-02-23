@@ -640,7 +640,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
             # test on ftol #
-            options['ftol'] = 1e-8*f0
+            options['ftol'] = 1e-14*f0
             
         # Run minimization 
         res = opt.minimize(var.cost, Xopt,

@@ -1105,21 +1105,41 @@ BASIS_LS = dict(
 # Internal Tides
 BASIS_IT = dict(
 
+    ### COMMON PARAMETER ###
+
+    scalemodes = None, # Only for SW1LM model, 
+
+    scalew_igws = None,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None, # name of the variable of the basis vector 
+
+    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    ### - HBC PARAMETER ### 
+
     Nwaves = 1, # number of wave component 
 
     Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
 
-    sigma_B_He = 0.2, # Background variance for He
-
     sigma_B_bc = 1e-2, # Background variance for bc
+
+    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
+
+    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+
+    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
+
+    ### - ITG PARAMETER - ### 
 
     sigma_B_itg = 1e-2, # Background variance for itg
 
     sigma_B_itg_bathy_modulated = False, # True if sigma_B_itg is modulated by bathymetry gradient 
 
     bathymetry_gradient_smooth = False, # True if bathymetry graident needs to be smoothened by a gaussian kernel 
-
-    He_time_dependant = True, # True if equivalent height parameter changes in time  
 
     itg_time_dependant = False, # True if internal tide generation parameter changes in time  
 
@@ -1133,31 +1153,22 @@ BASIS_IT = dict(
 
     name_var_bathy = {'lon':'','lat':'','var':''},
 
-    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+    D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
+
+    T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
+
+    ### - HE PARAMETER - ### 
+
+    sigma_B_He = 0.2, # Background variance for He
+
+    He_time_dependant = True, # True if equivalent height parameter changes in time  
+
+    He_uniform = True, # True if He is uniform over space AND time, useful for twin experiment 
 
     D_He = 200, # Space scale of gaussian decomposition for He (in km)
 
     T_He = 20, # Time scale of gaussian decomposition for He (in days)
 
-    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
-
-    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
-
-    D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
-
-    T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
-
-    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
-
-    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
-
-    scalemodes = None, # Only for SW1LM model, 
-
-    scalew_igws = None,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
 )
 
 

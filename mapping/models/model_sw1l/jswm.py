@@ -23,7 +23,7 @@ class Swm:
         ###############
         # COORDINATES #
         ###############
-         
+        
         self.X = State.X # X coordinates
         self.Y = State.Y # Y coordinates
         self.Xu = self.rho_on_u(self.X) # X coordinates on the u grid 
@@ -836,6 +836,7 @@ class Swm:
         #print("shape He : ",self.shape_params['He'])
         #print("size param : ",params.size)
         #print("slice He : ",self.slice_params['He'])
+
 
         # - Equivalent height - #
         if 'He' in self.name_params:

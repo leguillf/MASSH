@@ -2187,6 +2187,7 @@ class Basis_it:
             raise AttributeError('Please prescribe a bathymetry_gradient_threshold if using itg parameter that is bathymetry located.')
         self.sigma_B_itg_bathy_modulated = config.BASIS.sigma_B_itg_bathy_modulated
         self.bathymetry_gradient_smooth = config.BASIS.bathymetry_gradient_smooth
+        self.He_uniform = config.BASIS.He_uniform
         
         self.sigma_B_He = config.BASIS.sigma_B_He
         self.sigma_B_bc = config.BASIS.sigma_B_bc
@@ -2276,6 +2277,9 @@ class Basis_it:
         threshold_value = self.bathymetry_gradient_threshold
         grad_threshold = np.nanpercentile(norm_grad.flatten(),q=threshold_value)
         self.idx_bathy = np.where(norm_grad>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
+
+        ### TEST FOR TWIN EXPERIMENT ### 
+        #self.idx_bathy = (np.array([40]),np.array([40]))
 
         # Normalizing bathymetry gradient 
         if self.bathymetry_gradient_smooth : 
@@ -2381,6 +2385,13 @@ class Basis_it:
             return Xb, Q
 
     def set_He(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
+
+        if self.He_uniform: # for twin experiment 
+            shapeHe = [1]
+
+            shapeHe_phys = (self.ny,self.nx)
+
+            return shapeHe, shapeHe_phys
 
         ###############################
         ###   - SPACE DIMENSION -   ###
@@ -2674,7 +2685,10 @@ class Basis_it:
         for name in self.slice_params_phys.keys():
             # - He 
             if name == "He":
-                if self.He_time_dependant:
+                if self.He_uniform: # for twin experiment
+                    phi[self.slice_params_phys[name]] = X[self.slice_params[name]]
+
+                elif self.He_time_dependant:
                     phi[self.slice_params_phys[name]] = np.tensordot(
                                                             np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.He_xy_gauss,(1,0)),
                                                             self.He_t_gauss[:,indt],(0,0)).flatten()
@@ -2698,8 +2712,6 @@ class Basis_it:
                         itg[0][self.idx_bathy] = X_itg[0] # COS PART OF ITG
                         itg[1][self.idx_bathy] = X_itg[1] # SIN PART OF ITG
                         phi[self.slice_params_phys[name]] = itg.flatten()
-                        #phi[self.slice_params_phys[name]].reshape(self.shape_params_phys[name])#[:,self.idx_bathy] = X[self.slice_params[name]]
-                        #phi[self.slice_params_phys[name]] = phi[self.slice_params_phys[name]].flatten()
                 else : 
                     if self.itg_time_dependant:
                         phi[self.slice_params_phys[name]] = np.tensordot(
@@ -2760,7 +2772,10 @@ class Basis_it:
         for name in self.slice_params.keys():
             # - He 
             if name == "He":
-                if self.He_time_dependant:
+                if self.He_uniform: # for twin experiment
+                    adX[self.slice_params[name]] = np.sum(param[name])
+
+                elif self.He_time_dependant:
                     adX[self.slice_params[name]] = np.tensordot(param[name][:,:,np.newaxis]*self.He_t_gauss[:,indt],
                                                                 self.He_xy_gauss[:,:,:],([0,1],[1,2])).flatten()
                 else : 
