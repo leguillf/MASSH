@@ -800,6 +800,27 @@ class Obsop_interp_l4(Obsop_interp):
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
 
+            # PLOTTING FOR DEBUG #
+            '''
+            fig, (ax1,ax2,ax3) = plt.subplots(1,3,figsize=(16,4))
+            fig.suptitle(f"{t}")
+            plot1 = ax1.pcolormesh(HX.reshape((81,81)))
+            ax1.set_title("Model")
+            ax1.set_aspect("equal")
+            fig.colorbar(plot1,ax=ax1)
+
+            plot2 = ax2.pcolormesh(self.varobs[t][name].reshape((81,81)))
+            ax2.set_title("Obs")
+            ax2.set_aspect("equal")
+            fig.colorbar(plot2,ax=ax2)
+
+            plot3 = ax3.pcolormesh(_misfit.reshape((81,81)),cmap="RdBu")
+            ax3.set_title("Misfit")
+            ax3.set_aspect("equal")
+            fig.colorbar(plot3,ax=ax3)
+            plt.show()
+            '''
+
             # Output
             misfit = _inverr*_misfit
             misfit_to_save = _inverr*_inverr*_misfit
