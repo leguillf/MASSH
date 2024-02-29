@@ -160,8 +160,8 @@ class Variational:
             misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))
 
-        print("Jo = ",Jo)
-        print("Jb = ",Jb)  
+        #print("Jo = ",Jo)
+        #print("Jb = ",Jb)  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)

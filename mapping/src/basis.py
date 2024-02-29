@@ -2188,6 +2188,7 @@ class Basis_it:
         self.sigma_B_itg_bathy_modulated = config.BASIS.sigma_B_itg_bathy_modulated
         self.bathymetry_gradient_smooth = config.BASIS.bathymetry_gradient_smooth
         self.He_uniform = config.BASIS.He_uniform
+        self.itg_single_bathy = config.BASIS.itg_single_bathy
         
         self.sigma_B_He = config.BASIS.sigma_B_He
         self.sigma_B_bc = config.BASIS.sigma_B_bc
@@ -2279,7 +2280,8 @@ class Basis_it:
         self.idx_bathy = np.where(norm_grad>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
 
         ### TEST FOR TWIN EXPERIMENT ### 
-        self.idx_bathy = (np.array([40]),np.array([40]))
+        if self.itg_single_bathy == True : 
+            self.idx_bathy = (np.array([40]),np.array([40]))
 
         # Normalizing bathymetry gradient 
         if self.bathymetry_gradient_smooth : 
