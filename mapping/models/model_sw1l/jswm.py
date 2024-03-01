@@ -838,6 +838,7 @@ class Swm:
         #print("slice He : ",self.slice_params['He'])
 
 
+
         # - Equivalent height - #
         if 'He' in self.name_params:
             He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb

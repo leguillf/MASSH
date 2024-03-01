@@ -2436,7 +2436,7 @@ class Basis_it:
         ###   - TIME DIMENSION -   ###
         ##############################
         
-        if self.itg_time_dependant:
+        if self.He_time_dependant:
 
             # - COORDINATES - # 
             ENST_He = np.arange(-self.T_He*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_He/self.facnlt , self.T_He/self.facnlt)

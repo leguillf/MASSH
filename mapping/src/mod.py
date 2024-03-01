@@ -1452,7 +1452,7 @@ class Model_sw1l_jax(M):
                     State.var[self.name_var[name]] = var_init.values
         else:
             for name in self.name_var:
-                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float64')
+                State.var[self.name_var[name]] = np.zeros((State.nx,State.ny),dtype='float64')
                 State.var[self.name_var[name]][State.mask] = np.nan
 
         # Initialize auxiliary variables and values)
@@ -1561,8 +1561,8 @@ class Model_sw1l_jax(M):
                                             ]
             elif param =='itg' :
                 self.shape_params['itg'] = [2, # A and B, coefficient in front of cos and sin 
-                                            State.ny, #NY
-                                            State.nx] #NX
+                                            State.nx, #NX
+                                            State.ny] #NY
         
         # Setting number of parameters 
         self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))

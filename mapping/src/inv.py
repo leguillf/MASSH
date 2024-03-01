@@ -21,7 +21,7 @@ from . import grid
 
 
 
-def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, Bc=None, *args, **kwargs):
+def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=None, Bc=None, *args, **kwargs):
 
     """
     NAME
@@ -32,7 +32,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
     """
     
     if config.INV is None:
-        return Inv_forward(config, State=State, Model=Model, Bc=Bc)
+        return Inv_forward(config, State=State, Model=Model,Basis=Basis,X=X, Bc=Bc)
     
     print(config.INV)
     
@@ -58,7 +58,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
         sys.exit(config.INV.super + ' not implemented yet')
         
 
-def Inv_forward(config,State,Model,Bc=None):
+def Inv_forward(config,State,Model,Basis,X,Bc):
     
     """
     NAME
@@ -68,6 +68,11 @@ def Inv_forward(config,State,Model,Bc=None):
         Run a model forward integration  
     
     """
+
+    if X is not None:
+        print("Doing forward run from prescribed control vector X!")
+        if Basis==None:
+            sys.exit("Please prescribe Basis!")
 
     if 'JAX' in config.MOD.super:
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
@@ -89,6 +94,15 @@ def Inv_forward(config,State,Model,Bc=None):
     while present_date < config.EXP.final_date :
         
         State.plot(present_date)
+
+                # current time in secondes
+        t = (present_date - config.EXP.init_date).total_seconds()
+        
+        if Basis!=None:
+            # Reduced basis
+            Basis.operg(t/3600/24,X,State=State)
+        
+        #print(State.params['itg'][0,98:102,70:130])
         
         # Propagation
         Model.step(State,nstep,t=t)

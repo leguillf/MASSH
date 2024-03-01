@@ -69,7 +69,7 @@ class State:
 
             
 
-            self.ny,self.nx = self.lon.shape
+            self.nx,self.ny = self.lon.shape ### ATTENTION ### PAS self.ny,self.nx
 
             self.lon_min = np.nanmin(self.lon)
             self.lon_max = np.nanmax(self.lon)
@@ -118,8 +118,12 @@ class State:
                 config (module): configuration module
         """     
         self.geo_grid = True
-        lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) 
-        lat = np.arange(config.lat_min, config.lat_max + config.dlat, config.dlat) 
+        #lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) 
+        #lat = np.arange(config.lat_min, config.lat_max + config.dlat, config.dlat) 
+
+        lon = np.linspace(config.lon_min, config.lon_max,int((config.lon_max-config.lon_min+config.dlon)/config.dlon))
+        lat = np.linspace(config.lat_min, config.lat_max,int((config.lat_max-config.lat_min+config.dlat)/config.dlat))
+        
         lon,lat = np.meshgrid(lon,lat)
         self.dlon = config.dlon
         self.dlon = config.dlat
