@@ -1147,7 +1147,9 @@ BASIS_IT = dict(
 
     itg_bathymetry_selected = False, # True if itg sources are located on highest bathymetry gradients
 
-    bathymetry_gradient_threshold = None, # the percentage of highest gradient pixels to sekect for itg parameter 
+    itg_single_bathy = False, # for twin exp 
+
+    bathymetry_gradient_threshold = None, # the percentage of highest gradient pixels to select for itg parameter 
 
     path_bathymetry = None, # path to bathymetry netcdf file.   
 
