@@ -135,7 +135,7 @@ class Bc_ext:
         var_interp = {}
         for name in self.var:
             if self.time_bc is not None and self.time_bc.size>1:
-                var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)})
+                var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)}).squeeze()
                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
                 # Remove NaN
                 if np.isnan(var).any():

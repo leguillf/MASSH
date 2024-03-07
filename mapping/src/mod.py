@@ -854,6 +854,7 @@ class Model_qg1l_jax(M):
 
         Xb = self.bc['SSH'][t0]
         if self.advect_tracer:
+            Xb = Xb[np.newaxis,:,:]
             for name in self.name_var:
                 if name!='SSH' and name in self.bc and len(self.bc[name].keys())>0:
                     if t1 in self.bc[name]: 
@@ -864,8 +865,7 @@ class Model_qg1l_jax(M):
                         idx_closest = np.argmin(np.abs(t_list-t1))
                         new_t1 = t_list[idx_closest]
                         Cb = self.bc[name][new_t1]
-                    Xb = np.append(Xb[np.newaxis,:,:], 
-                                Cb[np.newaxis,:,:], axis=0)     
+                    Xb = np.append(Xb, Cb[np.newaxis,:,:], axis=0)     
         return Xb.astype('float64')
     
     def step(self,State,nstep=1,t=0):

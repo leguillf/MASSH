@@ -651,6 +651,8 @@ INV_4DVAR = dict(
 
     compute_test = False, # TLM, ADJ & GRAD tests
 
+    JAX_mem_fraction = None,
+
     path_init_4Dvar = None, # To restart the minimization process from a specified control vector
 
     restart_4Dvar = False, # To restart the minimization process from the last control vector
@@ -848,7 +850,7 @@ INV_MOI = dict(
 
 NAME_BASIS = None
 
-# Balanced Motions
+# Balanced Motions 
 BASIS_BM = dict(
 
     name_mod_var = None, # Name of the related model variable 
@@ -899,6 +901,33 @@ BASIS_BM = dict(
 
 )
 
+
+BASIS_BM_INIT = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+
+    facns = 1., #factor for wavelet spacing in space
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    lmeso = 300, # Largest mesoscale wavelenght 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    anomaly = False, # Use init state from BC as background
+
+)
+
 BASIS_CURRENT = dict(
 
     mode = 'geo', # 'geo' or 'ageo'
@@ -946,6 +975,33 @@ BASIS_CURRENT = dict(
     depth1 = 0.,
 
     depth2 = 30.,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
+# Balanced Motions 
+BASIS_WAVELET3D = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+
+    facnst = 1., #factor for wavelet spacing in space and time 
+
+    npsp = 3.5, # Defines the wavelet shape, both in space and time 
+
+    facpsp = 1.5, # factor to fix df between wavelets, both in space and time 
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    tmin = 2, # minimum time of decorrelation 
+
+    tmax = 20., # maximum time of decorrelation 
+
+    sigma_Q = 1e-1, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 

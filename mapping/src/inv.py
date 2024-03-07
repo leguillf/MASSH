@@ -591,7 +591,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
     # Set Reduced Basis
     if Basis is not None:
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in days) for which the basis components will be compute (at each timestep_checkpoint)
-        Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
+        Xb, Q = Basis.set_basis(time_basis, return_q=True, State=State) # Q is the standard deviation. To get the variance, use Q^2
     else:
         sys.exit('4Dvar only work with reduced basis!!')
     
@@ -1079,7 +1079,7 @@ def Inv_4Dvar_parallel(config, State=None) :
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
         if config.INV.JAX_mem_fraction is not None and config.INV.JAX_mem_fraction>0:
             os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
-        if len(proc)>0:
+        elif len(proc)>0:
             os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(proc),config.INV.nprocs))
     old_stdout = sys.stdout # backup current stdout
     sys.stdout = open(os.devnull, "w") # prevent printoing outputs

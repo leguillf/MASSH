@@ -86,7 +86,7 @@ class Obsop_interp:
         # For grid interpolation:
         lon = +State.lon
         lat = +State.lat
-        self.shape_grid = (State.ny, State.nx)
+        self.shape_grid = [State.ny, State.nx]
         self.coords_geo = np.column_stack((lon.ravel(), lat.ravel()))
         self.coords_car = grid.geo2cart(self.coords_geo)
 
@@ -594,11 +594,12 @@ class Obsop_interp_l4(Obsop_interp):
         # For grid interpolation:
         self.interp_method = config.OBSOP.interp_method
 
+        self.DX = State.DX
+        self.DY = State.DY
+
         # Misfit on gradients
         self.gradients = config.OBSOP.gradients
         if self.gradients:
-            self.DX = State.DX
-            self.DY = State.DY
             self.name_H += f'_L4_grad_{config.OBSOP.interp_method}'
         else:
             self.name_H += f'_L4_{config.OBSOP.interp_method}'
@@ -611,6 +612,9 @@ class Obsop_interp_l4(Obsop_interp):
         self.varobs = {}
         self.errobs = {}
 
+        #############################
+        # Loop on observation dates #
+        #############################
         for i,t in enumerate(self.date_obs):
 
             self.varobs[t] = {}
@@ -618,16 +622,14 @@ class Obsop_interp_l4(Obsop_interp):
 
             sat_info_list = self.dict_obs[t]['attributes']
             obs_file_list = self.dict_obs[t]['obs_path']
-            obs_name_list = self.dict_obs[t]['obs_name']
 
-        
             # Concatenate obs from different sensors
             lon_obs = {}
             lat_obs = {}
             var_obs = {}
             err_obs = {}
 
-            for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
+            for sat_info,obs_file in zip(sat_info_list,obs_file_list):
 
                 if sat_info.super!='OBS_L4':
                     continue
@@ -636,57 +638,76 @@ class Obsop_interp_l4(Obsop_interp):
                 # Merge observations
                 ####################
                 with xr.open_dataset(obs_file) as ncin:
-                    lon = ncin[sat_info['name_lon']].values.ravel() 
-                    lat = ncin[sat_info['name_lat']].values.ravel()
-
+                    lon = ncin[sat_info['name_lon']].values
+                    lat = ncin[sat_info['name_lat']].values
                     for name in sat_info['name_var']:
                         # Observed variable
-                        var = ncin[name].values.ravel() 
+                        var = ncin[name].values 
                         # Observed error
                         name_err = name + '_err'
                         if name_err in ncin:
-                            err = ncin[name_err].values.ravel() 
+                            err = ncin[name_err].values
                         elif sat_info['sigma_noise'] is not None:
                             err = sat_info['sigma_noise'] * np.ones_like(var)
                         else:
                             err = np.ones_like(var)                        
+
+                        # Append to lists
                         if name in lon_obs:
-                            var_obs[name] = np.concatenate((var_obs[name],var))
-                            err_obs[name] = np.concatenate((err_obs[name],err))
-                            lon_obs[name] = np.concatenate((lon_obs[name],lon))
-                            lat_obs[name] = np.concatenate((lat_obs[name],lat))
+                            var_obs[name].append(+var)
+                            err_obs[name].append(+err)
+                            lon_obs[name].append(+lon)
+                            lat_obs[name].append(+lat)
                         else:
-                            var_obs[name] = +var
-                            err_obs[name] = +err
-                            lon_obs[name] = +lon
-                            lat_obs[name] = +lat
+                            var_obs[name] = [+var]
+                            err_obs[name] = [+err]
+                            lon_obs[name] = [+lon]
+                            lat_obs[name] = [+lat]
+                    
             
             for name in lon_obs:
-                coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
                 ################
                 # Process L4 obs
                 ################
                 file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
+                # Check if spatial interpolations have already been performed
                 if not self.compute_op and self.write_op and os.path.exists(file_L4):
                     with open(file_L4, "rb") as f:
                         var_obs_interp, err_obs_interp = pickle.load(f)
                 else:
                     # Grid interpolation: performing spatial interpolation now
-                    if self.interp_method=='hybrid':
-                        # We perform first nearest, then linear, and then cubic interpolations
-                        var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='nearest')
-                        err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='nearest')
-                        var_obs_interp_linear = griddata(coords_obs, var_obs[name], self.coords_geo, method='linear')
-                        err_obs_interp_linear = griddata(coords_obs, err_obs[name], self.coords_geo, method='linear')
-                        var_obs_interp[~np.isnan(var_obs_interp_linear)] = var_obs_interp_linear[~np.isnan(var_obs_interp_linear)]
-                        err_obs_interp[~np.isnan(err_obs_interp_linear)] = err_obs_interp_linear[~np.isnan(err_obs_interp_linear)]
-                        var_obs_interp_cubic = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
-                        err_obs_interp_cubic = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
-                        var_obs_interp[~np.isnan(var_obs_interp_cubic)] = var_obs_interp_linear[~np.isnan(var_obs_interp_cubic)]
-                        err_obs_interp[~np.isnan(err_obs_interp_cubic)] = err_obs_interp_linear[~np.isnan(err_obs_interp_cubic)]
-                    else:
-                        var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
-                        err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
+                    # Loop on different obs for this date and this variable name
+                    var_obs_interp = np.zeros([len(var_obs[name]),]+self.shape_grid)
+                    err_obs_interp = np.zeros([len(var_obs[name]),]+self.shape_grid)
+                    for iobs in range(len(var_obs[name])):
+                        _coords_obs = np.column_stack((lon_obs[name][iobs].flatten(), lat_obs[name][iobs].flatten()))
+                        if self.interp_method=='hybrid':
+                            # We perform first nearest, then linear, and then cubic interpolations
+                            _var_obs_interp = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='nearest')
+                            _err_obs_interp = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='nearest')
+                            _var_obs_interp_linear = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='linear')
+                            _err_obs_interp_linear = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='linear')
+                            _var_obs_interp[~np.isnan(_var_obs_interp_linear)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_linear)]
+                            _err_obs_interp[~np.isnan(_err_obs_interp_linear)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_linear)]
+                            _var_obs_interp_cubic = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
+                            _err_obs_interp_cubic = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
+                            _var_obs_interp[~np.isnan(_var_obs_interp_cubic)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_cubic)]
+                            _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)]
+                        else:
+                            _var_obs_interp = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
+                            _err_obs_interp = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
+                        
+                        # Add error due to interpolation (resolutions ratio)
+                        dx,dy = grid.lonlat2dxdy(lon_obs[name][iobs],lat_obs[name][iobs])
+                        dx = griddata(_coords_obs, dx.flatten(), self.coords_geo)
+                        dy = griddata(_coords_obs, dy.flatten(), self.coords_geo)
+                        _err_res = (dx * dy) / (self.DX * self.DY).flatten()
+                        _err_res = np.where(_err_res<1,1,_err_res)
+                        _err_obs_interp *= _err_res
+                    
+                        var_obs_interp[iobs] = _var_obs_interp.reshape(self.shape_grid)
+                        err_obs_interp[iobs] = _err_obs_interp.reshape(self.shape_grid)
+                        
                     # Save operator if asked
                     if self.write_op:
                         with open(file_L4, "wb") as f:
@@ -697,20 +718,21 @@ class Obsop_interp_l4(Obsop_interp):
                 
                 if self.gradients:
                      # Compute gradients
-                    var_obs_interp_reshape = var_obs_interp.reshape(self.DY.shape)
-                    var_obs_interp_grady = np.zeros_like(self.DY)
-                    var_obs_interp_gradx = np.zeros_like(self.DY)
-                    var_obs_interp_grady[1:-1,1:-1] = (var_obs_interp_reshape[2:,1:-1] - var_obs_interp_reshape[:-2,1:-1]) / (2 * self.DY[1:-1,1:-1])
-                    var_obs_interp_gradx[1:-1,1:-1] = (var_obs_interp_reshape[1:-1,2:] - var_obs_interp_reshape[1:-1,:-2]) / (2 * self.DX[1:-1,1:-1])
+                    var_obs_interp_grady = np.zeros_like(var_obs_interp)*np.nan
+                    var_obs_interp_gradx = np.zeros_like(var_obs_interp)*np.nan
+                    var_obs_interp_grady[:,1:-1,1:-1] = (var_obs_interp[:,2:,1:-1] - var_obs_interp[:,:-2,1:-1]) / (2 * self.DY[np.newaxis,1:-1,1:-1])
+                    var_obs_interp_gradx[:,1:-1,1:-1] = (var_obs_interp[:,1:-1,2:] - var_obs_interp[:,1:-1,:-2]) / (2 * self.DX[np.newaxis,1:-1,1:-1])
 
                     # Fill dictionnaries
-                    self.varobs[t][name+'_grady'] = var_obs_interp_grady.flatten()
-                    self.varobs[t][name+'_gradx'] = var_obs_interp_gradx.flatten()
-                    self.errobs[t][name] = err_obs_interp
+                    self.varobs[t][name+'_grady'] = var_obs_interp_grady
+                    self.varobs[t][name+'_gradx'] = var_obs_interp_gradx
+                    self.errobs[t][name] = err_obs_interp /  (self.DY[np.newaxis,:,:]**2 + self.DX[np.newaxis,:,:]**2)**.5
                 else:
                     # Fill dictionnaries
                     self.varobs[t][name] = var_obs_interp
                     self.errobs[t][name] = err_obs_interp
+                
+                
 
     def misfit(self,t,State):
         if self.gradients:
@@ -727,21 +749,22 @@ class Obsop_interp_l4(Obsop_interp):
         for name in self.name_var_obs[t]:
 
             # Get model state
-            X = State.getvar(self.name_mod_var[name]).ravel()
+            X = State.getvar(self.name_mod_var[name])
 
             # Project model state to obs space
-            HX = +X
+            HX = +X[np.newaxis,:,:]
 
             # Compute misfit & errors
             _misfit = (HX-self.varobs[t][name])
             _inverr = 1/self.errobs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
-        
+
             # Save to netcdf
             dsout = xr.Dataset(
                     {
-                    "misfit": (("Nobs"), _inverr*_inverr*_misfit),
+                    "misfit": (('Nobs','Ny','Nx'), _misfit),
+                    "inverr": (('Nobs','Ny','Nx'), _inverr),
                     }
                     )
             dsout.to_netcdf(
@@ -753,7 +776,8 @@ class Obsop_interp_l4(Obsop_interp):
             mode = 'a'
 
             # Concatenate
-            misfit = np.concatenate((misfit,_inverr*_misfit))
+            for iobs in range(_misfit.shape[0]):
+                misfit = np.concatenate((misfit,(_inverr[iobs]*_misfit[iobs]).flatten()))
 
         return misfit
     
@@ -768,17 +792,17 @@ class Obsop_interp_l4(Obsop_interp):
             # Get model state
             X = State.getvar(self.name_mod_var[name])
 
-            if self.gradients:
-                # Compute gradients
-                HX_grady = np.zeros_like(self.DY)
-                HX_gradx = np.zeros_like(self.DY)
-                HX_grady[1:-1,1:-1] = ((X[2:,1:-1] - X[:-2,1:-1]) / (2 * self.DY[1:-1,1:-1]))
-                HX_gradx[1:-1,1:-1] = ((X[1:-1,2:] - X[1:-1,:-2]) / (2 * self.DX[1:-1,1:-1]))
-
+            # Compute gradients
+            HX_grady = np.zeros_like(self.DY)
+            HX_gradx = np.zeros_like(self.DY)
+            HX_grady[1:-1,1:-1] = ((X[2:,1:-1] - X[:-2,1:-1]) / (2 * self.DY[1:-1,1:-1]))
+            HX_gradx[1:-1,1:-1] = ((X[1:-1,2:] - X[1:-1,:-2]) / (2 * self.DX[1:-1,1:-1]))
+            HX_grady = HX_grady[np.newaxis,:,:]
+            HX_gradx = HX_gradx[np.newaxis,:,:]
 
             # Compute misfit & errors
-            _misfit_grady = (HX_grady.flatten()-self.varobs[t][name+'_grady']) 
-            _misfit_gradx = (HX_gradx.flatten()-self.varobs[t][name+'_gradx']) 
+            _misfit_grady = (HX_grady-self.varobs[t][name+'_grady']) 
+            _misfit_gradx = (HX_gradx-self.varobs[t][name+'_gradx']) 
             _inverr = 1/self.errobs[t][name]
             _misfit_grady[np.isnan(_misfit_grady)] = 0
             _misfit_gradx[np.isnan(_misfit_gradx)] = 0
@@ -787,12 +811,13 @@ class Obsop_interp_l4(Obsop_interp):
             # Save to netcdf
             dsout = xr.Dataset(
                     {
-                    "misfit_grady": (("Nobs"), _inverr*_inverr*_misfit_grady),
-                    "misfit_gradx": (("Nobs"), _inverr*_inverr*_misfit_gradx),
+                    "misfit_grady": (('Nobs','Ny','Nx'), _misfit_grady),
+                    "misfit_gradx": (('Nobs','Ny','Nx'), _misfit_gradx),
+                    "inverr" : (('Nobs','Ny','Nx'), _inverr)
                     }
                     )
             dsout.to_netcdf(
-                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc"), 
+                os.path.join(self.tmp_DA_path,f"misfit_L4_grad_{t.strftime('%Y%m%d_%H%M')}.nc"), 
                 mode=mode, 
                 group=name
                 )
@@ -800,7 +825,8 @@ class Obsop_interp_l4(Obsop_interp):
             mode = 'a'
 
             # Concatenate
-            misfit = np.concatenate((misfit,_inverr*_misfit_grady,_inverr*_misfit_gradx))
+            for iobs in range(_inverr.shape[0]):
+                misfit = np.concatenate((misfit,(_inverr[iobs]*_misfit_grady[iobs]).flatten(),(_inverr[iobs]*_misfit_gradx[iobs]).flatten()))
 
         return misfit
     
@@ -820,6 +846,7 @@ class Obsop_interp_l4(Obsop_interp):
                 os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc")), 
                 group=name)
             misfit = ds['misfit'].values
+            inverr = ds['inverr'].values
             ds.close()
             del ds
 
@@ -830,10 +857,11 @@ class Obsop_interp_l4(Obsop_interp):
             advar = adState.getvar(self.name_mod_var[name])
 
             # Compute adjoint operation of y = Hx
-            adX = +misfit
+            for iobs in range(misfit.shape[0]):
+                advar += (inverr[iobs]* inverr[iobs] * misfit[iobs])
 
             # Update adjoint variable
-            adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])      
+            adState.setvar(advar, self.name_mod_var[name])      
     
     def _adj_grad(self, t, adState, R):
 
@@ -841,10 +869,11 @@ class Obsop_interp_l4(Obsop_interp):
 
             # Read misfit
             ds = xr.open_dataset(os.path.join(
-                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc")), 
+                os.path.join(self.tmp_DA_path,f"misfit_L4_grad_{t.strftime('%Y%m%d_%H%M')}.nc")), 
                 group=name)
-            misfit_grady = ds['misfit_grady'].values.reshape(self.DY.shape)
-            misfit_gradx = ds['misfit_gradx'].values.reshape(self.DY.shape)
+            misfit_grady = ds['misfit_grady'].values
+            misfit_gradx = ds['misfit_gradx'].values
+            inverr = ds['inverr'].values
             ds.close()
             del ds
 
@@ -856,14 +885,14 @@ class Obsop_interp_l4(Obsop_interp):
             advar = adState.getvar(self.name_mod_var[name])
 
             # Compute adjoint operation of y = Hx
-            adX = np.zeros_like(advar)
-            adX[2:,1:-1] += misfit_grady[1:-1,1:-1] / 2 * self.DY[1:-1,1:-1]
-            adX[:-2,1:-1] += -misfit_grady[1:-1,1:-1] / 2 * self.DY[1:-1,1:-1]
-            adX[1:-1,2:] += misfit_gradx[1:-1,1:-1] / 2 * self.DX[1:-1,1:-1]
-            adX[1:-1,:-2] += -misfit_gradx[1:-1,1:-1] / 2 * self.DX[1:-1,1:-1]
+            for iobs in range(inverr.shape[0]):
+                advar[2:,1:-1] += inverr[iobs,1:-1,1:-1]* inverr[iobs,1:-1,1:-1] * misfit_grady[iobs,1:-1,1:-1] / (2 * self.DY[1:-1,1:-1])
+                advar[:-2,1:-1] += -inverr[iobs,1:-1,1:-1]* inverr[iobs,1:-1,1:-1] * misfit_grady[iobs,1:-1,1:-1] / (2 * self.DY[1:-1,1:-1])
+                advar[1:-1,2:] += inverr[iobs,1:-1,1:-1]* inverr[iobs,1:-1,1:-1] * misfit_gradx[iobs,1:-1,1:-1] / (2 * self.DX[1:-1,1:-1])
+                advar[1:-1,:-2] += -inverr[iobs,1:-1,1:-1]* inverr[iobs,1:-1,1:-1] * misfit_gradx[iobs,1:-1,1:-1] / (2 * self.DX[1:-1,1:-1])
 
             # Update adjoint variable
-            adState.setvar(advar + adX, self.name_mod_var[name])      
+            adState.setvar(advar, self.name_mod_var[name])      
 
 
 ###############################################################################
