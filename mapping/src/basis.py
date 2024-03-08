@@ -2280,7 +2280,6 @@ class Basis_it:
         self.idx_bathy = np.where(norm_grad>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
 
         ### TEST FOR TWIN EXPERIMENT ### 
-        print(self.itg_single_bathy)
         if self.itg_single_bathy == True : 
             self.idx_bathy = (np.array([40]),np.array([40]))
 
