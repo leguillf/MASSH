@@ -754,7 +754,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
     time_checkpoints.append(np.datetime64(Model.timestamps[-1]))
     t_checkpoints.append(Model.T[-1])
     checkpoints = np.asarray(checkpoints)
-    time_checkpoints = np.asarray(time_checkpoints)
+    time_checkpoints = np.asarray(time_checkpoints)    
     print(f'--> {checkpoints.size} checkpoints to evaluate the cost function')
 
     # Boundary conditions
