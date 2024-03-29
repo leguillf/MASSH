@@ -1,9 +1,9 @@
 import jax.numpy as jnp 
 from jax import jit
 from jax import jvp,vjp
-from jax.config import config
 from jax import debug
-config.update("jax_enable_x64", True)
+#from jax.config import config
+#config.update("jax_enable_x64", True)
 from jax.lax import scan
 from jax import vmap
 
