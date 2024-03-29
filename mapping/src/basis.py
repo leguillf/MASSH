@@ -2208,6 +2208,8 @@ class Basis_it:
         self.shape_phys = (State.ny,State.nx)
         self.ny = State.ny
         self.nx = State.nx
+        self.X = State.X 
+        self.Y = State.Y 
         self.lon = State.lon
         self.lat = State.lat
         self.lon_min = State.lon_min
@@ -2265,14 +2267,27 @@ class Basis_it:
 
         ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
 
-        ds = ds.where(ds.elevation<0) # masking the outer lands (where ds.elevation>0)
+        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0 
 
         self.bathymetry = ds[name_elevation].values
 
-        # Calculating bathymetry gradient and 
-        grad = np.gradient(self.bathymetry)
-        norm_grad = np.sqrt(grad[0]**2+grad[1]**2)
-        norm_grad[np.isnan(self.bathymetry)]=np.nan
+        # Calculating bathymetry gradient 
+        # X component of gradient
+        grad_x = np.zeros(self.X.shape)
+        grad_x[:,1:-2] = (self.bathymetry[:,2:-1]-self.bathymetry[:,0:-3])/(self.X[:,2:-1]-self.X[:,0:-3]) # inner part of gradient 
+        grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(self.X[:,1]-self.X[:,0])
+        grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(self.X[:,-1]-self.X[:,-2])
+        
+        # Y component of gradient
+        grad_y = np.zeros(self.Y.shape)
+        grad_y[1:-2,:] = (self.bathymetry[2:-1,:]-self.bathymetry[0:-3,:])/(self.Y[2:-1,:]-self.Y[0:-3,:])
+        grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(self.Y[1,:]-self.Y[0,:])
+        grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(self.Y[-1,:]-self.Y[-2,:])
+        
+        self.grad_x = grad_x
+        self.grad_y = grad_y
+
+        norm_grad = np.sqrt(self.grad_x**2+self.grad_y**2)
 
         # Segregating itg point locations 
         threshold_value = self.bathymetry_gradient_threshold
