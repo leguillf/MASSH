@@ -18,6 +18,8 @@ from datetime import datetime
 import pyinterp 
 import pyinterp.fill
 
+import warnings
+
 from . import grid
 
 class State:
@@ -106,6 +108,9 @@ class State:
 
             # Gravity
             self.g = 9.81
+
+            # Bathymetry field 
+            self.set_bathy(config)
 
     def ini_geo_grid(self,config):
         """
@@ -288,6 +293,66 @@ class State:
             self.mask = mask_interp.copy()
         
         self.mask += (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
+
+    def set_bathy(self,config):
+
+        """
+        NAME
+            set_bathy
+
+        DESCRIPTION
+            Read bathymetry file, interpolate it to the grid
+        """
+
+        # Read bathymetry 
+        if config.EXP.path_bathymetry is not None and os.path.exists(config.EXP.path_bathymetry):
+            ds = xr.open_dataset(config.EXP.path_bathymetry).squeeze()
+            name_lon = config.EXP.name_var_bathy['lon']
+            name_lat = config.EXP.name_var_bathy['lat']
+            name_elevation = config.EXP.name_var_bathy['var']
+
+        else: # No bathymetry file prescripted
+            warnings.warn("No bathymetry field prescribed.")
+            return None 
+
+        # Convert longitudes
+        if np.sign(ds[name_lon].data.min())==-1 and self.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds[name_lon])    
+
+        dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
+        dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
+        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
+        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
+        
+        ds = ds.sel(
+            {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
+                name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
+
+        ds = ds.interp(coords={name_lon:self.lon[0,:],name_lat:self.lat[:,0]},method='cubic')
+
+        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0 
+
+        self.bathymetry = ds[name_elevation].values
+
+        # Calculating bathymetry gradient 
+        # X component of gradient
+        grad_x = np.zeros(self.X.shape)
+        grad_x[:,1:-2] = (self.bathymetry[:,2:-1]-self.bathymetry[:,0:-3])/(self.X[:,2:-1]-self.X[:,0:-3]) # inner part of gradient 
+        grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(self.X[:,1]-self.X[:,0])
+        grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(self.X[:,-1]-self.X[:,-2])
+        
+        # Y component of gradient
+        grad_y = np.zeros(self.Y.shape)
+        grad_y[1:-2,:] = (self.bathymetry[2:-1,:]-self.bathymetry[0:-3,:])/(self.Y[2:-1,:]-self.Y[0:-3,:])
+        grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(self.Y[1,:]-self.Y[0,:])
+        grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(self.Y[-1,:]-self.Y[-2,:])
+        
+        self.grad_bathymetry_x = grad_x
+        self.grad_bathymetry_y = grad_y
+        
             
     def save_output(self,date,name_var=None):
         

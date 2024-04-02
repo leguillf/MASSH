@@ -55,6 +55,10 @@ EXP = dict(
 
     path_obs = None, # if set to None, observations are saved in *tmp_DA_path*
 
+    path_bathymetry = None, # path to read bathymetry netcdf file.   
+
+    name_var_bathy = {'lon':'','lat':'','var':''},
+
     coriolis_force = True, # if set to False, coriolis force is set to 0 (for idealized case for instance)
 
     n_workers = 1 # number of workers to parallelize experiment preparation (like Obsop, ...)
@@ -1151,13 +1155,13 @@ BASIS_IT = dict(
 
     bathymetry_gradient_threshold = None, # the percentage of highest gradient pixels to select for itg parameter 
 
-    path_bathymetry = None, # path to bathymetry netcdf file.   
-
-    name_var_bathy = {'lon':'','lat':'','var':''},
-
     D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
 
     T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
+
+    # - Anisotropic ITG - #
+
+    anisotropic_itg = False,
 
     ### - HE PARAMETER - ### 
 

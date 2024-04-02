@@ -2184,7 +2184,7 @@ class Basis_it:
         self.itg_bathymetry_selected = config.BASIS.itg_bathymetry_selected
         self.bathymetry_gradient_threshold = config.BASIS.bathymetry_gradient_threshold
         if self.bathymetry_gradient_threshold == None and self.itg_bathymetry_selected==True: 
-            raise AttributeError('Please prescribe a bathymetry_gradient_threshold if using itg parameter that is bathymetry located.')
+            raise AttributeError('Please prescribe a bathymetry_gradient_threshold in the configuration file if using itg parameter that is bathymetry located.')
         self.sigma_B_itg_bathy_modulated = config.BASIS.sigma_B_itg_bathy_modulated
         self.bathymetry_gradient_smooth = config.BASIS.bathymetry_gradient_smooth
         self.He_uniform = config.BASIS.He_uniform
@@ -2195,6 +2195,8 @@ class Basis_it:
         self.sigma_B_itg = config.BASIS.sigma_B_itg
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
+
+        self.anisotropic_itg = config.BASIS.anisotropic_itg
         
         if config.BASIS.Ntheta>0:
             self.Ntheta = 2*(config.BASIS.Ntheta-1)+3 # We add -pi/2,0,pi/2
@@ -2225,86 +2227,36 @@ class Basis_it:
 
         self.name_params = config.MOD.name_params 
 
-        # Configurating bathymetry information 
-        self.set_bathy(config,State)
-        
+        # Normalizing bathymetry gradient 
+        norm_grad = np.sqrt(State.grad_bathymetry_x**2+State.grad_bathymetry_y**2)
+        if self.bathymetry_gradient_smooth : 
+            norm_grad = scipy.signal.convolve2d(norm_grad,(1/9)*np.ones((3,3)),mode="same",boundary="fill")
 
-    def set_bathy(self,config,State):
+        norm_grad /= np.nanmax(norm_grad)
+        self.norm_grad_bathymetry = norm_grad
+
+        if self.itg_bathymetry_selected : 
+            self.select_itg(State)
+        
+    def select_itg(self,State):
 
         """
         NAME
-            set_bathy
+            select_itg
 
         DESCRIPTION
-            Read bathymetry file, interpolate it to state grid
+            Selects Internal Tide Generation sites 
         """
-
-        # Read bathymetry 
-        if config.BASIS.path_bathymetry is not None and os.path.exists(config.BASIS.path_bathymetry):
-            ds = xr.open_dataset(config.BASIS.path_bathymetry).squeeze()
-            name_lon = config.BASIS.name_var_bathy['lon']
-            name_lat = config.BASIS.name_var_bathy['lat']
-            name_elevation = config.BASIS.name_var_bathy['var']
-
-        else: # No bathymetry file prescripted
-            return None 
-
-        # Convert longitudes
-        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
-            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
-        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
-            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
-        ds = ds.sortby(ds[name_lon])    
-
-        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
-        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
-        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
-        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
-        
-        ds = ds.sel(
-            {name_lon:slice(State.lon_min-dlon,State.lon_max+dlon),
-                name_lat:slice(State.lat_min-dlat,State.lat_max+dlat)})
-
-        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
-
-        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0 
-
-        self.bathymetry = ds[name_elevation].values
-
-        # Calculating bathymetry gradient 
-        # X component of gradient
-        grad_x = np.zeros(self.X.shape)
-        grad_x[:,1:-2] = (self.bathymetry[:,2:-1]-self.bathymetry[:,0:-3])/(self.X[:,2:-1]-self.X[:,0:-3]) # inner part of gradient 
-        grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(self.X[:,1]-self.X[:,0])
-        grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(self.X[:,-1]-self.X[:,-2])
-        
-        # Y component of gradient
-        grad_y = np.zeros(self.Y.shape)
-        grad_y[1:-2,:] = (self.bathymetry[2:-1,:]-self.bathymetry[0:-3,:])/(self.Y[2:-1,:]-self.Y[0:-3,:])
-        grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(self.Y[1,:]-self.Y[0,:])
-        grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(self.Y[-1,:]-self.Y[-2,:])
-        
-        self.grad_x = grad_x
-        self.grad_y = grad_y
-
-        norm_grad = np.sqrt(self.grad_x**2+self.grad_y**2)
 
         # Segregating itg point locations 
         threshold_value = self.bathymetry_gradient_threshold
-        grad_threshold = np.nanpercentile(norm_grad.flatten(),q=threshold_value)
-        self.idx_bathy = np.where(norm_grad>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
+        grad_threshold = np.nanpercentile(self.norm_grad_bathymetry.flatten(),q=threshold_value)
+        self.idx_bathy = np.where(self.norm_grad_bathymetry>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
 
         ### TEST FOR TWIN EXPERIMENT ### 
         if self.itg_single_bathy == True : 
             self.idx_bathy = (np.array([40]),np.array([40]))
 
-        # Normalizing bathymetry gradient 
-        if self.bathymetry_gradient_smooth : 
-            norm_grad = scipy.signal.convolve2d(norm_grad,(1/9)*np.ones((3,3)),mode="same",boundary="fill")
-        norm_grad /= np.nanmax(norm_grad)
-        self.norm_grad_bathymetry = norm_grad
-        
-    
     def set_basis(self,time,return_q=False):
         
         TIME_MIN = time.min()
@@ -2332,7 +2284,10 @@ class Basis_it:
                 self.shape_params["hbcE"], self.shape_params["hbcW"], self.shape_params_phys["hbcE"], self.shape_params_phys["hbcW"] = self.set_hbcy(time, LAT_MIN, LAT_MAX, TIME_MIN, TIME_MAX)
 
             if name == "itg": 
-                self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
+                if self.anisotropic_itg == False :
+                    self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
+                elif self.anisotropic_itg == True :
+                    self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_anisotropic_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX)
         
         self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) # dictionary with the number of each of the parameters in reduced space 
         self.n_params_phys = dict(zip(self.shape_params_phys.keys(), map(np.prod, self.shape_params_phys.values()))) # dictionary with the number of each of the parameters in physical space
@@ -2620,9 +2575,11 @@ class Basis_it:
                         self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
                     360)
                 
-                mask_el = np.zeros_like(ENSLON1,dtype='bool') # mask indicating if reduced basis element is consider, by default set to False 
-
+                
                 if self.itg_bathymetry_selected == True : # selecting the coordinates locted on bathymetry high gradient points if itg_bathymetry_selected == True 
+                    
+                    mask_el = np.zeros_like(ENSLON1,dtype='bool') # mask indicating if reduced basis element is consider, by default set to False 
+
                     # raising error if no bathymetry file has been prescribed
                     if type(self.bathymetry) is not np.ndarray:
                         raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_selected == True')
@@ -2635,6 +2592,8 @@ class Basis_it:
                             if (np.abs((np.mod(self.lon[idx] - ENSLON1[J]+180,360)-180) / self.km2deg * np.cos(ENSLAT1[I] * np.pi / 180.)) <= self.D_itg) and (np.abs((self.lat[idx] - ENSLAT1[I]) / self.km2deg) <= self.D_itg):
                                 mask_el[J] = True 
                             K+=1
+                else : 
+                    mask_el = np.ones_like(ENSLON1,dtype='bool') # mask indicating if reduced basis element is consider, by default set to False 
 
                 ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1[mask_el]))]))
                 ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1[mask_el]]))
@@ -2684,6 +2643,49 @@ class Basis_it:
         print('nitg:',np.prod(shapeitg))
 
         return shapeitg, shapeitg_phys
+
+    def set_anisotropic_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX):
+
+        # - COORDINATES - # 
+        ENSLAT1 = np.arange(
+            LAT_MIN - self.D_He*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_He/self.facns*self.km2deg, self.D_He/self.facns*self.km2deg)
+        ENSLAT_itg = []
+        ENSLON_itg = []
+        for I in range(len(ENSLAT1)):
+            ENSLON1 = np.mod(
+                np.arange(
+                    LON_MIN - self.D_He*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    LON_MAX + 1.5*self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+                360)
+            ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+            ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
+        self.ENSLAT_itg = ENSLAT_itg
+        self.ENSLON_itg = ENSLON_itg
+
+        # - GAUSSIAN FUNCTIONS - # 
+        itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
+        for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
+            iobs = np.where(
+                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_He) &
+                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_He)
+                    )[0]
+            xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+            yy = (self.lat1d[iobs] - lat0) / self.km2deg
+            
+            itg_xy_gauss[i,iobs] = mywindow(xx / self.D_He) * mywindow(yy / self.D_He)
+
+        itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
+        self.itg_xy_gauss = itg_xy_gauss
+
+        # Shapes of parameters # 
+        shapeitg_phys = (4,self.ny,self.nx)
+        shapeitg = [4,ENSLAT_itg.size]
+
+        print('nitg:',np.prod(shapeitg))
+
+        return shapeitg, shapeitg_phys
     
     def operg(self,t,X,State=None):
 
@@ -2720,22 +2722,26 @@ class Basis_it:
                 
             # - itg 
             if name == "itg":
-                if not self.reduced_basis_itg : 
-                    if not self.itg_bathymetry_selected : 
-                        phi[self.slice_params_phys[name]] = X[self.slice_params[name]]#.reshape(self.shape_params[name]).flatten()
-                    else : 
-                        itg = np.zeros(self.shape_params_phys[name]) # ITG IN PHYSICAL SPACE, TO BE FILLED 
-                        X_itg = X[self.slice_params[name]].reshape(self.shape_params[name]) # ITG IN REDUCED SPACE, CONTAINS THE INFORMATION
-                        itg[0][self.idx_bathy] = X_itg[0] # COS PART OF ITG
-                        itg[1][self.idx_bathy] = X_itg[1] # SIN PART OF ITG
-                        phi[self.slice_params_phys[name]] = itg.flatten()
-                else : 
-                    if self.itg_time_dependant:
-                        phi[self.slice_params_phys[name]] = np.tensordot(
-                                                        np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)),
-                                                        self.itg_t_gauss[:,indt],(1,0)).flatten() 
-                    else : 
-                        phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
+                if self.anisotropic_itg == True : # Anisotropic version of ITG # 
+                    phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
+
+                else : # Other version of ITG # 
+                    if not self.reduced_basis_itg : # ITG isn't on a reduced basis # 
+                        if not self.itg_bathymetry_selected : # All pixels are controlled # 
+                            phi[self.slice_params_phys[name]] = X[self.slice_params[name]]#.reshape(self.shape_params[name]).flatten()
+                        else : # Only pixels with highest bathy gradient are controlled #
+                            itg = np.zeros(self.shape_params_phys[name]) # ITG IN PHYSICAL SPACE, TO BE FILLED 
+                            X_itg = X[self.slice_params[name]].reshape(self.shape_params[name]) # ITG IN REDUCED SPACE, CONTAINS THE INFORMATION
+                            itg[0][self.idx_bathy] = X_itg[0] # COS PART OF ITG
+                            itg[1][self.idx_bathy] = X_itg[1] # SIN PART OF ITG
+                            phi[self.slice_params_phys[name]] = itg.flatten()
+                    else : # ITG is on a reduced basis # 
+                        if self.itg_time_dependant: # ITG is dependant on time # 
+                            phi[self.slice_params_phys[name]] = np.tensordot(
+                                                            np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)),
+                                                            self.itg_t_gauss[:,indt],(1,0)).flatten() 
+                        else : # ITG isn't dependant on time # 
+                            phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
 
         # - SAVING OUTPUTS - #
 
@@ -2796,8 +2802,8 @@ class Basis_it:
                     adX[self.slice_params[name]] = np.tensordot(param[name][:,:,np.newaxis]*self.He_t_gauss[:,indt],
                                                                 self.He_xy_gauss[:,:,:],([0,1],[1,2])).flatten()
                 else : 
-                    adX[self.slice_params[name]] = np.tensordot(param[name][:,:,np.newaxis],
-                                                                self.He_xy_gauss[:,:,:],([0,1],[1,2])).flatten()
+                    adX[self.slice_params[name]] = np.tensordot(param[name],
+                                                                self.He_xy_gauss,([0,1],[1,2])).flatten()
             
             # - hbc         
             if name in ["hbcS","hbcN","hbcW","hbcE"]:
@@ -2806,19 +2812,23 @@ class Basis_it:
             
             # - itg 
             if name == "itg":
-                if not self.reduced_basis_itg :
-                    if not self.itg_bathymetry_selected : 
-                        adX[self.slice_params[name]] = param[name].flatten()
-                    else : 
-                        adX[self.slice_params[name]] = np.concatenate((param[name][0][self.idx_bathy].flatten(),
-                                                                      param[name][1][self.idx_bathy].flatten()))
-                else : 
-                    if self.itg_time_dependant:
-                        adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],
-                                                                    self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
-                    else : 
-                        adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis],
-                                                                    self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
+                if self.anisotropic_itg == True : # Anisotropic version of ITG # 
+                    adX[self.slice_params[name]] = np.tensordot(param[name],
+                                                                        self.itg_xy_gauss,([1,2],[1,2])).flatten()
+                else : # Other version of ITG # 
+                    if not self.reduced_basis_itg : # ITG isn't on a reduced basis #  
+                        if not self.itg_bathymetry_selected : # All pixels are controlled #
+                            adX[self.slice_params[name]] = param[name].flatten()
+                        else :  # Only pixels with highest bathy gradient are controlled #
+                            adX[self.slice_params[name]] = np.concatenate((param[name][0][self.idx_bathy].flatten(),
+                                                                        param[name][1][self.idx_bathy].flatten()))
+                    else :  # ITG is on a reduced basis #  
+                        if self.itg_time_dependant: # ITG is dependant on time # 
+                            adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],
+                                                                        self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
+                        else : # ITG isn't dependant on time # 
+                            adX[self.slice_params[name]] = np.tensordot(param[name],
+                                                                        self.itg_xy_gauss,([1,2],[1,2])).flatten()
 
         # Setting adState parameters to 0 
         if adState is not None:

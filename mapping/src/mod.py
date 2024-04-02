@@ -1433,6 +1433,9 @@ class Model_sw1l_jax(M):
         self.omegas = np.asarray(config.MOD.w_waves)
         self.bc_kind = config.MOD.bc_kind
 
+        # Internal Tide Generation # 
+        self.anisotropic_itg = config.BASIS.anisotropic_itg # if True, expression of ITG is anisotropic 
+
         # Setting Model mask # 
         self.mask = {}
         self.set_mask(State.mask,config)
@@ -1560,10 +1563,15 @@ class Model_sw1l_jax(M):
                                             State.ny # NY
                                             ]
             elif param =='itg' :
-                self.shape_params['itg'] = [2, # A and B, coefficient in front of cos and sin 
-                                            State.nx, #NX
-                                            State.ny] #NY
-        
+                if not self.anisotropic_itg : 
+                    self.shape_params['itg'] = [2, # A and B, coefficient in front of cos and sin 
+                                                State.nx, #NX
+                                                State.ny] #NY
+                elif self.anisotropic_itg :
+                    self.shape_params['itg'] = [4, # A_u, A_v, B_u, B_v, coefficients in front of cos and sin for each bathymetry gradient components 
+                                                State.nx, #NX
+                                                State.ny] #NY
+                    
         # Setting number of parameters 
         self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))
 

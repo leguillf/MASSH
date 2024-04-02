@@ -31,6 +31,15 @@ class Swm:
         self.Xv = self.rho_on_v(self.X) # X coordinates on the v grid
         self.Yv = self.rho_on_v(self.Y) # Y coordinates on the v grid
 
+        ########
+        # DATA #
+        ########
+
+        # Bathymetry gradient # 
+
+        self.grad_bathymetry_x = State.grad_bathymetry_x
+        self.grad_bathymetry_y = State.grad_bathymetry_y
+
         ##############
         # PARAMETERS #
         ##############
@@ -61,6 +70,9 @@ class Swm:
             self.Heb = Model.Heb
         else: 
             self.Heb = Model.Heb * jnp.ones_like(self.X)
+        
+        # - Internal Tide Generation - # 
+        self.anisotropic_itg = Model.anisotropic_itg # if True, expression of ITG is anisotropic 
 
         #########################
         # FUNCTIONAL PARAMETERS #
@@ -848,7 +860,12 @@ class Swm:
         # - ITG : Internal Tide Generation - # 
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
-            rhs_itg = jnp.cos(self.omegas[0]*jnp.array(t))*itg[0,:]+jnp.sin(self.omegas[0]*jnp.array(t))*itg[1,:]
+            if not self.anisotropic_itg : 
+                rhs_itg = itg[0,:]*jnp.cos(self.omegas[0]*jnp.array(t))+ itg[1,:]*jnp.sin(self.omegas[0]*jnp.array(t))
+            elif self.anisotropic_itg :
+                rhs_itg=self.grad_bathymetry_x*(itg[0,:]*jnp.cos(self.omegas[0]*jnp.array(t))+itg[1,:]*jnp.sin(self.omegas[0]*jnp.array(t))) # component for x gradient
+                rhs_itg+=self.grad_bathymetry_y*(itg[2,:]*jnp.cos(self.omegas[0]*jnp.array(t))+ itg[3,:]*jnp.sin(self.omegas[0]*jnp.array(t))) # component for y gradient
+                            
         else : 
             rhs_itg = jnp.zeros((self.ny, self.nx))
 
