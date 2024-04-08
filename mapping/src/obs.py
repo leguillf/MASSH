@@ -93,7 +93,12 @@ def Obs(config, State, *args, **kwargs):
             else:
                 path = f'{OBS.path}*.nc'
             try:
-                _ds = xr.open_mfdataset(path)
+
+                if OBS.super=='OBS_SSH_SWATH' : # no need to specify the dimension along which to concatenate 
+                    _ds = xr.open_mfdataset(path,combine='nested',concat_dim = OBS.concat_dim)
+                else :
+                    _ds = xr.open_mfdataset(path)
+                
             except ValueError:
                 print('ValueError: opening with combine==nested')
                 files = glob.glob(path)
@@ -206,7 +211,8 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     varobs[name].data = varobs[name].data + sign*mdt_on_obs
                 # Remove high values
                 if 'varmax' in obs_attr and obs_attr.varmax is not None:
-                    varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+                    #varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+                    varobs[name].where(np.abs(varobs[name])<obs_attr.varmax,varobs[name],np.nan)
 
             # Build netcdf
             coords = {obs_attr.name_time:_ds[obs_attr.name_time].values}

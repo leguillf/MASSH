@@ -2648,16 +2648,16 @@ class Basis_it:
 
         # - COORDINATES - # 
         ENSLAT1 = np.arange(
-            LAT_MIN - self.D_He*(1-1./self.facns)*self.km2deg,
-            LAT_MAX + 1.5*self.D_He/self.facns*self.km2deg, self.D_He/self.facns*self.km2deg)
+            LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
         ENSLAT_itg = []
         ENSLON_itg = []
         for I in range(len(ENSLAT1)):
             ENSLON1 = np.mod(
                 np.arange(
-                    LON_MIN - self.D_He*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                    LON_MAX + 1.5*self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                    self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+                    LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
                 360)
             ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
             ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
@@ -2668,13 +2668,13 @@ class Basis_it:
         itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
         for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
             iobs = np.where(
-                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_He) &
-                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_He)
+                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
+                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg)
                     )[0]
             xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
             yy = (self.lat1d[iobs] - lat0) / self.km2deg
             
-            itg_xy_gauss[i,iobs] = mywindow(xx / self.D_He) * mywindow(yy / self.D_He)
+            itg_xy_gauss[i,iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
 
         itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
         self.itg_xy_gauss = itg_xy_gauss

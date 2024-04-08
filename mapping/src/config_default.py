@@ -228,6 +228,8 @@ OBS_SSH_SWATH = dict(
 
     nudging_params_relvort = None, # dictionary of nudging parameters on Relative Vorticity {'sigma':<float>,'K':<float>,'Tau':<datetime.timedelta>}. Note that *sigma* parameter is useless now, and will be removed soon
     
+    concat_dim = "num_lines" # dimension name along which to concatenate 
+    
 )
 
 #################################################################################################################################

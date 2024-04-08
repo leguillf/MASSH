@@ -288,8 +288,9 @@ class Obsop_interp_l3(Obsop_interp):
 
         # Initialization
         misfit = np.array([])
+        misfit_to_save = np.array([])
 
-        mode = 'w'
+        #mode = 'w'
         for name in self.name_var_obs[t]:
 
             # Get model state
@@ -303,43 +304,25 @@ class Obsop_interp_l3(Obsop_interp):
             _inverr = 1/self.errobs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
-        
-            # Save to netcdf
-            dsout = xr.Dataset(
-                    {
-                    "misfit": (("Nobs"), _inverr*_inverr*_misfit),
-                    }
-                    )
-            dsout.to_netcdf(
-                os.path.join(self.tmp_DA_path,f"misfit_L3_{t.strftime('%Y%m%d_%H%M')}.nc"), 
-                mode=mode, 
-                group=name
-                )
-            dsout.close()
-            mode = 'a'
 
             # Concatenate
             misfit = np.concatenate((misfit,_inverr*_misfit))
+            misfit_to_save = np.concatenate((misfit_to_save,_inverr*_inverr*_misfit))
+        
+        return misfit, misfit_to_save
 
-        return misfit
-
-    def adj(self, t, adState, R):
+    def adj(self, t, adState, misfit, R):
 
         for name in self.name_var_obs[t]:
-
-            # Read misfit
-            ds = xr.open_dataset(os.path.join(
-                os.path.join(self.tmp_DA_path,f"misfit_L3_{t.strftime('%Y%m%d_%H%M')}.nc")), 
-                group=name)
-            misfit = ds['misfit'].values
-            ds.close()
-            del ds
 
             # Apply R operator
             misfit = R.inv(misfit)
 
             # Read adjoint variable
             advar = adState.getvar(self.name_mod_var[name])
+
+            #print(name,t,"misfit_shape in grad : ",misfit.shape)
+            #print(tprint("misfit shape",misfit.shape)
 
             # Compute adjoint operation of y = Hx
             adX = self.Hop[t][name].T @ misfit
@@ -501,6 +484,7 @@ class Obsop_interp_l3_geocur(Obsop_interp_l3):
 
         # Initialization
         misfit = np.array([])
+        misfit_to_save = np.array([])
 
         if 'SSH' in self.name_var_obs[t]:
 
@@ -530,8 +514,9 @@ class Obsop_interp_l3_geocur(Obsop_interp_l3):
 
             # Concatenate
             misfit = np.concatenate((misfit,_inverr*_misfit))
-
-        return misfit
+            misfit_to_save = np.concatenate((misfit,_inverr*_inverr*_misfit))
+            
+        return misfit, misfit_to_save
 
     def adj(self, t, adState, R):
 
@@ -786,6 +771,10 @@ class Obsop_interp_l4(Obsop_interp):
                         misfit_to_save (array) : misfit saved for grad function in tools_4Dvar.py
         '''
         
+        # Initialization
+        misfit = np.array([])
+        misfit_to_save = np.array([])
+
         for name in self.name_var_obs[t]:
 
             # Get model state
@@ -800,30 +789,9 @@ class Obsop_interp_l4(Obsop_interp):
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
 
-            # PLOTTING FOR DEBUG #
-            '''
-            fig, (ax1,ax2,ax3) = plt.subplots(1,3,figsize=(16,4))
-            fig.suptitle(f"{t}")
-            plot1 = ax1.pcolormesh(HX.reshape((81,81)))
-            ax1.set_title("Model")
-            ax1.set_aspect("equal")
-            fig.colorbar(plot1,ax=ax1)
-
-            plot2 = ax2.pcolormesh(self.varobs[t][name].reshape((81,81)))
-            ax2.set_title("Obs")
-            ax2.set_aspect("equal")
-            fig.colorbar(plot2,ax=ax2)
-
-            plot3 = ax3.pcolormesh(_misfit.reshape((81,81)),cmap="RdBu")
-            ax3.set_title("Misfit")
-            ax3.set_aspect("equal")
-            fig.colorbar(plot3,ax=ax3)
-            plt.show()
-            '''
-
             # Output
-            misfit = _inverr*_misfit
-            misfit_to_save = _inverr*_inverr*_misfit
+            misfit = np.concatenate((misfit,_inverr*_misfit))
+            misfit_to_save = np.concatenate((misfit_to_save,_inverr*_inverr*_misfit))
 
         return misfit, misfit_to_save
 
