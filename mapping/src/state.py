@@ -320,13 +320,14 @@ class State:
             ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
         elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
             ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
-        ds = ds.sortby(ds[name_lon])    
+        ds = ds.sortby(ds[name_lon])   
+
 
         dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
         dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
         dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
         dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
-        
+
         ds = ds.sel(
             {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
                 name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
