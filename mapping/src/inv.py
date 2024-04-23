@@ -871,7 +871,9 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
         
         # Save minimization trajectory
         if config.INV.save_minimization:
-            ds = xr.Dataset({'cost':(('j'),var.J),'grad':(('g'),var.G)})
+            ds = xr.Dataset({'J':(('N'),var.J),'Jo':(('N'),var.Jo),'grad':(('N'),var.G)})
+            for param in Basis.name_params:
+               ds["Jb_"+param]=xr.DataArray(var.J[param],dims=["N"])
             ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
             ds.close()
 
