@@ -196,11 +196,11 @@ class Variational:
                     B_specific = Cov(self.B.sigma[self.slice_params[param]])
                 if self.B is not None:
                     if self.prec :
-                        self.Jb[param] = X0_specific.dot(X0_specific) # cost of background term
+                        self.Jb[param].append(X0_specific.dot(X0_specific)) # cost of background term
                     else:
-                        self.Jb[param] = np.dot(X0_specific,B_specific.inv(X0_specific)) # cost of background term
+                        self.Jb[param].append(np.dot(X0_specific,B_specific.inv(X0_specific))) # cost of background term
                 else:
-                    self.Jb[param] = 0
+                    self.Jb[param].append(0)
 
         # Measuring computation times
         #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
