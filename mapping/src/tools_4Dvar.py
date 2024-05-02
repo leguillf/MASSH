@@ -85,6 +85,13 @@ class Variational:
                 self.Jb[param] = []
             # observational cost term 
             self.Jo = []
+            # background grad norm
+            self.Gb = {}
+            for param in Basis.name_params : 
+                self.Gb[param] = []
+            # observational grad norm 
+            self.Go = []
+            
         
         # For incremental 4Dvar only
         self.X0 = self.Xb*0
@@ -142,6 +149,7 @@ class Variational:
             if self.H.is_obs(timestamp):
                 misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
+                # print("Jo at "+str(timestamp)+" : ",Jo,"(",misfit.dot(self.R.inv(misfit)),")")
 
             # Measuring computation times
             #t_misfit.append(datetime.now()-t0)
@@ -168,13 +176,12 @@ class Variational:
         if self.H.is_obs(timestamp):
             misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))
-
-
-        #print("Jo = ",Jo)
-        #print("Jb = ",Jb)  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
+
+        # print("Jb = ",Jb)
+        # print("Jo = ",Jo)
         
         State.plot(title='State variables at the end of cost function evaluation')
         ### TO DO : HOW TO PLOT THE PARAMETERS ### 
@@ -281,7 +288,6 @@ class Variational:
         
         g = adX + gb  # total gradient
 
-        
         adState.plot(title='adjoint variables at the end of gradient function evaluation')
         self.basis.operg(t/3600/24,adX,State=State)
 
@@ -289,7 +295,26 @@ class Variational:
         #State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
         
         if self.save_minimization:
-            self.G.append(np.max(np.abs(g)))
+            self.G.append(np.max(np.abs(g))) # gradient of all parameters 
+            self.Go.append(np.max(np.abs(adX))) # observational cost 
+            for param in self.Gb.keys() : # background cost
+                ## defining X0_specific - the part of vector X for specific parameter && B_specific - the part of Cov matrix B for specific parameter##
+                if param == "hbcx":
+                    X0_specific = np.concatenate((X0[self.slice_params["hbcS"]],X0[self.slice_params["hbcN"]]))
+                    B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcS"]],self.B.sigma[self.slice_params["hbcN"]])))
+                elif param == "hbcy":
+                    X0_specific = np.concatenate((X0[self.slice_params["hbcE"]],X0[self.slice_params["hbcW"]]))
+                    B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcE"]],self.B.sigma[self.slice_params["hbcW"]])))
+                else :
+                    X0_specific = X0[self.slice_params[param]]
+                    B_specific = Cov(self.B.sigma[self.slice_params[param]])
+                if self.B is not None:
+                    if self.prec :
+                        self.Gb[param].append(np.max(np.abs(X0_specific))) # cost of background term
+                    else:
+                        self.Gb[param].append(np.max(np.abs(self.B_specific.inv(X0_specific)))) # cost of background term
+                else:
+                    self.Gb[param].append(0)
 
         # Measuring computation times
         #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")

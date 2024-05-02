@@ -299,11 +299,27 @@ class Obsop_interp_l3(Obsop_interp):
             # Project model state to obs space
             HX = self.Hop[t][name] @ X
 
+            # if t == datetime(2012, 6, 23, 6, 0) :
+            #     np.save("./state.npy",X)
+            #     np.save("./HX.npy",HX)
+                
+
             # Compute misfit & errors
             _misfit = (HX-self.varobs[t][name])
             _inverr = 1/self.errobs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
+
+            #if t == datetime(2012, 6, 23, 6, 0) :
+            #if self.varobs[t][name].size>1000:
+            # plt.figure(figsize=(20,5))
+            # plt.plot(HX,label="HX",c='blue')
+            # plt.plot(self.varobs[t][name],label="measure",c='green')
+            # plt.plot(_misfit,label="misfit",c='orange')
+            # plt.ylim(-0.1,0.1)
+            # plt.title(str(t))
+            # plt.legend()
+            # plt.show()
 
             # Concatenate
             misfit = np.concatenate((misfit,_inverr*_misfit))
@@ -566,7 +582,8 @@ class Obsop_interp_l4(Obsop_interp):
                                                   dict_obs[t_obs[ind_obs]]['attributes']):
                         
                         # Check if this observation class is wanted
-                        if sat_info.super!='OBS_L4':
+                        #if sat_info.super!='OBS_L4':
+                        if sat_info.super not in ["OBS_L4", "OBS_SSH_SWATH"]:
                             continue
                         if config.OBSOP.name_obs is None or (config.OBSOP.name_obs is not None and obs_name in config.OBSOP.name_obs):
                             if obs_name not in self.name_obs:
@@ -609,7 +626,8 @@ class Obsop_interp_l4(Obsop_interp):
 
             for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
 
-                if sat_info.super!='OBS_L4':
+                #if sat_info.super!='OBS_L4':
+                if sat_info.super not in ["OBS_L4", "OBS_SSH_SWATH"]:
                     continue
 
                 ####################
@@ -659,14 +677,12 @@ class Obsop_interp_l4(Obsop_interp):
             
             ### Computing unsaved variables ### 
             if self.n_workers>1 : 
-                var_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(jb_delayed(griddata)(np.column_stack((lon_obs[t][name], lat_obs[t][name])), 
-                                                                                                            var_obs[t][name], 
-                                                                                                            self.coords_geo, 
-                                                                                                            method=self.interp_method) for t in t_unsave)
-                err_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(jb_delayed(griddata)(np.column_stack((lon_obs[t][name], lat_obs[t][name])), 
-                                                                                                            err_obs[t][name], 
-                                                                                                            self.coords_geo, 
-                                                                                                            method=self.interp_method) for t in t_unsave)
+                var_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(
+                    jb_delayed(grid_interp)(lon_obs[t][name],lat_obs[t][name],var_obs[t][name],self.coords_geo,self.interp_method) for t in t_unsave
+                )
+                err_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(
+                    jb_delayed(grid_interp)(lon_obs[t][name],lat_obs[t][name],err_obs[t][name],self.coords_geo,self.interp_method) for t in t_unsave
+                )
                 for i,t in enumerate(t_unsave) :
                     var_obs[t][name] = var_interp[i]
                     err_obs[t][name] = err_interp[i]
@@ -679,8 +695,8 @@ class Obsop_interp_l4(Obsop_interp):
                     
             else: 
                 for t in t_unsave : 
-                    var_obs[t][name] = griddata(np.column_stack((lon_obs[t][name], lat_obs[t][name])), var_obs[t][name], self.coords_geo, method=self.interp_method)
-                    err_obs[t][name] = griddata(np.column_stack((lon_obs[t][name], lat_obs[t][name])), err_obs[t][name], self.coords_geo, method=self.interp_method)
+                    var_obs[t][name] = grid_interp(lon_obs[t][name],lat_obs[t][name],var_obs[t][name],self.coords_geo,self.interp_method)
+                    err_obs[t][name] = grid_interp(lon_obs[t][name],lat_obs[t][name],err_obs[t][name],self.coords_geo,self.interp_method)
                     if self.write_op:
                         file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
                         with open(file_L4, "wb") as f:
@@ -691,7 +707,8 @@ class Obsop_interp_l4(Obsop_interp):
         # Fill dictionnaries
         self.varobs = var_obs
         self.errobs = err_obs
-    
+
+
     """
     def misfit(self,t,State):
 
@@ -810,7 +827,24 @@ class Obsop_interp_l4(Obsop_interp):
 
             # Update adjoint variable
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])
+
+
+def grid_interp(_lon_obs,_lat_obs,_array_obs,_coords_geo,interp_method):
+    _coords_obs = np.column_stack((_lon_obs, _lat_obs))
+    if interp_method == "hybrid":
+
+        _array_obs_interp = griddata(_coords_obs,_array_obs, _coords_geo, method="nearest") # first interpolation with "nearest" method
+        _array_obs_interp_linear = griddata(_coords_obs,_array_obs, _coords_geo, method="linear") # second interpolation with "linear" method
+        _array_obs_interp_cubic = griddata(_coords_obs, _array_obs, _coords_geo, method="cubic") # third interpolation with "cubic" method
+
+        _array_obs_interp[~np.isnan(_array_obs_interp_linear)]=_array_obs_interp_linear[~np.isnan(_array_obs_interp_linear)] # filling out first interpolation with all available values of second method 
+        _array_obs_interp[~np.isnan(_array_obs_interp_cubic)] = _array_obs_interp_cubic[~np.isnan(_array_obs_interp_cubic)] # filling out first interpolation with all available values of third method 
+
+        return _array_obs_interp
     
+    else : 
+        
+        return griddata(_coords_obs,_array_obs,_coords_geo,method=interp_method)
 
 ###############################################################################
 #                            Multi-Operators                                  #

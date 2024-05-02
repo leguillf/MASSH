@@ -525,6 +525,9 @@ class State:
         other.lon = self.lon
         other.lat = self.lat
         other.geo_grid = self.geo_grid
+        other.grad_bathymetry_x = self.grad_bathymetry_x
+        other.grad_bathymetry_y = self.grad_bathymetry_y
+        
 
         # (deep)Copy model variables
         for name in self.var.keys():
