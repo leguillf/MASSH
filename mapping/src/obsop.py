@@ -37,7 +37,7 @@ def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
     if config.OBSOP is None:
         return 
     
-    if verbose:
+    if verbose and not config.OBSOP.super is None:
         print(config.OBSOP)
     
     if config.OBSOP.super is None:
@@ -111,10 +111,13 @@ class Obsop_interp:
                 for i in range(self.coords_geo.shape[0]):
                     if np.any(np.all(np.isclose(coords_geo_borders,self.coords_geo[i]), axis=1)):
                         self.ind_borders.append(i)
-        
+
         # Process obs
         self.dict_obs = dict_obs
-        
+
+        #number of observations 
+        self.n_obs = 0 
+
 
     def process_obs(self, var_bc=None):
 
@@ -173,6 +176,9 @@ class Obsop_interp_l3(Obsop_interp):
         self.dmax = self.Npix*np.mean(np.sqrt(State.DX**2 + State.DY**2))*1e-3*np.sqrt(2)/2 # maximal distance for space interpolation
 
         self.name_H += f'_L3_{config.OBSOP.Npix}'
+
+        # misfit normalization 
+        self.normalize_misfit = config.OBSOP.normalize_misfit
     
     def _sparse_op(self,lon_obs,lat_obs):
         
@@ -284,6 +290,9 @@ class Obsop_interp_l3(Obsop_interp):
                         with open(file_L3, "wb") as f:
                             pickle.dump(_H, f)
 
+                #updating number of obs 
+                self.n_obs+=var_obs[name].size
+
     def misfit(self,t,State):
 
         # Initialization
@@ -299,31 +308,19 @@ class Obsop_interp_l3(Obsop_interp):
             # Project model state to obs space
             HX = self.Hop[t][name] @ X
 
-            # if t == datetime(2012, 6, 23, 6, 0) :
-            #     np.save("./state.npy",X)
-            #     np.save("./HX.npy",HX)
-                
-
             # Compute misfit & errors
             _misfit = (HX-self.varobs[t][name])
             _inverr = 1/self.errobs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
 
-            #if t == datetime(2012, 6, 23, 6, 0) :
-            #if self.varobs[t][name].size>1000:
-            # plt.figure(figsize=(20,5))
-            # plt.plot(HX,label="HX",c='blue')
-            # plt.plot(self.varobs[t][name],label="measure",c='green')
-            # plt.plot(_misfit,label="misfit",c='orange')
-            # plt.ylim(-0.1,0.1)
-            # plt.title(str(t))
-            # plt.legend()
-            # plt.show()
-
             # Concatenate
             misfit = np.concatenate((misfit,_inverr*_misfit))
             misfit_to_save = np.concatenate((misfit_to_save,_inverr*_inverr*_misfit))
+
+            # if self.normalize_misfit: 
+            #    misfit/=np.sqrt(self.n_obs)
+            #    misfit_to_save/=np.sqrt(self.n_obs)
         
         return misfit, misfit_to_save
 
@@ -708,71 +705,6 @@ class Obsop_interp_l4(Obsop_interp):
         self.varobs = var_obs
         self.errobs = err_obs
 
-
-    """
-    def misfit(self,t,State):
-
-        # Initialization
-        misfit = np.array([])
-
-        mode = 'w'
-        for name in self.name_var_obs[t]:
-
-            # Get model state
-            X = State.getvar(self.name_mod_var[name]).ravel() 
-
-            # Project model state to obs space
-            HX = +X
-
-            # Compute misfit & errors
-            _misfit = (HX-self.varobs[t][name])
-            _inverr = 1/self.errobs[t][name]
-            _misfit[np.isnan(_misfit)] = 0
-            _inverr[np.isnan(_inverr)] = 0
-        
-            # Save to netcdf
-            dsout = xr.Dataset(
-                    {
-                    "misfit": (("Nobs"), _inverr*_inverr*_misfit),
-                    }
-                    )
-            dsout.to_netcdf(
-                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc"), 
-                mode=mode, 
-                group=name
-                )
-            dsout.close()
-            mode = 'a'
-
-            # Concatenate
-            misfit = np.concatenate((misfit,_inverr*_misfit))
-
-        return misfit
-
-    def adj(self, t, adState, R):
-
-        for name in self.name_var_obs[t]:
-
-            # Read misfit
-            ds = xr.open_dataset(os.path.join(
-                os.path.join(self.tmp_DA_path,f"misfit_L4_{t.strftime('%Y%m%d_%H%M')}.nc")), 
-                group=name)
-            misfit = ds['misfit'].values
-            ds.close()
-            del ds
-
-            # Apply R operator
-            misfit = R.inv(misfit)
-
-            # Read adjoint variable
-            advar = adState.getvar(self.name_mod_var[name])
-
-            # Compute adjoint operation of y = Hx
-            adX = +misfit
-
-            # Update adjoint variable
-            adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])
-    """
     
     def misfit(self,t,State):
 
@@ -830,7 +762,25 @@ class Obsop_interp_l4(Obsop_interp):
 
 
 def grid_interp(_lon_obs,_lat_obs,_array_obs,_coords_geo,interp_method):
+
+    """
+        NAME
+            grid_interp
+    
+        DESCRIPTION
+            Function to interpolate obsevrations on L4 grid. It is defined as a function outside the class because it used with joblib for parallelisation. 
+
+            Args:
+                _lon_obs (array): longitude of observations 
+                _lat_obs (array) : latitude of observations 
+                _array_obs (array) : values of observations 
+                _coords_geo (array) : coordinates onto which values need to be interpolated 
+                interp_method (str) : interpolation method 
+                
+    """     
+
     _coords_obs = np.column_stack((_lon_obs, _lat_obs))
+    
     if interp_method == "hybrid":
 
         _array_obs_interp = griddata(_coords_obs,_array_obs, _coords_geo, method="nearest") # first interpolation with "nearest" method
@@ -873,23 +823,36 @@ class Obsop_multi:
         for _Obsop in self.Obsop:
             _Obsop.process_obs(var_bc)
                 
-
+ 
     def misfit(self,t,State):
 
         misfit = np.array([])
+        misfit_to_save = {}
 
-        for _Obsop in self.Obsop:
+        for i,_Obsop in enumerate(self.Obsop):
             if _Obsop.is_obs(t):
-                _misfit = _Obsop.misfit(t,State)
+                _misfit, _misfit_to_save = _Obsop.misfit(t,State)
                 misfit = np.concatenate((misfit,_misfit))
+                misfit_to_save[i] = _misfit_to_save
         
-        return misfit
+        return misfit, misfit_to_save
 
-    def adj(self, t, adState, R):
+        # FORMER VERSION OF MISFIT FOR OBSOP MULTI # 
+        # misfit = np.array([])
+
+        # for _Obsop in self.Obsop:
+        #     if _Obsop.is_obs(t):
+        #         _misfit = _Obsop.misfit(t,State)
+        #         misfit = np.concatenate((misfit,_misfit))
+        
+        # return misfit
+
+
+    def adj(self, t, adState, misfits, R):
     
-        for _Obsop in self.Obsop:
+        for i,_Obsop in enumerate(self.Obsop):
             if _Obsop.is_obs(t):
-                _Obsop.adj(t,adState,R)
+                _Obsop.adj(t,adState,misfits[i],R)
 
     
 class Obsop_interp_jax(Obsop_interp):

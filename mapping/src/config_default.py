@@ -566,6 +566,8 @@ OBSOP_INTERP_L3 = dict(
 
     mask_borders = False,
 
+    normalize_misfit = False, # normalizing misfit by the number of observations 
+
 )
 
 OBSOP_INTERP_L3_GEOCUR = dict(
@@ -694,7 +696,7 @@ INV_4DVAR = dict(
 
     only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
 
-    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
+    anomaly_from_bc = False, # Whether to perform the minimization with anomalies from boundary condition field(s)
  
 )
 

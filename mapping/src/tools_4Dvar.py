@@ -106,7 +106,7 @@ class Variational:
         if config.INV.compute_test:
             print('Gradient test:')
             if self.prec:
-                X = (np.random.random(self.basis.nbasis)-0.5)
+                X = 1e-3*(np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
@@ -149,7 +149,7 @@ class Variational:
             if self.H.is_obs(timestamp):
                 misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
-                # print("Jo at "+str(timestamp)+" : ",Jo,"(",misfit.dot(self.R.inv(misfit)),")")
+                #print("Jo at "+str(timestamp)+" : ",Jo,"(",misfit.dot(self.R.inv(misfit)),")")
 
             # Measuring computation times
             #t_misfit.append(datetime.now()-t0)
@@ -439,7 +439,9 @@ def grad_test(J, G, X):
     h /= np.linalg.norm(h)
     JX = J(X)
     GX = G(X)
+    #print("GX",GX)
     Gh = h.dot(np.where(np.isnan(GX),0,GX))
+    #print("Gh",Gh)
     L = [[],[]]
     for p in range(10):
         lambd = 10**(-p)

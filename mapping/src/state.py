@@ -396,7 +396,8 @@ class State:
         ds = xr.Dataset(var, coords=coords)
         ds.to_netcdf(filename,
                      encoding={'time': {'units': 'days since 1900-01-01'}},
-                     unlimited_dims={'time':True})
+                     unlimited_dims={'time':True},
+                     mode="w") # forcing overwriting
         
         ds.close()
         del ds

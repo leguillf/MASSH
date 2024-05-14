@@ -669,10 +669,10 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         
         # Save minimization trajectory
         if config.INV.save_minimization:
-            ds = xr.Dataset({'J':(('N'),var.J),'Jo':(('N'),var.Jo),'G':(('N'),var.G),'Go':(('N'),var.Go),})
+            ds = xr.Dataset({'J':(('Nj'),var.J),'Jo':(('Nj'),var.Jo),'G':(('Ng'),var.G),'Go':(('Ng'),var.Go),})
             for param in Basis.name_params:
-               ds["Jb_"+param]=xr.DataArray(var.Jb[param],dims=["N"])
-               ds["Gb_"+param]=xr.DataArray(var.Gb[param],dims=["N"])
+               ds["Jb_"+param]=xr.DataArray(var.Jb[param],dims=["Nj"])
+               ds["Gb_"+param]=xr.DataArray(var.Gb[param],dims=["Ng"])
             ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
             ds.close()
 
