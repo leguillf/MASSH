@@ -214,11 +214,18 @@ class Obsop_interp_l3(Obsop_interp):
         self.errobs = {}
         self.Hop = {}
 
+        # self.lon_obs and self.alt_obs attributes to locate the observations when plotting
+        self.lon_obs = {}
+        self.lat_obs = {}
+
         for i,t in enumerate(self.date_obs):
 
             self.varobs[t] = {}
             self.errobs[t] = {}
             self.Hop[t] = {}
+            self.lon_obs[t] = {}
+            self.lat_obs[t] = {}
+
 
             sat_info_list = self.dict_obs[t]['attributes']
             obs_file_list = self.dict_obs[t]['obs_path']
@@ -276,6 +283,8 @@ class Obsop_interp_l3(Obsop_interp):
                 # Fill dictionnaries
                 self.varobs[t][name] = var_obs[name]
                 self.errobs[t][name] = err_obs[name]
+                self.lon_obs[t][name] = lon_obs[name]
+                self.lat_obs[t][name] = lat_obs[name]
 
                 # Compute Sparse operator
                 if not self.compute_op and self.write_op and os.path.exists(file_L3):

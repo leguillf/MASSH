@@ -110,7 +110,7 @@ class Variational:
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
-     
+    
     def cost(self,X0):
                 
         # Initial state

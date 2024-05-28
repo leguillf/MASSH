@@ -59,6 +59,8 @@ EXP = dict(
 
     name_var_bathy = {'lon':'','lat':'','var':''},
 
+    path_tidal_velocity = None, # path to read tidal velocity netcdf file, for SW model with IT generation, Use FES files
+
     coriolis_force = True, # if set to False, coriolis force is set to 0 (for idealized case for instance)
 
     n_workers = 1 # number of workers to parallelize experiment preparation (like Obsop, ...)
@@ -439,6 +441,8 @@ MOD_SW1L_JAX = dict(
 
     w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
 
+    w_names = ["m2"], # tidal components name (according to FES filenames)
+
     He_init = 0.9, # Mean height (in m)
 
     He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
@@ -589,7 +593,6 @@ OBSOP_INTERP_L3_GEOCUR = dict(
 OBSOP_INTERP_L4 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
-
     write_op = False, # Write operator data to *path_save*
 
     path_save = None, # Directory where to save observational operator
@@ -1126,8 +1129,6 @@ BASIS_IT = dict(
     facgauss = 3.5,  # factor for gaussian spacing= both space/time
 
     ### - HBC PARAMETER ### 
-
-    Nwaves = 1, # number of wave component 
 
     Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
 

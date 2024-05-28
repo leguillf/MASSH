@@ -2203,7 +2203,8 @@ class Basis_it:
         else:
             self.Ntheta = 1 # Only angle 0°
         
-        self.Nwaves = config.BASIS.Nwaves
+        self.Nwaves = len(config.MOD.w_waves)
+        self.omegas = np.asarray(config.MOD.w_waves)
 
         # Grid params
         self.nphys= State.lon.size
@@ -2536,8 +2537,8 @@ class Basis_it:
                 if type(self.bathymetry) is not np.ndarray:
                     raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_selected == True')
 
-                shapeitg = [2,self.idx_bathy[0].size]
-                shapeitg_phys = (2,self.nx,self.ny)
+                shapeitg = [self.Nwaves,2,self.idx_bathy[0].size]
+                shapeitg_phys = [self.Nwaves,2,self.nx,self.ny]
 
                 print('nitg:',np.prod(shapeitg))
 
@@ -2545,8 +2546,8 @@ class Basis_it:
                 
             # - WITH TOTAL CONTROL OF ITG # 
             else : 
-                shapeitg = [2,self.nx,self.ny]
-                shapeitg_phys = (2,self.nx,self.ny)
+                shapeitg = [self.Nwaves,2,self.nx,self.ny]
+                shapeitg_phys = [self.Nwaves,2,self.nx,self.ny]
 
                 print('nitg:',np.prod(shapeitg))
 
@@ -2633,12 +2634,12 @@ class Basis_it:
                 itg_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_itg)
 
             self.itg_t_gauss = itg_t_gauss
-            shapeitg = [2,ENST_itg.size,ENSLAT_itg.size]
+            shapeitg = [self.Nwaves,2,ENST_itg.size,ENSLAT_itg.size]
 
         else : 
-            shapeitg = [2,ENSLAT_itg.size]
+            shapeitg = [self.Nwaves,2,ENSLAT_itg.size]
         
-        shapeitg_phys = (2,self.ny,self.nx)
+        shapeitg_phys = [self.Nwaves,2,self.ny,self.nx]
 
         print('nitg:',np.prod(shapeitg))
 
@@ -2680,8 +2681,8 @@ class Basis_it:
         self.itg_xy_gauss = itg_xy_gauss
 
         # Shapes of parameters # 
-        shapeitg_phys = (4,self.ny,self.nx)
-        shapeitg = [4,ENSLAT_itg.size]
+        shapeitg = [self.Nwaves,4,ENSLAT_itg.size]
+        shapeitg_phys = [self.Nwaves,4,self.ny,self.nx]
 
         print('nitg:',np.prod(shapeitg))
 
@@ -2814,7 +2815,7 @@ class Basis_it:
             if name == "itg":
                 if self.anisotropic_itg == True : # Anisotropic version of ITG # 
                     adX[self.slice_params[name]] = np.tensordot(param[name],
-                                                                        self.itg_xy_gauss,([1,2],[1,2])).flatten()
+                                                                        self.itg_xy_gauss,([-2,-1],[-2,-1])).flatten()
                 else : # Other version of ITG # 
                     if not self.reduced_basis_itg : # ITG isn't on a reduced basis #  
                         if not self.itg_bathymetry_selected : # All pixels are controlled #

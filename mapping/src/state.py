@@ -110,7 +110,11 @@ class State:
             self.g = 9.81
 
             # Bathymetry field 
-            self.set_bathy(config)
+            self.init_bathy(config)
+
+            # Tidal velocities 
+            if config.MOD.super == 'MOD_SW1L_JAX':
+                self.init_tidal_velocity(config)
 
     def ini_geo_grid(self,config):
         """
@@ -294,11 +298,11 @@ class State:
         
         self.mask += (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
 
-    def set_bathy(self,config):
+    def init_bathy(self,config):
 
         """
         NAME
-            set_bathy
+            init_bathy
 
         DESCRIPTION
             Read bathymetry file, interpolate it to the grid
@@ -341,19 +345,86 @@ class State:
         # Calculating bathymetry gradient 
         # X component of gradient
         grad_x = np.zeros(self.X.shape)
-        grad_x[:,1:-2] = (self.bathymetry[:,2:-1]-self.bathymetry[:,0:-3])/(self.X[:,2:-1]-self.X[:,0:-3]) # inner part of gradient 
+        grad_x[:,1:-1] = (self.bathymetry[:,2:]-self.bathymetry[:,0:-2])/(self.X[:,2:]-self.X[:,0:-2]) # inner part of gradient 
         grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(self.X[:,1]-self.X[:,0])
         grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(self.X[:,-1]-self.X[:,-2])
         
         # Y component of gradient
         grad_y = np.zeros(self.Y.shape)
-        grad_y[1:-2,:] = (self.bathymetry[2:-1,:]-self.bathymetry[0:-3,:])/(self.Y[2:-1,:]-self.Y[0:-3,:])
+        grad_y[1:-1,:] = (self.bathymetry[2:,:]-self.bathymetry[0:-2,:])/(self.Y[2:,:]-self.Y[0:-2,:])
         grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(self.Y[1,:]-self.Y[0,:])
         grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(self.Y[-1,:]-self.Y[-2,:])
         
         self.grad_bathymetry_x = grad_x
         self.grad_bathymetry_y = grad_y
+
+    def init_tidal_velocity(self,config):
+        """
+        NAME
+            init_bathy
+
+        DESCRIPTION
+            Reads tidal velocity file, interpolate it to the grid
+        """
+
+        # Read tidal velocities
+        if config.EXP.path_tidal_velocity is not None and os.path.exists(config.EXP.path_tidal_velocity): 
+
+            # Variables
+            self.tidal_U = {}
+            self.tidal_V = {}
+            
+            for name in config.MOD.w_names:
+                self.tidal_U[name] = self.open_interpolate(config,name,"U")
+                self.tidal_V[name] = self.open_interpolate(config,name,"V")
+
+        else: # No tidal velocity file prescripted
+            warnings.warn("No tidal velocity field prescribed.")
+            return None 
+
+    def open_interpolate(self,config,name,direction):
+        """
+        NAME
+            open_interpolate
+
+        DESCRIPTION
+            Opens and interpolates the tidal velocity files 
+
+        ARGUMENT 
+            - config : config python file 
+            - name (str) : name of the tidal component 
+            - direction (str) :  velocity direction, either "U" or "V"
+        """
+
+        if direction == "U":
+            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"eastward_velocity",name+".nc")).squeeze()
+        elif direction == "V":
+            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"northward_velocity",name+".nc")).squeeze()
         
+        # Convert longitudes
+        if np.sign(ds["lon"].data.min())==-1 and self.lon_unit=='0_360':
+            ds = ds.assign_coords({"lon":(("lon", ds["lon"].data % 360))})
+        elif np.sign(ds["lon"].data.min())==1 and self.lon_unit=='-180_180':
+            ds = ds.assign_coords({"lon":(("lon", (ds["lon"].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds["lon"])   
+
+
+        dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
+        dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
+        dlon +=  np.nanmax(ds["lon"].data[1:] - ds["lon"].data[:-1])
+        dlat +=  np.nanmax(ds["lat"].data[1:] - ds["lat"].data[:-1])
+
+        ds = ds.sel(
+            {"lon":slice(self.lon_min-dlon,self.lon_max+dlon),
+                "lat":slice(self.lat_min-dlat,self.lat_max+dlat)})
+
+        ds = ds.interp(coords={"lon":self.lon[0,:],"lat":self.lat[:,0]},method='cubic')
+
+        if direction == "U":
+            return ds["Ua"].values*1E-2 # Converting into m/s
+        elif direction == "V":
+            return ds["Va"].values*1E-2 # Converting into m/s
+
             
     def save_output(self,date,name_var=None):
         
