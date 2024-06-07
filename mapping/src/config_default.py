@@ -59,6 +59,8 @@ EXP = dict(
 
     name_var_bathy = {'lon':'','lat':'','var':''},
 
+    smooth_wavelength = None, # wavelength for the smoothing of bathymetry (in meters), if None no smoothing is applied 
+
     path_tidal_velocity = None, # path to read tidal velocity netcdf file, for SW model with IT generation, Use FES files
 
     coriolis_force = True, # if set to False, coriolis force is set to 0 (for idealized case for instance)
@@ -593,6 +595,7 @@ OBSOP_INTERP_L3_GEOCUR = dict(
 OBSOP_INTERP_L4 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
+    
     write_op = False, # Write operator data to *path_save*
 
     path_save = None, # Directory where to save observational operator
@@ -700,7 +703,9 @@ INV_4DVAR = dict(
     only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
 
     anomaly_from_bc = False, # Whether to perform the minimization with anomalies from boundary condition field(s)
- 
+
+    cost_function_coeff = 1 #coefficient multiplying the cost function (for testing)
+
 )
 
 INV_4DVAR_JAX = dict(

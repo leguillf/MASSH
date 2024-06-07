@@ -13,6 +13,8 @@ import pandas as pd
 from copy import deepcopy
 import matplotlib.pyplot as plt
 from scipy import interpolate
+from scipy.signal import convolve2d
+from scipy.special import factorial
 import glob
 from datetime import datetime
 import pyinterp 
@@ -354,6 +356,14 @@ class State:
         grad_y[1:-1,:] = (self.bathymetry[2:,:]-self.bathymetry[0:-2,:])/(self.Y[2:,:]-self.Y[0:-2,:])
         grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(self.Y[1,:]-self.Y[0,:])
         grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(self.Y[-1,:]-self.Y[-2,:])
+
+        # Applying bathymetry smoothing if prescribed 
+        if config.EXP.smooth_wavelength != None and np.round(config.EXP.smooth_wavelength/self.dx).astype(np.int32) > 0 : 
+            N_pixel = np.round(config.EXP.smooth_wavelength/self.dx).astype(np.int32)
+            array_pascal = factorial(N_pixel-1)/(factorial(np.ones((1,N_pixel))*(N_pixel-1)-np.arange(0,N_pixel).reshape((1,N_pixel)))*factorial(np.arange(0,N_pixel).reshape((1,N_pixel))))
+            gaussian_kernel = (1/array_pascal.sum()**2)*array_pascal.T*array_pascal
+            grad_x = convolve2d(grad_x,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+            grad_y = convolve2d(grad_y,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
         
         self.grad_bathymetry_x = grad_x
         self.grad_bathymetry_y = grad_y

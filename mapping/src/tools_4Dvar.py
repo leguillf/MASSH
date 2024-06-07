@@ -65,6 +65,9 @@ class Variational:
         
         # preconditioning
         self.prec = config.INV.prec
+
+        # multiplication coefficient 
+        self.cost_function_coeff = config.INV.cost_function_coeff
         
         # Wavelet reduced basis
         self.dtbasis = int(config.INV.timestep_checkpoint.total_seconds()//M.dt)
@@ -211,8 +214,8 @@ class Variational:
 
         # Measuring computation times
         #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
-
-        return J
+        
+        return J*self.cost_function_coeff
     
     def grad(self,X0): 
                 

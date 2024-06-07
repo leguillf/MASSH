@@ -14,6 +14,7 @@ import matplotlib.pylab as plt
 from scipy.interpolate import griddata
 from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
+from scipy.spatial import distance_matrix, cKDTree
 import pandas as pd
 from jax.experimental import sparse
 import jax.numpy as jnp 
@@ -23,6 +24,7 @@ import datetime
 from datetime import datetime 
 from joblib import Parallel
 from joblib import delayed as jb_delayed
+
 jax.config.update("jax_enable_x64", True)
 
 def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
@@ -118,6 +120,9 @@ class Obsop_interp:
         #number of observations 
         self.n_obs = 0 
 
+        # number of workers 
+        self.n_workers = config.EXP.n_workers
+
 
     def process_obs(self, var_bc=None):
 
@@ -179,128 +184,36 @@ class Obsop_interp_l3(Obsop_interp):
 
         # misfit normalization 
         self.normalize_misfit = config.OBSOP.normalize_misfit
-    
-    def _sparse_op(self,lon_obs,lat_obs):
-        
-        coords_geo_obs = np.column_stack((lon_obs, lat_obs))
-        coords_car_obs = grid.geo2cart(coords_geo_obs)
 
-        row = [] # indexes of observation grid
-        col = [] # indexes of state grid
-        data = [] # interpolation coefficients
-        Nobs = coords_geo_obs.shape[0]
-
-        for iobs in range(Nobs):
-            _dist = cdist(coords_car_obs[iobs][np.newaxis,:], self.coords_car, metric="euclidean")[0]
-            # Npix closest
-            ind_closest = np.argsort(_dist)
-            # Get Npix closest pixels (ignoring boundary pixels)
-            weights = []
-            for ipix in range(self.Npix):
-                if (not ind_closest[ipix] in self.ind_borders) and (not ind_closest[ipix] in self.ind_mask) and (_dist[ind_closest[ipix]]<=self.dmax):
-                    weights.append(np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*self.dmax)**2))))
-                    row.append(iobs)
-                    col.append(ind_closest[ipix])
-            sum_weights = np.sum(weights)
-            # Fill interpolation coefficients 
-            for w in weights:
-                data.append(w/sum_weights)
-
-        return csc_matrix((data, (row, col)), shape=(Nobs, self.coords_geo.shape[0]))
-
+    ## NEW VERSION OF OBSOP INTERPL3 (PARALLELIZED) ## 
     def process_obs(self, var_bc=None):
 
-        self.varobs = {}
-        self.errobs = {}
-        self.Hop = {}
-
-        # self.lon_obs and self.alt_obs attributes to locate the observations when plotting
+        self.var_obs = {}
+        self.err_obs = {}
         self.lon_obs = {}
         self.lat_obs = {}
+        self.Hop = {}
 
-        for i,t in enumerate(self.date_obs):
-
-            self.varobs[t] = {}
-            self.errobs[t] = {}
-            self.Hop[t] = {}
-            self.lon_obs[t] = {}
-            self.lat_obs[t] = {}
-
-
-            sat_info_list = self.dict_obs[t]['attributes']
-            obs_file_list = self.dict_obs[t]['obs_path']
-            obs_name_list = self.dict_obs[t]['obs_name']
-
+        data_obs = Parallel(n_jobs=self.n_workers,backend='threading')(jb_delayed(compute_obs_L3)(i=i,
+                                                                                                    t=t,
+                                                                                                    dict_obs=self.dict_obs[t],
+                                                                                                    name_obs=self.name_obs,
+                                                                                                    path_save=self.path_save,
+                                                                                                    name_H=self.name_H,
+                                                                                                    compute_op=self.compute_op,
+                                                                                                    write_op=self.write_op,
+                                                                                                    coords_car=self.coords_car,
+                                                                                                    coords_geo=self.coords_geo,
+                                                                                                    Npix=self.Npix,
+                                                                                                    ind_borders=self.ind_borders,
+                                                                                                    ind_mask=self.ind_mask,
+                                                                                                    dmax=self.dmax,
+                                                                                                    var_bc=var_bc) for i,t in enumerate(self.date_obs))
         
-            # Concatenate obs from different sensors
-            lon_obs = {}
-            lat_obs = {}
-            var_obs = {}
-            err_obs = {}
+        for i,t in enumerate(self.date_obs):
+            self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t], self.Hop[t], _n_obs = data_obs[i]
 
-            for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
-
-                if sat_info.super not in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
-                        continue
-                
-                ####################
-                # Merge observations
-                ####################
-                with xr.open_dataset(obs_file) as ncin:
-                    lon = ncin[sat_info['name_lon']].values.ravel() 
-                    lat = ncin[sat_info['name_lat']].values.ravel()
-
-                    for name in sat_info['name_var']:
-                        # Observed variable
-                        var = ncin[name].values.ravel() 
-                        # Observed error
-                        name_err = name + '_err'
-                        if name_err in ncin:
-                            err = ncin[name_err].values.ravel() 
-                        elif sat_info['sigma_noise'] is not None:
-                            err = sat_info['sigma_noise'] * np.ones_like(var)
-                        else:
-                            err = np.ones_like(var)                        
-                        if name in lon_obs:
-                            var_obs[name] = np.concatenate((var_obs[name],var))
-                            err_obs[name] = np.concatenate((err_obs[name],err))
-                            lon_obs[name] = np.concatenate((lon_obs[name],lon))
-                            lat_obs[name] = np.concatenate((lat_obs[name],lat))
-                        else:
-                            var_obs[name] = +var
-                            err_obs[name] = +err
-                            lon_obs[name] = +lon
-                            lat_obs[name] = +lat
-            
-            for name in lon_obs:
-                coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
-                file_L3 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
-                if var_bc is not None and name in var_bc:
-                    mask = np.any(np.isnan(self.coords_geo),axis=1)
-                    var_bc_interp = griddata(self.coords_geo[~mask], var_bc[name][i].flatten()[~mask], coords_obs, method='cubic')
-                    var_obs[name] -= var_bc_interp
-
-                # Fill dictionnaries
-                self.varobs[t][name] = var_obs[name]
-                self.errobs[t][name] = err_obs[name]
-                self.lon_obs[t][name] = lon_obs[name]
-                self.lat_obs[t][name] = lat_obs[name]
-
-                # Compute Sparse operator
-                if not self.compute_op and self.write_op and os.path.exists(file_L3):
-                    with open(file_L3, "rb") as f:
-                        self.Hop[t][name] = pickle.load(f)
-                else:
-                    # Compute operator
-                    _H = self._sparse_op(lon_obs[name],lat_obs[name])
-                    self.Hop[t][name] = _H
-                    # Save operator if asked
-                    if self.write_op:
-                        with open(file_L3, "wb") as f:
-                            pickle.dump(_H, f)
-
-                #updating number of obs 
-                self.n_obs+=var_obs[name].size
+            self.n_obs+=_n_obs
 
     def misfit(self,t,State):
 
@@ -318,8 +231,8 @@ class Obsop_interp_l3(Obsop_interp):
             HX = self.Hop[t][name] @ X
 
             # Compute misfit & errors
-            _misfit = (HX-self.varobs[t][name])
-            _inverr = 1/self.errobs[t][name]
+            _misfit = (HX-self.var_obs[t][name])
+            _inverr = 1/self.err_obs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
 
@@ -327,9 +240,9 @@ class Obsop_interp_l3(Obsop_interp):
             misfit = np.concatenate((misfit,_inverr*_misfit))
             misfit_to_save = np.concatenate((misfit_to_save,_inverr*_inverr*_misfit))
 
-            # if self.normalize_misfit: 
-            #    misfit/=np.sqrt(self.n_obs)
-            #    misfit_to_save/=np.sqrt(self.n_obs)
+            if self.normalize_misfit: 
+               misfit/=np.sqrt(self.n_obs/1628021)
+               misfit_to_save/=self.n_obs/1628021
         
         return misfit, misfit_to_save
 
@@ -351,6 +264,115 @@ class Obsop_interp_l3(Obsop_interp):
 
             # Update adjoint variable
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])  
+
+def compute_obs_L3(i,t,dict_obs,name_obs,path_save,name_H,compute_op,write_op,coords_car,coords_geo,Npix,ind_borders,ind_mask,dmax,var_bc):
+    
+    # variables to return # 
+    _lon_obs = {}
+    _lat_obs = {}
+    _var_obs = {}
+    _err_obs = {}
+    _Hop = {}
+    _n_obs = 0
+
+    sat_info_list = dict_obs['attributes']
+    obs_file_list = dict_obs['obs_path']
+    obs_name_list = dict_obs['obs_name']
+
+    for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
+        
+        if obs_name not in name_obs or sat_info.super not in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:  
+            continue
+        
+        ####################
+        # Merge observations
+        ####################
+        with xr.open_dataset(obs_file) as ncin:
+            lon = ncin[sat_info['name_lon']].values.ravel() 
+            lat = ncin[sat_info['name_lat']].values.ravel()
+
+            for name in sat_info['name_var']:
+                # Observed variable
+                var = ncin[name].values.ravel() 
+                # Observed error
+                name_err = name + '_err'
+                if name_err in ncin:
+                    err = ncin[name_err].values.ravel() 
+                elif sat_info['sigma_noise'] is not None:
+                    err = sat_info['sigma_noise'] * np.ones_like(var)
+                else:
+                    err = np.ones_like(var)                        
+                if name in _lon_obs:
+                    _var_obs[name] = np.concatenate((_var_obs[name],var))
+                    _err_obs[name] = np.concatenate((_err_obs[name],err))
+                    _lon_obs[name] = np.concatenate((_lon_obs[name],lon))
+                    _lat_obs[name] = np.concatenate((_lat_obs[name],lat))
+                else:
+                    _var_obs[name] = +var
+                    _err_obs[name] = +err
+                    _lon_obs[name] = +lon
+                    _lat_obs[name] = +lat
+
+    for name in _lon_obs:
+        coords_obs = np.column_stack((_lon_obs[name], _lon_obs[name]))
+        file_L3 = f"{path_save}/{name_H}_{'_'.join(name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
+        if var_bc is not None and name in var_bc:
+            mask = np.any(np.isnan(coords_geo),axis=1)
+            var_bc_interp = griddata(coords_geo[~mask], var_bc[name][i].flatten()[~mask], coords_obs, method='cubic')
+            _var_obs[name] -= var_bc_interp
+
+        # Fill dictionnaries
+        _var_obs[name] = _var_obs[name]
+        _err_obs[name] = _err_obs[name]
+        _lon_obs[name] = _lon_obs[name]
+        _lat_obs[name] = _lat_obs[name]
+
+        # Compute Sparse operator
+        if not compute_op and write_op and os.path.exists(file_L3):
+            with open(file_L3, "rb") as f:
+                _Hop[name] = pickle.load(f)
+        else:
+            # Compute operator
+            _H = _sparse_op(_lon_obs[name],_lat_obs[name],coords_car,coords_geo,Npix,ind_borders,ind_mask,dmax)
+            _Hop[name] = _H
+            # Save operator if asked
+            if write_op:
+                with open(file_L3, "wb") as f:
+                    pickle.dump(_H, f)
+
+
+        #updating number of obs 
+        _n_obs+=_var_obs[name].size
+    
+    return _lon_obs, _lat_obs, _var_obs, _err_obs, _Hop, _n_obs
+
+def _sparse_op(lon_obs,lat_obs,coords_car,coords_geo,Npix,ind_borders,ind_mask,dmax):
+        
+    coords_geo_obs = np.column_stack((lon_obs, lat_obs))
+    coords_car_obs = grid.geo2cart(coords_geo_obs)
+
+    row = [] # indexes of observation grid
+    col = [] # indexes of state grid
+    data = [] # interpolation coefficients
+    Nobs = coords_geo_obs.shape[0]
+
+    for iobs in range(Nobs):
+        _dist = cdist(coords_car_obs[iobs][np.newaxis,:], coords_car, metric="euclidean")[0]
+        # Npix closest
+        ind_closest = np.argsort(_dist)
+        # Get Npix closest pixels (ignoring boundary pixels)
+        weights = []
+        for ipix in range(Npix):
+            if (not ind_closest[ipix] in ind_borders) and (not ind_closest[ipix] in ind_mask) and (_dist[ind_closest[ipix]]<=dmax):
+                weights.append(np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*dmax)**2))))
+                row.append(iobs)
+                col.append(ind_closest[ipix])
+        sum_weights = np.sum(weights)
+        # Fill interpolation coefficients 
+        for w in weights:
+            data.append(w/sum_weights)
+
+    return csc_matrix((data, (row, col)), shape=(Nobs, coords_geo.shape[0]))
 
 class Obsop_interp_l3_geocur(Obsop_interp_l3):
 
@@ -605,114 +627,33 @@ class Obsop_interp_l4(Obsop_interp):
         # For grid interpolation:
         self.interp_method = config.OBSOP.interp_method
 
+        self.dist_min = .5*np.sqrt(State.dx**2+State.dy**2)*1e-3 # Minimum distance to consider an observation inside a model pixel
+
         self.name_H += f'_L4_{config.OBSOP.interp_method}'
 
-        self.n_workers = config.EXP.n_workers
-    
-    # NEW VERSION OF PROCESS_OBS L4 #
+
+    # NEWER VERSION OF PROCESS_OBS L4 (5TH JUNE 2024) - BETTER PARALLELIZATION #
     def process_obs(self, var_bc=None):
 
-        # Concatenate obs from different sensors
-        lon_obs = {}
-        lat_obs = {}
-        var_obs = {}
-        err_obs = {}
+        self.lon_obs = {}
+        self.lat_obs = {}
+        self.var_obs = {}
+        self.err_obs = {}
 
-        for t in self.date_obs:
+        # for t in self.date_obs:
+        #     self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t] = compute_obs_L4(t=t,dict_obs=self.dict_obs[t],name_obs=self.name_obs,path_save=self.path_save,
+        #                                                                  name_H=self.name_H,compute_op=self.compute_op,write_op=self.write_op,
+        #                                                                  coords_geo=self.coords_geo,interp_method=self.interp_method,
+        #                                                                  dist_min = self.dist_min, var_bc=var_bc,date_obs=self.date_obs)
 
-            # Concatenate obs from different sensors
-            lon_obs[t] = {}
-            lat_obs[t] = {}
-            var_obs[t] = {}
-            err_obs[t] = {}
 
-            sat_info_list = self.dict_obs[t]['attributes']
-            obs_file_list = self.dict_obs[t]['obs_path']
-            obs_name_list = self.dict_obs[t]['obs_name']
-
-            for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
-
-                #if sat_info.super!='OBS_L4':
-                if sat_info.super not in ["OBS_L4", "OBS_SSH_SWATH"]:
-                    continue
-
-                ####################
-                # Merge observations
-                ####################
-                with xr.open_dataset(obs_file) as ncin:
-                    lon = ncin[sat_info['name_lon']].values.ravel() 
-                    lat = ncin[sat_info['name_lat']].values.ravel()
-
-                    for name in sat_info['name_var']:
-                        # Observed variable
-                        var = ncin[name].values.ravel() 
-                        # Observed error
-                        name_err = name + '_err'
-                        if name_err in ncin:
-                            err = ncin[name_err].values.ravel() 
-                        elif sat_info['sigma_noise'] is not None:
-                            err = sat_info['sigma_noise'] * np.ones_like(var)
-                        else:
-                            err = np.ones_like(var)                        
-                        if name in lon_obs[t]:
-                            var_obs[t][name] = np.concatenate((var_obs[t][name],var))
-                            err_obs[t][name] = np.concatenate((err_obs[t][name],err))
-                            lon_obs[t][name] = np.concatenate((lon_obs[t][name],lon))
-                            lat_obs[t][name] = np.concatenate((lat_obs[t][name],lat))
-                        else:
-                            var_obs[t][name] = +var
-                            err_obs[t][name] = +err
-                            lon_obs[t][name] = +lon
-                            lat_obs[t][name] = +lat
+        data_obs = Parallel(n_jobs=self.n_workers,backend='threading')(jb_delayed(compute_obs_L4)(t=t,dict_obs=self.dict_obs[t],name_obs=self.name_obs,path_save=self.path_save,
+                                                                         name_H=self.name_H,compute_op=self.compute_op,write_op=self.write_op,
+                                                                         coords_geo=self.coords_geo,interp_method=self.interp_method,
+                                                                         dist_min = self.dist_min, var_bc=var_bc,date_obs=self.date_obs) for t in self.date_obs)
         
-        ########################
-        # Interpolating L4 obs #
-        ########################
-        for name in lon_obs[self.date_obs[0]]:
-
-            t_unsave = []
-
-            ### Loading saved variables ### 
-            for t in self.date_obs : 
-                file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
-                if not self.compute_op and self.write_op and os.path.exists(file_L4):
-                    with open(file_L4, "rb") as f:
-                        var_obs[t][name], err_obs[t][name] = pickle.load(f)
-                else : 
-                    t_unsave.append(t)
-            
-            ### Computing unsaved variables ### 
-            if self.n_workers>1 : 
-                var_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(
-                    jb_delayed(grid_interp)(lon_obs[t][name],lat_obs[t][name],var_obs[t][name],self.coords_geo,self.interp_method) for t in t_unsave
-                )
-                err_interp = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(
-                    jb_delayed(grid_interp)(lon_obs[t][name],lat_obs[t][name],err_obs[t][name],self.coords_geo,self.interp_method) for t in t_unsave
-                )
-                for i,t in enumerate(t_unsave) :
-                    var_obs[t][name] = var_interp[i]
-                    err_obs[t][name] = err_interp[i]
-                    if self.write_op:
-                        file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
-                        with open(file_L4, "wb") as f:
-                            pickle.dump((var_obs[t][name],err_obs[t][name]), f) 
-                    if var_bc is not None and name in var_bc:
-                        var_obs[t][name] -= var_bc[name][self.date_obs.index(t)].flatten()
-                    
-            else: 
-                for t in t_unsave : 
-                    var_obs[t][name] = grid_interp(lon_obs[t][name],lat_obs[t][name],var_obs[t][name],self.coords_geo,self.interp_method)
-                    err_obs[t][name] = grid_interp(lon_obs[t][name],lat_obs[t][name],err_obs[t][name],self.coords_geo,self.interp_method)
-                    if self.write_op:
-                        file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
-                        with open(file_L4, "wb") as f:
-                            pickle.dump((var_obs[t][name],err_obs[t][name]), f)
-                    if var_bc is not None and name in var_bc:
-                        var_obs[t][name] -= var_bc[name][self.date_obs.index(t)].flatten()
-
-        # Fill dictionnaries
-        self.varobs = var_obs
-        self.errobs = err_obs
+        for i,t in enumerate(self.date_obs):
+            self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t] = data_obs[i]
 
     
     def misfit(self,t,State):
@@ -742,8 +683,8 @@ class Obsop_interp_l4(Obsop_interp):
             HX = +X
 
             # Compute misfit & errors
-            _misfit = (HX-self.varobs[t][name])
-            _inverr = 1/self.errobs[t][name]
+            _misfit = (HX-self.var_obs[t][name])
+            _inverr = 1/self.err_obs[t][name]
             _misfit[np.isnan(_misfit)] = 0
             _inverr[np.isnan(_inverr)] = 0
 
@@ -770,7 +711,93 @@ class Obsop_interp_l4(Obsop_interp):
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])
 
 
-def grid_interp(_lon_obs,_lat_obs,_array_obs,_coords_geo,interp_method):
+def compute_obs_L4(t,dict_obs,name_obs,path_save,name_H,compute_op,write_op,coords_geo,interp_method,dist_min,var_bc,date_obs):
+
+    """
+    
+    ARGUMENTS : 
+        - t : timestep
+        - dict_obs : obs information in a directory 
+        - name_obs : observation names that are in observational operator
+    
+    """
+
+    # variables to return # 
+    _lon_obs = {}
+    _lat_obs = {}
+    _var_obs = {}
+    _err_obs = {}
+
+    # variables for satellite info #
+    _sat_info_super_obs = {}
+
+    sat_info_list = dict_obs['attributes']
+    obs_file_list = dict_obs['obs_path']
+    obs_name_list = dict_obs['obs_name']
+
+    for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
+
+        
+        #if sat_info.super!='OBS_L4':
+        if obs_name not in name_obs or sat_info.super not in ["OBS_L4", "OBS_SSH_SWATH"]:
+
+            continue
+
+        ####################
+        # Merge observations
+        ####################
+
+        with xr.open_dataset(obs_file) as ncin:
+            lon = ncin[sat_info['name_lon']].values.ravel() 
+            lat = ncin[sat_info['name_lat']].values.ravel()
+
+            for name in sat_info['name_var']:
+                # Observed information
+                _sat_info_super_obs[name] = sat_info.super
+                # Observed variable
+                var = ncin[name].values.ravel() 
+                # Observed error
+                name_err = name + '_err'
+                if name_err in ncin:
+                    err = ncin[name_err].values.ravel() 
+                elif sat_info['sigma_noise'] is not None:
+                    err = sat_info['sigma_noise'] * np.ones_like(var)
+                else:
+                    err = np.ones_like(var)                        
+                if name in _lon_obs:
+                    _var_obs[name] = np.concatenate((_var_obs[name],var))
+                    _err_obs[name] = np.concatenate((_err_obs[name],err))
+                    _lon_obs[name] = np.concatenate((_lon_obs[name],lon))
+                    _lat_obs[name] = np.concatenate((_lat_obs[name],lat))
+                else:
+                    _var_obs[name] = +var
+                    _err_obs[name] = +err
+                    _lon_obs[name] = +lon
+                    _lat_obs[name] = +lat    
+        
+    for name in _lon_obs:
+
+        # check if obsop have been previously saved for this timestep # 
+        file_L4 = f"{path_save}/{name_H}_{'_'.join(name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
+        if not compute_op and os.path.exists(file_L4):
+            with open(file_L4, "rb") as f:
+                _var_obs[name], _err_obs[name] = pickle.load(f)
+
+        else : 
+
+            _var_obs[name] = grid_interp(_lon_obs[name],_lat_obs[name],_var_obs[name],coords_geo,interp_method,dist_min,_sat_info_super_obs[name])
+            _err_obs[name] = grid_interp(_lon_obs[name],_lat_obs[name],_err_obs[name],coords_geo,interp_method,dist_min,_sat_info_super_obs[name])
+            
+            if write_op:
+                file_L4 = f"{path_save}/{name_H}_{'_'.join(name_obs)}_{t.strftime('%Y%m%d_%H%M')}_{name}.pic"
+                with open(file_L4, "wb") as f:
+                    pickle.dump((_var_obs[name],_err_obs[name]), f)
+            if var_bc is not None and name in var_bc:
+                _var_obs[name] -= var_bc[name][date_obs.index(t)].flatten()
+
+    return _lon_obs, _lat_obs, _var_obs, _err_obs
+
+def grid_interp(_lon_obs,_lat_obs,_array_obs,_coords_geo,interp_method,dist_min,sat_info_super):
 
     """
         NAME
@@ -798,12 +825,24 @@ def grid_interp(_lon_obs,_lat_obs,_array_obs,_coords_geo,interp_method):
 
         _array_obs_interp[~np.isnan(_array_obs_interp_linear)]=_array_obs_interp_linear[~np.isnan(_array_obs_interp_linear)] # filling out first interpolation with all available values of second method 
         _array_obs_interp[~np.isnan(_array_obs_interp_cubic)] = _array_obs_interp_cubic[~np.isnan(_array_obs_interp_cubic)] # filling out first interpolation with all available values of third method 
-
-        return _array_obs_interp
     
     else : 
         
-        return griddata(_coords_obs,_array_obs,_coords_geo,method=interp_method)
+        _array_obs_interp = griddata(_coords_obs,_array_obs,_coords_geo,method=interp_method)
+
+    # Special processing for SWOT data (Masking pixels outside of swath) #
+    if sat_info_super == "OBS_SSH_SWATH":
+
+        obs_tree = cKDTree(grid.geo2cart(_coords_obs))
+        mod_tree = cKDTree(grid.geo2cart(_coords_geo))
+        dist_mx = mod_tree.sparse_distance_matrix(obs_tree, dist_min)
+        keys = np.array(list(dist_mx.keys()))
+        ind_mod_in = keys[:, 0] # Index of model grid inside the swath
+        mask_mod_in = np.ones_like(_array_obs_interp, dtype=bool) # mask to be applied on interpoled fields
+        mask_mod_in[ind_mod_in] = 0
+        _array_obs_interp[mask_mod_in] = np.nan
+
+    return _array_obs_interp
 
 ###############################################################################
 #                            Multi-Operators                                  #
@@ -832,7 +871,6 @@ class Obsop_multi:
         for _Obsop in self.Obsop:
             _Obsop.process_obs(var_bc)
                 
- 
     def misfit(self,t,State):
 
         misfit = np.array([])
