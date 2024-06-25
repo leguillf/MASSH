@@ -2198,8 +2198,8 @@ class Basis_it:
 
         self.anisotropic_itg = config.BASIS.anisotropic_itg
         
-        if config.BASIS.Ntheta>0:
-            self.Ntheta = 2*(config.BASIS.Ntheta-1)+3 # We add -pi/2,0,pi/2
+        if config.MOD.Ntheta>0:
+            self.Ntheta = 2*(config.MOD.Ntheta-1)+3 # We add -pi/2,0,pi/2
         else:
             self.Ntheta = 1 # Only angle 0°
         

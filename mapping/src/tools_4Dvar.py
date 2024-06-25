@@ -157,11 +157,11 @@ class Variational:
             # Measuring computation times
             #t_misfit.append(datetime.now()-t0)
             #t0 = datetime.now()
-            
+
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 self.basis.operg(t/3600/24, X, State=State)
-            
+
             self.States[self.checkpoints[i]] = State.copy()
 
             # Measuring computation times

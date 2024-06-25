@@ -1135,8 +1135,6 @@ BASIS_IT = dict(
 
     ### - HBC PARAMETER ### 
 
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
     sigma_B_bc = 1e-2, # Background variance for bc
 
     D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)

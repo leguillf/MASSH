@@ -948,8 +948,8 @@ class Swm:
 
         # Time propagation
         X1, _ = scan(self.one_step_for_scan_jit, init=X0, xs=jnp.zeros(nstep))
-        #for _ in range(nstep):
-            # One time step
+        # for _ in range(nstep):
+        #     # One time step
         #    X1 = self.one_step_jit(X0)
         
         return X1

@@ -1112,7 +1112,7 @@ class Model_sw1l_np(M):
         else:
             self.Heb = config.MOD.He_init
             
-            
+        
         if config.MOD.Ntheta>0:
             theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
             self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
@@ -1843,7 +1843,7 @@ class Model_sw1l_jax(M):
 
         #setting params 
         params = X1[self.swm.nstates:]
-        for param in self.name_params :     
+        for param in self.name_params :    
             State.params[param] = params[self.slice_params[param]].reshape(self.shape_params[param])
 
 
