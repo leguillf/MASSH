@@ -1149,35 +1149,17 @@ BASIS_IT = dict(
 
     sigma_B_itg = 1e-2, # Background variance for itg
 
-    sigma_B_itg_bathy_modulated = False, # True if sigma_B_itg is modulated by bathymetry gradient 
-
-    bathymetry_gradient_smooth = False, # True if bathymetry graident needs to be smoothened by a gaussian kernel 
-
     itg_time_dependant = False, # True if internal tide generation parameter changes in time  
-
-    reduced_basis_itg = False, # True if internal tide generation parameter needs to be decomposed on a reduced basis 
-
-    itg_bathymetry_selected = False, # True if itg sources are located on highest bathymetry gradients
-
-    itg_single_bathy = False, # for twin exp 
-
-    bathymetry_gradient_threshold = None, # the percentage of highest gradient pixels to select for itg parameter 
 
     D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
 
     T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
-
-    # - Anisotropic ITG - #
-
-    anisotropic_itg = False,
 
     ### - HE PARAMETER - ### 
 
     sigma_B_He = 0.2, # Background variance for He
 
     He_time_dependant = True, # True if equivalent height parameter changes in time  
-
-    He_uniform = True, # True if He is uniform over space AND time, useful for twin experiment 
 
     D_He = 200, # Space scale of gaussian decomposition for He (in km)
 

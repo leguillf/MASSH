@@ -1548,7 +1548,7 @@ class Model_sw1l_jax(M):
             if param not in ['He', 'hbcx', 'hbcy', 'itg'] : 
                 sys.exit(param+" not implemented. Please choose parameters among ['He', 'hbcx', 'hbcy', 'itg'].")
             elif param =='He' : 
-                self.shape_params['He'] = [State.ny,State.nx]
+                self.shape_params['He'] = [State.nx,State.ny]
             elif param =='hbcx' : 
                 self.shape_params['hbcx'] = [len(self.omegas), # tide frequencies
                                             2, # North/South
@@ -1564,16 +1564,10 @@ class Model_sw1l_jax(M):
                                             State.ny # NY
                                             ]
             elif param =='itg' :
-                if not self.anisotropic_itg : 
-                    self.shape_params['itg'] = [len(self.omegas), # tide frequencies
-                                                2, # A and B, coefficient in front of cos and sin 
-                                                State.nx, #NX
-                                                State.ny] #NY
-                elif self.anisotropic_itg :
-                    self.shape_params['itg'] = [len(self.omegas), # tide frequencies
-                                                4, # A_u, A_v, B_u, B_v, coefficients in front of cos and sin for each bathymetry gradient components 
-                                                State.nx, #NX
-                                                State.ny] #NY
+                self.shape_params['itg'] = [len(self.omegas), # tide frequencies
+                                            4, # A_u, A_v, B_u, B_v, coefficients in front of cos and sin for each bathymetry gradient components 
+                                            State.nx, #NX
+                                            State.ny] #NY
                     
         # Setting number of parameters 
         self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))

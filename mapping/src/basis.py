@@ -2165,49 +2165,14 @@ class BASIS_ls:
 class Basis_it:
    
     def __init__(self,config, State):
-        self.km2deg =1./110
-    
-        self.facns = config.BASIS.facgauss
-        self.facnlt = config.BASIS.facgauss
-        self.D_He = config.BASIS.D_He
-        self.T_He = config.BASIS.T_He
-        self.D_bc = config.BASIS.D_bc
-        self.T_bc = config.BASIS.T_bc
-        # for itg (internal tide generation)
-        self.D_itg = config.BASIS.D_itg
-        self.T_itg = config.BASIS.T_itg
 
-        # characteristics of the control parameters 
-        self.reduced_basis_itg = config.BASIS.reduced_basis_itg
-        self.itg_time_dependant = config.BASIS.itg_time_dependant
-        self.He_time_dependant = config.BASIS.He_time_dependant
-        self.itg_bathymetry_selected = config.BASIS.itg_bathymetry_selected
-        self.bathymetry_gradient_threshold = config.BASIS.bathymetry_gradient_threshold
-        if self.bathymetry_gradient_threshold == None and self.itg_bathymetry_selected==True: 
-            raise AttributeError('Please prescribe a bathymetry_gradient_threshold in the configuration file if using itg parameter that is bathymetry located.')
-        self.sigma_B_itg_bathy_modulated = config.BASIS.sigma_B_itg_bathy_modulated
-        self.bathymetry_gradient_smooth = config.BASIS.bathymetry_gradient_smooth
-        self.He_uniform = config.BASIS.He_uniform
-        self.itg_single_bathy = config.BASIS.itg_single_bathy
-        
-        self.sigma_B_He = config.BASIS.sigma_B_He
-        self.sigma_B_bc = config.BASIS.sigma_B_bc
-        self.sigma_B_itg = config.BASIS.sigma_B_itg
-        self.path_background = config.BASIS.path_background
-        self.var_background = config.BASIS.var_background
+        ##################
+        ### - COMMON - ###
+        ##################
 
-        self.anisotropic_itg = config.BASIS.anisotropic_itg
-        
-        if config.MOD.Ntheta>0:
-            self.Ntheta = 2*(config.MOD.Ntheta-1)+3 # We add -pi/2,0,pi/2
-        else:
-            self.Ntheta = 1 # Only angle 0°
-        
-        self.Nwaves = len(config.MOD.w_waves)
-        self.omegas = np.asarray(config.MOD.w_waves)
-
-        # Grid params
-        self.nphys= State.lon.size
+        # Grid specs
+        self.km2deg =1./110 # Kilometer to deg factor 
+        self.nphys = State.lon.size
         self.shape_phys = (State.ny,State.nx)
         self.ny = State.ny
         self.nx = State.nx
@@ -2226,39 +2191,90 @@ class Basis_it:
         self.latE = State.lat[:,0]
         self.latW = State.lat[:,-1]
 
+        # Name of controlled parameters
         self.name_params = config.MOD.name_params 
 
-        # Normalizing bathymetry gradient 
-        norm_grad = np.sqrt(State.grad_bathymetry_x**2+State.grad_bathymetry_y**2)
-        if self.bathymetry_gradient_smooth : 
-            norm_grad = scipy.signal.convolve2d(norm_grad,(1/9)*np.ones((3,3)),mode="same",boundary="fill")
+        # Basis reduction factor
+        self.facns = config.BASIS.facgauss # Factor for gaussian spacing in space
+        self.facnlt = config.BASIS.facgauss # Factor for gaussian spacing in time
 
-        norm_grad /= np.nanmax(norm_grad)
-        self.norm_grad_bathymetry = norm_grad
+        # Tidal frequencies 
+        self.Nwaves = len(config.MOD.w_waves) # Number
+        self.omegas = np.asarray(config.MOD.w_waves) # List of frequencies 
 
-        if self.itg_bathymetry_selected : 
-            self.select_itg(State)
+        # Information for setting parameter background
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
+
+        ################################
+        ### - EQUIVALENT HEIGHT He - ###
+        ################################
+
+        self.D_He = config.BASIS.D_He # Space scale of gaussian decomposition for He (in km)
+        self.T_He = config.BASIS.T_He # Time scale of gaussian decomposition for He (in days)
+
+        self.He_time_dependant = config.BASIS.He_time_dependant # True if the He parameter is time dependant (True by default)
+
+        self.sigma_B_He = config.BASIS.sigma_B_He # Covariance sigma for equivalent height He parameter
+
+        ##########################################
+        ### - HEIGHT BOUNDARY CONDITIONS hbc - ###
+        ##########################################
+
+        self.D_bc = config.BASIS.D_bc # Space scale of gaussian decomposition for hbc (in km)
+        self.T_bc = config.BASIS.T_bc # Time scale of gaussian decomposition for hbc (in days)
+
+        # Number of angles (computed from the normal of the border) of incoming waves
+        if config.MOD.Ntheta>0: 
+            self.Ntheta = 2*(config.MOD.Ntheta-1)+3 # We add -pi/2,0,pi/2
+        else:
+            self.Ntheta = 1 # Only angle 0°
+
+        self.sigma_B_bc = config.BASIS.sigma_B_bc # Covariance sigma for hbc parameter
+
+        ########################################
+        ### - INTERNAL TIDE GENERATION itg - ###
+        ########################################
+
+        self.D_itg = config.BASIS.D_itg # Space scale of gaussian decomposition for itg (in km)
+        self.T_itg = config.BASIS.T_itg # Time scale of gaussian decomposition for itg (in days)
+
+        self.itg_time_dependant = config.BASIS.itg_time_dependant # True if the itg parameter is time dependant (False by default)
+
+        self.sigma_B_itg = config.BASIS.sigma_B_itg # Covariance sigma for itg parameter
         
-    def select_itg(self,State):
-
-        """
-        NAME
-            select_itg
-
-        DESCRIPTION
-            Selects Internal Tide Generation sites 
-        """
-
-        # Segregating itg point locations 
-        threshold_value = self.bathymetry_gradient_threshold
-        grad_threshold = np.nanpercentile(self.norm_grad_bathymetry.flatten(),q=threshold_value)
-        self.idx_bathy = np.where(self.norm_grad_bathymetry>=grad_threshold) # idx of bathymetry field where gradient is higher that threshold 
-
-        ### TEST FOR TWIN EXPERIMENT ### 
-        if self.itg_single_bathy == True : 
-            self.idx_bathy = (np.array([40]),np.array([40]))
-
     def set_basis(self,time,return_q=False):
+
+        """
+        Set the basis for the controlled parameters of the model and calculate reduced basis functions.
+
+        Parameters:
+        -----------
+        time : np.ndarray
+            Array of time points.
+        return_q : bool, optional
+            If True, returns the covariance matrix Q and the background vector array Xb, by default False.
+
+        Returns:
+        --------
+        tuple of np.ndarray
+            If return_q is True, returns a tuple containing:
+                - Xb : np.ndarray
+                    Background vector array Xb.
+                - Q : np.ndarray or None
+                    Covariance matrix Q.
+        
+        Notes:
+        ------
+        - This function initializes and sets the basis for controlled model parameters by 
+        calculating their shapes in both the reduced and physical spaces.
+        - It handles chosen parameters in config file between : "He", "hbcx", "hbcy", and "itg".
+        - It prints the reduced order of the recued basis.
+        - If return_q is True and necessary sigma_B values are set, it creates and returns 
+        the Q array based on these sigma_B values.
+        - If path_background is set and the file exists, it loads background vector from 
+        the specified file.
+        """
         
         TIME_MIN = time.min()
         TIME_MAX = time.max()
@@ -2268,57 +2284,78 @@ class Basis_it:
         LAT_MAX = self.lat_max
         if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
 
-        self.time = time
+        self.time = time 
 
-        self.bc_gauss = {} # gaussian basis for boundary conditions 
-        self.shape_params = {} # dictionary with the shapes in the reduced space of each of the parameters 
-        self.shape_params_phys = {} # dictionary with the shapes in the physical space of each of the parameters 
- 
+        self.bc_gauss = {} # Dictionary containing gaussian basis elements for each parameters. 
+        self.shape_params = {} # Dictionary containing the shapes in the reduced space of each of the parameters.
+        self.shape_params_phys = {} # Dictionary containing the shapes in the physical space of each of the parameters.
+        
+        #############################################
+        ### SETTING UP THE REDUCED BASIS ELEMENTS ###
+        #############################################
+
         for name in self.name_params : 
+
+            # - Equivalent Height He - #
             if name == "He": 
                 self.shape_params["He"], self.shape_params_phys["He"] = self.set_He(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX) 
 
+            # - X height boundary conditions - #
             if name == "hbcx":  
                 self.shape_params["hbcS"], self.shape_params["hbcN"], self.shape_params_phys["hbcS"], self.shape_params_phys["hbcN"] = self.set_hbcx(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
-
+            
+            # - Y height boundary conditions - #
             if name == "hbcy": 
                 self.shape_params["hbcE"], self.shape_params["hbcW"], self.shape_params_phys["hbcE"], self.shape_params_phys["hbcW"] = self.set_hbcy(time, LAT_MIN, LAT_MAX, TIME_MIN, TIME_MAX)
-
+            
+            # - Internal tide generation itg - #
             if name == "itg": 
-                if self.anisotropic_itg == False :
-                    self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
-                elif self.anisotropic_itg == True :
-                    self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_anisotropic_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX)
+                self.shape_params["itg"], self.shape_params_phys["itg"] = self.set_itg(time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX)
         
-        self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) # dictionary with the number of each of the parameters in reduced space 
-        self.n_params_phys = dict(zip(self.shape_params_phys.keys(), map(np.prod, self.shape_params_phys.values()))) # dictionary with the number of each of the parameters in physical space
-        
-        self.nbasis = sum(self.n_params.values()) # total number of parameters in the reduced space
-        self.nphys = sum(self.n_params_phys.values()) # total number of parameters in the physical space
-        self.nphystot = 0 # total number of parameters in the physical space (for printing reduced order)
+        ############################################
+        ### REDUCED BASIS INFORMATION ATTRIBUTES ###
+        ############################################
+
+        # Dictionary with the number of parameters in reduced space 
+        self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) 
+        # Dictionary with the number of parameters in pysical space
+        self.n_params_phys = dict(zip(self.shape_params_phys.keys(), map(np.prod, self.shape_params_phys.values()))) 
+        # Total number of parameters in the reduced space
+        self.nbasis = sum(self.n_params.values()) 
+        # Total number of parameters in the physical space
+        self.nphys = sum(self.n_params_phys.values()) 
+        # Total number of parameters in the physical space (including time dimension)
+        self.nphystot = 0 
         for param in self.n_params_phys.keys():
             if (param == "itg" and not self.itg_time_dependant) or (param == "He" and not self.He_time_dependant):
                 self.nphystot += self.n_params_phys[param] 
             else : 
                 self.nphystot += self.n_params_phys[param]*time.size
-
+        # Setting up slice information for parameters 
         interval = 0 ; interval_phys = 0 
-        self.slice_params = {} # dictionary with the slices of each of the parameters in the reduced space
-        self.slice_params_phys = {} # dictionary with the slices of each of the parameters in the physical space
-        for name in self.shape_params.keys() :
+        self.slice_params = {} # Dictionary with the slices of parameters in the reduced space
+        self.slice_params_phys = {} # Dictionary with the slices of parameters in the physical space
+        for name in self.shape_params.keys():
             self.slice_params[name]=slice(interval,interval+self.n_params[name])
             self.slice_params_phys[name]=slice(interval_phys,interval_phys+self.n_params_phys[name])
             interval += self.n_params[name]; interval_phys += self.n_params_phys[name]
-
         # PRINTING REDUCED ORDER : #     
         print(f'reduced order: {self.nphystot} --> {self.nbasis}\nreduced factor: {int(self.nphystot/self.nbasis)}')
-    
+
+        #########################################
+        ### COMPUTING THE COVARIANCE MATRIX Q ###
+        #########################################        
+
         if return_q :
             if None not in [self.sigma_B_He, self.sigma_B_bc, self.sigma_B_itg]:
-                Q = np.zeros((self.nbasis,))
+                Q = np.zeros((self.nbasis,)) # Initializing
                 for name in self.slice_params.keys() :
+
+                    # - Equivalent Height He - #
                     if name == "He" : 
                         Q[self.slice_params[name]]=self.sigma_B_He
+
+                    # - Height boundary conditions hbc - #
                     if name in ["hbcS","hbcN","hbcW","hbcE"] : 
                         if hasattr(self.sigma_B_bc,'__len__'):
                             if len(self.sigma_B_bc)==self.Nwaves:
@@ -2333,16 +2370,9 @@ class Basis_it:
                                 Q[self.slice_params[name]]=self.sigma_B_bc[0]
                         else:
                             Q[self.slice_params[name]]=self.sigma_B_bc
+
+                    # - Internal tide generation itg - #
                     if name == "itg" : 
-                        # if sigma_B is being modulated by bathymetry gradient, only works for non basis reduced itg not bathymetry located 
-                        if self.sigma_B_itg_bathy_modulated and not self.reduced_basis_itg :
-                            # if only highest bathymetry gradient are selected 
-                            if self.itg_bathymetry_selected : 
-                                Q[self.slice_params[name]] = self.sigma_B_itg*np.tile(self.norm_grad_bathymetry[self.idx_bathy].flatten(),reps=2)
-                            else :  
-                                Q[self.slice_params[name]] = self.sigma_B_itg*np.tile(self.norm_grad_bathymetry.flatten(),reps=2)
-                            Q[np.isnan(Q)]=0
-                        else : 
                             Q[self.slice_params[name]]=self.sigma_B_itg
             else:
                 Q = None
@@ -2359,12 +2389,40 @@ class Basis_it:
 
     def set_He(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
 
-        if self.He_uniform: # for twin experiment 
-            shapeHe = [1]
+        """
+        Set the equivalent height He parameter recuced basis elements.
 
-            shapeHe_phys = (self.ny,self.nx)
+        Parameters:
+        -----------
+        time : np.ndarray
+            Array of time points.
+        LAT_MIN : float
+            Minimum latitude value.
+        LAT_MAX : float
+            Maximum latitude value.
+        LON_MIN : float
+            Minimum longitude value.
+        LON_MAX : float
+            Maximum longitude value.
+        TIME_MIN : float
+            Minimum time value.
+        TIME_MAX : float
+            Maximum time value.
 
-            return shapeHe, shapeHe_phys
+        Returns:
+        --------
+        tuple
+            A tuple containing:
+                - shapeHe : list
+                    Shape of the He parameter in the reduced space.
+                - shapeHe_phys : list
+                    Shape of the He parameter in the physical space.
+        
+        Notes:
+        ------
+        - This function sets the basis elements for the He parameter. It computes spatial and temporal Gaussian basis functions based on specificatiions of config file and coordinates.
+        - It prints the total number of He parameters in the reduced space.
+        """
 
         ###############################
         ###   - SPACE DIMENSION -   ###
@@ -2424,7 +2482,7 @@ class Basis_it:
         else : 
             shapeHe = [ENSLAT_He.size]
 
-        shapeHe_phys = (self.ny,self.nx)
+        shapeHe_phys = [self.nx,self.ny]
 
         print('nHe:',np.prod(shapeHe))
 
@@ -2432,49 +2490,120 @@ class Basis_it:
         
     
     def set_hbcx(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
-        
-        # South
+
+        """
+        Set the height boundary conditions hbcx parameter recuced basis elements for both the South and North boundaries.
+
+        Parameters:
+        -----------
+        time : np.ndarray
+            Array of time points.
+        LAT_MIN : float
+            Minimum latitude value.
+        LAT_MAX : float
+            Maximum latitude value.
+        LON_MIN : float
+            Minimum longitude value.
+        LON_MAX : float
+            Maximum longitude value.
+        TIME_MIN : float
+            Minimum time value.
+        TIME_MAX : float
+            Maximum time value.
+
+        Returns:
+        --------
+        tuple
+            A tuple containing:
+                - shapehbcS : list
+                    Shape of the South boundary hbcx parameter in the reduced space.
+                - shapehbcN : list
+                    Shape of the North boundary hbcx parameter in the reduced space.
+                - shapehbcS_phys : list
+                    Shape of the South boundary hbcx parameter in the physical space.
+                - shapehbcN_phys : list
+                    Shape of the North boundary hbcx parameter in the physical space.
+
+        Notes:
+        ------
+        - This function sets the basis elements for the height boundary conditions hbcx parameter. It computes spatial and temporal Gaussian basis functions based on specificatiions of config file and coordinates.
+        - It prints the total number of hbcx parameters in the reduced space.
+        """
+
+        ###############################
+        ###   - SPACE DIMENSION -   ###
+        ###############################
+
+        # - SOUTH - # 
+        # Ensemble of reduced basis longitudes
         ENSLON_S = np.mod(
                 np.arange(
                     LON_MIN - self.D_bc*(1-1./self.facns)/np.cos(LAT_MIN*np.pi/180.)*self.km2deg,
                     LON_MAX + 1.5*self.D_bc/self.facns/np.cos(LAT_MIN*np.pi/180.)*self.km2deg,
                     self.D_bc/self.facns/np.cos(LAT_MIN*np.pi/180.)*self.km2deg),
                 360)
+        # Computing reduced basis elements gaussian supports 
         bc_S_gauss = np.zeros((ENSLON_S.size,self.nx))
         for i,lon0 in enumerate(ENSLON_S):
             iobs = np.where((np.abs((np.mod(self.lonS - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)) <= self.D_bc))[0] 
             xx = (np.mod(self.lonS[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)     
             bc_S_gauss[i,iobs] = mywindow(xx / self.D_bc) 
         
-        # North
+        # - NORTH - #
+        # Ensemble of reduced basis longitudes
         ENSLON_N = np.mod(
                 np.arange(
                     LON_MIN - self.D_bc*(1-1./self.facns)/np.cos(LAT_MAX*np.pi/180.)*self.km2deg,
                     LON_MAX + 1.5*self.D_bc/self.facns/np.cos(LAT_MAX*np.pi/180.)*self.km2deg,
                     self.D_bc/self.facns/np.cos(LAT_MAX*np.pi/180.)*self.km2deg),
                 360)
+        # Computing reduced basis elements gaussian supports 
         bc_N_gauss = np.zeros((ENSLON_N.size,self.nx))
         for i,lon0 in enumerate(ENSLON_N):
             iobs = np.where((np.abs((np.mod(self.lonN - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)) <= self.D_bc))[0] 
             xx = (np.mod(self.lonN[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)     
             bc_N_gauss[i,iobs] = mywindow(xx / self.D_bc) 
 
-        self.bc_gauss["hbcS"] = bc_S_gauss
-        self.bc_gauss["hbcN"] = bc_N_gauss
+        # Saving gaussian reduced basis elements 
+        self.bc_gauss["hbcS"] = bc_S_gauss # For South boundary 
+        self.bc_gauss["hbcN"] = bc_N_gauss # For North boundary 
 
-        ## in time
+        ##############################
+        ###   - TIME DIMENSION -   ###
+        ##############################
+
+        # Ensemble of reduced basis timesteps
         ENST_bc = np.arange(-self.T_bc*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_bc/self.facnlt , self.T_bc/self.facnlt)
         bc_t_gauss = np.zeros((ENST_bc.size,time.size))
         for i,time0 in enumerate(ENST_bc):
             iobs = np.where(abs(time-time0) < self.T_bc)
             bc_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_bc)
         
+        # Gaussian reduced basis element
         self.bc_t_gauss = bc_t_gauss
 
-        shapehbcS = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_S_gauss.shape[0]]
-        shapehbcN = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_N_gauss.shape[0]]
+        ####################################
+        ###   - BASIS ELEMENT SHAPES -   ###
+        ####################################
 
-        shapehbcS_phys = shapehbcN_phys = [self.Nwaves, 2, self.Ntheta, self.nx]
+        # - Shapes of the hbcy parameter in the reduced space.
+        shapehbcS = [self.Nwaves,           # - Number of tidal frequency components 
+                     2,                     # - Number of boundaries (North and South)
+                     self.Ntheta,           # - Number of angles
+                     ENST_bc.size,          # - Number of basis timesteps
+                     bc_S_gauss.shape[0]]   # - Number of basis spatial elements 
+        
+        shapehbcN = [self.Nwaves,           # - Number of tidal frequency components 
+                     2,                     # - Number of boundaries (North and South)
+                     self.Ntheta,           # - Number of angles
+                     ENST_bc.size,          # - Number of basis timesteps
+                     bc_N_gauss.shape[0]]   # - Number of basis spatial elements 
+
+        # - Shapes of the hbcy parameter in the physical space.
+        shapehbcS_phys = shapehbcN_phys = [self.Nwaves,     # - Number of tidal frequency components 
+                                           2,               # - Number of boundaries (North and South)
+                                           self.Ntheta,     # - Number of angles
+                                           self.nx]         # - Number of gridpoints along x axis
         
         print('nbcx:',np.prod(shapehbcS)+np.prod(shapehbcN))
 
@@ -2482,172 +2611,273 @@ class Basis_it:
 
 
     def set_hbcy(self,time, LAT_MIN, LAT_MAX, TIME_MIN, TIME_MAX): 
-    
+
+        """
+        Set the height boundary conditions hbcy parameter recuced basis elements for both the East and West boundaries.
+
+        Parameters:
+        -----------
+        time : np.ndarray
+            Array of time points.
+        LAT_MIN : float
+            Minimum latitude value.
+        LAT_MAX : float
+            Maximum latitude value.
+        LON_MIN : float
+            Minimum longitude value.
+        LON_MAX : float
+            Maximum longitude value.
+        TIME_MIN : float
+            Minimum time value.
+        TIME_MAX : float
+            Maximum time value.
+
+        Returns:
+        --------
+        tuple
+            A tuple containing:
+                - shapehbcE : list
+                    Shape of the East boundary hbcx parameter in the reduced space.
+                - shapehbcW : list
+                    Shape of the West boundary hbcx parameter in the reduced space.
+                - shapehbcE_phys : list
+                    Shape of the East boundary hbcx parameter in the physical space.
+                - shapehbcW_phys : list
+                    Shape of the West boundary hbcx parameter in the physical space.
+
+        Notes:
+        ------
+        - This function sets the basis elements for the height boundary conditions hbcx parameter. It computes spatial and temporal Gaussian basis functions based on specificatiions of config file and coordinates.
+        - It prints the total number of hbcy parameters in the reduced space.
+        """
+        
+        #########################################
+        ###   - COMPUTING SPACE DIMENSION -   ###
+        #########################################
+
+        # Ensemble of reduced basis latitudes (common for each boundaries)
         ENSLAT = np.arange(
             LAT_MIN - self.D_bc*(1-1./self.facns)*self.km2deg,
             LAT_MAX + 1.5*self.D_bc/self.facns*self.km2deg, 
             self.D_bc/self.facns*self.km2deg)
 
-        # East
+        # - EAST - #
+        # Computing reduced basis elements gaussian supports 
         bc_E_gauss = np.zeros((ENSLAT.size,self.ny))
         for i,lat0 in enumerate(ENSLAT):
             iobs = np.where(np.abs((self.latE - lat0) / self.km2deg) <= self.D_bc)[0]
             yy = (self.latE[iobs] - lat0) / self.km2deg
             bc_E_gauss[i,iobs] = mywindow(yy / self.D_bc) 
 
-        # West 
+        # - WEST - # 
+        # Computing reduced basis elements gaussian supports 
         bc_W_gauss = np.zeros((ENSLAT.size,self.ny))
         for i,lat0 in enumerate(ENSLAT):
             iobs = np.where(np.abs((self.latW - lat0) / self.km2deg) <= self.D_bc)[0]
             yy = (self.latW[iobs] - lat0) / self.km2deg
             bc_W_gauss[i,iobs] = mywindow(yy / self.D_bc) 
 
-        self.bc_gauss["hbcE"] = bc_E_gauss
-        self.bc_gauss["hbcW"] = bc_W_gauss
+        # Gaussian reduced basis elements
+        self.bc_gauss["hbcE"] = bc_E_gauss # For East boundary 
+        self.bc_gauss["hbcW"] = bc_W_gauss # For West boundary 
         
-        ## in time
+        ########################################
+        ###   - COMPUTING TIME DIMENSION -   ###
+        ########################################
+
+        # Ensemble of reduced basis timesteps
         ENST_bc = np.arange(-self.T_bc*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_bc/self.facnlt , self.T_bc/self.facnlt)
         bc_t_gauss = np.zeros((ENST_bc.size,time.size))
         for i,time0 in enumerate(ENST_bc):
             iobs = np.where(abs(time-time0) < self.T_bc)
             bc_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_bc)
         
+        # Gaussian reduced basis element
         self.bc_t_gauss = bc_t_gauss
-        
-        shapehbcE = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_E_gauss.shape[0]]
-        shapehbcW = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_W_gauss.shape[0]]
 
-        shapehbcE_phys = shapehbcW_phys = [self.Nwaves, 2, self.Ntheta, self.ny]
+        ####################################
+        ###   - BASIS ELEMENT SHAPES -   ###
+        ####################################
+        
+        # Shapes of the hbcx parameter in the reduced space.
+        shapehbcE = [self.Nwaves,               # - Number of tidal frequency components 
+                     2,                         # - Number of boundaries (North and South)
+                     self.Ntheta,               # - Number of angles
+                     ENST_bc.size,              # - Number of basis timesteps
+                     bc_E_gauss.shape[0]]       # - Number of basis spatial elements 
+        
+        shapehbcW = [self.Nwaves,               # - Number of tidal frequency components 
+                     2,                         # - Number of boundaries (North and South)
+                     self.Ntheta,               # - Number of angles
+                     ENST_bc.size,              # - Number of basis timesteps
+                     bc_W_gauss.shape[0]]       # - Number of basis spatial elements 
+
+        # Shapes of the hbcx parameter in the physical space.
+        shapehbcE_phys = shapehbcW_phys = [self.Nwaves,     # - Number of tidal frequency components 
+                                           2,               # - Number of boundaries (North and South)
+                                           self.Ntheta,     # - Number of angles
+                                           self.ny]         # - Number of gridpoints along x axis
 
         print('nbcy:',np.prod(shapehbcE)+np.prod(shapehbcW))
 
         return shapehbcE, shapehbcW, shapehbcE_phys, shapehbcW_phys
     
-    def set_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
+    # def set_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
         
-        ################################
-        ###   - NO REDUCED BASIS -   ###
-        ################################
+    #     ################################
+    #     ###   - NO REDUCED BASIS -   ###
+    #     ################################
 
-        if not self.reduced_basis_itg :
+    #     if not self.reduced_basis_itg :
 
-            # - WITH CONTROL OF ITG DEPENDANT ON BATHYMETRY # 
-            if self.itg_bathymetry_selected :
-                # raising error if no bathymetry file has been prescribed
-                if type(self.bathymetry) is not np.ndarray:
-                    raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_selected == True')
+    #         # - WITH CONTROL OF ITG DEPENDANT ON BATHYMETRY # 
+    #         if self.itg_bathymetry_selected :
+    #             # raising error if no bathymetry file has been prescribed
+    #             if type(self.bathymetry) is not np.ndarray:
+    #                 raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_selected == True')
 
-                shapeitg = [self.Nwaves,2,self.idx_bathy[0].size]
-                shapeitg_phys = [self.Nwaves,2,self.nx,self.ny]
+    #             shapeitg = [self.Nwaves,2,self.idx_bathy[0].size]
+    #             shapeitg_phys = [self.Nwaves,2,self.nx,self.ny]
 
-                print('nitg:',np.prod(shapeitg))
+    #             print('nitg:',np.prod(shapeitg))
 
-                return shapeitg, shapeitg_phys
+    #             return shapeitg, shapeitg_phys
                 
-            # - WITH TOTAL CONTROL OF ITG # 
-            else : 
-                shapeitg = [self.Nwaves,2,self.nx,self.ny]
-                shapeitg_phys = [self.Nwaves,2,self.nx,self.ny]
+    #         # - WITH TOTAL CONTROL OF ITG # 
+    #         else : 
+    #             shapeitg = [self.Nwaves,2,self.nx,self.ny]
+    #             shapeitg_phys = [self.Nwaves,2,self.nx,self.ny]
 
-                print('nitg:',np.prod(shapeitg))
+    #             print('nitg:',np.prod(shapeitg))
 
-                return shapeitg, shapeitg_phys
+    #             return shapeitg, shapeitg_phys
             
-        else :
+    #     else :
 
-        ##################################
-        ###   - WITH REDUCED BASIS -   ###
-        ##################################        
+    #     ##################################
+    #     ###   - WITH REDUCED BASIS -   ###
+    #     ##################################        
         
          
-            ###   - SPACE DIMENSION -   ###
+    #         ###   - SPACE DIMENSION -   ###
 
-            # * coordinates * # 
-            ENSLAT1 = np.arange(
-                LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
-                LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
-            ENSLAT_itg = []
-            ENSLON_itg = []
-            for I in range(len(ENSLAT1)):
-                ENSLON1 = np.mod(
-                    np.arange(
-                        LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                        LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                        self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
-                    360)
+    #         # * coordinates * # 
+    #         ENSLAT1 = np.arange(
+    #             LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
+    #             LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
+    #         ENSLAT_itg = []
+    #         ENSLON_itg = []
+    #         for I in range(len(ENSLAT1)):
+    #             ENSLON1 = np.mod(
+    #                 np.arange(
+    #                     LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+    #                     LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+    #                     self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+    #                 360)
                 
                 
-                if self.itg_bathymetry_selected == True : # selecting the coordinates locted on bathymetry high gradient points if itg_bathymetry_selected == True 
+    #             if self.itg_bathymetry_selected == True : # selecting the coordinates locted on bathymetry high gradient points if itg_bathymetry_selected == True 
                     
-                    mask_el = np.zeros_like(ENSLON1,dtype='bool') # mask indicating if reduced basis element is consider, by default set to False 
+    #                 mask_el = np.zeros_like(ENSLON1,dtype='bool') # mask indicating if reduced basis element is consider, by default set to False 
 
-                    # raising error if no bathymetry file has been prescribed
-                    if type(self.bathymetry) is not np.ndarray:
-                        raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_selected == True')
-                    for J in range(len(ENSLON1)):
-                        K=0
-                        while mask_el[J] == False and K < len(self.idx_bathy[0]) : 
-                        #for K in range(len(self.idx_bathy)):
-                            idx = (self.idx_bathy[0][K],self.idx_bathy[1][K]) 
-                            # if any bathymetry gradient point is inside range of the reduced basis element 
-                            if (np.abs((np.mod(self.lon[idx] - ENSLON1[J]+180,360)-180) / self.km2deg * np.cos(ENSLAT1[I] * np.pi / 180.)) <= self.D_itg) and (np.abs((self.lat[idx] - ENSLAT1[I]) / self.km2deg) <= self.D_itg):
-                                mask_el[J] = True 
-                            K+=1
-                else : 
-                    mask_el = np.ones_like(ENSLON1,dtype='bool') # mask indicating if reduced basis element is consider, by default set to False 
+    #                 # raising error if no bathymetry file has been prescribed
+    #                 if type(self.bathymetry) is not np.ndarray:
+    #                     raise AttributeError('Bathymetry file input has not been prescribed and itg_bathymetry_selected == True')
+    #                 for J in range(len(ENSLON1)):
+    #                     K=0
+    #                     while mask_el[J] == False and K < len(self.idx_bathy[0]) : 
+    #                     #for K in range(len(self.idx_bathy)):
+    #                         idx = (self.idx_bathy[0][K],self.idx_bathy[1][K]) 
+    #                         # if any bathymetry gradient point is inside range of the reduced basis element 
+    #                         if (np.abs((np.mod(self.lon[idx] - ENSLON1[J]+180,360)-180) / self.km2deg * np.cos(ENSLAT1[I] * np.pi / 180.)) <= self.D_itg) and (np.abs((self.lat[idx] - ENSLAT1[I]) / self.km2deg) <= self.D_itg):
+    #                             mask_el[J] = True 
+    #                         K+=1
+    #             else : 
+    #                 mask_el = np.ones_like(ENSLON1,dtype='bool') # mask indicating if reduced basis element is consider, by default set to False 
 
-                ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1[mask_el]))]))
-                ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1[mask_el]]))
-                #ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
-                #ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
-            self.ENSLAT_itg = ENSLAT_itg
-            self.ENSLON_itg = ENSLON_itg
+    #             ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1[mask_el]))]))
+    #             ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1[mask_el]]))
+    #             #ENSLAT_itg = np.concatenate(([ENSLAT_itg,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+    #             #ENSLON_itg = np.concatenate(([ENSLON_itg,ENSLON1]))
+    #         self.ENSLAT_itg = ENSLAT_itg
+    #         self.ENSLON_itg = ENSLON_itg
             
-            # * gaussian functions * # 
-            itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
-            for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
-                iobs = np.where(
-                        (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
-                        (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg)
-                        )[0]
-                xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
-                yy = (self.lat1d[iobs] - lat0) / self.km2deg
+    #         # * gaussian functions * # 
+    #         itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
+    #         for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
+    #             iobs = np.where(
+    #                     (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
+    #                     (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg)
+    #                     )[0]
+    #             xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+    #             yy = (self.lat1d[iobs] - lat0) / self.km2deg
                 
-                itg_xy_gauss[i,iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
+    #             itg_xy_gauss[i,iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
 
-            itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
+    #         itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
 
                 
-            self.itg_xy_gauss = itg_xy_gauss
+    #         self.itg_xy_gauss = itg_xy_gauss
 
-        ###   - TIME DIMENSION -   ###
+    #     ###   - TIME DIMENSION -   ###
          
-        if self.itg_time_dependant:
+    #     if self.itg_time_dependant:
 
-            # * coordinates * # 
-            ENST_itg = np.arange(-self.T_itg*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_itg/self.facnlt , self.T_itg/self.facnlt)
+    #         # * coordinates * # 
+    #         ENST_itg = np.arange(-self.T_itg*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_itg/self.facnlt , self.T_itg/self.facnlt)
         
-            # * gaussian functions * #  
-            itg_t_gauss = np.zeros((ENST_itg.size,time.size))
-            for i,time0 in enumerate(ENST_itg):
-                iobs = np.where(abs(time-time0) < self.T_itg)
-                itg_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_itg)
+    #         # * gaussian functions * #  
+    #         itg_t_gauss = np.zeros((ENST_itg.size,time.size))
+    #         for i,time0 in enumerate(ENST_itg):
+    #             iobs = np.where(abs(time-time0) < self.T_itg)
+    #             itg_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_itg)
 
-            self.itg_t_gauss = itg_t_gauss
-            shapeitg = [self.Nwaves,2,ENST_itg.size,ENSLAT_itg.size]
+    #         self.itg_t_gauss = itg_t_gauss
+    #         shapeitg = [self.Nwaves,2,ENST_itg.size,ENSLAT_itg.size]
 
-        else : 
-            shapeitg = [self.Nwaves,2,ENSLAT_itg.size]
+    #     else : 
+    #         shapeitg = [self.Nwaves,2,ENSLAT_itg.size]
         
-        shapeitg_phys = [self.Nwaves,2,self.ny,self.nx]
+    #     shapeitg_phys = [self.Nwaves,2,self.ny,self.nx]
 
-        print('nitg:',np.prod(shapeitg))
+    #     print('nitg:',np.prod(shapeitg))
 
-        return shapeitg, shapeitg_phys
+    #     return shapeitg, shapeitg_phys
 
-    def set_anisotropic_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX):
+    def set_itg(self,time, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX, TIME_MIN, TIME_MAX):
 
-        # - COORDINATES - # 
+        """
+        Set the internal tide generation itg parameter recuced basis elements.
+
+        Parameters:
+        ----------
+        time : ndarray
+            Array of time points.
+        LAT_MIN : float
+            Minimum latitude for the grid.
+        LAT_MAX : float
+            Maximum latitude for the grid.
+        LON_MIN : float
+            Minimum longitude for the grid.
+        LON_MAX : float
+            Maximum longitude for the grid.
+        TIME_MIN : float
+            Minimum time value for the grid.
+        TIME_MAX : float
+            Maximum time value for the grid.
+
+        Returns:
+        -------
+        tuple
+            - shapeitg: Shape of the itg parameter in the reduced space.
+            - shapeitg_phys: Shape of the itg parameter in the physical space.
+        """
+
+        #########################################
+        ###   - COMPUTING SPACE DIMENSION -   ###
+        #########################################
+
+        # Ensemble of reduced basis coordinates
         ENSLAT1 = np.arange(
             LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
             LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg, self.D_itg/self.facns*self.km2deg)
@@ -2665,7 +2895,7 @@ class Basis_it:
         self.ENSLAT_itg = ENSLAT_itg
         self.ENSLON_itg = ENSLON_itg
 
-        # - GAUSSIAN FUNCTIONS - # 
+        # Computing reduced basis elements gaussian supports 
         itg_xy_gauss = np.zeros((ENSLAT_itg.size,self.lon1d.size))
         for i,(lat0,lon0) in enumerate(zip(ENSLAT_itg,ENSLON_itg)):
             iobs = np.where(
@@ -2680,10 +2910,44 @@ class Basis_it:
         itg_xy_gauss = itg_xy_gauss.reshape((ENSLAT_itg.size,self.ny,self.nx))
         self.itg_xy_gauss = itg_xy_gauss
 
-        # Shapes of parameters # 
-        shapeitg = [self.Nwaves,4,ENSLAT_itg.size]
-        shapeitg_phys = [self.Nwaves,4,self.ny,self.nx]
+        ########################################
+        ###   - COMPUTING TIME DIMENSION -   ###
+        ########################################
 
+        if self.itg_time_dependant:
+
+            # Ensemble of reduced basis coordinates
+            ENST_itg = np.arange(-self.T_itg*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_itg/self.facnlt , self.T_itg/self.facnlt)
+        
+            # Computing reduced basis elements gaussian supports 
+            itg_t_gauss = np.zeros((ENST_itg.size,time.size))
+            for i,time0 in enumerate(ENST_itg):
+                iobs = np.where(abs(time-time0) < self.T_itg)
+                itg_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_itg)
+
+            self.itg_t_gauss = itg_t_gauss
+
+        ####################################
+        ###   - BASIS ELEMENT SHAPES -   ###
+        ####################################
+
+        # Shapes of the itg parameter in the reduced space.
+        if self.itg_time_dependant: # If parameter is time dependant 
+            shapeitg = [self.Nwaves,            # - Number of tidal frequency components 
+                        4,                      # - Number of estimated parameter (cos and sin for x and y axis)
+                        ENST_itg.size,          # - Number of basis timesteps 
+                        ENSLAT_itg.size]        # - Number of basis spatial points 
+        else : # If parameter is not time dependant
+            shapeitg = [self.Nwaves,            # - Number of tidal frequency components 
+                        4,                      # - Number of estimated parameter (cos and sin for x and y axis)
+                        ENSLAT_itg.size]        # - Number of basis spatial points 
+
+        # Shapes of the itg parameter in the physical space.
+        shapeitg_phys = [self.Nwaves,       # - Number of tidal frequency components 
+                         4,                 # - Number of estimated parameter (cos and sin for x and y axis)
+                         self.nx,           # - Number of grid poiints along x axis. 
+                         self.ny]           # - Number of grid poiints along y axis. 
+                          
         print('nitg:',np.prod(shapeitg))
 
         return shapeitg, shapeitg_phys
@@ -2691,69 +2955,84 @@ class Basis_it:
     def operg(self,t,X,State=None):
 
         """
-            Project to physicial space
+        Perform the basis projection operation for a given time and parameter vector.
+
+        This method projects the given parameter vector X from reduced basis onto the model grid, at the provided time t. The results can be stored in the provided State object.
+                
+        operg : | REDUCED SPACE >>>>>> PHYSICAL SPACE | (Model Grid) 
+
+        Parameters:
+        ----------
+        t : float
+            The time at which the projection is performed.
+        X : ndarray
+            The parameter vector to be projected.
+        State : object, optional
+            State object to store the parameters after projection. If not provided, the method returns the projected vector onto physical space.
+
+        Returns:
+        -------
+        phi : ndarray
+            The projected parameter vector if State is not provided. Otherwise, updates the State object in place.
+
         """
 
-        # - INITIALIZATION - #
+        ##############################
+        ###   - INITIALIZATION -   ###
+        ##############################
 
-        indt = np.argmin(np.abs(self.time-t))   
-
+        # Index of timestep t in self.time array
+        indt = np.argmin(np.abs(self.time-t))  
+        # Variable to return  
         phi = np.zeros((self.nphys,))
 
-        # - BASIS OPERATION - #
+        ##########################################
+        ###   - BASIS PROJECTION OPERATION -   ###
+        ##########################################
 
         for name in self.slice_params_phys.keys():
-            # - He 
-            if name == "He":
-                if self.He_uniform: # for twin experiment
-                    phi[self.slice_params_phys[name]] = X[self.slice_params[name]]
 
-                elif self.He_time_dependant:
+            # - Equivalent Height He - # 
+            if name == "He":
+                if self.He_time_dependant:
                     phi[self.slice_params_phys[name]] = np.tensordot(
                                                             np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.He_xy_gauss,(1,0)),
                                                             self.He_t_gauss[:,indt],(0,0)).flatten()
                 else : 
                     phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.He_xy_gauss,(-1,0)).flatten()
 
-            # - hbc 
+            # - Height boundary conditions hbc - #
             if name in ["hbcS","hbcN","hbcW","hbcE"]:
                 phi[self.slice_params_phys[name]] = np.tensordot(
                                                         np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.bc_gauss[name],(-1,0)),
                                                         self.bc_t_gauss[:,indt],(-2,0)).flatten()
                 
-            # - itg 
+            # - Internal Tide Generation itg - #
             if name == "itg":
-                if self.anisotropic_itg == True : # Anisotropic version of ITG # 
+                if self.itg_time_dependant == True :
+                    phi[self.slice_params_phys[name]] = np.tensordot(
+                                                            np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)),
+                                                            self.itg_t_gauss[:,indt],(2,0)).flatten() 
+                else : 
                     phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
 
-                else : # Other version of ITG # 
-                    if not self.reduced_basis_itg : # ITG isn't on a reduced basis # 
-                        if not self.itg_bathymetry_selected : # All pixels are controlled # 
-                            phi[self.slice_params_phys[name]] = X[self.slice_params[name]]#.reshape(self.shape_params[name]).flatten()
-                        else : # Only pixels with highest bathy gradient are controlled #
-                            itg = np.zeros(self.shape_params_phys[name]) # ITG IN PHYSICAL SPACE, TO BE FILLED 
-                            X_itg = X[self.slice_params[name]].reshape(self.shape_params[name]) # ITG IN REDUCED SPACE, CONTAINS THE INFORMATION
-                            itg[0][self.idx_bathy] = X_itg[0] # COS PART OF ITG
-                            itg[1][self.idx_bathy] = X_itg[1] # SIN PART OF ITG
-                            phi[self.slice_params_phys[name]] = itg.flatten()
-                    else : # ITG is on a reduced basis # 
-                        if self.itg_time_dependant: # ITG is dependant on time # 
-                            phi[self.slice_params_phys[name]] = np.tensordot(
-                                                            np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)),
-                                                            self.itg_t_gauss[:,indt],(1,0)).flatten() 
-                        else : # ITG isn't dependant on time # 
-                            phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.itg_xy_gauss,(-1,0)).flatten()
 
-        # - SAVING OUTPUTS - #
+        ##############################
+        ###   - SAVING OUTPUTS -   ###
+        ##############################
 
         if State is not None:
             for name in self.name_params : 
+
+                # - Height boundary conditions hbcx - #
                 if name == "hbcx" : 
                     State.params['hbcx'] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcS"]].reshape(self.shape_params_phys["hbcS"]),axis=1),
                                                            np.expand_dims(phi[self.slice_params_phys["hbcN"]].reshape(self.shape_params_phys["hbcN"]),axis=1)),axis=1)
+                # - Height boundary conditions hbcy - #
                 elif name == "hbcy" : 
                     State.params['hbcy'] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcE"]].reshape(self.shape_params_phys["hbcE"]),axis=1),
                                                            np.expand_dims(phi[self.slice_params_phys["hbcW"]].reshape(self.shape_params_phys["hbcW"]),axis=1)),axis=1)
+                # - Equivalent Height He - OR - Internal Tide Generation itg - #
                 else : 
                     State.params[name] = phi[self.slice_params_phys[name]].reshape(self.shape_params_phys[name])
         else: 
@@ -2762,23 +3041,44 @@ class Basis_it:
     def operg_transpose(self,t,phi=None,adState=None):
 
         """
-            Project to reduced space
+        Perform the transpose basis projection operation for a given time and parameters.
+
+        This method computes the transposed operation of the basis projection operation operg. 
+                
+        operg_transpose : | PHYSICAL SPACE  >>>>>> REDUCED SPACE | 
+
+        Parameters:
+        ----------
+        t : float
+            The time at which the projection is performed.
+        phi : ndarray, optional
+            The vector of concatenated parameters in the physical space. 
+        adState : object, optional
+            State object containing the parameters.
+
+        Returns:
+        -------
+        adX : ndarray
+            The result of the transposed basis projection of the parameter vector.
+
         """
 
-        # - INITIALIZATION - #
+        ##############################
+        ###   - INITIALIZATION -   ###
+        ##############################
 
-        param = {} # dictionary containing the values of alle the params 
-        
+        # Dictionary containing the values of alle the params 
+        param = {} 
+        # Index of timestep t in self.time array
         indt = np.argmin(np.abs(self.time-t)) 
-
+        # Variable to return 
         adX = np.zeros((self.nbasis,)) 
 
-        # - GETTING VARIABLES - #
-
-        if phi is not None:
+        # Getting the parameters 
+        if phi is not None: # If provided through phi ndarray argument 
             for name in self.slice_params_phys.keys():
                 param[name] = phi[self.slice_params_phys[name]].reshape(self.shape_params_phys[name])
-        elif adState is not None:
+        elif adState is not None: # If provided through adState object argument 
             for name in self.name_params:
                 if name == "hbcx" : 
                     param["hbcS"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcS"])
@@ -2786,50 +3086,39 @@ class Basis_it:
                 elif name == "hbcy" : 
                     param["hbcE"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcE"])
                     param["hbcW"] = adState.params[name][:,1,:,:,:].reshape(self.shape_params_phys["hbcW"])
-                else : 
+                else :
                     param[name] = adState.params[name].reshape(self.shape_params_phys[name])
         else: 
             sys.exit('Provide either phi or adState')
 
-        # - BASIS OPERATION - #
+        ####################################
+        ###   - TRANSPOSED OPERATION -   ###
+        ####################################
 
         for name in self.slice_params.keys():
-            # - He 
-            if name == "He":
-                if self.He_uniform: # for twin experiment
-                    adX[self.slice_params[name]] = np.sum(param[name])
 
-                elif self.He_time_dependant:
+            # - Equivalent Height He - #  
+            if name == "He":
+                if self.He_time_dependant:
                     adX[self.slice_params[name]] = np.tensordot(param[name][:,:,np.newaxis]*self.He_t_gauss[:,indt],
                                                                 self.He_xy_gauss[:,:,:],([0,1],[1,2])).flatten()
                 else : 
                     adX[self.slice_params[name]] = np.tensordot(param[name],
                                                                 self.He_xy_gauss,([0,1],[1,2])).flatten()
             
-            # - hbc         
+            # - Height boundary conditions hbc - #        
             if name in ["hbcS","hbcN","hbcW","hbcE"]:
                 adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
                                                             self.bc_gauss[name],(-2,-1)).flatten()
             
-            # - itg 
+            # - Internal Tide Generation itg - #
             if name == "itg":
-                if self.anisotropic_itg == True : # Anisotropic version of ITG # 
+                if self.itg_time_dependant == True :
+                    adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],
+                                                                        self.itg_xy_gauss[:,:,:],([2,3],[-2,-1])).flatten()
+                else : 
                     adX[self.slice_params[name]] = np.tensordot(param[name],
-                                                                        self.itg_xy_gauss,([-2,-1],[-2,-1])).flatten()
-                else : # Other version of ITG # 
-                    if not self.reduced_basis_itg : # ITG isn't on a reduced basis #  
-                        if not self.itg_bathymetry_selected : # All pixels are controlled #
-                            adX[self.slice_params[name]] = param[name].flatten()
-                        else :  # Only pixels with highest bathy gradient are controlled #
-                            adX[self.slice_params[name]] = np.concatenate((param[name][0][self.idx_bathy].flatten(),
-                                                                        param[name][1][self.idx_bathy].flatten()))
-                    else :  # ITG is on a reduced basis #  
-                        if self.itg_time_dependant: # ITG is dependant on time # 
-                            adX[self.slice_params[name]] = np.tensordot(param[name][:,:,:,np.newaxis]*self.itg_t_gauss[:,indt],
-                                                                        self.itg_xy_gauss[:,:,:],([1,2],[-2,-1])).flatten()
-                        else : # ITG isn't dependant on time # 
-                            adX[self.slice_params[name]] = np.tensordot(param[name],
-                                                                        self.itg_xy_gauss,([1,2],[1,2])).flatten()
+                                                                self.itg_xy_gauss,([-2,-1],[-2,-1])).flatten()
 
         # Setting adState parameters to 0 
         if adState is not None:
@@ -2839,6 +3128,31 @@ class Basis_it:
         return adX
         
     def test_operg(self, t, State):
+
+        """
+        Test the operg function for consistency.
+
+        This method performs a consistency check for the `operg` and `operg_transpose`
+        functions by comparing the inner products of the state vectors and their projections.
+
+        Parameters:
+        ----------
+        t : float
+            The time at which the test is performed.
+        State : object
+            The state object containing the parameters shape and information to be used for testing.
+
+        Returns:
+        -------
+        None
+
+        Notes:
+        -----
+        - The method generates random states and projections, applies the `operg` and
+        `operg_transpose` functions, and compares the inner products of the results.
+        - The ratio of the inner products is printed to verify it equals to 0..
+
+        """
 
         State0 = State.random()
         phi0 = np.random.random((self.nbasis,))
