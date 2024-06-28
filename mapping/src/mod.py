@@ -1367,22 +1367,19 @@ class Model_sw1l_jax(M):
         super().__init__(config,State)
 
         self.config = config
-        # Model specific libraries
-        if config.MOD.dir_model is None:
-            dir_model = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             '..','models','model_sw1l'))
-        else:
-            dir_model = config.MOD.dir_model
-        
-        swm = SourceFileLoader("swm", 
-                                dir_model + "/jswm.py").load_module()
-                               #dir_model + "/swm.py").load_module()
-        
-        self.time_scheme = config.MOD.time_scheme
-        self.bc_island = config.MOD.bc_island # boundary condition type in the island 
 
-        # grid
+        ############################
+        ### MODEL SPECIFICATIONS ###
+        ############################
+
+        # Time integration scheme 
+        self.time_scheme = config.MOD.time_scheme
+
+        # Boundary condition types
+        self.bc_kind = config.MOD.bc_kind # For the domain boundaries
+        self.bc_island = config.MOD.bc_island # For the islands and continents 
+
+        # Grid specifications
         self.ny = State.ny
         self.nx = State.nx
 
@@ -1394,54 +1391,86 @@ class Model_sw1l_jax(M):
         # Gravity
         self.g = State.g
 
-        # Variables and parameters names arguments 
-        self.name_var = config.MOD.name_var
-        self.name_params = config.MOD.name_params
-
-        # Variables to save
-        #if config.MOD.var_to_save == None : 
-        #    print('OK!!')
-        #    self.var_to_save == None 
-        #else : 
-        #    self.var_to_save = []
-        #    for var in self.var_to_save : 
-        #        self.var_to_save.append(self.name_var[var])
-
-             
-        # Equivalent depth
-        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-            ds = xr.open_dataset(config.MOD.He_data['path'])
-            self.Heb = ds[config.MOD.He_data['var']].values
-        else:
-            self.Heb = config.MOD.He_init
-        
-        # Entering waves BC 
-        if 'hbcx' in self.name_params and 'hbcy' in self.name_params :
-            if config.MOD.Ntheta>0:
-                theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-                self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-            else:
-                self.bc_theta = np.array([0])
-        elif 'hbcx' in config.MOD.name_params or 'hbcy' in config.MOD.name_params :
-            warnings.warn("Only partly controlling boundary conditions (either just x or y)", Warning)
-            if config.MOD.Ntheta>0:
-                theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-                self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-            else:
-                self.bc_theta = np.array([0])
-            
+        # Tidal frequency components 
         self.omegas = np.asarray(config.MOD.w_waves)
         self.omega_names = config.MOD.w_names
-        self.bc_kind = config.MOD.bc_kind
 
-        # Internal Tide Generation # 
-        self.anisotropic_itg = config.BASIS.anisotropic_itg # if True, expression of ITG is anisotropic 
+        ####################################
+        ### INITIALIZING MODEL VARIABLES ###
+        ####################################
+
+        # List of variable names
+        self.name_var = config.MOD.name_var
 
         # Setting Model mask # 
         self.mask = {}
         self.set_mask(State.mask,config)
+
+        self.init_variables(config,State)
+
+        #############################################
+        ### INITIALIZING MODEL CONTROL PARAMETERS ###
+        #############################################
+
+        # List of parameter names
+        self.name_params = config.MOD.name_params
+                
+        # Initializing model params
+        self.init_params(config,State)
+
+        #################################
+        ### LOADING MODEL PYTHON FILE ### 
+        #################################
+
+        if config.MOD.dir_model is None:
+            dir_model = os.path.realpath(
+                os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             '..','models','model_sw1l'))
+        else:
+            dir_model = config.MOD.dir_model
         
-        # Initialize model state
+        swm = SourceFileLoader("swm", 
+                                dir_model + "/jswm.py").load_module()
+
+        # Model initialization
+        self.swm = swm.Swm(Model = self,
+                           State = State) 
+
+        # Model functions initialization
+        if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
+            self.swm_step = self.swm.step_jit
+            self.swm_step_tgl = self.swm.step_tgl_jit
+            self.swm_step_adj = self.swm.step_adj_jit
+        else:
+            self.swm_step = self.swm.step_jit
+
+        # Tests tgl & adj
+        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+            print('Tangent test:')
+            tangent_test(self,State,nstep=100)
+            print('Adjoint test:')
+            adjoint_test(self,State,nstep=100)
+
+    def init_variables(self,config,State) : 
+
+        """
+        Initialize model state and auxiliary variables based on the configuration file.
+        This method initializes the model state variables in the State object, and the auxiliary variables in the Model object.
+
+        Args:
+        -----
+            config (Config): The configuration file.
+            State (State): A State object which will be modified to include the model state variables.
+
+        Notes:
+            - Coastal pixel indexes and auxiliary variables are set up only if `State.mask` is not None.
+        """
+
+        ##################################################
+        ### - INITIALIZING THE MODEL STATE VARIABLES - ###
+        ##################################################
+
+        # Iinitializing from a specified grid file 
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
             dsin = xr.open_dataset(config.GRID.path_init_grid)
             for name in self.name_var:
@@ -1454,18 +1483,22 @@ class Model_sw1l_jax(M):
                     dsin.close()
                     del dsin
                     State.var[self.name_var[name]] = var_init.values
+        # Iinitializing with zeros 
         else:
             for name in self.name_var:
                 State.var[self.name_var[name]] = np.zeros((State.nx,State.ny),dtype='float64')
                 State.var[self.name_var[name]][State.mask] = np.nan
 
-        # Initialize auxiliary variables and values)
-        # - coastal pixel indexes 
+        ######################################################
+        ### - INITIALIZING THE MODEL AUXILIARY VARIABLES - ###
+        ######################################################
+
+        # Coastal pixel indexes 
         self.idxcoast = {}
-        # - coastal pixel values 
+        # Coastal pixel values 
         self.auxvar = {}
-        
-        # -- Indexes of coastal pixels -- # 
+
+        # Setting coastal pixel indexes 
         if State.mask is not None : 
 
             idxcoastN = np.where( np.invert(State.mask[:-1,:]) * State.mask[1:,:]  )
@@ -1500,86 +1533,116 @@ class Model_sw1l_jax(M):
                 # EAST coastal indexes # 
                 self.auxvar["uE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
                 self.auxvar["hE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
-                
-        # Initializing model params
-        self.init_params(State,config.MOD.name_params)
 
-        # Model initialization
-        self.swm = swm.Swm(Model = self,
-                           State = State) 
-
-        # Model functions initialization
-        if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
-            self.swm_step = self.swm.step_jit
-            self.swm_step_tgl = self.swm.step_tgl_jit
-            self.swm_step_adj = self.swm.step_adj_jit
-        else:
-            self.swm_step = self.swm.step_jit
-
-        # Tests tgl & adj
-        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
-            tangent_test(self,State,nstep=100)
-            print('Adjoint test:')
-            adjoint_test(self,State,nstep=100)
-
-
-    def init_params(self,State,name_params) :
+    def init_params(self,config,State) :
 
         """
-        NAME
-            init_params
-        
-        ARGUMENT : 
-            param : parameter to initialize among 
-        #       - He : Equivalent Height 
-        #       - hbcx : SSH boundary condition for x 
-        #       - hbcy : SSH boundary condition for y 
-        #       - itg : Internal Tide Generation 
-    
-        DESCRIPTION
-            Initializes the parameter of the object State + sets parameters characteristics in Model object. 
+        Initializes the model controlled parameters information based on the configuration file. 
+        This method also initializes the parameters in the State object. 
+
+        Args:
+        -----
+            config (Config): The configuration file.
+            State (State): A State object which will be modified to include the initialized parameters.
+
+        Notes:
+        ------
+            Parameters in `self.name_params` should be one of :
+                - 'He' : Equivalent Height
+                - 'hbcx' : Height Boundary Conditions along x axis
+                - 'hbcy' : Height Boundary Conditions along y axis
+                - 'itg' : Internal Tide Generation
+
         """
-        self.shape_params = {}
+
+        # Dictionary containing the shape of the parameters
+        self.shape_params = {} 
+        # Dictionary containing the slices of the parameters
         self.slice_params = {}
 
-        # Setting the shapes of parameters
-        for param in name_params : 
+        #######################################
+        ### - INITIALIZING SPECIFICATIONS - ###
+        #######################################
+
+        # - Equivalent Height He background 
+        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
+            ds = xr.open_dataset(config.MOD.He_data['path'])
+            self.Heb = ds[config.MOD.He_data['var']].values
+        else:
+            self.Heb = config.MOD.He_init
+        
+        # Height boundary condition hbc structure  
+        if 'hbcx' in self.name_params and 'hbcy' in self.name_params :
+            if config.MOD.Ntheta>0:
+                theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
+                self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
+            else:
+                self.bc_theta = np.array([0])
+        elif 'hbcx' in self.name_params or 'hbcy' in self.name_params :
+            warnings.warn("Only partly controlling boundary conditions (either just x or y)", Warning)
+            if config.MOD.Ntheta>0:
+                theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
+                self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
+            else:
+                self.bc_theta = np.array([0])
+
+        ###############################
+        ### - INITIALIZING SHAPES - ###
+        ###############################               
+
+        for param in self.name_params : 
+
+            # If the parameter is not implemented 
             if param not in ['He', 'hbcx', 'hbcy', 'itg'] : 
                 sys.exit(param+" not implemented. Please choose parameters among ['He', 'hbcx', 'hbcy', 'itg'].")
+
+            # - Equivalent Height : He 
             elif param =='He' : 
-                self.shape_params['He'] = [State.nx,State.ny]
+                self.shape_params['He'] = [State.nx,    # - Number of grid points along x axis.
+                                           State.ny]    # - Number of grid points along y axis.
+            
+            # - Height Boundary Conditions along x : hbcx 
             elif param =='hbcx' : 
-                self.shape_params['hbcx'] = [len(self.omegas), # tide frequencies
-                                            2, # North/South
-                                            2, # cos/sin
-                                            len(self.bc_theta), # Angles
-                                            State.nx # NX
-                                            ]
+                self.shape_params['hbcx'] = [len(self.omegas),      # - Number of tidal frequency components 
+                                            2,                      # - Number of boundaries (North & South)
+                                            2,                      # - Number of controlled components (cos & sin)
+                                            len(self.bc_theta),     # - Number of angles
+                                            State.nx]               # - Number of gridpoints along x axis
+                
+            # - Height Boundary Conditions along y : hbcy
             elif param =='hbcy' :
-                self.shape_params['hbcy'] = [len(self.omegas), # tide frequencies
-                                            2, # North/South
-                                            2, # cos/sin
-                                            len(self.bc_theta), # Angles
-                                            State.ny # NY
-                                            ]
+                self.shape_params['hbcy'] = [len(self.omegas),      # - Number of tidal frequency components 
+                                            2,                      # - Number of boundaries (East & West)
+                                            2,                      # - Number of controlled components (cos & sin)
+                                            len(self.bc_theta),     # - Number of angles
+                                            State.ny]               # - Number of gridpoints along y axis
+            
+            # - Internal Tide Generation itg 
             elif param =='itg' :
-                self.shape_params['itg'] = [len(self.omegas), # tide frequencies
-                                            4, # A_u, A_v, B_u, B_v, coefficients in front of cos and sin for each bathymetry gradient components 
-                                            State.nx, #NX
-                                            State.ny] #NY
-                    
-        # Setting number of parameters 
+                self.shape_params['itg'] = [len(self.omegas),       # - Number of tidal frequency components 
+                                            4,                      # - Number of estimated parameter (cos and sin for x and y axis)
+                                            State.nx,               # - Number of grid points along x axis.
+                                            State.ny]               # - Number of grid points along y axis.
+        
+
+        #####################################################
+        ### - INITIALIZING SLICE AND NUMBER INFORMATION - ###
+        #####################################################
+
+        # Number of parameters 
         self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))
 
-        # Setting slice information of parameters
+        # Slices of parameters
         idx = 0 
-        for param in name_params : 
+        for param in self.name_params : 
             self.slice_params[param] = slice(idx, idx + np.prod(self.shape_params[param]))
             idx += np.prod(self.shape_params[param])
 
-        # Initializing the parameters of the object State
-        for param in name_params :     
+        #######################################################
+        ### - INITIALIZING PARAMETERS IN THE STATE OBJECT - ###
+        #######################################################      
+
+        for param in self.name_params :     
             State.params[param] = np.zeros((self.shape_params[param]),dtype='float64')
 
     def _detect_coast(self,mask,axis):

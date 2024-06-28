@@ -2586,22 +2586,22 @@ class Basis_it:
         ###   - BASIS ELEMENT SHAPES -   ###
         ####################################
 
-        # - Shapes of the hbcy parameter in the reduced space.
+        # - Shapes of the hbcy parameters in the reduced space.
         shapehbcS = [self.Nwaves,           # - Number of tidal frequency components 
-                     2,                     # - Number of boundaries (North and South)
+                     2,                     # - Number of controlled components (cos & sin)
                      self.Ntheta,           # - Number of angles
                      ENST_bc.size,          # - Number of basis timesteps
                      bc_S_gauss.shape[0]]   # - Number of basis spatial elements 
         
         shapehbcN = [self.Nwaves,           # - Number of tidal frequency components 
-                     2,                     # - Number of boundaries (North and South)
+                     2,                     # - Number of controlled components (cos & sin)
                      self.Ntheta,           # - Number of angles
                      ENST_bc.size,          # - Number of basis timesteps
                      bc_N_gauss.shape[0]]   # - Number of basis spatial elements 
 
-        # - Shapes of the hbcy parameter in the physical space.
+        # - Shapes of the hbcy parameters in the physical space.
         shapehbcS_phys = shapehbcN_phys = [self.Nwaves,     # - Number of tidal frequency components 
-                                           2,               # - Number of boundaries (North and South)
+                                           2,               # - Number of controlled components (cos & sin)
                                            self.Ntheta,     # - Number of angles
                                            self.nx]         # - Number of gridpoints along x axis
         
@@ -2699,22 +2699,22 @@ class Basis_it:
         ###   - BASIS ELEMENT SHAPES -   ###
         ####################################
         
-        # Shapes of the hbcx parameter in the reduced space.
+        # Shapes of the hbcx parameters in the reduced space.
         shapehbcE = [self.Nwaves,               # - Number of tidal frequency components 
-                     2,                         # - Number of boundaries (North and South)
+                     2,                         # - Number of controlled components (cos & sin)
                      self.Ntheta,               # - Number of angles
                      ENST_bc.size,              # - Number of basis timesteps
                      bc_E_gauss.shape[0]]       # - Number of basis spatial elements 
         
         shapehbcW = [self.Nwaves,               # - Number of tidal frequency components 
-                     2,                         # - Number of boundaries (North and South)
+                     2,                         # - Number of controlled components (cos & sin)
                      self.Ntheta,               # - Number of angles
                      ENST_bc.size,              # - Number of basis timesteps
                      bc_W_gauss.shape[0]]       # - Number of basis spatial elements 
 
-        # Shapes of the hbcx parameter in the physical space.
+        # Shapes of the hbcx parameters in the physical space.
         shapehbcE_phys = shapehbcW_phys = [self.Nwaves,     # - Number of tidal frequency components 
-                                           2,               # - Number of boundaries (North and South)
+                                           2,               # - Number of controlled components (cos & sin)
                                            self.Ntheta,     # - Number of angles
                                            self.ny]         # - Number of gridpoints along x axis
 
@@ -2945,8 +2945,8 @@ class Basis_it:
         # Shapes of the itg parameter in the physical space.
         shapeitg_phys = [self.Nwaves,       # - Number of tidal frequency components 
                          4,                 # - Number of estimated parameter (cos and sin for x and y axis)
-                         self.nx,           # - Number of grid poiints along x axis. 
-                         self.ny]           # - Number of grid poiints along y axis. 
+                         self.nx,           # - Number of grid points along x axis. 
+                         self.ny]           # - Number of grid points along y axis. 
                           
         print('nitg:',np.prod(shapeitg))
 
