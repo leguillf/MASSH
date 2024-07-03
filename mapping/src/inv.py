@@ -531,8 +531,8 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     Run a 4Dvar analysis
     '''
 
-    if 'JAX' in config.MOD.super:
-        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+    # if 'JAX' in config.MOD.super:
+    #     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     
     # Compute checkpoints when the cost function will be evaluated 
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
@@ -670,9 +670,10 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
         # Save minimization trajectory
         if config.INV.save_minimization:
             ds = xr.Dataset({'J':(('Nj'),var.J),'Jo':(('Nj'),var.Jo),'G':(('Ng'),var.G),'Go':(('Ng'),var.Go),})
-            for param in Basis.name_params:
-               ds["Jb_"+param]=xr.DataArray(var.Jb[param],dims=["Nj"])
-               ds["Gb_"+param]=xr.DataArray(var.Gb[param],dims=["Ng"])
+            # Commented because it doesn't work for multi model
+            # for param in Basis.name_params:
+            #    ds["Jb_"+param]=xr.DataArray(var.Jb[param],dims=["Nj"])
+            #    ds["Gb_"+param]=xr.DataArray(var.Gb[param],dims=["Ng"])
             ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
             ds.close()
 

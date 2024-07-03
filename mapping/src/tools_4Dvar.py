@@ -74,7 +74,8 @@ class Variational:
         self.basis = Basis 
 
         # Basis params information 
-        self.slice_params = Basis.slice_params
+        # Commented because it doesn't work for multi model 
+        # self.slice_params = Basis.slice_params
         
         # Save cost function and its gradient at each iteration 
         self.save_minimization = config.INV.save_minimization
@@ -84,14 +85,16 @@ class Variational:
             self.G = []
             # background cost term 
             self.Jb = {}
-            for param in Basis.name_params : 
-                self.Jb[param] = []
+            # Commented because it doesn't work for multi model
+            # for param in Basis.name_params : 
+            #     self.Jb[param] = []
             # observational cost term 
             self.Jo = []
             # background grad norm
             self.Gb = {}
-            for param in Basis.name_params : 
-                self.Gb[param] = []
+            # Commented because it doesn't work for multi model
+            # for param in Basis.name_params : 
+            #     self.Gb[param] = []
             # observational grad norm 
             self.Go = []
             
@@ -193,24 +196,25 @@ class Variational:
         if self.save_minimization: #saving cost function terms 
             self.J.append(J) # total cost
             self.Jo.append(Jo) # observational cost 
-            for param in self.Jb.keys() : # background cost
-                ## defining X0_specific - the part of vector X for specific parameter && B_specific - the part of Cov matrix B for specific parameter##
-                if param == "hbcx":
-                    X0_specific = np.concatenate((X0[self.slice_params["hbcS"]],X0[self.slice_params["hbcN"]]))
-                    B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcS"]],self.B.sigma[self.slice_params["hbcN"]])))
-                elif param == "hbcy":
-                    X0_specific = np.concatenate((X0[self.slice_params["hbcE"]],X0[self.slice_params["hbcW"]]))
-                    B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcE"]],self.B.sigma[self.slice_params["hbcW"]])))
-                else :
-                    X0_specific = X0[self.slice_params[param]]
-                    B_specific = Cov(self.B.sigma[self.slice_params[param]])
-                if self.B is not None:
-                    if self.prec :
-                        self.Jb[param].append(X0_specific.dot(X0_specific)) # cost of background term
-                    else:
-                        self.Jb[param].append(np.dot(X0_specific,B_specific.inv(X0_specific))) # cost of background term
-                else:
-                    self.Jb[param].append(0)
+            # Commented because it doesn't work for multi model
+            # for param in self.Jb.keys() : # background cost
+            #     ## defining X0_specific - the part of vector X for specific parameter && B_specific - the part of Cov matrix B for specific parameter##
+            #     if param == "hbcx":
+            #         X0_specific = np.concatenate((X0[self.slice_params["hbcS"]],X0[self.slice_params["hbcN"]]))
+            #         B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcS"]],self.B.sigma[self.slice_params["hbcN"]])))
+            #     elif param == "hbcy":
+            #         X0_specific = np.concatenate((X0[self.slice_params["hbcE"]],X0[self.slice_params["hbcW"]]))
+            #         B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcE"]],self.B.sigma[self.slice_params["hbcW"]])))
+            #     else :
+            #         X0_specific = X0[self.slice_params[param]]
+            #         B_specific = Cov(self.B.sigma[self.slice_params[param]])
+            #     if self.B is not None:
+            #         if self.prec :
+            #             self.Jb[param].append(X0_specific.dot(X0_specific)) # cost of background term
+            #         else:
+            #             self.Jb[param].append(np.dot(X0_specific,B_specific.inv(X0_specific))) # cost of background term
+            #     else:
+            #         self.Jb[param].append(0)
 
         # Measuring computation times
         #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
@@ -300,24 +304,25 @@ class Variational:
         if self.save_minimization:
             self.G.append(np.max(np.abs(g))) # gradient of all parameters 
             self.Go.append(np.max(np.abs(adX))) # observational cost 
-            for param in self.Gb.keys() : # background cost
-                ## defining X0_specific - the part of vector X for specific parameter && B_specific - the part of Cov matrix B for specific parameter##
-                if param == "hbcx":
-                    X0_specific = np.concatenate((X0[self.slice_params["hbcS"]],X0[self.slice_params["hbcN"]]))
-                    B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcS"]],self.B.sigma[self.slice_params["hbcN"]])))
-                elif param == "hbcy":
-                    X0_specific = np.concatenate((X0[self.slice_params["hbcE"]],X0[self.slice_params["hbcW"]]))
-                    B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcE"]],self.B.sigma[self.slice_params["hbcW"]])))
-                else :
-                    X0_specific = X0[self.slice_params[param]]
-                    B_specific = Cov(self.B.sigma[self.slice_params[param]])
-                if self.B is not None:
-                    if self.prec :
-                        self.Gb[param].append(np.max(np.abs(X0_specific))) # cost of background term
-                    else:
-                        self.Gb[param].append(np.max(np.abs(self.B_specific.inv(X0_specific)))) # cost of background term
-                else:
-                    self.Gb[param].append(0)
+            # Commented because it doesn't work for multi model
+            # for param in self.Gb.keys() : # background cost
+            #     ## defining X0_specific - the part of vector X for specific parameter && B_specific - the part of Cov matrix B for specific parameter##
+            #     if param == "hbcx":
+            #         X0_specific = np.concatenate((X0[self.slice_params["hbcS"]],X0[self.slice_params["hbcN"]]))
+            #         B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcS"]],self.B.sigma[self.slice_params["hbcN"]])))
+            #     elif param == "hbcy":
+            #         X0_specific = np.concatenate((X0[self.slice_params["hbcE"]],X0[self.slice_params["hbcW"]]))
+            #         B_specific = Cov(np.concatenate((self.B.sigma[self.slice_params["hbcE"]],self.B.sigma[self.slice_params["hbcW"]])))
+            #     else :
+            #         X0_specific = X0[self.slice_params[param]]
+            #         B_specific = Cov(self.B.sigma[self.slice_params[param]])
+            #     if self.B is not None:
+            #         if self.prec :
+            #             self.Gb[param].append(np.max(np.abs(X0_specific))) # cost of background term
+            #         else:
+            #             self.Gb[param].append(np.max(np.abs(self.B_specific.inv(X0_specific)))) # cost of background term
+            #     else:
+            #         self.Gb[param].append(0)
 
         # Measuring computation times
         #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")

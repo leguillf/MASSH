@@ -23,11 +23,14 @@ from jax import jit
 from jax import jvp,vjp
 from jax.lax import scan
 
+from copy import deepcopy
+
 from functools import partial
 
 import pyinterp 
 
 from . import  grid
+from . import switchvar
 
 from .exp import Config as Config
 
@@ -237,6 +240,7 @@ class Model_diffusion(M):
 
         for name in self.name_var:
             if t in self.bc[name]:
+
                 State.var[self.name_var[name]] +=\
                     self.Wbc * (self.bc[name][t]-self.bc[name][t0]) 
 
@@ -645,6 +649,359 @@ class Model_qg1l_np(M):
         adSSH1[np.isnan(adSSH1)] = 0
         adState.setvar(adSSH1,self.name_var['SSH'])
 
+# class Model_qg1l_jax(M):
+
+    # def __init__(self,config,State):
+
+    #     super().__init__(config,State)
+
+    #     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+
+    #     # Model specific libraries
+    #     if config.MOD.dir_model is None:
+    #         dir_model = os.path.realpath(
+    #             os.path.join(os.path.dirname(os.path.realpath(__file__)),
+    #                          '..','models','model_qg1l'))
+    #     else:
+    #         dir_model = config.MOD.dir_model  
+    #     qgm = SourceFileLoader("qgm",dir_model + "/jqgm.py").load_module() 
+    #     model = qgm.Qgm
+
+    #     # Coriolis
+    #     self.f = State.f
+    #     f0 = np.nanmean(self.f)
+    #     self.f[np.isnan(self.f)] = f0
+            
+    #     # Open Rossby Radius if provided
+    #     if config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
+
+    #         ds = xr.open_dataset(config.MOD.filec_aux)
+            
+    #         self.c = grid.interp2d(ds,
+    #                                config.MOD.name_var_c,
+    #                                State.lon,
+    #                                State.lat)
+
+
+    #         self.c[np.isnan(self.c)] = np.nanmean(self.c)
+            
+    #         if config.MOD.cmin is not None:
+    #             self.c[self.c<config.MOD.cmin] = config.MOD.cmin
+            
+    #         if config.MOD.cmax is not None:
+    #             self.c[self.c>config.MOD.cmax] = config.MOD.cmax
+            
+    #         if config.EXP.flag_plot>1:
+    #             plt.figure()
+    #             plt.pcolormesh(self.c)
+    #             plt.colorbar()
+    #             plt.title('Rossby phase velocity')
+    #             plt.show()
+                
+    #     else:
+    #         self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
+            
+    #     # Initialize model state
+    #     if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
+    #         dsin = xr.open_dataset(config.GRID.path_init_grid)
+    #         for name in self.name_var:
+    #             if name in config.MOD.name_init_var:
+    #                 var_init = dsin[config.MOD.name_init_var[name]]
+    #                 if len(var_init.shape)==3:
+    #                     var_init = var_init[0,:,:]
+    #                 if config.GRID.subsampling is not None:
+    #                     var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
+    #                 dsin.close()
+    #                 del dsin
+    #                 State.var[self.name_var[name]] = var_init.values
+    #             else:
+    #                 State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+    #     else:
+    #         for name in self.name_var:  
+    #             State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+    #             if State.mask is not None:
+    #                 State.var[self.name_var[name]][State.mask] = np.nan
+
+    #     # Initialize model Parameters (Flux on SSH and tracers)
+    #     for name in self.name_var:
+    #         State.params[self.name_var[name]] = np.zeros((State.ny,State.nx))
+
+    #     # Initialize boundary condition dictionnary for each model variable
+    #     self.bc = {}
+    #     self.forcing = {}
+    #     for _name_var_mod in self.name_var:
+    #         self.bc[_name_var_mod] = {}
+    #         self.forcing[_name_var_mod] = {}
+    #     self.init_from_bc = config.MOD.init_from_bc
+    #     self.Wbc = np.zeros((State.ny,State.nx))
+    #     if config.MOD.dist_sponge_bc is not None and State.mask is not None:
+    #         self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
+    #         if config.EXP.flag_plot>1:
+    #             plt.figure()
+    #             plt.pcolormesh(self.Wbc)
+    #             plt.colorbar()
+    #             plt.title('Wbc')
+    #             plt.show()
+
+    #     # Use boundary conditions as mean field (for 4Dvar only)
+    #     if config.INV is not None and config.INV.super=='INV_4DVAR':
+    #         self.anomaly_from_bc = config.INV.anomaly_from_bc
+    #     else:
+    #         self.anomaly_from_bc = False
+
+    #     # Tracer advection flag
+    #     self.advect_tracer = config.MOD.advect_tracer
+
+    #    # Masked array for model initialization
+    #     SSH0 = State.getvar(name_var=self.name_var['SSH'])
+            
+    #     # Model initialization
+    #     self.qgm = model(dx=State.DX,
+    #                      dy=State.DY,
+    #                      dt=self.dt,
+    #                      SSH=SSH0,
+    #                      c=self.c,
+    #                      upwind=config.MOD.upwind,
+    #                      time_scheme=config.MOD.time_scheme,
+    #                      g=State.g,
+    #                      f=self.f,
+    #                      Wbc=self.Wbc,
+    #                      Kdiffus=config.MOD.Kdiffus,
+    #                      Kdiffus_trac=config.MOD.Kdiffus_trac,
+    #                      bc_trac=config.MOD.bc_trac)
+
+    #     # Model functions initialization
+    #     if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
+    #         self.qgm_step = self.qgm.step_jit
+    #         self.qgm_step_tgl = self.qgm.step_tgl_jit
+    #         self.qgm_step_adj = self.qgm.step_adj_jit
+    #     else:
+    #         self.qgm_step = self.qgm.step_jit
+        
+    #     # Tests tgl & adj
+    #     if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+    #         print('Tangent test:')
+    #         tangent_test(self,State,nstep=100)
+    #         print('Adjoint test:')
+    #         adjoint_test(self,State,nstep=100)
+    
+    # def init(self, State, t0=0):
+
+    #     if self.anomaly_from_bc:
+    #         return
+    #     elif type(self.init_from_bc)==dict:
+    #         for name in self.init_from_bc:
+    #             if self.init_from_bc[name] and t0 in self.bc[name]:
+    #                 State.setvar(self.bc[name][t0], self.name_var[name])
+    #     elif self.init_from_bc:
+    #         for name in self.name_var: 
+    #             if t0 in self.bc[name]:
+    #                  State.setvar(self.bc[name][t0], self.name_var[name])
+
+
+    # def set_bc(self,time_bc,var_bc):
+
+    #     for _name_var_bc in var_bc:
+    #         for _name_var_mod in self.name_var:
+    #             if _name_var_bc==_name_var_mod:
+    #                 for i,t in enumerate(time_bc):
+    #                     var_bc_t = +var_bc[_name_var_bc][i]
+    #                     # Remove nan
+    #                     var_bc_t[self.qgm.mask==0] = 0.
+    #                     var_bc_t[np.isnan(var_bc_t)] = 0.
+    #                     # Fill bc dictionnary
+    #                     self.bc[_name_var_mod][t] = var_bc_t
+    #             elif _name_var_bc==f'{_name_var_mod}_params':
+    #                 for i,t in enumerate(time_bc):
+    #                     var_bc[_name_var_bc][i][np.isnan(var_bc[_name_var_bc][i])] = 0.
+    #                     self.forcing[_name_var_mod][t] = var_bc[_name_var_bc][i]
+
+    # def ano_bc(self,t,State,sign):
+
+    #     if not self.anomaly_from_bc:
+    #         return
+    #     else:
+    #         for name in self.name_var:
+    #             if t in self.bc[name]:
+    #                 State.var[self.name_var[name]] += sign * self.bc[name][t]
+            
+    # def _apply_bc(self,t0,t1):
+        
+    #     Xb = np.zeros((self.ny,self.nx,))
+
+    #     if 'SSH' not in self.bc:
+    #         return Xb
+    #     elif t0 not in self.bc['SSH']:
+    #         # Find closest time
+    #         t_list = np.array(list(self.bc['SSH'].keys()))
+    #         idx_closest = np.argmin(np.abs(t_list-t0))
+    #         t0 = t_list[idx_closest]
+
+    #     Xb = self.bc['SSH'][t0]
+    #     if self.advect_tracer:
+    #         for name in self.name_var:
+    #             if name!='SSH':
+    #                 if t1 in self.bc[name]: 
+    #                     Cb = self.bc[name][t1]
+    #                 else:
+    #                     # Find closest time
+    #                     t_list = np.array(list(self.bc['SSH'].keys()))
+    #                     idx_closest = np.argmin(np.abs(t_list-t1))
+    #                     new_t1 = t_list[idx_closest]
+    #                     Cb = self.bc[name][new_t1]
+    #                 Xb = np.append(Xb[np.newaxis,:,:], 
+    #                                 Cb[np.newaxis,:,:], axis=0)     
+    #     return Xb.astype('float64')
+    
+    # def step(self,State,nstep=1,t=0):
+ 
+    #     # Get full field from anomaly 
+    #     self.ano_bc(t,State,+1)
+
+    #     # Boundary field
+    #     Xb = self._apply_bc(t,int(t+nstep*self.dt))
+
+    #     # Get state variable(s)
+    #     X0 = State.getvar(name_var=self.name_var['SSH'])
+    #     if self.advect_tracer:
+    #         X0 = X0[np.newaxis,:,:]
+    #         for name in self.name_var:
+    #             if name!='SSH':
+    #                 C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+    #                 X0 = np.append(X0, C0, axis=0)
+        
+    #     # init
+    #     X1 = +X0.astype('float64')
+
+    #     # Time propagation
+    #     X1 = self.qgm_step(X1,Xb,nstep=nstep)
+    #     t1 = t + nstep*self.dt
+
+    #     # Convert to numpy array
+    #     X1 = np.array(X1).astype('float64')
+        
+    #     # Update state
+    #     if self.name_var['SSH'] in State.params:
+    #         Fssh = State.params[self.name_var['SSH']].astype('float64') # Forcing term for SSH
+    #         if self.advect_tracer:
+    #             X1[0] += nstep*self.dt/(3600*24) * Fssh 
+    #             State.setvar(X1[0], name_var=self.name_var['SSH'])
+    #             for i,name in enumerate(self.name_var):
+    #                 if name!='SSH':
+    #                     Fc = +State.params[self.name_var[name]] # Forcing term for tracer
+    #                     if name in self.forcing and t in self.forcing[name]:
+    #                         Fc[1:-1,1:-1] += (self.forcing[name][t]*(3600*24))[1:-1,1:-1]
+    #                     X1[i] += nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc)
+    #                     State.setvar(X1[i], name_var=self.name_var[name])
+    #         else:
+    #             X1 += nstep*self.dt/(3600*24) * Fssh 
+    #             State.setvar(X1, name_var=self.name_var['SSH'])
+
+    #     # Get anomaly from full field
+    #     self.ano_bc(t1,State,-1)
+    
+    # def step_tgl(self,dState,State,nstep=1,t=None):
+
+    #     # Get full field from anomaly 
+    #     self.ano_bc(t,State,+1)
+
+    #     # Boundary field
+    #     Xb = self._apply_bc(t,int(t+nstep*self.dt))
+        
+    #     # Get state variable
+    #     dX0 = dState.getvar(name_var=self.name_var['SSH']).astype('float64')
+    #     X0 = State.getvar(name_var=self.name_var['SSH']).astype('float64')
+    #     if self.advect_tracer:
+    #         dX0 = dX0[np.newaxis,:,:]
+    #         X0 = X0[np.newaxis,:,:]
+    #         for name in self.name_var:
+    #             if name!='SSH':
+    #                 dC0 = dState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+    #                 dX0 = np.append(dX0, dC0, axis=0)
+    #                 C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+    #                 X0 = np.append(X0, C0, axis=0)
+        
+    #     # init
+    #     dX1 = +dX0.astype('float64')
+    #     X1 = +X0.astype('float64')
+
+    #     # Time propagation
+    #     dX1 = self.qgm_step_tgl(dX1,X1,Xb=Xb,nstep=nstep)
+
+    #     # Convert to numpy and reshape
+    #     dX1 = np.array(dX1).astype('float64')
+
+    #     # Update state
+    #     if self.name_var['SSH'] in dState.params:
+    #         dFssh = dState.params[self.name_var['SSH']].astype('float64') # Forcing term for SSH
+    #         if self.advect_tracer:
+    #             dX1[0] +=  nstep*self.dt/(3600*24) * dFssh  
+    #             dState.setvar(dX1[0], name_var=self.name_var['SSH'])
+    #             for i,name in enumerate(self.name_var):
+    #                 if name!='SSH':
+    #                     dFc = dState.params[self.name_var[name]] # Forcing term for tracer
+    #                     dX1[i] +=  nstep*self.dt/(3600*24) * dFc  * (1-self.Wbc)
+    #                     dState.setvar(dX1[i], name_var=self.name_var[name])
+    #         else:
+    #             dX1 += nstep*self.dt/(3600*24) * dFssh  
+    #             dState.setvar(dX1, name_var=self.name_var['SSH'])
+
+    #     # Get anomaly from full field
+    #     self.ano_bc(t,State,-1)
+
+    # def step_adj(self,adState,State,nstep=1,t=None):
+        
+    #     # Get full field from anomaly 
+    #     self.ano_bc(t,State,+1)
+
+    #     # Boundary field
+    #     Xb = self._apply_bc(t,int(t+nstep*self.dt))
+
+    #     # Get state variable
+    #     adSSH0 = adState.getvar(name_var=self.name_var['SSH']).astype('float64')
+    #     SSH0 = State.getvar(name_var=self.name_var['SSH']).astype('float64')
+    #     if self.advect_tracer:
+    #         adX0 = adSSH0[np.newaxis,:,:].astype('float64')
+    #         X0 = SSH0[np.newaxis,:,:].astype('float64')
+    #         for name in self.name_var:
+    #             if name!='SSH':
+    #                 adC0 = adState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+    #                 adX0 = np.append(adX0, adC0, axis=0)
+    #                 C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
+    #                 X0 = np.append(X0, C0, axis=0)
+    #     else:
+    #         adX0 = adSSH0
+    #         X0 = SSH0
+        
+    #     # Init
+    #     adX1 = +adX0
+    #     X1 = +X0
+
+    #     # Time propagation
+    #     adX1 = self.qgm_step_adj(adX1,X1,Xb,nstep=nstep)
+
+    #     # Convert to numpy and reshape
+    #     adX1 = np.array(adX1).squeeze().astype('float64')
+
+    #     # Update state and parameters
+    #     if self.name_var['SSH'] in adState.params:
+    #         for name in self.name_var:
+    #             adparams = nstep*self.dt/(3600*24) *\
+    #                 adState.getvar(name_var=self.name_var[name]).astype('float64') 
+    #             if name!='SSH':
+    #                 adparams *= (1-self.Wbc)
+    #             adState.params[self.name_var[name]] += adparams  
+                
+    #     if self.advect_tracer:
+    #         adState.setvar(adX1[0],self.name_var['SSH'])
+    #         for i,name in enumerate(self.name_var):
+    #             if name!='SSH':
+    #                 adState.setvar(adX1[i],self.name_var[name])
+    #     else:
+    #         adState.setvar(adX1,self.name_var['SSH'])
+
+### NEWEST VERSION OF QG1L_JAX BY FLO ### 
+
 class Model_qg1l_jax(M):
 
     def __init__(self,config,State):
@@ -677,9 +1034,6 @@ class Model_qg1l_jax(M):
                                    config.MOD.name_var_c,
                                    State.lon,
                                    State.lat)
-
-
-            self.c[np.isnan(self.c)] = np.nanmean(self.c)
             
             if config.MOD.cmin is not None:
                 self.c[self.c<config.MOD.cmin] = config.MOD.cmin
@@ -731,7 +1085,11 @@ class Model_qg1l_jax(M):
         self.init_from_bc = config.MOD.init_from_bc
         self.Wbc = np.zeros((State.ny,State.nx))
         if config.MOD.dist_sponge_bc is not None and State.mask is not None:
-            self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
+            if config.MOD.advect_tracer and config.MOD.bc_trac=='OBC':
+                bc = False # No sponge band for open boundaries
+            else:
+                bc = True
+            self.Wbc = grid.compute_weight_map(State.lon, State.lat, deepcopy(State.mask), config.MOD.dist_sponge_bc, bc=bc)
             if config.EXP.flag_plot>1:
                 plt.figure()
                 plt.pcolormesh(self.Wbc)
@@ -746,7 +1104,15 @@ class Model_qg1l_jax(M):
             self.anomaly_from_bc = False
 
         # Tracer advection flag
+        self.advect_pv = config.MOD.advect_pv
         self.advect_tracer = config.MOD.advect_tracer
+        self.forcing_tracer_from_bc = config.MOD.forcing_tracer_from_bc
+
+        # Ageostrophic velocity flag
+        if 'U' in self.name_var and 'V' in self.name_var:
+            self.ageo_velocities = True
+        else:
+            self.ageo_velocities = False
 
        # Masked array for model initialization
         SSH0 = State.getvar(name_var=self.name_var['SSH'])
@@ -764,15 +1130,18 @@ class Model_qg1l_jax(M):
                          Wbc=self.Wbc,
                          Kdiffus=config.MOD.Kdiffus,
                          Kdiffus_trac=config.MOD.Kdiffus_trac,
-                         bc_trac=config.MOD.bc_trac)
+                         bc_trac=config.MOD.bc_trac,
+                         split_in_bins=config.MOD.split_in_bins,
+                         lenght_bins=config.MOD.lenght_bins,
+                         facbin=config.MOD.facbin,
+                         advect_pv=self.advect_pv,
+                         ageo_velocities=self.ageo_velocities)
 
         # Model functions initialization
-        if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
-            self.qgm_step = self.qgm.step_jit
-            self.qgm_step_tgl = self.qgm.step_tgl_jit
-            self.qgm_step_adj = self.qgm.step_adj_jit
-        else:
-            self.qgm_step = self.qgm.step_jit
+        self.qgm_step = self.qgm.step_jit
+        self.qgm_step_tgl = self.qgm.step_tgl_jit
+        self.qgm_step_adj = self.qgm.step_adj_jit
+
         
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
@@ -781,6 +1150,24 @@ class Model_qg1l_jax(M):
             print('Adjoint test:')
             adjoint_test(self,State,nstep=100)
     
+    def save_output(self,State,present_date,name_var=None,t=None):
+        # Add geostrophic current to ageostrophic velocities
+        if self.ageo_velocities:
+            State0 = State.copy()
+            # Get ageostrophic velocites
+            ua = State0.getvar(name_var=self.name_var['U'])
+            va = State0.getvar(name_var=self.name_var['V'])
+            # Compute geostrophic current from ssh
+            ssh = State0.getvar(name_var=self.name_var['SSH'])
+            ug,vg = switchvar.ssh2uv(ssh,State0)
+            # Set total current
+            State0.setvar(ug+ua, name_var=self.name_var['U'])
+            State0.setvar(vg+va, name_var=self.name_var['V'])
+            State0.save_output(present_date,name_var)
+            State0.plot()
+        else:
+            State.save_output(present_date,name_var)
+
     def init(self, State, t0=0):
 
         if self.anomaly_from_bc:
@@ -794,7 +1181,6 @@ class Model_qg1l_jax(M):
                 if t0 in self.bc[name]:
                      State.setvar(self.bc[name][t0], self.name_var[name])
 
-
     def set_bc(self,time_bc,var_bc):
 
         for _name_var_bc in var_bc:
@@ -803,7 +1189,6 @@ class Model_qg1l_jax(M):
                     for i,t in enumerate(time_bc):
                         var_bc_t = +var_bc[_name_var_bc][i]
                         # Remove nan
-                        var_bc_t[self.qgm.mask==0] = 0.
                         var_bc_t[np.isnan(var_bc_t)] = 0.
                         # Fill bc dictionnary
                         self.bc[_name_var_mod][t] = var_bc_t
@@ -827,6 +1212,8 @@ class Model_qg1l_jax(M):
 
         if 'SSH' not in self.bc:
             return Xb
+        elif len(self.bc['SSH'].keys())==0:
+             return Xb
         elif t0 not in self.bc['SSH']:
             # Find closest time
             t_list = np.array(list(self.bc['SSH'].keys()))
@@ -835,8 +1222,9 @@ class Model_qg1l_jax(M):
 
         Xb = self.bc['SSH'][t0]
         if self.advect_tracer:
+            Xb = Xb[np.newaxis,:,:]
             for name in self.name_var:
-                if name!='SSH':
+                if name!='SSH' and name in self.bc and len(self.bc[name].keys())>0:
                     if t1 in self.bc[name]: 
                         Cb = self.bc[name][t1]
                     else:
@@ -845,8 +1233,7 @@ class Model_qg1l_jax(M):
                         idx_closest = np.argmin(np.abs(t_list-t1))
                         new_t1 = t_list[idx_closest]
                         Cb = self.bc[name][new_t1]
-                    Xb = np.append(Xb[np.newaxis,:,:], 
-                                    Cb[np.newaxis,:,:], axis=0)     
+                    Xb = np.append(Xb, Cb[np.newaxis,:,:], axis=0)     
         return Xb.astype('float64')
     
     def step(self,State,nstep=1,t=0):
@@ -861,8 +1248,15 @@ class Model_qg1l_jax(M):
         X0 = State.getvar(name_var=self.name_var['SSH'])
         if self.advect_tracer:
             X0 = X0[np.newaxis,:,:]
+            # Ageostrophic velocities
+            if self.ageo_velocities:
+                U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                V = State.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                X0 = np.append(X0, U, axis=0)
+                X0 = np.append(X0, V, axis=0)
+            # Tracers
             for name in self.name_var:
-                if name!='SSH':
+                if name not in ['SSH', 'U', 'V']:
                     C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
                     X0 = np.append(X0, C0, axis=0)
         
@@ -884,10 +1278,13 @@ class Model_qg1l_jax(M):
                 State.setvar(X1[0], name_var=self.name_var['SSH'])
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
-                        Fc = +State.params[self.name_var[name]] # Forcing term for tracer
-                        if name in self.forcing and t in self.forcing[name]:
-                            Fc[1:-1,1:-1] += (self.forcing[name][t]*(3600*24))[1:-1,1:-1]
-                        X1[i] += nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc)
+                        Fc = +State.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
+                        # Add Nudging to BC 
+                        if self.forcing_tracer_from_bc:
+                            X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc * (Xb[i] - X0[i]) 
+                        # Only forcing flux
+                        else:
+                            X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc 
                         State.setvar(X1[i], name_var=self.name_var[name])
             else:
                 X1 += nstep*self.dt/(3600*24) * Fssh 
@@ -896,7 +1293,7 @@ class Model_qg1l_jax(M):
         # Get anomaly from full field
         self.ano_bc(t1,State,-1)
     
-    def step_tgl(self,dState,State,nstep=1,t=None):
+    def step_tgl(self,dState,State,nstep=1,t=0):
 
         # Get full field from anomaly 
         self.ano_bc(t,State,+1)
@@ -910,8 +1307,19 @@ class Model_qg1l_jax(M):
         if self.advect_tracer:
             dX0 = dX0[np.newaxis,:,:]
             X0 = X0[np.newaxis,:,:]
+            # Ageostrophic velocities
+            if self.ageo_velocities:
+                U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                V = State.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                dU = dState.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                dV = dState.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                X0 = np.append(X0, U, axis=0)
+                X0 = np.append(X0, V, axis=0)
+                dX0 = np.append(dX0, dU, axis=0)
+                dX0 = np.append(dX0, dV, axis=0)
+            # Tracers
             for name in self.name_var:
-                if name!='SSH':
+                if name not in ['SSH', 'U', 'V']:
                     dC0 = dState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
                     dX0 = np.append(dX0, dC0, axis=0)
                     C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
@@ -935,8 +1343,15 @@ class Model_qg1l_jax(M):
                 dState.setvar(dX1[0], name_var=self.name_var['SSH'])
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
-                        dFc = dState.params[self.name_var[name]] # Forcing term for tracer
-                        dX1[i] +=  nstep*self.dt/(3600*24) * dFc  * (1-self.Wbc)
+                        dFc = dState.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
+                        # Add Nudging to BC 
+                        if self.forcing_tracer_from_bc:
+                            Fc = State.params[self.name_var[name]] 
+                            dX1[i] +=  nstep*self.dt/(3600*24) * (1-self.Wbc) *\
+                                  (dFc * (Xb[i] - X0[i]) - Fc * dX0[i])
+                        # Only forcing flux
+                        else:
+                            dX1[i] +=  nstep*self.dt/(3600*24) * dFc  * (1-self.Wbc)
                         dState.setvar(dX1[i], name_var=self.name_var[name])
             else:
                 dX1 += nstep*self.dt/(3600*24) * dFssh  
@@ -945,7 +1360,7 @@ class Model_qg1l_jax(M):
         # Get anomaly from full field
         self.ano_bc(t,State,-1)
 
-    def step_adj(self,adState,State,nstep=1,t=None):
+    def step_adj(self,adState,State,nstep=1,t=0):
         
         # Get full field from anomaly 
         self.ano_bc(t,State,+1)
@@ -959,8 +1374,19 @@ class Model_qg1l_jax(M):
         if self.advect_tracer:
             adX0 = adSSH0[np.newaxis,:,:].astype('float64')
             X0 = SSH0[np.newaxis,:,:].astype('float64')
+            # Ageostrophic velocities
+            if self.ageo_velocities:
+                U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                V = State.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                adU = adState.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
+                adV = adState.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
+                X0 = np.append(X0, U, axis=0)
+                X0 = np.append(X0, V, axis=0)
+                adX0 = np.append(adX0, adU, axis=0)
+                adX0 = np.append(adX0, adV, axis=0)
+            # Tracers
             for name in self.name_var:
-                if name!='SSH':
+                if name not in ['SSH', 'U', 'V']:
                     adC0 = adState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
                     adX0 = np.append(adX0, adC0, axis=0)
                     C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
@@ -968,7 +1394,7 @@ class Model_qg1l_jax(M):
         else:
             adX0 = adSSH0
             X0 = SSH0
-        
+
         # Init
         adX1 = +adX0
         X1 = +X0
@@ -981,11 +1407,15 @@ class Model_qg1l_jax(M):
 
         # Update state and parameters
         if self.name_var['SSH'] in adState.params:
-            for name in self.name_var:
+            for i,name in enumerate(self.name_var):
                 adparams = nstep*self.dt/(3600*24) *\
                     adState.getvar(name_var=self.name_var[name]).astype('float64') 
                 if name!='SSH':
                     adparams *= (1-self.Wbc)
+                    if self.forcing_tracer_from_bc:
+                        Fc = State.params[self.name_var[name]] 
+                        adparams *=  (Xb[i] - X0[i])
+                        adX1[i] += -nstep*self.dt/(3600*24) * (1-self.Wbc) * Fc * adX0[i]
                 adState.params[self.name_var[name]] += adparams  
                 
         if self.advect_tracer:
@@ -995,7 +1425,7 @@ class Model_qg1l_jax(M):
                     adState.setvar(adX1[i],self.name_var[name])
         else:
             adState.setvar(adX1,self.name_var['SSH'])
-   
+
 class Model_qg1l_jax_full(Model_qg1l_jax):
     def __init__(self,config,State):
         super().__init__(config,State)
@@ -1058,7 +1488,6 @@ class Model_qg1l_jax_full(Model_qg1l_jax):
                 State_var[self.name_var['SSH']] = X1
 
         return State_var
-
 
 ###############################################################################
 #                         Shallow Water Models                                #
@@ -1366,6 +1795,8 @@ class Model_sw1l_jax(M):
 
         super().__init__(config,State)
 
+        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+
         self.config = config
 
         ############################
@@ -1394,6 +1825,9 @@ class Model_sw1l_jax(M):
         # Tidal frequency components 
         self.omegas = np.asarray(config.MOD.w_waves)
         self.omega_names = config.MOD.w_names
+
+        # Tidal velocities 
+        self.init_tidal_velocity(config,State)
 
         ####################################
         ### INITIALIZING MODEL VARIABLES ###
@@ -1450,6 +1884,78 @@ class Model_sw1l_jax(M):
             tangent_test(self,State,nstep=100)
             print('Adjoint test:')
             adjoint_test(self,State,nstep=100)
+
+    def init (self,State,t0=0):
+
+        return
+
+
+    def init_tidal_velocity(self,config,State):
+        """
+        NAME
+            init_tidal_velocity
+
+        DESCRIPTION
+            Reads tidal velocity file, interpolate it to the grid
+        """
+
+        # Read tidal velocities
+        if config.EXP.path_tidal_velocity is not None and os.path.exists(config.EXP.path_tidal_velocity): 
+
+            # Variables
+            self.tidal_U = {}
+            self.tidal_V = {}
+            
+            for name in self.omega_names:
+                self.tidal_U[name] = self.open_interpolate(config,name,"U",State)
+                self.tidal_V[name] = self.open_interpolate(config,name,"V",State)
+
+        else: # No tidal velocity file prescripted
+            warnings.warn("No tidal velocity field prescribed. This is not suitable if Internal Tide generation is being controlled.")
+            return None 
+        
+    def open_interpolate(self,config,name,direction,State):
+        """
+        NAME
+            open_interpolate
+
+        DESCRIPTION
+            Opens and interpolates the tidal velocity files 
+
+        ARGUMENT 
+            - config : config python file 
+            - name (str) : name of the tidal component 
+            - direction (str) :  velocity direction, either "U" or "V"
+        """
+
+        if direction == "U":
+            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"eastward_velocity",name+".nc")).squeeze()
+        elif direction == "V":
+            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"northward_velocity",name+".nc")).squeeze()
+        
+        # Convert longitudes
+        if np.sign(ds["lon"].data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({"lon":(("lon", ds["lon"].data % 360))})
+        elif np.sign(ds["lon"].data.min())==1 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({"lon":(("lon", (ds["lon"].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds["lon"])   
+
+
+        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
+        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
+        dlon +=  np.nanmax(ds["lon"].data[1:] - ds["lon"].data[:-1])
+        dlat +=  np.nanmax(ds["lat"].data[1:] - ds["lat"].data[:-1])
+
+        ds = ds.sel(
+            {"lon":slice(State.lon_min-dlon,State.lon_max+dlon),
+                "lat":slice(State.lat_min-dlat,State.lat_max+dlat)})
+
+        ds = ds.interp(coords={"lon":State.lon[0,:],"lat":State.lat[:,0]},method='cubic')
+
+        if direction == "U":
+            return ds["Ua"].values*1E-2 # Converting into m/s
+        elif direction == "V":
+            return ds["Va"].values*1E-2 # Converting into m/s
 
     def init_variables(self,config,State) : 
 
@@ -3572,6 +4078,11 @@ class Model_multi:
             print('Adjoint test:')
             adjoint_test(self,State,nstep=10)
 
+    def init(self,State,t0=0):
+
+        for M in self.Models:
+            M.init(State,t0)
+
     def set_bc(self,time_bc,var_bc):
 
         for M in self.Models:
@@ -3638,6 +4149,11 @@ class Model_multi:
         
         for name in self.name_var:
             adState.var[self.name_var[name]] *= 0 
+
+    def save_output(self,State,present_date,name_var=None,t=None):
+
+        for M in self.Models:
+            M.save_output(State,present_date,name_var=name_var,t=t)
                       
 ###############################################################################
 #                       Tangent and Adjoint tests                             #

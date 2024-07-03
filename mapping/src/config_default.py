@@ -257,6 +257,7 @@ MOD_DIFF = dict(
     init_from_bc = False,
 
     dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
+    
 )
 
 # 1.5-layer Quasi-Geostrophic models
@@ -546,7 +547,7 @@ BC_EXT = dict(
 
     name_lat = 'lat',
 
-    name_time = None,
+    name_time = 'time',
 
     name_var = {},
 
@@ -1121,6 +1122,8 @@ BASIS_LS = dict(
 # Internal Tides
 BASIS_IT = dict(
 
+    name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+
     ### COMMON PARAMETER ###
 
     scalemodes = None, # Only for SW1LM model, 
@@ -1154,6 +1157,10 @@ BASIS_IT = dict(
     D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
 
     T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
+
+    w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
 
     ### - HE PARAMETER - ### 
 

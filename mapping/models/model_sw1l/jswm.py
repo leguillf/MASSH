@@ -42,8 +42,8 @@ class Swm:
 
         # Tidal Velocity # 
 
-        self.tidal_U = State.tidal_U
-        self.tidal_V = State.tidal_U
+        self.tidal_U = Model.tidal_U
+        self.tidal_V = Model.tidal_V
 
         ##############
         # PARAMETERS #
@@ -76,9 +76,6 @@ class Swm:
             self.Heb = Model.Heb
         else: 
             self.Heb = Model.Heb * jnp.ones_like(self.X)
-        
-        # - Internal Tide Generation - # 
-        self.anisotropic_itg = Model.anisotropic_itg # if True, expression of ITG is anisotropic 
 
         #########################
         # FUNCTIONAL PARAMETERS #
@@ -867,14 +864,10 @@ class Swm:
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg']) # parameters for itg forcing 
             rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
-            if not self.anisotropic_itg : 
-                for i,_omega in enumerate(self.omegas) : 
-                    rhs_itg += itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+ itg[i,1,:]*jnp.sin(_omega*jnp.array(t))
-            elif self.anisotropic_itg :
-                for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
-                    rhs_itg+=self.grad_bathymetry_x*self.tidal_U[_w_name]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
-                    rhs_itg+=self.grad_bathymetry_y*self.tidal_V[_w_name]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
-        
+            for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
+                rhs_itg+=self.grad_bathymetry_x*self.tidal_U[_w_name]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
+                rhs_itg+=self.grad_bathymetry_y*self.tidal_V[_w_name]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
+    
         else : 
             rhs_itg = jnp.zeros((self.ny, self.nx))
 
