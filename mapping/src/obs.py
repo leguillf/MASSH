@@ -163,6 +163,9 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         ds[obs_attr.name_lon].data = ds[obs_attr.name_lon].data % 360
     elif np.sign(ds[obs_attr.name_lon].data.min())>=0 and lon_unit=='-180_180':
         ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
+        #ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
+
+
     
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 

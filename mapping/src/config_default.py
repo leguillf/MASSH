@@ -336,6 +336,8 @@ MOD_QG1L_JAX = dict(
 
     bc_trac = 'OBC', # Either OBC or fixed
 
+    forcing_tracer_from_bc = False, # Whether to use BC fields to force tracer advection,
+
     split_in_bins = False, # Whether to split the spatial domain in bins, each of them being associated with constant c & f
 
     lenght_bins = 1000, # Length of one spatial bin (in km). 
@@ -479,6 +481,10 @@ MOD_TRACADV_VEL = dict(
 
     var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
+    add_bc_vel_output = False,
+
+    vel_forcing = 'nio', # Either 'nio' or 'flux'
+
     upwind = 3, # Order of the upwind scheme for tracer advection (either 1,2 or 3)
 
     time_scheme = 'Euler', # Either Euler, rk2 or rk4
@@ -587,7 +593,9 @@ OBSOP_INTERP_L4 = dict(
 
     mask_borders = False,
 
-    interp_method = 'linear' # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
+    interp_method = 'linear', # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
+
+    gradients = False
 
 )
 
@@ -644,6 +652,8 @@ INV_BFN = dict(
 INV_4DVAR = dict(
 
     compute_test = False, # TLM, ADJ & GRAD tests
+
+    JAX_mem_fraction = None,
 
     path_init_4Dvar = None, # To restart the minimization process from a specified control vector
 
@@ -842,7 +852,7 @@ INV_MOI = dict(
 
 NAME_BASIS = None
 
-# Balanced Motions
+# Balanced Motions 
 BASIS_BM = dict(
 
     name_mod_var = None, # Name of the related model variable 
@@ -890,6 +900,33 @@ BASIS_BM = dict(
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
     var_background = None # name of the variable of the basis vector
+
+)
+
+
+BASIS_BM_INIT = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+
+    facns = 1., #factor for wavelet spacing in space
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    lmeso = 300, # Largest mesoscale wavelenght 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    anomaly = False, # Use init state from BC as background
 
 )
 
@@ -947,21 +984,52 @@ BASIS_CURRENT = dict(
 
 )
 
+# Balanced Motions 
+BASIS_WAVELET3D = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+
+    facnst = 1., #factor for wavelet spacing in space and time 
+
+    npsp = 3.5, # Defines the wavelet shape, both in space and time 
+
+    facpsp = 1.5, # factor to fix df between wavelets, both in space and time 
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    tmin = 2, # minimum time of decorrelation 
+
+    tmax = 20., # maximum time of decorrelation 
+
+    sigma_Q = 1e-1, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
 BASIS_GAUSS3D = dict(
 
     name_mod_var = '', # Name of the related model variable 
 
     flux = False,
 
-    facns = 1., # Factor for gaussian spacing in space
+    facns = 2., # Factor for gaussian spacing in space
 
-    facnlt = 2., # Factor for gaussian spacing in time
+    facnlt = 1., # Factor for gaussian spacing in time
 
     sigma_D = 300, # Spatial scale (km)
 
     sigma_T = 20, # Time scale (days)
 
     sigma_Q = 0.01, # Standard deviation for matrix Q 
+
+    normalize_fact = True,
+
+    time_spinup = None # days
 
 )
 

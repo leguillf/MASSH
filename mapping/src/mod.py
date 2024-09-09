@@ -18,6 +18,7 @@ from math import pi
 from datetime import timedelta
 import matplotlib.pylab as plt 
 import pyinterp
+from copy import deepcopy
 
 import jax.numpy as jnp 
 from jax import jit
@@ -728,7 +729,7 @@ class Model_qg1l_jax(M):
                 bc = False # No sponge band for open boundaries
             else:
                 bc = True
-            self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc, bc=bc)
+            self.Wbc = grid.compute_weight_map(State.lon, State.lat, deepcopy(State.mask), config.MOD.dist_sponge_bc, bc=bc)
             if config.EXP.flag_plot>1:
                 plt.figure()
                 plt.pcolormesh(self.Wbc)
@@ -745,6 +746,7 @@ class Model_qg1l_jax(M):
         # Tracer advection flag
         self.advect_pv = config.MOD.advect_pv
         self.advect_tracer = config.MOD.advect_tracer
+        self.forcing_tracer_from_bc = config.MOD.forcing_tracer_from_bc
 
         # Ageostrophic velocity flag
         if 'U' in self.name_var and 'V' in self.name_var:
@@ -860,6 +862,7 @@ class Model_qg1l_jax(M):
 
         Xb = self.bc['SSH'][t0]
         if self.advect_tracer:
+            Xb = Xb[np.newaxis,:,:]
             for name in self.name_var:
                 if name!='SSH' and name in self.bc and len(self.bc[name].keys())>0:
                     if t1 in self.bc[name]: 
@@ -870,8 +873,7 @@ class Model_qg1l_jax(M):
                         idx_closest = np.argmin(np.abs(t_list-t1))
                         new_t1 = t_list[idx_closest]
                         Cb = self.bc[name][new_t1]
-                    Xb = np.append(Xb[np.newaxis,:,:], 
-                                    Cb[np.newaxis,:,:], axis=0)     
+                    Xb = np.append(Xb, Cb[np.newaxis,:,:], axis=0)     
         return Xb.astype('float64')
     
     def step(self,State,nstep=1,t=0):
@@ -917,9 +919,12 @@ class Model_qg1l_jax(M):
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
                         Fc = +State.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
-                        if name in self.forcing and t in self.forcing[name]:
-                            Fc[1:-1,1:-1] += (self.forcing[name][t]*(3600*24))[1:-1,1:-1]
-                        X1[i] += nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc)
+                        # Add Nudging to BC 
+                        if self.forcing_tracer_from_bc:
+                            X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc * (Xb[i] - X0[i]) 
+                        # Only forcing flux
+                        else:
+                            X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc 
                         State.setvar(X1[i], name_var=self.name_var[name])
             else:
                 X1 += nstep*self.dt/(3600*24) * Fssh 
@@ -979,7 +984,14 @@ class Model_qg1l_jax(M):
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
                         dFc = dState.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
-                        dX1[i] +=  nstep*self.dt/(3600*24) * dFc  * (1-self.Wbc)
+                        # Add Nudging to BC 
+                        if self.forcing_tracer_from_bc:
+                            Fc = State.params[self.name_var[name]] 
+                            dX1[i] +=  nstep*self.dt/(3600*24) * (1-self.Wbc) *\
+                                  (dFc * (Xb[i] - X0[i]) - Fc * dX0[i])
+                        # Only forcing flux
+                        else:
+                            dX1[i] +=  nstep*self.dt/(3600*24) * dFc  * (1-self.Wbc)
                         dState.setvar(dX1[i], name_var=self.name_var[name])
             else:
                 dX1 += nstep*self.dt/(3600*24) * dFssh  
@@ -1022,7 +1034,7 @@ class Model_qg1l_jax(M):
         else:
             adX0 = adSSH0
             X0 = SSH0
-        
+
         # Init
         adX1 = +adX0
         X1 = +X0
@@ -1035,11 +1047,15 @@ class Model_qg1l_jax(M):
 
         # Update state and parameters
         if self.name_var['SSH'] in adState.params:
-            for name in self.name_var:
+            for i,name in enumerate(self.name_var):
                 adparams = nstep*self.dt/(3600*24) *\
                     adState.getvar(name_var=self.name_var[name]).astype('float64') 
                 if name!='SSH':
                     adparams *= (1-self.Wbc)
+                    if self.forcing_tracer_from_bc:
+                        Fc = State.params[self.name_var[name]] 
+                        adparams *=  (Xb[i] - X0[i])
+                        adX1[i] += -nstep*self.dt/(3600*24) * (1-self.Wbc) * Fc * adX0[i]
                 adState.params[self.name_var[name]] += adparams  
                 
         if self.advect_tracer:
@@ -1049,69 +1065,6 @@ class Model_qg1l_jax(M):
                     adState.setvar(adX1[i],self.name_var[name])
         else:
             adState.setvar(adX1,self.name_var['SSH'])
-   
-class Model_qg1l_jax_full(Model_qg1l_jax):
-    def __init__(self,config,State):
-        super().__init__(config,State)
-        self.step_jit = jit(self.step, static_argnums=[0,3])
-
-    def _apply_bc(self,t,t1):
-
-        Xb = jnp.zeros((self.ny,self.nx,))
-
-        if 'SSH' not in self.bc:
-            return Xb
-        elif t not in self.bc['SSH']:
-            return Xb
-        else:
-            Xb = self.bc['SSH'][t]
-            if self.advect_tracer:
-                for name in self.name_var:
-                    if name!='SSH':
-                        if t1 in self.bc[name]: 
-                            Cb = self.bc[name][t1]
-                        else:
-                            Cb = jnp.zeros((self.ny,self.nx,))
-                        Xb = jnp.append(Xb[jnp.newaxis,:,:], 
-                                       Cb[jnp.newaxis,:,:], axis=0)     
-        return Xb
-
-    def step(self,t,State_var,State_params,nstep=1):
-
-        # Boundary field
-        Xb = self._apply_bc(t,int(t+nstep*self.dt))
-
-        # Get state variable(s)
-        X0 = State_var[self.name_var['SSH']]
-        if self.advect_tracer:
-            X0 = X0[np.newaxis,:,:]
-            for name in self.name_var:
-                if name!='SSH':
-                    C0 = State_var[self.name_var[name]][jnp.newaxis,:,:]
-                    X0 = np.append(X0, C0, axis=0)
-        
-        # init
-        X1 = +X0
-
-        # Time propagation
-        X1 = self.qgm_step(X1,Xb,nstep=nstep)
-        
-        # Update state
-        if self.name_var['SSH'] in State_params:
-            Fssh = State_params[self.name_var['SSH']] # Forcing term for SSH
-            if self.advect_tracer:
-                X1[0] += nstep*self.dt/(3600*24) * Fssh
-                State_var[self.name_var['SSH']] = X1[0]
-                for i,name in enumerate(self.name_var):
-                    if name!='SSH':
-                        Fc = State_params[self.name_var[name]] # Forcing term for tracer
-                        X1[i] += nstep*self.dt/(3600*24) * Fc
-                        State_var[self.name_var[name]] = X1[i]
-            else:
-                X1 += nstep*self.dt/(3600*24) * Fssh
-                State_var[self.name_var['SSH']] = X1
-
-        return State_var
 
 
 ###############################################################################
@@ -2971,12 +2924,13 @@ class Model_tracadv_ssh(M):
                 adState.setvar(adc1[i], name_var=self.name_var[name])
                 i += 1
 
-
 class Model_tracadv_vel(M):
 
     def __init__(self,config,State):
 
         super().__init__(config,State)
+
+        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
         # Initialize model state variables
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
@@ -2998,6 +2952,10 @@ class Model_tracadv_vel(M):
                 State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
                 if State.mask is not None:
                     State.var[self.name_var[name]][State.mask] = np.nan
+        if State.mask is not None:
+            self.indmask = State.mask
+        else:
+            self.indmask = []
             
 
         # Initialize grid spacing
@@ -3014,7 +2972,13 @@ class Model_tracadv_vel(M):
         # Diffusion
         self.Kdiffus = config.MOD.Kdiffus
 
-        # Initialize model parameters (Flux/Forcing)
+        # Coriolis
+        self.f = State.f
+
+        self.add_bc_vel_output = config.MOD.add_bc_vel_output
+
+        # Initialize model parameters (Flux/Nio)
+        self.vel_forcing = config.MOD.vel_forcing
         for name in self.name_var:
             State.params[self.name_var[name]] = np.zeros((State.ny,State.nx))
 
@@ -3030,7 +2994,7 @@ class Model_tracadv_vel(M):
         self.Wbc = np.zeros((State.ny,State.nx))
         if State.mask is not None:
             if config.MOD.dist_sponge_bc:
-                self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
+                self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc, bc=False)
                 if config.EXP.flag_plot>1:
                     plt.figure()
                     plt.pcolormesh(self.Wbc)
@@ -3050,9 +3014,9 @@ class Model_tracadv_vel(M):
                                     self.Wbc[itest,jtest] = 1  
             
 
-        self._step_jax_jit = jit(self._step_jax, static_argnums=3)  
-        self._step_jax_tgl_jit = jit(self._step_jax_tgl, static_argnums=4)  
-        self._step_jax_adj_jit = jit(self._step_jax_adj, static_argnums=4)    
+        self._step_jax_jit = jit(self._step_jax, static_argnums=5)  
+        self._step_jax_tgl_jit = jit(self._step_jax_tgl, static_argnums=6)  
+        self._step_jax_adj_jit = jit(self._step_jax_adj, static_argnums=6)    
 
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
@@ -3084,17 +3048,35 @@ class Model_tracadv_vel(M):
                         var_bc[_name_var_bc][i][np.isnan(var_bc[_name_var_bc][i])] = 0.
                         self.forcing[_name_var_mod][t] = var_bc[_name_var_bc][i]
     
-    def _add_geo_vel(self,t,u,v):
+    def _get_geo_vel(self,t):
 
-        utot = u.copy()
-        vtot = v.copy()
+        ug = np.zeros((self.ny,self.nx))
+        vg = np.zeros((self.ny,self.nx))
 
-        if 'U' in self.bc and t in self.bc['U']:
-            utot += self.bc['U'][t]
-        if 'V' in self.bc and t in self.bc['V']:
-            vtot += self.bc['V'][t]
+        if 'U' in self.bc:
+            if t in self.bc['U']:
+                ug = self.bc['U'][t]
+            else:
+                # Find closest time
+                t_list = np.array(list(self.bc['U'].keys()))
+                if len(t_list)>0:
+                    idx_closest = np.argmin(np.abs(t_list-t))
+                    new_t = t_list[idx_closest]
+                    ug = self.bc['U'][new_t]
+        if 'V' in self.bc:
+            if t in self.bc['V']:
+                vg = self.bc['V'][t]
+            else:
+                # Find closest time
+                t_list = np.array(list(self.bc['V'].keys()))
+                if len(t_list)>0:
+                    idx_closest = np.argmin(np.abs(t_list-t))
+                    new_t = t_list[idx_closest]
+                    vg = self.bc['V'][new_t]
+        ug[np.isnan(ug)] = 0.
+        vg[np.isnan(vg)] = 0.
 
-        return utot, vtot
+        return ug, vg
 
     def _get_tracer_bc(self, t):
 
@@ -3102,9 +3084,18 @@ class Model_tracadv_vel(M):
         i = 0
         for name in self.name_var:
             if name not in ['U','V']:
-                if name in self.bc and t in self.bc[name]:
-                    cb[i] = self.bc[name][t]
+                if name in self.bc:
+                    if t in self.bc[name]:
+                        cb[i] = +self.bc[name][t]
+                    else:
+                        # Find closest time
+                        t_list = np.array(list(self.bc[name].keys()))
+                        if len(t_list)>0:
+                            idx_closest = np.argmin(np.abs(t_list-t))
+                            new_t = t_list[idx_closest]
+                            cb[i] = +self.bc[name][new_t]
                     i += 1
+        cb[np.isnan(cb)] = 0.
         
         return cb
     
@@ -3228,18 +3219,40 @@ class Model_tracadv_vel(M):
 
     def _one_step_for_scan(self,X0,X):
 
-        u = X0[0][0]
-        v = X0[0][1]
-        c0 = X0[0][2:]
-        cb0 = X0[1]
-        cb1 = X0[2]
-        nstep = X0[3]
-        step = X0[4]
+        # Dynamical variables
+        u = X0[0][0,0]
+        v = X0[0][0,1]
+        c0 = X0[0][0,2:]
+
+        # parameter variables
+        pu = X0[0][1,0]
+        pv = X0[0][1,1]
+        pc0 = X0[0][1,2:]
+
+        # Static variables
+        ub = X0[1]
+        vb = X0[2]
+        cb0 = X0[3]
+        cb1 = X0[4]
+        nstep = X0[5]
+        step = X0[6]
+        t = X0[7]
+
+        # Reshaping
         if len(c0.shape)==2:
             c0 = c0[jnp.newaxis,:,:]
+
+        # NIOs
+        if self.vel_forcing=='nio':
+            u = pu * jnp.cos(-self.f*t) + pv * jnp.sin(-self.f*t)
+            v = pu * jnp.sin(-self.f*t) - pv * jnp.cos(-self.f*t)
         
+        # Add background velocities
+        utot = u + ub
+        vtot = v + vb
+
         # Spatial scheme
-        rhs = self._adv(u,v,c0)
+        rhs = self._adv(utot,vtot,c0)
 
         # Time scheme
         if self.time_scheme=='Euler':
@@ -3248,7 +3261,7 @@ class Model_tracadv_vel(M):
         elif self.time_scheme=='rk2':
             # rk2
             c12 = c0 + 0.5*rhs*self.dt
-            rhs12 = self._adv(u,v,c12)
+            rhs12 = self._adv(utot,vtot,c12)
             c1 = c0 + self.dt * rhs12
         elif self.time_scheme=='rk4':
             # rk4
@@ -3256,77 +3269,92 @@ class Model_tracadv_vel(M):
             k1 = rhs * self.dt
             ## k2
             c2 = c0 + 0.5*k1
-            rhs2 = self._adv(u,v,c2)
+            rhs2 = self._adv(utot,vtot,c2)
             k2 = rhs2*self.dt
             ## k3
             c3 = c0 + 0.5*k2
-            rhs3 = self._adv(u,v,c3)
+            rhs3 = self._adv(utot,vtot,c3)
             k3 = rhs3*self.dt
             ## k4
             c4 = c0 + k2
-            rhs4 = self._adv(u,v,c4) 
+            rhs4 = self._adv(utot,vtot,c4) 
             k4 = rhs4*self.dt
             # q increment
             c1 = c0 + (k1 + 2 * k2 + 2 * k3 + k4) / 6.
         
         # Boundary condition
         cb = (1-(step+1)/nstep) * cb0 + (step+1)/nstep * cb1 # linear interpolation
-        c1 = self._bc(u,v,c0,c1,cb)
-            
-        X = jnp.append(u[jnp.newaxis,:,:],v[jnp.newaxis,:,:],axis=0)
-        X = jnp.append(X,c1,axis=0)
+        c1 = self._bc(utot,vtot,c0,c1,cb)
 
-        X = (X,cb0,cb1,nstep,step+1)
+        # Tracer forcings
+        pc0 = jnp.where(pc0>=0,pc0,0.)
+        c1 += self.dt/(3600*24) * (1-self.Wbc) * pc0 * (cb - c0) 
+
+        # Update state vector
+        X = jnp.zeros((2,len(self.name_var),self.ny,self.nx))
+        X = X.at[0,0].set(u)
+        X = X.at[0,1].set(v)
+        X = X.at[0,2:].set(c1)
+        X = X.at[1,0].set(pu)
+        X = X.at[1,1].set(pv)
+        X = X.at[1,2:].set(pc0)
+
+        X = (X, ub, vb, cb0, cb1, nstep, step+1, t+self.dt)
+
+
 
         return X, X
 
-    def _step_jax(self,X0,cb0,cb1,nstep):
+    def _step_jax(self,X0,ub,vb,cb0,cb1,nstep,t):
 
         # Add static arguments in X dynamic variables for scan function
         step = 0
-        X0 = (X0, cb0, cb1, nstep, step)
+        X0 = (X0, ub, vb, cb0, cb1, nstep, step, t)
 
         # Run scan
         X1, _ = scan(self._one_step_for_scan, init=X0, xs=jnp.zeros(nstep))
 
         # Get dynamic variables 
-        X1, _, _, _, _ = X1
+        X1, _, _, _, _, _, _, _ = X1
         
         return X1
     
-    def _step_jax_tgl(self,dX0,X0,cb0,cb1,nstep):
+    def _step_jax_tgl(self,dX0,X0,ub,vb,cb0,cb1,nstep,t):
 
-        _, dX1 = jvp(partial(self._step_jax_jit, cb0=cb0, cb1=cb1, nstep=nstep), (X0,), (dX0,))
+        _, dX1 = jvp(partial(self._step_jax_jit, ub=ub, vb=vb, cb0=cb0, cb1=cb1, nstep=nstep, t=t), (X0,), (dX0,))
 
         return dX1
 
-    def _step_jax_adj(self,adX0,X0,cb0,cb1,nstep):
+    def _step_jax_adj(self,adX0,X0,ub,vb,cb0,cb1,nstep,t):
         
-        _, adf = vjp(partial(self._step_jax_jit, cb0=cb0, cb1=cb1, nstep=nstep), X0)
+        _, adf = vjp(partial(self._step_jax_jit, ub=ub, vb=vb, cb0=cb0, cb1=cb1, nstep=nstep, t=t), X0)
         
         return adf(adX0)[0]
     
     def step(self,State,nstep=1,t=0):
 
         # Init
-        X0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        X0 = np.zeros((2,len(self.name_var),self.ny,self.nx))
 
-        # Get velocity variable(s)
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-        utot, vtot = self._add_geo_vel(t,u,v) # Add geostrophic velocities
-        X0[0] = utot
-        X0[1] = vtot
-
-        # Get tracer variables
-        i = 2
+        # Get dynamical variable
+        X0[0,0] = State.getvar(name_var=self.name_var['U'])
+        X0[0,1] = State.getvar(name_var=self.name_var['V'])
+        X0[1,0] = State.params[self.name_var['U']]
+        X0[1,1] = State.params[self.name_var['V']]
+        i = 0
         for name in self.name_var:
             if name not in ['U','V']:
-                c0 = State.getvar(name_var=self.name_var[name])
-                # Fill array
-                X0[i] = c0
-                i += 1
-        
+                X0[0,2+i] = State.getvar(self.name_var[name])
+                X0[1,2+i] = State.params[self.name_var[name]]
+                i += 1      
+
+        # Mask to 0
+        X0[np.isnan(X0)] = 0.
+
+        # Background velocities
+        ub,vb = self._get_geo_vel(t)
+
+        # Tracer boundary conditions
         cb0 = self._get_tracer_bc(t)
         cb1 = self._get_tracer_bc(t+nstep*self.dt)
 
@@ -3334,56 +3362,62 @@ class Model_tracadv_vel(M):
         X0 = jnp.array(X0)
 
         # Forward propagation 
-        X1 = self._step_jax_jit(X0,cb0,cb1,nstep)
+        X1 = self._step_jax_jit(X0,ub,vb,cb0,cb1,nstep,t)
 
         # Back to numpy
-        X1 = np.array(X1) # advected tracer concentrations
+        X1 = np.array(X1) 
+
+        # Split Variables, Parameters
+        var1 = X1[0]
+        par1 = X1[1]
+
+        # Put the mask again
+        var1[:,self.indmask] = np.nan
+        par1[:,self.indmask] = np.nan
         
         # Update state
-        Fu = State.params[self.name_var['U']] 
-        Fv = State.params[self.name_var['V']] 
-        u += nstep*self.dt/(3600*24) * Fu
-        v += nstep*self.dt/(3600*24) * Fv
-        State.setvar(u, name_var=self.name_var['U'])
-        State.setvar(v, name_var=self.name_var['V'])
+        State.setvar(var1[0], self.name_var['U'])
+        State.setvar(var1[1], self.name_var['V'])
+        State.params[self.name_var['U']] = par1[0]
+        State.params[self.name_var['V']] = par1[1]
         i = 0
         for name in self.name_var:
             if name not in ['U','V']:
-                Fc = +State.params[self.name_var[name]] # Forcing term for tracer
-                if name in self.forcing and t in self.forcing[name]:
-                    Fc[1:-1,1:-1] += (self.forcing[name][t]*(3600*24))[1:-1,1:-1]
-                X1[i+2] += nstep*self.dt/(3600*24) * Fc  * (1-self.Wbc)
-                State.setvar(X1[i+2], name_var=self.name_var[name])
+                State.setvar(var1[2+i], self.name_var[name])
+                State.params[self.name_var[name]] = par1[2+i]
                 i += 1
     
     def step_tgl(self,dState,State,nstep=1,t=None):
 
         # Init
-        dX0 = np.zeros((len(self.name_var),State.ny,State.nx))
-        X0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        dX0 = np.zeros((2,len(self.name_var),State.ny,State.nx))
+        X0 = np.zeros((2,len(self.name_var),State.ny,State.nx))
 
-        # Get velocity variable(s)
-        du = dState.getvar(name_var=self.name_var['U'])
-        dv = dState.getvar(name_var=self.name_var['V'])
-        dX0[0] = du
-        dX0[1] = dv
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-        utot, vtot = self._add_geo_vel(t,u,v) # Add geostrophic velocities
-        X0[0] = utot
-        X0[1] = vtot
-        
-        # Get tracer variables
-        i = 2
+        dX0[0,0] = dState.getvar(name_var=self.name_var['U'])
+        dX0[0,1] = dState.getvar(name_var=self.name_var['V'])
+        dX0[1,0] = dState.params[self.name_var['U']]
+        dX0[1,1] = dState.params[self.name_var['V']]
+        X0[0,0] = State.getvar(name_var=self.name_var['U'])
+        X0[0,1] = State.getvar(name_var=self.name_var['V'])
+        X0[1,0] = State.params[self.name_var['U']]
+        X0[1,1] = State.params[self.name_var['V']]
+        i = 0
         for name in self.name_var:
             if name not in ['U','V']:
-                dc0 = dState.getvar(name_var=self.name_var[name])
-                c0 = State.getvar(name_var=self.name_var[name])
-                # Fill array
-                dX0[i] = dc0
-                X0[i] = c0
-                i += 1
+                dX0[0,2+i] = dState.getvar(self.name_var[name])
+                dX0[1,2+i] = dState.params[self.name_var[name]]
+                X0[0,2+i] = State.getvar(self.name_var[name])
+                X0[1,2+i] = State.params[self.name_var[name]]
+                i += 1      
         
+        # Mask to 0
+        dX0[np.isnan(X0)] = 0.
+        X0[np.isnan(X0)] = 0.
+
+        # Background velocities
+        ub,vb = self._get_geo_vel(t)
+        
+        # Tracer boundary conditions
         cb0 = self._get_tracer_bc(t)
         cb1 = self._get_tracer_bc(t+nstep*self.dt)
 
@@ -3392,93 +3426,104 @@ class Model_tracadv_vel(M):
         X0 = jnp.array(X0)
 
         # Time propagation
-        dX1 = self._step_jax_tgl_jit(dX0,X0,cb0,cb1,nstep)
+        dX1 = self._step_jax_tgl_jit(dX0,X0,ub,vb,cb0,cb1,nstep,t)
 
         # Back to numpy
         dX1 = np.array(dX1) # advected tracer concentrations
+
+        # Split Variables, Parameters
+        dvar1 = dX1[0]
+        dpar1 = dX1[1]
+
+        # Put the mask again
+        dvar1[:,self.indmask] = np.nan
+        dpar1[:,self.indmask] = np.nan
         
         # Update state
-        dFu = dState.params[self.name_var['U']] 
-        dFv = dState.params[self.name_var['V']] 
-        du += nstep*self.dt/(3600*24) * dFu
-        dv += nstep*self.dt/(3600*24) * dFv
-        dState.setvar(du, name_var=self.name_var['U'])
-        dState.setvar(dv, name_var=self.name_var['V'])
+        dState.setvar(dvar1[0], self.name_var['U'])
+        dState.setvar(dvar1[1], self.name_var['V'])
+        dState.params[self.name_var['U']] = dpar1[0]
+        dState.params[self.name_var['V']] = dpar1[1]
         i = 0
         for name in self.name_var:
             if name not in ['U','V']:
-                dFc = dState.params[self.name_var[name]] # Forcing term for tracer
-                dX1[i+2] += nstep*self.dt/(3600*24) * dFc * (1-self.Wbc)
-                dState.setvar(dX1[i+2], name_var=self.name_var[name])
+                dState.setvar(dvar1[2+i], self.name_var[name])
+                dState.params[self.name_var[name]] = dpar1[2+i]
                 i += 1
-
+        
     def step_adj(self,adState,State,nstep=1,t=None):
 
         # Init
-        adX0 = np.zeros((len(self.name_var),State.ny,State.nx))
-        X0 = np.zeros((len(self.name_var),State.ny,State.nx))
+        adX0 = np.zeros((2,len(self.name_var),self.ny,self.nx))
+        X0 = np.zeros((2,len(self.name_var),self.ny,self.nx))
 
-        # Get velocity variable(s)
-        adu = adState.getvar(name_var=self.name_var['U'])
-        adv = adState.getvar(name_var=self.name_var['V'])
-        adX0[0] = adu
-        adX0[1] = adv
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-        utot, vtot = self._add_geo_vel(t,u,v) # Add geostrophic velocities
-        X0[0] = utot
-        X0[1] = vtot
-        
-        # Get tracer variables
-        i = 2
+        adX0[0,0] = adState.getvar(name_var=self.name_var['U'])
+        adX0[0,1] = adState.getvar(name_var=self.name_var['V'])
+        adX0[1,0] = adState.params[self.name_var['U']]
+        adX0[1,1] = adState.params[self.name_var['V']]
+        X0[0,0] = State.getvar(name_var=self.name_var['U'])
+        X0[0,1] = State.getvar(name_var=self.name_var['V'])
+        X0[1,0] = State.params[self.name_var['U']]
+        X0[1,1] = State.params[self.name_var['V']]
+        i = 0
         for name in self.name_var:
             if name not in ['U','V']:
-                adc0 = adState.getvar(name_var=self.name_var[name])
-                c0 = State.getvar(name_var=self.name_var[name])
-                # Fill array
-                adX0[i] = adc0
-                X0[i] = c0
-                i += 1
+                adX0[0,2+i] = adState.getvar(self.name_var[name])
+                adX0[1,2+i] = adState.params[self.name_var[name]]
+                X0[0,2+i] = State.getvar(self.name_var[name])
+                X0[1,2+i] = State.params[self.name_var[name]]
+                i += 1      
+
+        # Background velocities
+        ub,vb = self._get_geo_vel(t)
         
+        # Tracer boundary conditions
         cb0 = self._get_tracer_bc(t)
         cb1 = self._get_tracer_bc(t+nstep*self.dt)
-
-        # Update parameters
-        for name in self.name_var:
-            adF = nstep*self.dt/(3600*24) *\
-                    adState.getvar(name_var=self.name_var[name]) 
-            if name not in ['U','V']:
-                adF *= (1-self.Wbc)
-            adState.params[self.name_var[name]] += adF
+        
+        # Mask to 0
+        adX0[np.isnan(adX0)] = 0.
+        X0[np.isnan(X0)] = 0.
 
         # Convert to JAX
         adX0 = jnp.array(adX0)
         X0 = jnp.array(X0)
 
         # Time propagation
-        adX1 = self._step_jax_adj_jit(adX0,X0,cb0,cb1,nstep)
+        adX1 = self._step_jax_adj_jit(adX0,X0,ub,vb,cb0,cb1,nstep,t)
         
         # Back to numpy
         adX1 = np.array(adX1) 
         adX1[np.isnan(adX1)] = 0
 
-        # Update variables
-        adState.setvar(adX1[0], name_var=self.name_var['U'])
-        adState.setvar(adX1[1], name_var=self.name_var['V'])
+        # Split Variables, Parameters
+        advar1 = adX1[0]
+        adpar1 = adX1[1]
+
+        # Update state
+        adState.setvar(advar1[0], self.name_var['U'])
+        adState.setvar(advar1[1], self.name_var['V'])
+        adState.params[self.name_var['U']] = adpar1[0]
+        adState.params[self.name_var['V']] = adpar1[1]
         i = 0
         for name in self.name_var:
             if name not in ['U','V']:
-                adState.setvar(adX1[i+2], name_var=self.name_var[name])
+                adState.setvar(advar1[2+i], self.name_var[name])
+                adState.params[self.name_var[name]] = adpar1[2+i]
                 i += 1
-
-            
     
     def save_output(self,State,present_date,name_var=None,t=None):
 
         # Add geostrophic velocities
         u = State.getvar(name_var=self.name_var['U'])
         v = State.getvar(name_var=self.name_var['V'])
-        utot, vtot = self._add_geo_vel(t,u,v) # Add geostrophic velocities
+        if self.add_bc_vel_output:
+            ub, vb = self._get_geo_vel(t) # Add geostrophic velocities
+            utot = u + ub
+            vtot = v + vb
+        else:
+            utot = u
+            vtot = v
 
         State0 = State.copy()
         State0.setvar(utot,name_var=self.name_var['U'])
@@ -3486,12 +3531,6 @@ class Model_tracadv_vel(M):
 
         State0.save_output(present_date,name_var)
 
-
-                
-    
-
-
-        
 
 ###############################################################################
 #                             Multi-models                                    #

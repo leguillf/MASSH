@@ -92,6 +92,7 @@ class Variational:
                 
         # Initial state
         State = self.State.copy()
+        State.plot(title='State variables at the start of cost function evaluation')
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :

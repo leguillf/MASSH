@@ -870,6 +870,7 @@ def Inv_4Dvar_parallel(config, State=None) :
             os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
         elif len(processes)>0:
             os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(processes),config.INV.nprocs))
+
     old_stdout = sys.stdout # backup current stdout
     sys.stdout = open(os.devnull, "w") # prevent printoing outputs
 
