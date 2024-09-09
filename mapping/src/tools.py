@@ -224,6 +224,6 @@ def read_auxdata(file_aux,name_var,lon_unit):
     if len(lon.shape)==1:
         finterp = scipy.interpolate.RegularGridInterpolator((lon,lat),data,bounds_error=False,fill_value=None)
     else:
-        finterp = scipy.interpolate.NearestNDInterpolator(list(zip(lon.ravel(),lat.ravel())),data.ravel())
+        finterp = scipy.interpolate.LinearNDInterpolator(list(zip(lon.ravel(),lat.ravel())),data.ravel())
     return finterp
 

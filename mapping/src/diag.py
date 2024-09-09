@@ -1636,7 +1636,11 @@ class Diag_ose():
         self.name_ref_lon = config.DIAG.name_ref_lon
         self.name_ref_lat = config.DIAG.name_ref_lat
         self.name_ref_var = config.DIAG.name_ref_var
-        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref)
+        def preprocess(ds):
+            name_var = [self.name_ref_time, self.name_ref_lon, self.name_ref_lat,self.name_ref_var]
+            ds = ds[name_var]
+            return ds
+        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref,preprocess=preprocess)
         if np.sign(ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
             ref = ref.assign_coords({self.name_ref_lon:((ref[self.name_ref_lon].dims, ref[self.name_ref_lon].data % 360))})
         elif np.sign(ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
@@ -1644,8 +1648,7 @@ class Diag_ose():
         ref = ref.swap_dims({ref[self.name_ref_time].dims[0]:self.name_ref_time})
         lon_ref = ref[self.name_ref_lon] 
         lat_ref = ref[self.name_ref_lat]
-        ref = ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max), drop=True)
-        ref = ref.where((lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
+        ref = ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max) & (lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
         try:
             ref = ref.sel(
                 {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
@@ -1701,7 +1704,10 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
             bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var]
-            bas = bas.assign_coords({self.name_bas_lon:bas[self.name_bas_lon]})
+            if np.sign(bas[self.name_bas_lon].data.min())==-1 and State.lon_unit=='0_360':
+                bas = bas.assign_coords({self.name_bas_lon:((bas[self.name_bas_lon].dims, bas[self.name_bas_lon].data % 360))})
+            elif np.sign(bas[self.name_bas_lon].data.min())>=0 and State.lon_unit=='-180_180':
+                bas = bas.assign_coords({self.name_bas_lon:((bas[self.name_bas_lon].dims, (bas[self.name_bas_lon].data + 180) % 360 - 180))})
             bas = bas.sortby(bas[self.name_bas_lon])
             self.bas = bas.sel(
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
@@ -1709,8 +1715,8 @@ That could be due to non regular grid or bad written netcdf file')
             try:
                 self.bas = self.bas.sel(
                     {self.name_bas_lon:slice(self.lon_min,self.lon_max),
-                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}.load()
-                )
+                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}
+                ).load()
             except:
                 print('Warning: unable to select study region in the baseline fields.')
             bas.close()
@@ -2151,7 +2157,7 @@ That could be due to non regular grid or bad written netcdf file')
                 ax3.set_title('baseline')
                 ax2.set_title('experiment')
                 
-                im = ax4.pcolormesh(binning.x, binning.y, 100*(rmse_xy_exp-rmse_xy_bas)/rmse_xy_bas,vmin=-50,vmax=50,cmap='RdBu_r')
+                im = ax4.pcolormesh(binning.x, binning.y, 100*(rmse_xy_exp**2-rmse_xy_bas**2)/rmse_xy_bas**2,vmin=-50,vmax=50,cmap='RdBu_r')
                 ax4.set_title('Improvement experiment/baseline')
                 plt.colorbar(im,ax=ax4)
             else:

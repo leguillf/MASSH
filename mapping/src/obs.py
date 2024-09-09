@@ -154,16 +154,15 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         Subfunction handling observations generated from altimetric observations
         
     """
-
+    
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
     ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
 
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
-        ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, ds[obs_attr.name_lon].data % 360))})
+        ds[obs_attr.name_lon].data = ds[obs_attr.name_lon].data % 360
     elif np.sign(ds[obs_attr.name_lon].data.min())>=0 and lon_unit=='-180_180':
-        ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
-    #ds = ds.sortby(ds[obs_attr.name_lon])    
+        ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
     
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
@@ -186,88 +185,105 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     # Time loop
     count = 0
     for dt_curr in dt_list:
-        dt1 = np.datetime64(dt_curr-dt_timestep/2)
-        dt2 = np.datetime64(dt_curr+dt_timestep/2)
+        
+        try: 
+            dt1 = np.datetime64(dt_curr-dt_timestep/2)
+            dt2 = np.datetime64(dt_curr+dt_timestep/2)
 
-        try:
-            _ds = ds.sel({obs_attr.name_time:slice(dt1,dt2)})
-        except:
             try:
-                _ds = ds.where((ds[obs_attr.name_time]<dt2) &\
-                        (ds[obs_attr.name_time]>=dt1),drop=True)
+                _ds = ds.sel({obs_attr.name_time:slice(dt1,dt2)})
             except:
-                print(dt_curr,': Warning: impossible to select data for this time')
-                continue
-        
+                try:
+                    _ds = ds.where((ds[obs_attr.name_time]<dt2) &\
+                            (ds[obs_attr.name_time]>=dt1),drop=True)
+                except:
+                    print(dt_curr,': Warning: impossible to select data for this time')
+                    continue
 
-        lon = _ds[obs_attr.name_lon].values
-        lat = _ds[obs_attr.name_lat].values
-        
-        is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
-        
-        if is_obs:
-            # Save the selected dataset in a new nc file
-            varobs = {}
-            for name in obs_attr.name_var:
-                varobs[name] = _ds[obs_attr.name_var[name]]
-                # Add/Remove MDT
-                if finterpmdt is not None:
-                    mdt_on_obs = finterpmdt((lon,lat))
-                    if obs_attr.add_mdt:
-                        sign = 1
+
+            lon = _ds[obs_attr.name_lon].values
+            lat = _ds[obs_attr.name_lat].values
+
+            is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
+
+            if is_obs:
+                # Save the selected dataset in a new nc file
+                varobs = {}
+                for name in obs_attr.name_var:
+                    varobs[name] = _ds[obs_attr.name_var[name]]
+                    # Add/Remove MDT
+                    if finterpmdt is not None:
+                        mdt_on_obs = finterpmdt((lon,lat))
+                        if obs_attr.add_mdt:
+                            sign = 1
+                        else:
+                            sign = -1
+                        varobs[name].data = varobs[name].data + sign*mdt_on_obs
+                    # Add synthetic noise to the data
+                    if 'synthetic_noise' in obs_attr and obs_attr.synthetic_noise is not None:
+                        varobs[name].data = varobs[name].data + np.random.normal(0,obs_attr.synthetic_noise,varobs[name].size).reshape(varobs[name].shape) 
+                    # Remove high values
+                    if 'varmax' in obs_attr and obs_attr.varmax is not None:
+                        varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+                    # Subsampling
+                    if obs_attr.subsampling is not None:
+                        d = {}
+                        for dim in varobs[name].dims:
+                            d[dim] = obs_attr.subsampling
+                        varobs[name] = varobs[name].coarsen(d,boundary='trim').mean()
+                    # Error
+                    if finterperr is not None:
+                        err_on_obs = finterperr((lon,lat))
+                        varobs[name + '_err'] = varobs[name].copy()
+                        varobs[name + '_err'].data = err_on_obs
+
+                # Build netcdf
+                coords = {}
+                name_coords = [obs_attr.name_time,obs_attr.name_lon,obs_attr.name_lat]
+                if obs_attr.super=='OBS_SSH_SWATH' and obs_attr.name_xac is not None:
+                    name_coords.append(obs_attr.name_xac)
+                for name in name_coords:
+                    if obs_attr.subsampling is not None:
+                        d = {}
+                        for dim in _ds[name].dims:
+                            d[dim] = obs_attr.subsampling
+                        coords[name] = _ds[name].coarsen(d,boundary='trim').mean()
                     else:
-                        sign = -1
-                    varobs[name].data = varobs[name].data + sign*mdt_on_obs
-                # Add synthetic noise to the data
-                if 'synthetic_noise' in obs_attr and obs_attr.synthetic_noise is not None:
-                    varobs[name].data = varobs[name].data + np.random.normal(0,obs_attr.synthetic_noise,varobs[name].size).reshape(varobs[name].shape) 
-                # Remove high values
-                if 'varmax' in obs_attr and obs_attr.varmax is not None:
-                    varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
-                # Error
-                if finterperr is not None:
-                    err_on_obs = finterperr((lon,lat))
-                    varobs[name + '_err'] = varobs[name].copy()
-                    varobs[name + '_err'].data = err_on_obs
-                
-            # Build netcdf
-            coords = {obs_attr.name_time:_ds[obs_attr.name_time].values}
-            coords[obs_attr.name_lon] = _ds[obs_attr.name_lon]
-            coords[obs_attr.name_lat] = _ds[obs_attr.name_lat]
-            if obs_attr.super=='OBS_SSH_SWATH' and obs_attr.name_xac is not None:
-                coords[obs_attr.name_xac] = _ds[obs_attr.name_xac] # Accross track distance 
-            dsout = xr.Dataset(varobs,
-                               coords=coords
-                               )
+                        coords[name] = _ds[name]
+                dsout = xr.Dataset(varobs,
+                                   coords=coords
+                                   )
 
-            # Write netcdf
-            date = dt_curr.strftime('%Y%m%d_%Hh%M')
-            path = f"{out_path}/{out_name}_{obs_name}_{'_'.join(obs_attr.name_var)}_{date}"
-            if finterpmdt is not None:
-                if obs_attr.add_mdt:
-                    path += '_addmdt'
-                elif obs_attr.substract_mdt:
-                    path += '_submdt'
-            path += '.nc'
-            dsout.to_netcdf(path, encoding={obs_attr.name_time: {'_FillValue': None},
-                                            obs_attr.name_lon: {'_FillValue': None},
-                                            obs_attr.name_lat: {'_FillValue': None}})
-            dsout.close()
-            _ds.close()
-            del dsout,_ds
-            
-            # Add the path of the new nc file in the dictionnary
-            if dt_curr in dict_obs:
-                dict_obs[dt_curr]['obs_name'].append(obs_name)
-                dict_obs[dt_curr]['obs_path'].append(path)
-                dict_obs[dt_curr]['attributes'].append(obs_attr)
-            else:
-                dict_obs[dt_curr] = Config({})
-                dict_obs[dt_curr]['obs_name'] = [obs_name]
-                dict_obs[dt_curr]['obs_path'] = [path]
-                dict_obs[dt_curr]['attributes'] = [obs_attr]
-                
-            count +=1
+                # Write netcdf
+                date = dt_curr.strftime('%Y%m%d_%Hh%M')
+                path = f"{out_path}/{out_name}_{obs_name}_{'_'.join(obs_attr.name_var)}_{date}"
+                if finterpmdt is not None:
+                    if obs_attr.add_mdt:
+                        path += '_addmdt'
+                    elif obs_attr.substract_mdt:
+                        path += '_submdt'
+                path += '.nc'
+                dsout.to_netcdf(path, encoding={obs_attr.name_time: {'_FillValue': None},
+                                                obs_attr.name_lon: {'_FillValue': None},
+                                                obs_attr.name_lat: {'_FillValue': None}})
+                dsout.close()
+                _ds.close()
+                del dsout,_ds
+
+                # Add the path of the new nc file in the dictionnary
+                if dt_curr in dict_obs:
+                    dict_obs[dt_curr]['obs_name'].append(obs_name)
+                    dict_obs[dt_curr]['obs_path'].append(path)
+                    dict_obs[dt_curr]['attributes'].append(obs_attr)
+                else:
+                    dict_obs[dt_curr] = Config({})
+                    dict_obs[dt_curr]['obs_name'] = [obs_name]
+                    dict_obs[dt_curr]['obs_path'] = [path]
+                    dict_obs[dt_curr]['attributes'] = [obs_attr]
+
+                count +=1
+        except: 
+            continue
 
         
     print(f'--> {count} tracks selected')

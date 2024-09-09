@@ -14,12 +14,15 @@ import matplotlib.pylab as plt
 from scipy.interpolate import griddata
 from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
+from scipy.spatial import distance_matrix, cKDTree
 import pandas as pd
 from jax.experimental import sparse
 import jax.numpy as jnp 
 from jax import jit
 import jax
 jax.config.update("jax_enable_x64", True)
+
+
 
 def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
     """
@@ -578,7 +581,7 @@ class Obsop_interp_l4(Obsop_interp):
                                                   dict_obs[t_obs[ind_obs]]['attributes']):
                         
                         # Check if this observation class is wanted
-                        if sat_info.super!='OBS_L4':
+                        if sat_info.super not in ['OBS_L4', 'OBS_SSH_SWATH']:
                             continue
                         if config.OBSOP.name_obs is None or (config.OBSOP.name_obs is not None and obs_name in config.OBSOP.name_obs):
                             if obs_name not in self.name_obs:
@@ -593,6 +596,7 @@ class Obsop_interp_l4(Obsop_interp):
         
         # For grid interpolation:
         self.interp_method = config.OBSOP.interp_method
+        self.dist_min = .5*np.sqrt(State.dx**2+State.dy**2)*1e-3 # Minimum distance to consider an observation inside a model pixel
 
         self.name_H += f'_L4_{config.OBSOP.interp_method}'
 
@@ -609,19 +613,20 @@ class Obsop_interp_l4(Obsop_interp):
             sat_info_list = self.dict_obs[t]['attributes']
             obs_file_list = self.dict_obs[t]['obs_path']
             obs_name_list = self.dict_obs[t]['obs_name']
-
-        
+            
             # Concatenate obs from different sensors
             lon_obs = {}
             lat_obs = {}
             var_obs = {}
             err_obs = {}
+            type_obs = {}
 
             for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
 
-                if sat_info.super!='OBS_L4':
+                # Check if this observation class is wanted
+                if sat_info.super not in ['OBS_L4', 'OBS_SSH_SWATH']:
                     continue
-
+                
                 ####################
                 # Merge observations
                 ####################
@@ -650,6 +655,7 @@ class Obsop_interp_l4(Obsop_interp):
                             err_obs[name] = +err
                             lon_obs[name] = +lon
                             lat_obs[name] = +lat
+                            type_obs[name] = sat_info.super
             
             for name in lon_obs:
                 coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
@@ -662,32 +668,54 @@ class Obsop_interp_l4(Obsop_interp):
                         var_obs_interp, err_obs_interp = pickle.load(f)
                 else:
                     # Grid interpolation: performing spatial interpolation now
-                    if self.interp_method=='hybrid':
-                        # We perform first nearest, then linear, and then cubic interpolations
-                        var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='nearest')
-                        err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='nearest')
-                        var_obs_interp_linear = griddata(coords_obs, var_obs[name], self.coords_geo, method='linear')
-                        err_obs_interp_linear = griddata(coords_obs, err_obs[name], self.coords_geo, method='linear')
-                        var_obs_interp[~np.isnan(var_obs_interp_linear)] = var_obs_interp_linear[~np.isnan(var_obs_interp_linear)]
-                        err_obs_interp[~np.isnan(err_obs_interp_linear)] = err_obs_interp_linear[~np.isnan(err_obs_interp_linear)]
-                        var_obs_interp_cubic = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
-                        err_obs_interp_cubic = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
-                        var_obs_interp[~np.isnan(var_obs_interp_cubic)] = var_obs_interp_linear[~np.isnan(var_obs_interp_cubic)]
-                        err_obs_interp[~np.isnan(err_obs_interp_cubic)] = err_obs_interp_linear[~np.isnan(err_obs_interp_cubic)]
+                    if np.all(np.isnan(var_obs[name])):
+                        self.varobs[t][name] = (np.zeros((self.shape_grid))*np.nan) .flatten()
+                        self.errobs[t][name] = (np.zeros((self.shape_grid))*np.nan) .flatten()
+                        continue
                     else:
-                        var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
-                        err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
-                    # Save operator if asked
-                    if self.write_op:
-                        with open(file_L4, "wb") as f:
-                            pickle.dump((var_obs_interp,err_obs_interp), f)
+                        try:
+                            if self.interp_method=='hybrid':
+                                # We perform first nearest, then linear, and then cubic interpolations
+                                var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='nearest')
+                                err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='nearest')
+                                var_obs_interp_linear = griddata(coords_obs, var_obs[name], self.coords_geo, method='linear')
+                                err_obs_interp_linear = griddata(coords_obs, err_obs[name], self.coords_geo, method='linear')
+                                var_obs_interp[~np.isnan(var_obs_interp_linear)] = var_obs_interp_linear[~np.isnan(var_obs_interp_linear)]
+                                err_obs_interp[~np.isnan(err_obs_interp_linear)] = err_obs_interp_linear[~np.isnan(err_obs_interp_linear)]
+                                var_obs_interp_cubic = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
+                                err_obs_interp_cubic = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
+                                var_obs_interp[~np.isnan(var_obs_interp_cubic)] = var_obs_interp_linear[~np.isnan(var_obs_interp_cubic)]
+                                err_obs_interp[~np.isnan(err_obs_interp_cubic)] = err_obs_interp_linear[~np.isnan(err_obs_interp_cubic)]
 
-                if var_bc is not None and name in var_bc:
-                    var_obs_interp -= var_bc[name][i].flatten()
+                                # Mask pixels outside of swath
+                                if type_obs[name] == 'OBS_SSH_SWATH':
+                                    obs_tree = cKDTree(grid.geo2cart(coords_obs))
+                                    mod_tree = cKDTree(grid.geo2cart(self.coords_geo))
+                                    dist_mx = mod_tree.sparse_distance_matrix(obs_tree, self.dist_min)
+                                    keys = np.array(list(dist_mx.keys()))
+                                    ind_mod_in = keys[:, 0] # Index of model grid inside the swath
+                                    mask_mod_in = np.ones_like(var_obs_interp, dtype=bool) # mask to be applied on interpoled fields
+                                    mask_mod_in[ind_mod_in] = 0 
+                                    var_obs_interp[mask_mod_in] = np.nan
+                                    err_obs_interp[mask_mod_in] = np.nan
+                            else:
+                                var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
+                                err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
+                            # Save operator if asked
+                            if self.write_op:
+                                with open(file_L4, "wb") as f:
+                                    pickle.dump((var_obs_interp,err_obs_interp), f)
 
-                # Fill dictionnaries
-                self.varobs[t][name] = var_obs_interp
-                self.errobs[t][name] = err_obs_interp
+                            if var_bc is not None and name in var_bc:
+                                var_obs_interp -= var_bc[name][i].flatten()
+
+                            # Fill dictionnaries
+                            self.varobs[t][name] = var_obs_interp
+                            self.errobs[t][name] = err_obs_interp
+                        except:
+                            print(f'Warning in Obsop L4: unable to build file {file_L4}')
+                            self.varobs[t][name] = (np.zeros((self.shape_grid))*np.nan) .flatten()
+                            self.errobs[t][name] = (np.zeros((self.shape_grid))*np.nan) .flatten()
 
     def misfit(self,t,State):
 

@@ -108,7 +108,7 @@ def laplacian(u, dx, dy):
 def interp2d(ds,name_vars,lon_out,lat_out):
     
     ds = ds.assign_coords(
-                 {name_vars['lon']:(ds[name_vars['lon']] % 360),
+                 {name_vars['lon']:(ds[name_vars['lon']]),
                   name_vars['lat']:ds[name_vars['lat']]})
             
     if ds[name_vars['var']].shape[0]!=ds[name_vars['lat']].shape[0]:

@@ -43,7 +43,7 @@ class State:
         self.name_exp_save = config.EXP.name_exp_save
         self.path_save = config.EXP.path_save
         if not os.path.exists(self.path_save):
-            os.makedirs(self.EXP.path_save)
+            os.makedirs(self.path_save)
         self.flag_plot = config.EXP.flag_plot
 
         #  Initialize state variables dictonary
@@ -259,7 +259,11 @@ class State:
             mask = var[0,:,:]
         
         # Interpolate to state grid
-        x_source_axis = pyinterp.Axis(lon, is_circle=False)
+        if self.lon_unit=='-180_180':
+            is_circle = True
+        else:
+            is_circle = False
+        x_source_axis = pyinterp.Axis(lon, is_circle=is_circle)
         y_source_axis = pyinterp.Axis(lat)
         x_target = self.lon.T
         y_target = self.lat.T
