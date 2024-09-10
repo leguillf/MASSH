@@ -1650,7 +1650,7 @@ class Diag_ose():
         delta_x = []
         for name_ref in config.DIAG.name_ref:
             try:
-                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess)
+                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
             except:
                 files = glob.glob(name_ref)
                 # Get time dimension to concatenate
@@ -1658,13 +1658,14 @@ class Diag_ose():
                 name_time_dim = _ds0[self.name_ref_time].dims[0]
                 _ds0.close()
                 # Open nested files
-                _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess)
+                _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
                 
             if np.sign(_ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].data % 360))})
+                _ref = _ref.sortby(self.name_ref_lon)
             elif np.sign(_ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, (_ref[self.name_ref_lon].data + 180) % 360 - 180))})
-            _ref = _ref.sortby(self.name_ref_lon)
+                _ref = _ref.sortby(self.name_ref_lon)
             _ref = _ref.swap_dims({_ref[self.name_ref_time].dims[0]:self.name_ref_time})
             lon_ref = _ref[self.name_ref_lon] 
             lat_ref = _ref[self.name_ref_lat]
@@ -1811,7 +1812,7 @@ That could be due to non regular grid or bad written netcdf file')
 
             # Save to dataset
             exp_regridded.append( xr.DataArray(
-                name=self.name_exp_var,
+                name=var.name,
                 data=var_interp,
                 coords={self.name_ref_time: (_ref[self.name_ref_time].dims, _ref[self.name_ref_time].values),
                         self.name_ref_lon: (_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].values), 
@@ -1856,6 +1857,7 @@ That could be due to non regular grid or bad written netcdf file')
 
         # Save to dataset
         var_regridded = xr.DataArray(
+            name=var.name,
             data=var_regridded,
             coords={self.name_exp_time: time,
                     self.name_exp_lon: lon1d, 
