@@ -689,33 +689,38 @@ class Obsop_interp_l4(Obsop_interp):
                         continue
                     else:
                         try:
-                            if self.interp_method=='hybrid':
-                                # We perform first nearest, then linear, and then cubic interpolations
-                                var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method='nearest')
-                                err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method='nearest')
-                                var_obs_interp_linear = griddata(coords_obs, var_obs[name], self.coords_geo, method='linear')
-                                err_obs_interp_linear = griddata(coords_obs, err_obs[name], self.coords_geo, method='linear')
-                                var_obs_interp[~np.isnan(var_obs_interp_linear)] = var_obs_interp_linear[~np.isnan(var_obs_interp_linear)]
-                                err_obs_interp[~np.isnan(err_obs_interp_linear)] = err_obs_interp_linear[~np.isnan(err_obs_interp_linear)]
-                                var_obs_interp_cubic = griddata(coords_obs, var_obs[name], self.coords_geo, method='cubic')
-                                err_obs_interp_cubic = griddata(coords_obs, err_obs[name], self.coords_geo, method='cubic')
-                                var_obs_interp[~np.isnan(var_obs_interp_cubic)] = var_obs_interp_linear[~np.isnan(var_obs_interp_cubic)]
-                                err_obs_interp[~np.isnan(err_obs_interp_cubic)] = err_obs_interp_linear[~np.isnan(err_obs_interp_cubic)]
+                            # Loop on different obs for this date and this variable name
+                            var_obs_interp = np.zeros([len(var_obs[name]),]+self.shape_grid)
+                            err_obs_interp = np.zeros([len(var_obs[name]),]+self.shape_grid)
+                            for iobs in range(len(var_obs[name])):
+                                _coords_obs = np.column_stack((lon_obs[name][iobs].flatten(), lat_obs[name][iobs].flatten()))
+                                if self.interp_method=='hybrid':
+                                    # We perform first nearest, then linear, and then cubic interpolations
+                                    _var_obs_interp = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='nearest')
+                                    _err_obs_interp = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='nearest')
+                                    _var_obs_interp_linear = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='linear')
+                                    _err_obs_interp_linear = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='linear')
+                                    _var_obs_interp[~np.isnan(_var_obs_interp_linear)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_linear)]
+                                    _err_obs_interp[~np.isnan(_err_obs_interp_linear)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_linear)]
+                                    _var_obs_interp_cubic = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
+                                    _err_obs_interp_cubic = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
+                                    _var_obs_interp[~np.isnan(_var_obs_interp_cubic)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_cubic)]
+                                    _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)]
+                                else:
+                                    _var_obs_interp = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
+                                    _err_obs_interp = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
 
-                                # Mask pixels outside of swath
-                                if type_obs[name] == 'OBS_SSH_SWATH':
-                                    obs_tree = cKDTree(grid.geo2cart(coords_obs))
-                                    mod_tree = cKDTree(grid.geo2cart(self.coords_geo))
-                                    dist_mx = mod_tree.sparse_distance_matrix(obs_tree, self.dist_min)
-                                    keys = np.array(list(dist_mx.keys()))
-                                    ind_mod_in = keys[:, 0] # Index of model grid inside the swath
-                                    mask_mod_in = np.ones_like(var_obs_interp, dtype=bool) # mask to be applied on interpoled fields
-                                    mask_mod_in[ind_mod_in] = 0 
-                                    var_obs_interp[mask_mod_in] = np.nan
-                                    err_obs_interp[mask_mod_in] = np.nan
-                            else:
-                                var_obs_interp = griddata(coords_obs, var_obs[name], self.coords_geo, method=self.interp_method)
-                                err_obs_interp = griddata(coords_obs, err_obs[name], self.coords_geo, method=self.interp_method)
+                                # Add error due to interpolation (resolutions ratio)
+                                dx,dy = grid.lonlat2dxdy(lon_obs[name][iobs],lat_obs[name][iobs])
+                                dx = griddata(_coords_obs, dx.flatten(), self.coords_geo)
+                                dy = griddata(_coords_obs, dy.flatten(), self.coords_geo)
+                                _err_res = (dx * dy) / (self.DX * self.DY).flatten()
+                                _err_res = np.where(_err_res<1,1,_err_res)
+                                _err_obs_interp *= _err_res
+
+                                var_obs_interp[iobs] = _var_obs_interp.reshape(self.shape_grid)
+                                err_obs_interp[iobs] = _err_obs_interp.reshape(self.shape_grid)
+
                             # Save operator if asked
                             if self.write_op:
                                 with open(file_L4, "wb") as f:
@@ -724,72 +729,25 @@ class Obsop_interp_l4(Obsop_interp):
                             if var_bc is not None and name in var_bc:
                                 var_obs_interp -= var_bc[name][i].flatten()
 
-                            # Fill dictionnaries
-                            self.varobs[t][name] = var_obs_interp
-                            self.errobs[t][name] = err_obs_interp
+                            if self.gradients:
+                                 # Compute gradients
+                                var_obs_interp_grady = np.zeros_like(var_obs_interp)*np.nan
+                                var_obs_interp_gradx = np.zeros_like(var_obs_interp)*np.nan
+                                var_obs_interp_grady[:,1:-1,1:-1] = (var_obs_interp[:,2:,1:-1] - var_obs_interp[:,:-2,1:-1]) / (2 * self.DY[np.newaxis,1:-1,1:-1])
+                                var_obs_interp_gradx[:,1:-1,1:-1] = (var_obs_interp[:,1:-1,2:] - var_obs_interp[:,1:-1,:-2]) / (2 * self.DX[np.newaxis,1:-1,1:-1])
+
+                                # Fill dictionnaries
+                                self.varobs[t][name+'_grady'] = var_obs_interp_grady
+                                self.varobs[t][name+'_gradx'] = var_obs_interp_gradx
+                                self.errobs[t][name] = err_obs_interp /  (self.DY[np.newaxis,:,:]**2 + self.DX[np.newaxis,:,:]**2)**.5
+                            else:
+                                # Fill dictionnaries
+                                self.varobs[t][name] = var_obs_interp
+                                self.errobs[t][name] = err_obs_interp
                         except:
                             print(f'Warning in Obsop L4: unable to build file {file_L4}')
                             self.varobs[t][name] = (np.zeros((self.shape_grid))*np.nan) .flatten()
                             self.errobs[t][name] = (np.zeros((self.shape_grid))*np.nan) .flatten()
-=======
-                    # Loop on different obs for this date and this variable name
-                    var_obs_interp = np.zeros([len(var_obs[name]),]+self.shape_grid)
-                    err_obs_interp = np.zeros([len(var_obs[name]),]+self.shape_grid)
-                    for iobs in range(len(var_obs[name])):
-                        _coords_obs = np.column_stack((lon_obs[name][iobs].flatten(), lat_obs[name][iobs].flatten()))
-                        if self.interp_method=='hybrid':
-                            # We perform first nearest, then linear, and then cubic interpolations
-                            _var_obs_interp = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='nearest')
-                            _err_obs_interp = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='nearest')
-                            _var_obs_interp_linear = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='linear')
-                            _err_obs_interp_linear = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='linear')
-                            _var_obs_interp[~np.isnan(_var_obs_interp_linear)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_linear)]
-                            _err_obs_interp[~np.isnan(_err_obs_interp_linear)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_linear)]
-                            _var_obs_interp_cubic = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
-                            _err_obs_interp_cubic = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
-                            _var_obs_interp[~np.isnan(_var_obs_interp_cubic)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_cubic)]
-                            _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)]
-                        else:
-                            _var_obs_interp = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
-                            _err_obs_interp = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
-                        
-                        # Add error due to interpolation (resolutions ratio)
-                        dx,dy = grid.lonlat2dxdy(lon_obs[name][iobs],lat_obs[name][iobs])
-                        dx = griddata(_coords_obs, dx.flatten(), self.coords_geo)
-                        dy = griddata(_coords_obs, dy.flatten(), self.coords_geo)
-                        _err_res = (dx * dy) / (self.DX * self.DY).flatten()
-                        _err_res = np.where(_err_res<1,1,_err_res)
-                        _err_obs_interp *= _err_res
-                    
-                        var_obs_interp[iobs] = _var_obs_interp.reshape(self.shape_grid)
-                        err_obs_interp[iobs] = _err_obs_interp.reshape(self.shape_grid)
-                        
-                    # Save operator if asked
-                    if self.write_op:
-                        with open(file_L4, "wb") as f:
-                            pickle.dump((var_obs_interp,err_obs_interp), f)
-
-                if var_bc is not None and name in var_bc:
-                    var_obs_interp -= var_bc[name][i].flatten()
-                
-                if self.gradients:
-                     # Compute gradients
-                    var_obs_interp_grady = np.zeros_like(var_obs_interp)*np.nan
-                    var_obs_interp_gradx = np.zeros_like(var_obs_interp)*np.nan
-                    var_obs_interp_grady[:,1:-1,1:-1] = (var_obs_interp[:,2:,1:-1] - var_obs_interp[:,:-2,1:-1]) / (2 * self.DY[np.newaxis,1:-1,1:-1])
-                    var_obs_interp_gradx[:,1:-1,1:-1] = (var_obs_interp[:,1:-1,2:] - var_obs_interp[:,1:-1,:-2]) / (2 * self.DX[np.newaxis,1:-1,1:-1])
-
-                    # Fill dictionnaries
-                    self.varobs[t][name+'_grady'] = var_obs_interp_grady
-                    self.varobs[t][name+'_gradx'] = var_obs_interp_gradx
-                    self.errobs[t][name] = err_obs_interp /  (self.DY[np.newaxis,:,:]**2 + self.DX[np.newaxis,:,:]**2)**.5
-                else:
-                    # Fill dictionnaries
-                    self.varobs[t][name] = var_obs_interp
-                    self.errobs[t][name] = err_obs_interp
-                
-                
->>>>>>> 8422c4c860a21cdfcb452e6e1e8a31ee9d8b4ff8
 
     def misfit(self,t,State):
         if self.gradients:

@@ -1640,43 +1640,64 @@ class Diag_ose():
         self.name_ref_var = config.DIAG.name_ref_var
 
         def preprocess(ds):
-            name_var = [self.name_ref_time, self.name_ref_lon, self.name_ref_lat,self.name_ref_var]
+            name_var = [self.name_ref_time, self.name_ref_lon, self.name_ref_lat, self.name_ref_var]
             ds = ds[name_var]
             return ds
-        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref,preprocess=preprocess)
-        if np.sign(ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
-            ref = ref.assign_coords({self.name_ref_lon:((ref[self.name_ref_lon].dims, ref[self.name_ref_lon].data % 360))})
-        elif np.sign(ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
-            ref = ref.assign_coords({self.name_ref_lon:((ref[self.name_ref_lon].dims, (ref[self.name_ref_lon].data + 180) % 360 - 180))})
-        ref = ref.swap_dims({ref[self.name_ref_time].dims[0]:self.name_ref_time})
-        lon_ref = ref[self.name_ref_lon] 
-        lat_ref = ref[self.name_ref_lat]
-        ref = ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max) & (lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
-        try:
-            ref = ref.sel(
-                {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
-                )
-        except:
-            ref = ref.where((ref[self.name_ref_time]<=np.datetime64(self.time_max)) &\
-                        (ref[self.name_ref_time]>=np.datetime64(self.time_min)),drop=True)
-        self.ref = ref[self.name_ref_var].load()
-        if None not in [config.DIAG.velocity_ref, config.DIAG.delta_t_ref]:
-            self.delta_x = config.DIAG.velocity_ref * config.DIAG.delta_t_ref
-        else:    
-            self.delta_x = np.sqrt((0.5*(lon_ref.values[2:]-lon_ref.values[:-2])*111*np.cos(lat_ref.values[1:-1]))**2 + (0.5*(lat_ref.values[2:]-lat_ref.values[:-2])*111)**2).mean()
-        ref.close()
+        
+        if type(config.DIAG.name_ref) is not list:
+            config.DIAG.name_ref = [config.DIAG.name_ref]
+        ref = []
+        delta_x = []
+        for name_ref in config.DIAG.name_ref:
+            try:
+                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess)
+            except:
+                files = glob.glob(name_ref)
+                # Get time dimension to concatenate
+                _ds0 = xr.open_dataset(files[0])
+                name_time_dim = _ds0[self.name_ref_time].dims[0]
+                _ds0.close()
+                # Open nested files
+                _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess)
+                
+            if np.sign(_ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
+                _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].data % 360))})
+            elif np.sign(_ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
+                _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, (_ref[self.name_ref_lon].data + 180) % 360 - 180))})
+            _ref = _ref.sortby(self.name_ref_lon)
+            _ref = _ref.swap_dims({_ref[self.name_ref_time].dims[0]:self.name_ref_time})
+            lon_ref = _ref[self.name_ref_lon] 
+            lat_ref = _ref[self.name_ref_lat]
+            _ref = _ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max), drop=True)
+            _ref = _ref.where((lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
+            try:
+                _ref = _ref.sel(
+                    {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
+                    )
+            except:
+                _ref = _ref.where((_ref[self.name_ref_time]<=np.datetime64(self.time_max)) &\
+                            (_ref[self.name_ref_time]>=np.datetime64(self.time_min)),drop=True)
+            # Mean spatial resolution of alongtrack data
+            delta_x.append(0.001*np.median(pyinterp.geodetic.coordinate_distances(_ref[self.name_ref_lon][:-1].values,
+                                                                _ref[self.name_ref_lat][:-1].values,
+                                                                _ref[self.name_ref_lon][1:].values,
+                                                                _ref[self.name_ref_lat][1:].values
+                                                                )))
 
+            _ref.close()
 
             # Add MDT to reference data
             if config.DIAG.add_mdt_to_ref:
                 finterpmdt = read_auxdata(config.DIAG.path_mdt,config.DIAG.name_var_mdt,State.lon_unit)
                 mdt_on_ref = finterpmdt((_ref[self.name_ref_lon] , _ref[self.name_ref_lat]))
                 _ref[self.name_ref_var].data += mdt_on_ref
-            
+
             # Append to list
             ref.append(_ref[self.name_ref_var].load())
-            self.ref = ref
-            self.delta_x = delta_x
+        self.ref = ref
+        self.delta_x = delta_x
+            
+        
                                       
         # Experimental data
         self.geo_grid = State.geo_grid
