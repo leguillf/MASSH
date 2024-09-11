@@ -2522,7 +2522,7 @@ That could be due to non regular grid or bad written netcdf file')
 
         return list_lon_segment, list_lat_segment, list_ssh_alongtrack_segment, list_ssh_map_interp_segment, npt 
         
-    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral',delete_frames=False):
         
         # For memory leak when saving multiple png files...
         import matplotlib
@@ -2629,7 +2629,8 @@ That could be due to non regular grid or bad written netcdf file')
         _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
 
         # Delete frames
-        os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+        if delete_frames:
+            os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
 
         # Display movie
         if Display:
