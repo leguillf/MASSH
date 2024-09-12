@@ -71,7 +71,7 @@ class Bc_ext:
         if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':
             _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, _ds[config.BC.name_lon].data % 360))})
         elif np.sign(_ds[config.BC.name_lon].data.min())>=0 and State.lon_unit=='-180_180':
-            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180))})
+            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180 ))})
         _ds = _ds.sortby(_ds[config.BC.name_lon])    
 
         # Copy dataset
@@ -135,7 +135,7 @@ class Bc_ext:
         var_interp = {}
         for name in self.var:
             if self.time_bc is not None and self.time_bc.size>1:
-                var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)})
+                var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)}).squeeze()
                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
                 # Remove NaN
                 if np.isnan(var).any():
