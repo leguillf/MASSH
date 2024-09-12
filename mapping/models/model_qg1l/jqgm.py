@@ -1141,12 +1141,6 @@ class Qgm_bins:
             res = res.at[2:-2,2:-2].set(self._adv2_jit(up, vp, um, vm, var0))
         elif self.upwind == 3:
             res = res.at[2:-2,2:-2].set(self._adv3_jit(up, vp, um, vm, var0))
-
-        # Use first order scheme for boundary pixels
-        if self.upwind>1 and self.bc_trac=='OBC':
-            res_tmp = jnp.zeros_like(var0,dtype='float64')
-            res_tmp = res_tmp.at[1:-1, 1:-1].set(self._adv1_jit(up, vp, um, vm, var0))
-            res = jnp.where(self.ind2[ib], res_tmp, res)
         
         return res
 
@@ -1183,22 +1177,21 @@ class Qgm_bins:
         return res
 
     def _adv3(self, up, vp, um, vm, var0):
-
         """
-            3rd-order upwind scheme
+        3rd-order upwind scheme.
         """
-
         res = \
-            - up[1:-1,1:-1] * 1 / (6 * self.dx) * \
+            - up[1:-1, 1:-1] * 1 / (6 * self.dx) * \
             (2 * var0[2:-2, 3:-1] + 3 * var0[2:-2, 2:-2] - 6 * var0[2:-2, 1:-3] + var0[2:-2, :-4]) \
-            + um[1:-1,1:-1] * 1 / (6 * self.dx) * \
+            + um[1:-1, 1:-1] * 1 / (6 * self.dx) * \
             (var0[2:-2, 4:] - 6 * var0[2:-2, 3:-1] + 3 * var0[2:-2, 2:-2] + 2 * var0[2:-2, 1:-3]) \
-            - vp[1:-1,1:-1] * 1 / (6 * self.dy) * \
+            - vp[1:-1, 1:-1] * 1 / (6 * self.dy) * \
             (2 * var0[3:-1, 2:-2] + 3 * var0[2:-2, 2:-2] - 6 * var0[1:-3, 2:-2] + var0[:-4, 2:-2]) \
-            + vm[1:-1,1:-1] * 1 / (6 * self.dy) * \
+            + vm[1:-1, 1:-1] * 1 / (6 * self.dy) * \
             (var0[4:, 2:-2] - 6 * var0[3:-1, 2:-2] + 3 * var0[2:-2, 2:-2] + 2 * var0[1:-3, 2:-2])
 
         return res
+
 
     def euler(self, q0, c0, rhs):
 
@@ -1342,6 +1335,7 @@ class Qgm_bins:
 
         return h1, c1
 
+    
     def one_step_for_scan(self, X0, X, ib=0):
 
         h1, c1, hb, cb, qb = X0

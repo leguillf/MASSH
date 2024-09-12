@@ -98,9 +98,9 @@ def ssh2rv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81,norm=False):
 def uv2rv(UV, State=None, lon=None, lat=None, xac=None):
     # if lon and lat are provided, we compute grid spacing. 
     # Otherwise, state grid will be used
-    if None not in [lon,lat]:
+    try:
         dx,dy = grid.lonlat2dxdy(lon,lat)
-    else:
+    except:
         dx = State.DX
         dy = State.DY
 
@@ -109,7 +109,7 @@ def uv2rv(UV, State=None, lon=None, lat=None, xac=None):
     v = UV[1]
 
     uv_shapelen = len(u.shape)
-    if uv_shapelen.len == 2:
+    if uv_shapelen == 2:
         _dx = dx
         _dy = dy
     elif uv_shapelen == 3:

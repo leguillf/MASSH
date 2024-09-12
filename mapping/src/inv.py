@@ -109,7 +109,7 @@ def Inv_forward(config,State,Model,Bc=None):
         
     return
 
-         
+       
 def Inv_oi(config,State,dict_obs):
     
     """
@@ -591,7 +591,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
     # Set Reduced Basis
     if Basis is not None:
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in days) for which the basis components will be compute (at each timestep_checkpoint)
-        Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
+        Xb, Q = Basis.set_basis(time_basis, return_q=True, State=State) # Q is the standard deviation. To get the variance, use Q^2
     else:
         sys.exit('4Dvar only work with reduced basis!!')
     
@@ -618,8 +618,11 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         # Read previous minimum 
         print('Read previous minimum:',config.INV.path_init_4Dvar)
         ds = xr.open_dataset(config.INV.path_init_4Dvar)
-        Xopt = ds.res.values
+        Xopt = var.Xb*0
+        Xopt[:ds.res.size] = ds.res.values
         ds.close()
+        if config.INV.prec:
+            Xopt = B.invsqr(Xopt - var.Xb)
     
     # Path where to save the control vector at each 4Dvar iteration 
     # (carefull, depending on the number of control variables, these files may use large disk space)
@@ -646,9 +649,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
                 maxiter = max(config.INV.maxiter - len(tmp_files), 0)
                 ds.close()
             except:
-                Xopt = var.Xb*0
-        else:
-            Xopt = var.Xb*0
+                Xopt = +Xopt
             
     if not (config.INV.restart_4Dvar and maxiter==0):
         print('\n*** Minimization ***\n')
@@ -775,7 +776,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
     time_checkpoints.append(np.datetime64(Model.timestamps[-1]))
     t_checkpoints.append(Model.T[-1])
     checkpoints = np.asarray(checkpoints)
-    time_checkpoints = np.asarray(time_checkpoints)
+    time_checkpoints = np.asarray(time_checkpoints)    
     print(f'--> {checkpoints.size} checkpoints to evaluate the cost function')
 
     # Boundary conditions
@@ -795,12 +796,16 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
     Model.init(State)
     State.plot(title='Init State')
 
+    print("Model init : done")
+
     # Set Reduced Basis
     if Basis is not None:
         time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in seconds) for which the basis components will be compute (at each timestep_checkpoint)
         Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
     else:
         sys.exit('4Dvar only work with reduced basis!!')
+
+    print("Basis set : done")
     
     # Covariance matrix
     from .tools_4Dvar import Cov
@@ -848,7 +853,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
         else:
             Xopt = var.Xb*0
             
-    if not (config.INV.restart_4Dvar and maxiter==0):
+    if not (config.INV.restart_4Dvar and config.INV.maxiter==0):
         print('\n*** Minimization ***\n')
         ###################
         # Minimization    #
@@ -868,7 +873,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
             options['disp'] = True
         else:
             options['disp'] = False
-        options['maxiter'] = maxiter
+        options['maxiter'] = config.INV.maxiter
         if config.INV.gtol is not None:
             _ = var.cost(Xopt)
             g0 = var.grad(Xopt)
@@ -888,7 +893,9 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
         
         # Save minimization trajectory
         if config.INV.save_minimization:
-            ds = xr.Dataset({'cost':(('j'),var.J),'grad':(('g'),var.G)})
+            ds = xr.Dataset({'J':(('N'),var.J),'Jo':(('N'),var.Jo),'grad':(('N'),var.G)})
+            for param in Basis.name_params:
+               ds["Jb_"+param]=xr.DataArray(var.J[param],dims=["N"])
             ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
             ds.close()
 
@@ -964,6 +971,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
     gc.collect()
     print()
 
+    
 def Inv_4Dvar_parallel(config, State=None) :  
     
     from . import state
@@ -976,7 +984,7 @@ def Inv_4Dvar_parallel(config, State=None) :
     list_State = []
     weights_space = [] 
     weights_space_sum = np.zeros((State.ny, State.nx))
-    proc = []
+    processes = []
     list_date = []
     list_lonlat = []
     iproc = 0
@@ -1055,7 +1063,7 @@ def Inv_4Dvar_parallel(config, State=None) :
                 list_State[i].append(_State)   
                 # create subprocess instance
                 p = Process(target=Inv_4Dvar, args=(_config, _State, None, None, None, None, None, 0))
-                proc.append(p)
+                processes.append(p)
                 # Compute spatial window tappering for merging outputs after inversion
                 if i==0: # Only for first time window (useless to compute it for the others, because is identical)
                     winy = np.ones(_State.ny)
@@ -1079,23 +1087,25 @@ def Inv_4Dvar_parallel(config, State=None) :
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
         if config.INV.JAX_mem_fraction is not None and config.INV.JAX_mem_fraction>0:
             os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
-        if len(proc)>0:
-            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(proc),config.INV.nprocs))
+        elif len(processes)>0:
+            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(processes),config.INV.nprocs))
     old_stdout = sys.stdout # backup current stdout
     sys.stdout = open(os.devnull, "w") # prevent printoing outputs
+
+    # Run tasks in parallel with a maximum of config.INV.nprocs processes
     ip0 = 0 # First process index to start in parallel
-    ip1 = min(config.INV.nprocs, len(proc)) # Last process index to start in parallel
-    while ip0<len(proc):
+    ip1 = min(config.INV.nprocs, len(processes)) # Last process index to start in parallel
+    while ip0<len(processes):
         # start the processes
         for ip in range(ip0,ip1):
-            proc[ip].start()
+            processes[ip].start()
         # join the processes
         for ip in range(ip0,ip1):
-            proc[ip].join()
+            processes[ip].join()
         ip0 = ip1
-        if ip1==len(proc):
+        if ip1==len(processes):
             ip1 += 1 # +1 to exit the loop
-        ip1 = min(ip1+config.INV.nprocs, len(proc))
+        ip1 = min(ip1+config.INV.nprocs, len(processes))
     sys.stdout = old_stdout # reset old stdout
 
 

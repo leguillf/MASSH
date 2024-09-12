@@ -37,6 +37,9 @@ class Cov :
     def sqr(self,X):
         return self.sigma * X
     
+    def invsqr(self,X):
+        return 1/self.sigma * X
+    
     
 class Variational:
     
@@ -92,6 +95,7 @@ class Variational:
                 
         # Initial state
         State = self.State.copy()
+        State.plot(title='State variables at the start of cost function evaluation')
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
@@ -279,29 +283,28 @@ class Variational_jax:
         State_var = State.var
         State_params = State.params
 
-        #for i in range(len(self.checkpoints)-1):
-        i = 0
+        for i in range(len(self.checkpoints)-1):
 
-        timestamp = self.M.timestamps[self.checkpoints[i]]
-        t = self.M.T[self.checkpoints[i]]
-        nstep = self.checkpoints[i+1] - self.checkpoints[i]
-        
-        # 1. Misfit
-        if timestamp in self.H.date_obs:
-            misfit = self.H.misfit_jit(State_var,timestamp) # d=Hx-xobs   
-            Jo += misfit.dot(self.R.inv(misfit))
-        
-        # 2. Reduced basis
-        if self.checkpoints[i]%self.dtbasis==0:
-            State_params = self.basis.operg_jit(t/3600/24, X, State_params)
+            timestamp = self.M.timestamps[self.checkpoints[i]]
+            t = self.M.T[self.checkpoints[i]]
+            nstep = self.checkpoints[i+1] - self.checkpoints[i]
+            
+            # 1. Misfit
+            if timestamp in self.H.date_obs:
+                misfit = self.H.misfit_jit(State_var,timestamp) # d=Hx-xobs   
+                Jo += misfit.dot(self.R.inv(misfit))
+            
+            # 2. Reduced basis
+            if self.checkpoints[i]%self.dtbasis==0:
+                State_params = self.basis.operg(t/3600/24, X, State_params)
 
-        # 3. Run forward model
-        State_var = self.M.step_jit(t,State_var, State_params,nstep=nstep)
+            # 3. Run forward model
+            State_var = self.M.step_jit(t,State_var, State_params,nstep=nstep)
 
-        timestamp = self.M.timestamps[self.checkpoints[-1]]
-        if timestamp in self.H.date_obs:
-            misfit = self.H.misfit_jit(State_var,timestamp) # d=Hx-xobsx
-            Jo += misfit.dot(self.R.inv(misfit))  
+            timestamp = self.M.timestamps[self.checkpoints[-1]]
+            if timestamp in self.H.date_obs:
+                misfit = self.H.misfit_jit(State_var,timestamp) # d=Hx-xobsx
+                Jo += misfit.dot(self.R.inv(misfit))  
         
         # Cost function 
         J = 1/2 * (Jo + Jb)

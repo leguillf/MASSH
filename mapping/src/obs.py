@@ -102,21 +102,21 @@ def Obs(config, State, *args, **kwargs):
                 path = f'{OBS.path}*.nc'    
             try:
                 _ds = xr.open_mfdataset(path,preprocess=preprocess,compat='override',coords='minimal')
-            except ValueError:
-                print('ValueError: opening with combine==nested')
-                files = glob.glob(path)
-
-                # Get time dimension to concatenate
-                if len(files)==0:
-                    continue
-                _ds0 = xr.open_dataset(files[0])
-                name_time_dim = _ds0[OBS.name_time].dims[0]
-                _ds0.close()
-                # Open nested files
-                _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,preprocess=preprocess,compat='override',coords='minimal')
             except:
-                print('Error: unable to open multiple netcdf files')
-                continue
+                try:
+                    print('opening with combine==nested')
+                    files = glob.glob(path)
+                    # Get time dimension to concatenate
+                    if len(files)==0:
+                        continue
+                    _ds0 = xr.open_dataset(files[0])
+                    name_time_dim = _ds0[OBS.name_time].dims[0]
+                    _ds0.close()
+                    # Open nested files
+                    _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,preprocess=preprocess,compat='override',coords='minimal')
+                except:
+                    print('Error: unable to open multiple netcdf files')
+                    continue
         
         # Copy and close dataset
         ds = _ds.copy()
@@ -168,8 +168,8 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
     lat_obs = ds[obs_attr.name_lat]
-    ds = ds.where((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
-                  (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs), drop=True)
+    ds = ds.where(((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
+                  (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs)).compute(), drop=True)
 
     # MDT 
     if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:
@@ -223,7 +223,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     varobs[name].data = varobs[name].data + np.random.normal(0,obs_attr.synthetic_noise,varobs[name].size).reshape(varobs[name].shape) 
                 # Remove high values
                 if 'varmax' in obs_attr and obs_attr.varmax is not None:
-                    varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+                    varobs[name][(np.abs(varobs[name])>obs_attr.varmax).compute()] = np.nan
                 # Error
                 if finterperr is not None:
                     err_on_obs = finterperr((lon,lat))
@@ -291,8 +291,8 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
     lat_obs = ds[obs_attr.name_lat]
-    ds = ds.where((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
-                  (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs), drop=True)
+    ds = ds.where(((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
+                  (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs)).compute(), drop=True)
 
     lon_obs = ds[obs_attr.name_lon].values
     lat_obs = ds[obs_attr.name_lat].values
@@ -310,8 +310,8 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
             _ds = ds.sel({obs_attr.name_time:slice(dt1,dt2)})
         except:
             try:
-                _ds = ds.where((ds[obs_attr.name_time]<dt2) &\
-                        (ds[obs_attr.name_time]>=dt1),drop=True)
+                _ds = ds.where(((ds[obs_attr.name_time]<dt2) &\
+                        (ds[obs_attr.name_time]>=dt1)).compute(),drop=True)
             except:
                 print(dt_curr,': Warning: impossible to select data for this time')
                 continue
@@ -468,8 +468,8 @@ def get_obs(dict_obs,box,time_init,name_var='SSH'):
                         lon_obs = ds[_attrs.name_lon] % 360
                         lat_obs = ds[_attrs.name_lat]
                         
-                        ds = ds.where((lon0<=lon_obs) & (lon1>=lon_obs) & 
-                  (lat0<=lat_obs) & (lat1>=lat_obs), drop=True)
+                        ds = ds.where(((lon0<=lon_obs) & (lon1>=lon_obs) & 
+                  (lat0<=lat_obs) & (lat1>=lat_obs)).compute(), drop=True)
                         time_obs = ds[_attrs.name_time].values
                         time_obs = (time_obs-np.datetime64(time_init))/np.timedelta64(1, 'D')
 

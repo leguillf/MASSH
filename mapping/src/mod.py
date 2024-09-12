@@ -854,6 +854,7 @@ class Model_qg1l_jax(M):
 
         Xb = self.bc['SSH'][t0]
         if self.advect_tracer:
+            Xb = Xb[np.newaxis,:,:]
             for name in self.name_var:
                 if name!='SSH' and name in self.bc and len(self.bc[name].keys())>0:
                     if t1 in self.bc[name]: 
@@ -864,8 +865,7 @@ class Model_qg1l_jax(M):
                         idx_closest = np.argmin(np.abs(t_list-t1))
                         new_t1 = t_list[idx_closest]
                         Cb = self.bc[name][new_t1]
-                    Xb = np.append(Xb[np.newaxis,:,:], 
-                                Cb[np.newaxis,:,:], axis=0)     
+                    Xb = np.append(Xb, Cb[np.newaxis,:,:], axis=0)     
         return Xb.astype('float64')
     
     def step(self,State,nstep=1,t=0):
@@ -1057,6 +1057,53 @@ class Model_qg1l_jax(M):
                     adState.setvar(adX1[i],self.name_var[name])
         else:
             adState.setvar(adX1,self.name_var['SSH'])
+
+class Model_qg1l_jax_full(Model_qg1l_jax):
+    def __init__(self,config,State):
+        super().__init__(config,State)
+        self.step_jit = jit(self.step, static_argnums=[1,2])
+
+
+
+    def step(self,State_varparams,t,nstep=1):
+
+        State_var,State_params = State_varparams
+
+        # Boundary field
+        Xb = self._apply_bc(t,int(t+nstep*self.dt))
+
+        # Get state variable(s)
+        X0 = +State_var[self.name_var['SSH']]
+        if self.advect_tracer:
+            X0 = X0[np.newaxis,:,:]
+            for name in self.name_var:
+                if name!='SSH':
+                    C0 = +State_var[self.name_var[name]][jnp.newaxis,:,:]
+                    X0 = np.append(X0, C0, axis=0)
+        
+        # init
+        X1 = +X0.astype('float64')
+        State_var1 = State_var.copy()
+
+        # Time propagation
+        X1 = self.qgm_step(X1,Xb,nstep=nstep)
+
+        # Update state
+        if self.name_var['SSH'] in State_params:
+            Fssh = State_params[self.name_var['SSH']] # Forcing term for SSH
+            if self.advect_tracer:
+                X1[0] += nstep*self.dt/(3600*24) * Fssh
+                State_var1[self.name_var['SSH']] = X1[0]
+                for i,name in enumerate(self.name_var):
+                    if name!='SSH':
+                        Fc = State_params[self.name_var[name]] # Forcing term for tracer
+                        X1[i] += nstep*self.dt/(3600*24) * Fc
+                        State_var1[self.name_var[name]] = X1[i]
+            else:
+                X1 += nstep*self.dt/(3600*24) * Fssh
+                State_var1[self.name_var['SSH']] = X1
+
+        return [State_var1, State_params]
 
 
 ###############################################################################

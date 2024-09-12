@@ -17,6 +17,8 @@ import glob
 from datetime import datetime
 import pyinterp 
 import pyinterp.fill
+import pickle 
+
 
 from . import grid
 
@@ -43,7 +45,7 @@ class State:
         self.name_exp_save = config.EXP.name_exp_save
         self.path_save = config.EXP.path_save
         if not os.path.exists(self.path_save):
-            os.makedirs(self.EXP.path_save)
+            os.makedirs(self.path_save)
         self.flag_plot = config.EXP.flag_plot
 
         #  Initialize state variables dictonary
@@ -103,7 +105,8 @@ class State:
             
             # Gravity
             self.g = 9.81
-            
+
+
     def ini_geo_grid(self,config):
         """
         NAME

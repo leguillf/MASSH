@@ -346,29 +346,23 @@ MOD_QG1L_JAX = dict(
 
 MOD_QG1L_JAX_FULL = dict(
 
-    name_var = {'SSH':"ssh"},
+    name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc. and/or ageostrophic velocities U, V)
 
-    init_from_bc = False,
+    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
 
-    name_init_var = {},
+    dir_model = None, # directory of the model (if other than mapping/models/model_qg1l)
 
-    dir_model = None,
-
-    var_to_save = None,
-
-    multiscale = False,
-
-    advect_tracer = False,
-
-    dtmodel = 300, # model timestep
-
-    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk4)
+    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
     upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
 
-    upwind_adj = None, # idem but for the adjoint loop
+    advect_pv = True,
 
-    Reynolds = False, # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
+    advect_tracer = False, # Whether or not to advect tracers. If True, need to add tracer variables (e.g. SST) in *name_var*
+
+    dtmodel = 300, # model timestep
+
+    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk2,rk4)
 
     c0 = 2.7, # If not None, fixed value for phase velocity 
 
@@ -376,17 +370,27 @@ MOD_QG1L_JAX_FULL = dict(
 
     name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
 
-    cmin = None,
+    cmin = None, # Minimum value of phase velocity to consider
 
-    cmax = None,
+    cmax = None, # Maximum value of phase velocity to consider
 
-    only_diffusion = False, # If True, use only diffusion in the QG propagation
+    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
 
-    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
+    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
 
-    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
+    Kdiffus = None,
 
-    g = 9.81 
+    Kdiffus_trac = None,
+
+    bc_trac = 'OBC', # Either OBC or fixed
+
+    forcing_tracer_from_bc = False, # Whether to use BC fields to force tracer advection,
+
+    split_in_bins = False, # Whether to split the spatial domain in bins, each of them being associated with constant c & f
+
+    lenght_bins = 1000, # Length of one spatial bin (in km). 
+
+    facbin = 1
 
 )
 
@@ -563,6 +567,22 @@ OBSOP_INTERP_L3 = dict(
 
 )
 
+OBSOP_INTERP_L3_JAX = dict(
+
+    name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+    write_op = False, # Write operator data to *path_save*
+
+    path_save = None, # Directory where to save observational operator
+
+    compute_op = True, # Force computing H 
+
+    Npix = 4, # Number of pixels to perform projection y=Hx
+
+    mask_borders = False,
+
+)
+
 OBSOP_INTERP_L3_GEOCUR = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
@@ -650,6 +670,8 @@ INV_BFN = dict(
 INV_4DVAR = dict(
 
     compute_test = False, # TLM, ADJ & GRAD tests
+
+    JAX_mem_fraction = None,
 
     path_init_4Dvar = None, # To restart the minimization process from a specified control vector
 
@@ -848,7 +870,7 @@ INV_MOI = dict(
 
 NAME_BASIS = None
 
-# Balanced Motions
+# Balanced Motions 
 BASIS_BM = dict(
 
     name_mod_var = None, # Name of the related model variable 
@@ -899,6 +921,33 @@ BASIS_BM = dict(
 
 )
 
+
+BASIS_BM_INIT = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+
+    facns = 1., #factor for wavelet spacing in space
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    lmeso = 300, # Largest mesoscale wavelenght 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    anomaly = False, # Use init state from BC as background
+
+)
+
 BASIS_CURRENT = dict(
 
     mode = 'geo', # 'geo' or 'ageo'
@@ -946,6 +995,33 @@ BASIS_CURRENT = dict(
     depth1 = 0.,
 
     depth2 = 30.,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
+# Balanced Motions 
+BASIS_WAVELET3D = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+
+    facnst = 1., #factor for wavelet spacing in space and time 
+
+    npsp = 3.5, # Defines the wavelet shape, both in space and time 
+
+    facpsp = 1.5, # factor to fix df between wavelets, both in space and time 
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    tmin = 2, # minimum time of decorrelation 
+
+    tmax = 20., # maximum time of decorrelation 
+
+    sigma_Q = 1e-1, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
@@ -1132,6 +1208,49 @@ BASIS_BMaux = dict(
     var_background = None # name of the variable of the basis vector
 
 )
+
+BASIS_BMaux_JAX = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    facns = 1., #factor for wavelet spacing in space
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    file_aux = '', # Name of auxilliary file in which are stored the std and tdec for each locations at different wavelengths.
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    depth1 = 0.,
+
+    depth2 = 30.,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
 
 # Large scales 
 BASIS_LS = dict(
