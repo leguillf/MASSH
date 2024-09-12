@@ -262,7 +262,11 @@ class State:
             mask = var[0,:,:]
         
         # Interpolate to state grid
-        x_source_axis = pyinterp.Axis(lon, is_circle=False)
+        if self.lon_unit=='-180_180':
+            is_circle = True
+        else:
+            is_circle = False
+        x_source_axis = pyinterp.Axis(lon, is_circle=is_circle)
         y_source_axis = pyinterp.Axis(lat)
         x_target = self.lon.T
         y_target = self.lat.T

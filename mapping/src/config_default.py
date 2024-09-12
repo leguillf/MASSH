@@ -206,6 +206,8 @@ OBS_SSH_SWATH = dict(
     
     name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH)
     
+    subsampling = None,
+    
     synthetic_noise = None, # Std of synthetic noise (std in meters) to artificially add to the data
 
     sigma_noise = None, # Value of (constant) measurement error 

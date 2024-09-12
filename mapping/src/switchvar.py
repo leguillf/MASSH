@@ -95,7 +95,7 @@ def ssh2rv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81,norm=False):
     return rv
 
 
-def uv2rv(UV, State=None, lon=None, lat=None, xac=None):
+def uv2rv(UV, State=None, lon=None, lat=None, xac=None,norm=False):
     # if lon and lat are provided, we compute grid spacing. 
     # Otherwise, state grid will be used
     try:
@@ -122,7 +122,11 @@ def uv2rv(UV, State=None, lon=None, lat=None, xac=None):
 
     rv = np.zeros_like(u)
     
-    rv = np.gradient(v, _dx, axis=1) - np.gradient(u, _dy, axis=0)
+    rv = np.gradient(v, axis=1)/_dx - np.gradient(u, axis=0)/_dy
+    
+    if norm:
+        f = 4*np.pi/86164*np.sin(lat*np.pi/180)
+        rv /= f
 
     if xac is not None:
         rv = _masked_edge(rv,xac)

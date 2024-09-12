@@ -256,7 +256,7 @@ class Model_diffusion(M):
             State.setvar(var1, self.name_var[name])
         
         # Boundary conditions
-        self._apply_bc(State,t,t+nstep*self.dt)
+        #self._apply_bc(State,t,t+nstep*self.dt)
 
         
     def step_tgl(self,dState,State,nstep=1,t=None):
@@ -661,7 +661,15 @@ class Model_qg1l_jax(M):
         if config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
 
             ds = xr.open_dataset(config.MOD.filec_aux)
-            
+            name_lon = config.MOD.name_var_c['lon']
+            lon = ds[name_lon]
+            # Convert longitude 
+            if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+                ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
+            elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+                ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
+            ds = ds.sortby(name_lon)    
+
             self.c = grid.interp2d(ds,
                                    config.MOD.name_var_c,
                                    State.lon,

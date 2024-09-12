@@ -154,15 +154,17 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         Subfunction handling observations generated from altimetric observations
         
     """
-
+    
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
     ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
 
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
-        ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, ds[obs_attr.name_lon].data % 360))})
+        ds[obs_attr.name_lon].data = ds[obs_attr.name_lon].data % 360
     elif np.sign(ds[obs_attr.name_lon].data.min())>=0 and lon_unit=='-180_180':
-        ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
+        ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
+        #ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
+
 
     
     # Select sub area
@@ -186,6 +188,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     # Time loop
     count = 0
     for dt_curr in dt_list:
+    
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
 
@@ -198,13 +201,13 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
             except:
                 print(dt_curr,': Warning: impossible to select data for this time')
                 continue
-        
+
 
         lon = _ds[obs_attr.name_lon].values
         lat = _ds[obs_attr.name_lat].values
-        
+
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
-        
+
         if is_obs:
             # Save the selected dataset in a new nc file
             varobs = {}
@@ -223,12 +226,56 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     varobs[name].data = varobs[name].data + np.random.normal(0,obs_attr.synthetic_noise,varobs[name].size).reshape(varobs[name].shape) 
                 # Remove high values
                 if 'varmax' in obs_attr and obs_attr.varmax is not None:
-                    varobs[name][(np.abs(varobs[name])>obs_attr.varmax).compute()] = np.nan
+                    varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+                # Subsampling
+                if obs_attr.subsampling is not None:
+                    d = {}
+                    for dim in varobs[name].dims:
+                        d[dim] = obs_attr.subsampling
+                    varobs[name] = varobs[name].coarsen(d,boundary='trim').mean()
                 # Error
                 if finterperr is not None:
                     err_on_obs = finterperr((lon,lat))
                     varobs[name + '_err'] = varobs[name].copy()
                     varobs[name + '_err'].data = err_on_obs
+
+            # Build netcdf
+            coords = {}
+            name_coords = [obs_attr.name_time,obs_attr.name_lon,obs_attr.name_lat]
+            if obs_attr.super=='OBS_SSH_SWATH' and obs_attr.name_xac is not None:
+                name_coords.append(obs_attr.name_xac)
+            for name in name_coords:
+                if obs_attr.subsampling is not None:
+                    d = {}
+                    for dim in _ds[name].dims:
+                        d[dim] = obs_attr.subsampling
+                    coords[name] = _ds[name].coarsen(d,boundary='trim').mean()
+                else:
+                    coords[name] = _ds[name]
+            dsout = xr.Dataset(varobs,
+                                coords=coords
+                                )
+
+            # Write netcdf
+            date = dt_curr.strftime('%Y%m%d_%Hh%M')
+            path = f"{out_path}/{out_name}_{obs_name}_{'_'.join(obs_attr.name_var)}_{date}"
+            if finterpmdt is not None:
+                if obs_attr.add_mdt:
+                    sign = 1
+                else:
+                    sign = -1
+                varobs[name].data = varobs[name].data + sign*mdt_on_obs
+            # Add synthetic noise to the data
+            if 'synthetic_noise' in obs_attr and obs_attr.synthetic_noise is not None:
+                varobs[name].data = varobs[name].data + np.random.normal(0,obs_attr.synthetic_noise,varobs[name].size).reshape(varobs[name].shape) 
+            # Remove high values
+            if 'varmax' in obs_attr and obs_attr.varmax is not None:
+                varobs[name][(np.abs(varobs[name])>obs_attr.varmax).compute()] = np.nan
+            # Error
+            if finterperr is not None:
+                err_on_obs = finterperr((lon,lat))
+                varobs[name + '_err'] = varobs[name].copy()
+                varobs[name + '_err'].data = err_on_obs
                 
             # Build netcdf
             coords = {obs_attr.name_time:_ds[obs_attr.name_time].values}

@@ -14,12 +14,15 @@ import matplotlib.pylab as plt
 from scipy.interpolate import griddata
 from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
+from scipy.spatial import distance_matrix, cKDTree
 import pandas as pd
 from jax.experimental import sparse
 import jax.numpy as jnp 
 from jax import jit
 import jax
 jax.config.update("jax_enable_x64", True)
+
+
 
 def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
     """
@@ -789,7 +792,7 @@ class Obsop_interp_l4(Obsop_interp):
                                                   dict_obs[t_obs[ind_obs]]['attributes']):
                         
                         # Check if this observation class is wanted
-                        if sat_info.super!='OBS_L4':
+                        if sat_info.super not in ['OBS_L4', 'OBS_SSH_SWATH']:
                             continue
                         if config.OBSOP.name_obs is None or (config.OBSOP.name_obs is not None and obs_name in config.OBSOP.name_obs):
                             if obs_name not in self.name_obs:
@@ -804,6 +807,10 @@ class Obsop_interp_l4(Obsop_interp):
     
         # For grid interpolation:
         self.interp_method = config.OBSOP.interp_method
+        self.dist_min = .5*np.sqrt(State.dx**2+State.dy**2)*1e-3 # Minimum distance to consider an observation inside a model pixel
+
+        self.DX = State.DX
+        self.DY = State.DY
 
         self.DX = State.DX
         self.DY = State.DY
@@ -836,12 +843,14 @@ class Obsop_interp_l4(Obsop_interp):
             lat_obs = {}
             var_obs = {}
             err_obs = {}
+            type_obs = {}
 
             for sat_info,obs_file in zip(sat_info_list,obs_file_list):
 
-                if sat_info.super!='OBS_L4':
+                # Check if this observation class is wanted
+                if sat_info.super not in ['OBS_L4', 'OBS_SSH_SWATH']:
                     continue
-
+                
                 ####################
                 # Merge observations
                 ####################

@@ -1641,21 +1641,39 @@ class Diag_ose():
         self.name_ref_lon = config.DIAG.name_ref_lon
         self.name_ref_lat = config.DIAG.name_ref_lat
         self.name_ref_var = config.DIAG.name_ref_var
+
+        def preprocess(ds):
+            name_var = [self.name_ref_time, self.name_ref_lon, self.name_ref_lat, self.name_ref_var]
+            ds = ds[name_var]
+            return ds
+        
         if type(config.DIAG.name_ref) is not list:
             config.DIAG.name_ref = [config.DIAG.name_ref]
         ref = []
         delta_x = []
         for name_ref in config.DIAG.name_ref:
-            _ref = xr.open_mfdataset(name_ref, **config.DIAG.options_ref, preprocess=lambda ds: ds[[self.name_ref_var]])
+            try:
+                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
+            except:
+                files = glob.glob(name_ref)
+                # Get time dimension to concatenate
+                _ds0 = xr.open_dataset(files[0])
+                name_time_dim = _ds0[self.name_ref_time].dims[0]
+                _ds0.close()
+                # Open nested files
+                _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
+                
             if np.sign(_ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].data % 360))})
+                _ref = _ref.sortby(self.name_ref_lon)
             elif np.sign(_ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, (_ref[self.name_ref_lon].data + 180) % 360 - 180))})
+                _ref = _ref.sortby(self.name_ref_lon)
             _ref = _ref.swap_dims({_ref[self.name_ref_time].dims[0]:self.name_ref_time})
             lon_ref = _ref[self.name_ref_lon] 
             lat_ref = _ref[self.name_ref_lat]
-            _ref = _ref.where(((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max)).compute(), drop=True)
-            _ref = _ref.where(((lon_ref >= self.lon_min) & (lon_ref <= self.lon_max)).compute(), drop=True)
+            _ref = _ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max), drop=True)
+            _ref = _ref.where((lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
             try:
                 _ref = _ref.sel(
                     {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
@@ -1673,8 +1691,7 @@ class Diag_ose():
             delta_x.append(0.001*np.median(pyinterp.geodetic.coordinate_distances(_lon[:-1],
                                                                 _lat[:-1],
                                                                 _lon[1:],
-                                                                _lat[1:]
-                                                                )))
+                                                                _lat[1:])))
 
             _ref.close()
 
@@ -1683,11 +1700,12 @@ class Diag_ose():
                 finterpmdt = read_auxdata(config.DIAG.path_mdt,config.DIAG.name_var_mdt,State.lon_unit)
                 mdt_on_ref = finterpmdt((_ref[self.name_ref_lon] , _ref[self.name_ref_lat]))
                 _ref[self.name_ref_var].data += mdt_on_ref
-            
+
             # Append to list
             ref.append(_ref[self.name_ref_var].load())
-            self.ref = ref
-            self.delta_x = delta_x
+        self.ref = ref
+        self.delta_x = delta_x
+
                                       
         # Experimental data
         self.geo_grid = State.geo_grid
@@ -1723,7 +1741,7 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lon = config.DIAG.name_bas_lon
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
-            bas = xr.open_mfdataset(config.DIAG.name_bas, preprocess=lambda ds: ds[[self.name_bas_var]])[self.name_bas_var]
+            bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var]
             if np.sign(bas[self.name_bas_lon].data.min())==-1 and State.lon_unit=='0_360':
                 bas = bas.assign_coords({self.name_bas_lon:((bas[self.name_bas_lon].dims, bas[self.name_bas_lon].data % 360))})
             elif np.sign(bas[self.name_bas_lon].data.min())>=0 and State.lon_unit=='-180_180':
@@ -1736,8 +1754,8 @@ That could be due to non regular grid or bad written netcdf file')
             try:
                 self.bas = self.bas.sel(
                     {self.name_bas_lon:slice(self.lon_min,self.lon_max),
-                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}.load()
-                )
+                    self.name_bas_lat:slice(self.lat_min,self.lat_max)}
+                ).load()
             except:
                 print('Warning: unable to select study region in the baseline fields.')
             bas.close()
@@ -1803,7 +1821,7 @@ That could be due to non regular grid or bad written netcdf file')
 
             # Save to dataset
             exp_regridded.append( xr.DataArray(
-                name=self.name_exp_var,
+                name=var.name,
                 data=var_interp,
                 coords={self.name_ref_time: (_ref[self.name_ref_time].dims, _ref[self.name_ref_time].values),
                         self.name_ref_lon: (_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].values), 
@@ -1848,6 +1866,7 @@ That could be due to non regular grid or bad written netcdf file')
 
         # Save to dataset
         var_regridded = xr.DataArray(
+            name=var.name,
             data=var_regridded,
             coords={self.name_exp_time: time,
                     self.name_exp_lon: lon1d, 
@@ -1887,7 +1906,7 @@ That could be due to non regular grid or bad written netcdf file')
         var_alongtrack = _ref[self.name_ref_var].values
         var_exp_interp = _exp[self.name_exp_var].values
         if self.compare_to_baseline:
-            var_bas_interp = _bas[self.name_exp_var].values
+            var_bas_interp = _bas[self.name_bas_var].values
 
 
         ##########################
@@ -2186,7 +2205,7 @@ That could be due to non regular grid or bad written netcdf file')
                 ax3.set_title('baseline')
                 ax2.set_title('experiment')
                 
-                im = ax4.pcolormesh(binning.x, binning.y, 100*(rmse_xy_exp-rmse_xy_bas)/rmse_xy_bas,vmin=-50,vmax=50,cmap='RdBu_r')
+                im = ax4.pcolormesh(binning.x, binning.y, 100*(rmse_xy_exp**2-rmse_xy_bas**2)/rmse_xy_bas**2,vmin=-50,vmax=50,cmap='RdBu_r')
                 ax4.set_title('Improvement experiment/baseline')
                 plt.colorbar(im,ax=ax4)
             else:
@@ -2512,7 +2531,7 @@ That could be due to non regular grid or bad written netcdf file')
 
         return list_lon_segment, list_lat_segment, list_ssh_alongtrack_segment, list_ssh_map_interp_segment, npt 
         
-    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral',delete_frames=False):
         
         # For memory leak when saving multiple png files...
         import matplotlib
@@ -2619,7 +2638,8 @@ That could be due to non regular grid or bad written netcdf file')
         _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
 
         # Delete frames
-        os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+        if delete_frames:
+            os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
 
         # Display movie
         if Display:
