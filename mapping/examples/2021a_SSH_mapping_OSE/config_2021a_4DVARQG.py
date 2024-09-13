@@ -6,7 +6,7 @@ Created on Wed Jan  6 19:20:42 2021
 @author: leguillou
 """
 
-name_experiment = '2021a_4DVARQG_5km'
+name_experiment = '2021a_4DVARQG'
 
 #################################################################################################################################
 # Global libraries     
@@ -29,9 +29,9 @@ EXP = dict(
 
     tmp_DA_path = f"scratch/{name_experiment}", # temporary data assimilation directory path,
 
-    init_date = datetime(2017,7,1,0), # initial date (yyyy,mm,dd,hh) 
+    init_date = datetime(2017,10,1,0), # initial date (yyyy,mm,dd,hh) 
 
-    final_date = datetime(2017,12,31,0),  # final date (yyyy,mm,dd,hh) 
+    final_date = datetime(2017,12,1,0),  # final date (yyyy,mm,dd,hh) 
 
     assimilation_time_step = timedelta(hours=6),  
 
@@ -48,17 +48,19 @@ NAME_GRID = 'myGRID'
 
 myGRID = dict(
 
-    super = 'GRID_CAR',
+    super = 'GRID_GEO',
 
-    lon_min = 295examples/2021a_SSH_mapping_OSE/config_2021a_4DVARQG.py,                                        # domain min longitude
+    lon_min = 295.25,                                        # domain min longitude
 
-    lon_max = 305,                                        # domain max longitude
+    lon_max = 304.75,                                        # domain max longitude
 
-    lat_min = 33,                                         # domain min latitude
+    lat_min = 33.25,                                         # domain min latitude
 
-    lat_max = 43,                                         # domain max latitude
+    lat_max = 42.75,                                         # domain max latitude
 
-    dx = 5.,                                              # grid spacinng in km
+    dlon = 1/10.,                                              # grid spacinng in km
+
+    dlat = 1/10.,                                              # grid spacinng in km
 
 )
 
@@ -74,11 +76,13 @@ myMOD = dict(
 
     name_var = {'SSH':'ssh'},
 
-    dtmodel = 1200, # model timestep
+    dtmodel = 900, # model timestep
 
     time_scheme = 'rk2',
 
-    c0 = 2.7,
+    filec_aux = '../../aux/aux_first_baroclinic_speed.nc',
+
+    name_var_c = {'lon':'lon','lat':'lat','var':'c1'},
 
     init_from_bc = True
     
@@ -114,7 +118,7 @@ NAME_OBSOP = 'myOBSOP'
 
 myOBSOP = dict(
 
-    super = 'OBSOP_INTERP',
+    super = 'OBSOP_INTERP_L3',
 
     path_save = None, # Directory where to save observational operator
 
@@ -132,43 +136,33 @@ NAME_BASIS = 'myBASIS'
 
 myBASIS = dict(
 
-    super = 'BASIS_BM',
+    super = 'BASIS_BMaux',
 
-    flux = False,
+    name_mod_var = 'ssh', # Name of the related model variable 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
-    wavelet_init = False, # Estimate the initial state 
+    facns = 1., #factor for wavelet spacing in space
 
-    name_mod_var = 'ssh',
+    facnlt = 2., #factor for wavelet spacing in time
 
-    facns = 1., #factor for wavelet spacing= space
+    npsp = 3.5, # Defines the wavelet shape
 
-    facnlt = 2., #factor for wavelet spacing= time
+    facpsp = 1.5, # factor to fix df between wavelets
 
-    npsp= 3.5, # Defines the wavelet shape
+    file_aux = '../../aux/aux_reduced_basis_BM.nc', # Name of auxilliary file in which are stored the std and tdec for each locations at different wavelengths.
 
-    facpsp= 1.5, # factor to fix df between wavelets
+    lmin = 80, # minimal wavelength (in km)
 
-    lmin= 80, # minimal wavelength (in km)
+    lmax = 900., # maximal wavelength (in km)
 
-    lmax= 970., # maximal wavelength (in km)
+    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
 
-    lmeso = 300, # Largest mesoscale wavelenght 
-
-    tmeso = 10, # Largest mesoscale time of decorrelation 
-
-    sloptdec = -.5, # Slope such as tdec = lambda^slope where lamda is the wavelength
-
-    factdec = .5, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 0., # minimum time of decorrelation 
+    tdecmin = 2., # minimum time of decorrelation 
 
     tdecmax = 20., # maximum time of decorrelation 
 
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    Qmax = .01 , # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
-
-    slopQ = -2 # Slope such as Q = lambda^slope where lamda is the wavelength
+    facQ = 1, # factor to be multiplied to the estimated Q
 
 )
 
@@ -186,7 +180,7 @@ myINV = dict(
 
     gtol = 1e-3, # Gradient norm must be less than gtol before successful termination.
 
-    maxiter = 1000, # Maximal number of iterations for the minimization process
+    maxiter = 500, # Maximal number of iterations for the minimization process
 
     opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
 
@@ -194,7 +188,7 @@ myINV = dict(
 
     timestep_checkpoint = timedelta(hours=6), #  timesteps separating two consecutive analysis 
 
-    sigma_R = 1e-2, # Observational standard deviation
+    sigma_R = 3e-2, # Observational standard deviation
 
     prec = True, # preconditoning
  
@@ -349,10 +343,6 @@ myDIAG = dict(
 
     dir_output = None,
 
-    time_min = datetime(2017,10,15,0),
-
-    time_max = datetime(2017,12,15,0),
-
     name_ref = 'data/dt_gulfstream_c2_phy_l3_20161201-20180131_285-315_23-53.nc',
 
     name_ref_time = 'time',
@@ -376,6 +366,18 @@ myDIAG = dict(
     name_var_mdt = {'lon':'longitude','lat':'latitude','mdt':'mdt'},
 
     name_exp_var = 'ssh',
+
+    compare_to_baseline = True,
+
+    name_bas = 'data/OSE_ssh_mapping_DUACS.nc',
+
+    name_bas_time = 'time',
+
+    name_bas_lon = 'lon',
+
+    name_bas_lat = 'lat',
+
+    name_bas_var = 'ssh',
 
 
 )
