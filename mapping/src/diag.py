@@ -1653,7 +1653,7 @@ class Diag_ose():
         delta_x = []
         for name_ref in config.DIAG.name_ref:
             try:
-                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
+                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal').load()
             except:
                 files = glob.glob(name_ref)
                 # Get time dimension to concatenate
@@ -1661,7 +1661,7 @@ class Diag_ose():
                 name_time_dim = _ds0[self.name_ref_time].dims[0]
                 _ds0.close()
                 # Open nested files
-                _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
+                _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal').load()
                 
             if np.sign(_ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].data % 360))})
@@ -1702,7 +1702,7 @@ class Diag_ose():
                 _ref[self.name_ref_var].data += mdt_on_ref
 
             # Append to list
-            ref.append(_ref[self.name_ref_var].load())
+            ref.append(_ref[self.name_ref_var])
         self.ref = ref
         self.delta_x = delta_x
 
