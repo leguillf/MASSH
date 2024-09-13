@@ -37,7 +37,7 @@ EXP = dict(
 
     saveoutput_time_step = timedelta(hours=6),  # time step at which the states are saved 
 
-    flag_plot = 1,
+    flag_plot = 0,
 
 )
     
