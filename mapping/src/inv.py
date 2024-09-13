@@ -47,10 +47,6 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
     
     elif config.INV.super=='INV_4DVAR_PARALLEL':
         return Inv_4Dvar_parallel(config, State=State)
-    
-    elif config.INV.super=='INV_MOI':
-        return Inv_moi(config, State, dict_obs)
-    
     else:
         sys.exit(config.INV.super + ' not implemented yet')
         
@@ -105,7 +101,6 @@ def Inv_forward(config,State,Model,Bc=None):
     State.plot(title='End of forward integration')
         
     return
-
        
 def Inv_oi(config,State,dict_obs):
     
@@ -171,8 +166,7 @@ def Inv_oi(config,State,dict_obs):
         date = config.EXP.init_date + timedelta(days=t)
         State.save_output(date)
 
-    return
-    
+    return 
 
 def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
     """
@@ -511,7 +505,6 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
     print()
 
     return
-
 
 def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
 
@@ -956,249 +949,3 @@ def Inv_4Dvar_parallel(config, State=None) :
             date += config.EXP.saveoutput_time_step
                     
     return 
-
-
-def Inv_moi(config,State,dict_obs=None):
-    
-    
-    if config.INV.dir is None:
-        dir_moi = os.path.realpath(
-            os.path.join(os.path.dirname(os.path.realpath(__file__)),'moi'))
-    else:
-        dir_moi = config.INV.dir  
-    SourceFileLoader("sparse_inversion",dir_moi + "/sparse_inversion.py").load_module() 
-    SourceFileLoader("allcomps",dir_moi + "/allcomps.py").load_module() 
-    SourceFileLoader("tools",dir_moi + "/tools.py").load_module() 
-    SourceFileLoader("rw",dir_moi + "/rw.py").load_module() 
-    SourceFileLoader("comp_iw",dir_moi + "/comp_iw.py").load_module() 
-    moi = SourceFileLoader("miost",dir_moi + "/miost.py").load_module() 
-    grid_moi = SourceFileLoader("miost",dir_moi + "/grid.py").load_module()
-    comp_geo3 = SourceFileLoader("miost",dir_moi + "/comp_geo3.py").load_module()    
-    obs = SourceFileLoader("miost",dir_moi + "/obs.py").load_module()    
-    
-    
-    # Save grid 
-    if config.INV.path_mdt is not None and os.path.exists(config.INV.path_mdt):                      
-        ds = xr.open_dataset(config.INV.path_mdt).squeeze()
-        
-        mdt = grid.interp2d(ds,
-                            config.INV.name_var_mdt,
-                            State.lon,
-                            State.lat)
-        flag_mdt = True
-    else:
-        mdt = np.zeros_like(State.lon)
-        flag_mdt = False
-    grd = xr.Dataset({'lon':(('lon',),State.lon[State.ny//2,:]),
-                      'lat':(('lat',),State.lat[:,State.nx//2]),
-                      'mdt':(('lat','lon'),mdt)})
-    name_grd = os.path.join(config.EXP.tmp_DA_path,'grd.nc')
-    grd.to_netcdf(name_grd)
-    
-    dlon =  (State.lon[:,1:] - State.lon[:,:-1]).max()
-    dlat =  (State.lat[1:,:] - State.lat[:-1,:]).max()
-    
-     # Flag initialization
-    moi_first_window = True
-    moi_last_window = False
-    
-    # MOI middle date initialization
-    middle_moi_date = config.EXP.init_date
-
-    # Loop on variables to map
-    for name in config.INV.name_var:
-
-        print(f'Mapping {name}...')
-
-        # Initialization (normally this step is done in mod.py, but here no Model object is provided)
-        State.var[config.INV.name_var[name]] = np.zeros((State.ny,State.nx))
-    
-        # Main time loop
-        while (middle_moi_date <= config.EXP.final_date) and not moi_last_window :
-            time0 = datetime.now()
-            # MIOST time period
-            init_moi_date = max(config.EXP.init_date, middle_moi_date - config.INV.window_size/2)
-            init_moi_date += timedelta(seconds=(init_moi_date - config.EXP.init_date).total_seconds()\
-                            / config.EXP.saveoutput_time_step.total_seconds()%1)
-            middle_moi_date = max(middle_moi_date, config.EXP.init_date + config.INV.window_size/2)
-            if ((middle_moi_date + config.INV.window_size/2) >= config.EXP.final_date):
-                moi_last_window = True
-                final_moi_date = config.EXP.final_date
-            else:
-                final_moi_date = init_moi_date + config.INV.window_size
-            
-                
-            # CONFIG MIOST
-            PHYS_COMP = []
-            if config.INV.set_geo3ss6d:
-                PHYS_COMP.append(
-                    comp_geo3.Comp_geo3ss6d(
-                        facns= 1., #factor for wavelet spacing= space
-                        facnlt= 2.,
-                        npsp= 3.5, # Defines the wavelet shape
-                        facpsp= 1.5, #1.5 # factor to fix df between wavelets
-                        lmin= config.INV.lmin, #
-                        lmax= config.INV.lmax,
-                        cutRo= 1.6,
-                        factdec= 15,
-                        tdecmin= config.INV.tdecmin, # !!!
-                        tdecmax= config.INV.tdecmax,
-                        tssr= 0.5,
-                        facRo= 8.,
-                        Romax= 150.,
-                        facQ= config.INV.facQ, # TO INCREASE ENERGY
-                        depth1= 0.,
-                        depth2= 30.,
-                        distortion_eq= 2.,
-                        lat_distortion_eq= 5.,
-                        distortion_eq_law= 2.,
-                        file_aux= config.INV.file_aux,
-                        filec_aux= config.INV.filec_aux,
-                        write= True,
-                        Hvarname= 'Hss')
-                )
-            
-            if config.INV.set_geo3ls:
-                PHYS_COMP.append(
-                    comp_geo3.Comp_geo3ls(
-                        facnls= 3., #factor for large-scale wavelet spacing
-                        facnlt= 3.,
-                        tdec_lw= 25.,
-                        std_lw= 0.04,
-                        lambda_lw= 970, #768.05127036
-                        file_aux= config.INV.file_aux,
-                        filec_aux= config.INV.filec_aux,
-                        write= True,
-                        Hvarname= 'Hls')
-                )
-
-            config_moi = dict(
-            
-                RUN_NAME = '', # Set automatically with filename
-                PATH = dict(OUTPUT= config.EXP.tmp_DA_path),
-                
-                ALGO = dict(
-                    USE_MPI= False,
-                    store_gtranspose= False, # only if USE_MPI
-                    INV_METHOD= 'PCG_INV',
-                    NITER= 800  , # Maximum number of iterations in the variational loop
-                    EPSPILLON_REST= 1.e-7,
-                    gsize_max = 5000000000 ,
-                    float_type= 'f8',
-                    int_type= 'i8'),
-                
-                GRID = grid_moi.Grid_msit(
-                    TEMPLATE_FILE= name_grd,
-                    LON_NAME= 'lon',
-                    LAT_NAME= 'lat',
-                    MDT_NAME= 'mdt',
-                    FLAG_MDT= flag_mdt,
-                    DATE_MIN= init_moi_date.strftime("%Y-%m-%d"),
-                    DATE_MAX= final_moi_date.strftime("%Y-%m-%d"),
-                    TIME_STEP= config.EXP.saveoutput_time_step.total_seconds()/(24*3600),
-                    NSTEPS_NC= int((24*3600)//config.EXP.saveoutput_time_step.total_seconds()),
-                    TIME_STEP_LF= 10000., # For internal tides with seasons
-                    LON_MIN= State.lon.min()-dlon,
-                    LON_MAX= State.lon.max()+dlon,
-                    LAT_MIN= State.lat.min()-dlat,
-                    LAT_MAX= State.lat.max()+dlat,
-                    tref_iw= 15340.),
-                
-                PHYS_COMP=PHYS_COMP,
-                
-                OBS_COMP=[
-                
-                    ],
-                
-                
-                OBS=[
-                
-                    obs.MASSH(
-                        name=config.EXP.name_experiment,
-                        dict_obs= dict_obs,
-                        name_var=name,
-                        noise=config.INV.sigma_R
-                        ),
-                    
-                        ]
-                
-                )
-            
-            # RUN MOI
-            moi.run_miost(config_moi)
-            
-            # READ OUTPUTS AND REFORMAT
-            ds = xr.open_mfdataset(os.path.join(config.EXP.tmp_DA_path,'_ms_analysis*.nc'),
-                                combine='by_coords')
-            if config.INV.set_geo3ss6d and config.INV.set_geo3ls:              
-                ssh = ds['Hss'] + ds['Hls']
-            elif config.INV.set_geo3ss6d:
-                ssh = ds['Hss']
-            else:
-                ssh = ds['Hls']
-                
-            # SAVE OUTPUTS 
-            # Set the saving temporal window
-            if moi_first_window:
-                write_date_min = init_moi_date
-                write_date_max = init_moi_date + config.INV.window_size/2 + config.INV.window_output/2
-            elif moi_last_window:
-                write_date_min = middle_moi_date - config.INV.window_output/2
-                write_date_max = final_moi_date
-            else:
-                write_date_min = middle_moi_date - config.INV.window_output/2
-                write_date_max = middle_moi_date + config.INV.window_output/2
-                
-            State_tmp = State.copy(free=True)
-            date = init_moi_date
-            i = 0
-            while date<=final_moi_date:
-                if (date >= write_date_min) & (date <= write_date_max) :
-                    
-                    if config.INV.window_overlap and not moi_first_window and\
-                            date<=middle_moi_date:
-                        # weight coefficients
-                        W1 = max((middle_moi_date - date)
-                                / (config.INV.window_output/2), 0)
-                        W2 = min((date - write_date_min)
-                                / (config.INV.window_output/2), 1)
-                        # Read previous output at this timestamp
-                        ds1 = State.load_output(date)
-                        ssh1 = ds1[config.INV.name_var[name]].data
-                        ds1.close()
-                        del ds1
-                        # Update state
-                        State_tmp.setvar(W1*ssh1 + W2*ssh[i].values + mdt, config.INV.name_var[name])
-                    else:
-                        State_tmp.setvar(ssh[i].values + mdt, config.INV.name_var[name])
-                        
-                    # Save output
-                    if config.EXP.saveoutputs:
-                        State_tmp.save_output(date)
-                    
-                date += config.EXP.saveoutput_time_step
-                i += 1
-            
-            if config.INV.window_overlap:
-                window_lag = config.INV.window_output/2
-            else:
-                window_lag = config.INV.window_output
-
-            if moi_first_window:
-                middle_moi_date = config.EXP.init_date + config.INV.window_size/2 + window_lag
-                moi_first_window = False
-            else:
-                middle_moi_date += window_lag
-            
-            ds.close()
-            del ds
-            
-            cmd = 'rm ' + os.path.join(config.EXP.tmp_DA_path,'_ms_analysis*.nc')
-            os.system(cmd)
-            
-            time1 = datetime.now()
-            print('Loop from',init_moi_date.strftime("%Y-%m-%d"),'to',
-                final_moi_date.strftime("%Y-%m-%d : in"),time1-time0,'seconds')
-         
-
-        

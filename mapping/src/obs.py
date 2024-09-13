@@ -288,7 +288,6 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         
     print(f'--> {count} tracks selected')
     
-    
 def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, out_name, lon_unit='0_360', bbox=None ):
     
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
@@ -371,8 +370,6 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
             count +=1
     
     print(f'--> {count} fields selected')
-            
-
 
 def _new_dict_obs(dict_obs, new_dir, date_min=None, date_max=None):
     """
@@ -410,9 +407,6 @@ def _new_dict_obs(dict_obs, new_dir, date_min=None, date_max=None):
             new_dict_obs[date]['attributes'].append(Config(attributes))
             
     return new_dict_obs
-                    
-    
-
 
 def detrend_obs(dict_obs):
 
@@ -448,9 +442,7 @@ def detrend_obs(dict_obs):
             ncout.to_netcdf(obs_file)
             ncout.close()
             del ncout
-            
-            
-            
+                      
 def get_obs(dict_obs,box,time_init,name_var='SSH'):
 
         lon0 = box[0]

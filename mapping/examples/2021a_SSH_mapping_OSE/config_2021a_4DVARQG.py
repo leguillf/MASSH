@@ -37,7 +37,7 @@ EXP = dict(
 
     saveoutput_time_step = timedelta(hours=6),  # time step at which the states are saved 
 
-    flag_plot = 0,
+    flag_plot = 1,
 
 )
     
@@ -48,19 +48,19 @@ NAME_GRID = 'myGRID'
 
 myGRID = dict(
 
-    super = 'GRID_GEO',
+    super = 'GRID_CAR',
 
-    lon_min = 295.25,                                        # domain min longitude
+    lon_min = 296.,                                        # domain min longitude
 
-    lon_max = 304.75,                                        # domain max longitude
+    lon_max = 304.,                                        # domain max longitude
 
     lat_min = 33.25,                                         # domain min latitude
 
     lat_max = 42.75,                                         # domain max latitude
 
-    dlon = 1/10.,                                              # grid spacinng in km
+    dx = 10.,                                              # grid spacinng in km
 
-    dlat = 1/10.,                                              # grid spacinng in km
+    dy = 10.,                                              # grid spacinng in km
 
 )
 
