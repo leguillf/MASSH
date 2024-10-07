@@ -531,6 +531,7 @@ class Basis_bm:
         nf = len(ff)
         logging.info('spatial normalized wavelengths: %s', 1./np.exp(logff))
         logging.info('ntheta: %s', ntheta)
+        self.ntheta = ntheta
 
         # Global time window
         deltat = TIME_MAX - TIME_MIN
@@ -639,7 +640,7 @@ class Basis_bm:
         Qt = np.array([]) # Initial state      
 
         iwave = 0
-        self.iff_wavebounds = [None]*nf
+        self.iff_wavebounds = [None]*(nf+1)
         for iff in range(nf):
             self.iff_wavebounds[iff] = iwave
             _nwavei = 2*ntheta*NP[iff] # just in space
@@ -663,6 +664,9 @@ class Basis_bm:
                   f'Q={Qt[-1]:.1E}')
         
         Q = np.concatenate((Qi,Qt))
+                    
+        self.iff_wavebounds[-1] = iwave
+        
     
         # Background
         if self.path_background is not None and os.path.exists(self.path_background):
@@ -777,7 +781,10 @@ class Basis_bm:
             Nt[t] = [0,]*self.nf
 
             for iff in range(self.nf):
-                Gt[t][iff] = np.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],))
+                if self.wavelet_init : 
+                    Gt[t][iff] = np.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff]-2*self.ntheta*self.NP[iff],)) # removing the number of basis elements for initial state evaluation 
+                else :
+                    Gt[t][iff] = np.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],))
                 ind_tmp = 0
                 for it in range(len(self.enst[iff])):
                     dt = t - self.enst[iff][it]
@@ -797,9 +804,17 @@ class Basis_bm:
         """
 
         # Projection
-        phi = np.zeros(self.shape_phys).ravel()
+        phi = np.zeros(self.shape_phys).ravel() # control vector in physical space for forcing parameters 
+        phi_i = np.zeros(self.shape_phys).ravel() # control vector in physical space for initial state estimation 
         for iff in range(self.nf):
-            Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
+            if self.wavelet_init :
+                # if initial state is estimated 
+                Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]-2*self.ntheta*self.NP[iff]] # control vector in reduced space for forcing parameters 
+                Xi = X[self.iff_wavebounds[iff+1]-2*self.ntheta*self.NP[iff]:self.iff_wavebounds[iff+1]] # control vector in reduced space for initial state estimation 
+                # Computing initial state 
+                phi_i += self.Gx[iff].dot(Xi)
+            else : 
+                Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
             GtXf = self.Gt[t][iff] * Xf
             ind0 = np.nonzero(self.Gt[t][iff])[0]
             if ind0.size>0:
@@ -809,6 +824,8 @@ class Basis_bm:
 
         # Update State
         if State is not None:
+            if self.wavelet_init and t==0 : 
+                State.setvar(phi_i,self.name_mod_var)
             State.params[self.name_mod_var] = phi
         else:
             return phi
@@ -825,17 +842,73 @@ class Basis_bm:
         adX = np.zeros(self.nbasis)
         adparams = adState.params[self.name_mod_var].ravel()
         for iff in range(self.nf):
+            if t==0 and self.wavelet_init: 
+                adparams_init = adState.getvar(self.name_mod_var).ravel()
+                adXi = self.Gx[iff].T.dot(adparams_init)
+                adX[self.iff_wavebounds[iff+1]-2*self.ntheta*self.NP[iff]:self.iff_wavebounds[iff+1]] += adXi
             Gt = +self.Gt[t][iff]
             ind0 = np.nonzero(Gt)[0]
             if ind0.size>0:
                 Gt = Gt[ind0].reshape(self.Nt[t][iff],self.Nx[iff])
                 adGtXf = self.Gx[iff].T.dot(adparams)
                 adGtXf = np.repeat(adGtXf[np.newaxis,:],self.Nt[t][iff],axis=0)
-                adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][ind0] += (Gt*adGtXf).ravel()
+                if self.wavelet_init : 
+                    adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]-2*self.ntheta*self.NP[iff]][ind0] += (Gt*adGtXf).ravel()
+                else : 
+                    adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][ind0] += (Gt*adGtXf).ravel()
         
         adState.params[self.name_mod_var] *= 0.
         
         return adX
+
+
+    def test_operg(self, t, State):
+
+        """
+        Test the operg function for consistency.
+
+        This method performs a consistency check for the `operg` and `operg_transpose`
+        functions by comparing the inner products of the state vectors and their projections.
+
+        Parameters:
+        ----------
+        t : float
+            The time at which the test is performed.
+        State : object
+            The state object containing the parameters shape and information to be used for testing.
+
+        Returns:
+        -------
+        None
+
+        Notes:
+        -----
+        - The method generates random states and projections, applies the `operg` and
+        `operg_transpose` functions, and compares the inner products of the results.
+        - The ratio of the inner products is printed to verify it equals to 0..
+
+        """
+
+        State0 = State.random()
+        psi0 = np.random.random((self.nbasis,))
+
+        adState1 = State.random()
+
+        phi1 = adState1.getparams(vect=True)
+        if t==0 and self.wavelet_init : 
+            phi1 = np.concatenate((phi1,adState1.getvar("ssh_bm",vect=True)))
+
+        psi1 = self.operg_transpose(t,adState=adState1)
+        self.operg(t,psi0,State=State0)
+        phi0 = State0.getparams(vect=True)
+        if t==0 and self.wavelet_init : 
+            phi0 = np.concatenate((phi0,State0.getvar("ssh_bm",vect=True)))
+
+
+        ps1 = np.inner(psi0,psi1)
+        ps2 = np.inner(phi0,phi1)
+            
+        print(f'test G[{t}]:', ps1/ps2)
 
 
 class Basis_geocur:
