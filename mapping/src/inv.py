@@ -21,7 +21,7 @@ from . import grid
 
 
 
-def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=None, Bc=None, *args, **kwargs):
+def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=None, Bc=None, Xa_prescribed=None, ssh_truth=None, *args, **kwargs):
 
     """
     NAME
@@ -32,7 +32,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=
     """
     
     if config.INV is None:
-        return Inv_forward(config, State=State, Model=Model,Basis=Basis,X=X, Bc=Bc)
+        return Inv_forward(config, State=State, Model=Model,Basis=Basis,X=X, Bc=Bc, ssh_truth = ssh_truth)
     
     print(config.INV)
     
@@ -43,7 +43,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=
         return Inv_bfn(config, State=State, Model=Model, dict_obs=dict_obs, Bc=Bc)
     
     elif config.INV.super=='INV_4DVAR':
-        return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
+        return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc, Xa_prescribed=Xa_prescribed)
     
     elif config.INV.super=='INV_4DVAR_JAX':
         return Inv_4Dvar_jax(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
@@ -58,7 +58,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=
         sys.exit(config.INV.super + ' not implemented yet')
         
 
-def Inv_forward(config,State,Model,Basis,X,Bc):
+def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
     
     """
     NAME
@@ -74,9 +74,16 @@ def Inv_forward(config,State,Model,Basis,X,Bc):
         if Basis==None:
             sys.exit("Please prescribe Basis!")
 
-    if 'JAX' in config.MOD.super:
-        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-    
+    if config.MOD.super is None :
+        for _mod in config.MOD.keys():
+            if 'JAX' in config.MOD[_mod]:
+                os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+    else :
+        if config.MOD.super is not None and 'JAX' in config.MOD.super:
+            os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+     
+
+        
     present_date = config.EXP.init_date
     if config.EXP.saveoutputs:
         State.save_output(present_date,name_var=Model.var_to_save)
@@ -91,6 +98,11 @@ def Inv_forward(config,State,Model,Basis,X,Bc):
 
     t = 0
     Model.init(State,t)
+
+    # Calculating rmse with truth ssh - TEST for BM dev # 
+    square_diff = 0 
+    i = 1
+
     while present_date < config.EXP.final_date :
         
         State.plot(present_date)
@@ -111,11 +123,22 @@ def Inv_forward(config,State,Model,Basis,X,Bc):
         present_date += timedelta(seconds=nstep*Model.dt)
         t += nstep*Model.dt
 
+        #####################################################
+        # Calculating rmse with truth ssh - TEST for BM dev #
+        if ssh_truth is not None : 
+            square_diff += np.nansum((State.var['SSH_tot']-ssh_truth[i,:,:].values)**2)
+            i += 1 
+        #####################################################
+
         # Save
         if config.EXP.saveoutputs:
             Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
-        
-    return
+    
+    if ssh_truth is not None:
+        # Returning the  rmse with truth ssh - TEST for BM dev
+        return np.sqrt(square_diff/(i*State.nx*State.ny))
+    else : 
+        return 
 
          
 def Inv_oi(config,State,dict_obs):
@@ -524,8 +547,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
     return
 
 
-def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
-
+def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,Xa_prescribed=None) :
     
     '''
     Run a 4Dvar analysis
@@ -598,7 +620,11 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     
     # Initial Control vector 
     if config.INV.path_init_4Dvar is None:
-        Xopt = np.zeros((Xb.size,))
+        if Xa_prescribed is not None : 
+            print("Prescribed parameter vector in Xa_prescribed will be used to start the minimization.")
+            Xopt = Xa_prescribed
+        else :
+            Xopt = np.zeros((Xb.size,))
     else:
         # Read previous minimum 
         print('Read previous minimum:',config.INV.path_init_4Dvar)
@@ -639,7 +665,7 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
             ds = xr.Dataset({'res':(('x',),XX)})
             ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
             ds.close()
-                
+        
         # Minimization options
         options = {}
         if verbose:
@@ -674,8 +700,12 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
             # for param in Basis.name_params:
             #    ds["Jb_"+param]=xr.DataArray(var.Jb[param],dims=["Nj"])
             #    ds["Gb_"+param]=xr.DataArray(var.Gb[param],dims=["Ng"])
-            ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
-            ds.close()
+            try : 
+                ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
+                ds.close()
+            except Exception as e: 
+                print(f"{e} occured, failed saving minimization trajectory.")
+        
 
         Xres = res.x
     else:

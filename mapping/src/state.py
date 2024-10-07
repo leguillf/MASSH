@@ -373,6 +373,25 @@ class State:
             f'h{str(date.hour).zfill(2)}'\
             f'm{str(date.minute).zfill(2)}.nc')
         
+        # Ensure the directory exists
+        if not os.path.exists(self.path_save):
+            print(f"Directory does not exist: {self.path_save}")
+            try:
+                os.makedirs(self.path_save)
+                print(f"Created directory: {self.path_save}")
+            except Exception as e:
+                print(f"Failed to create directory: {e}")
+
+        # Delete the existing file if it exists
+        if os.path.exists(filename):
+            try:
+                os.remove(filename)
+                # print(f"Deleted existing file: {filename}")
+            except PermissionError as e:
+                print(f"Permission error when deleting the file: {e}")
+            except Exception as e:
+                print(f"Failed to delete the existing file: {e}")
+        
         coords = {}
         coords[self.name_time] = ((self.name_time), [pd.to_datetime(date)],)
 

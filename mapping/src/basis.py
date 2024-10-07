@@ -462,6 +462,7 @@ class Basis_bm:
         self.name_mod_var = config.BASIS.name_mod_var
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
+        self.wavelet_init = config.BASIS.wavelet_init
         
         # Grid params
         self.nphys= State.lon.size
@@ -523,8 +524,6 @@ class Basis_bm:
         ff = np.exp(logff)
         ff = ff[1/ff<=self.lmax]
         dff = ff[1:] - ff[:-1]
-        print(ff)
-        print(dff)
         
         # Ensemble of directions for the wavelets (2D plane)
         theta = np.linspace(0, np.pi, int(np.pi * ff[0] / dff[0] * self.facpsp))[:-1]
@@ -636,27 +635,34 @@ class Basis_bm:
                 
         # Fill the Q diagonal matrix (expected variance for each wavelet)     
          
-        Q = np.array([]) 
+        Qi = np.array([])
+        Qt = np.array([]) # Initial state      
+
         iwave = 0
-        self.iff_wavebounds = [None]*(nf+1)
+        self.iff_wavebounds = [None]*nf
         for iff in range(nf):
             self.iff_wavebounds[iff] = iwave
-            if NP[iff]>0:
-                _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
-                if 1/ff[iff]>self.lmeso:
-                    # Constant
-                    Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
-                else:
-                    # Slope
-                    Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
+            _nwavei = 2*ntheta*NP[iff] # just in space
+            _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
+            if 1/ff[iff]>self.lmeso:
+                if self.wavelet_init:
+                    Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavei,))))
+                    iwave += _nwavei
+                Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
                 iwave += _nwavet
-                if return_q:
-                    print(f'lambda={1/ff[iff]:.1E}',
-                        f'nlocs={NP[iff]:.1E}',
-                        f'tdec={tdec[iff]:.1E}',
-                        f'Q={Q[-1]:.1E}')
-        self.iff_wavebounds[-1] = iwave
+            else:
+                if self.wavelet_init:
+                    Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavei,)))) 
+                    iwave += _nwavei
+                Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
+                iwave += _nwavet
+                
+            print(f'lambda={1/ff[iff]:.1E}',
+                  f'nlocs={NP[iff]:.1E}',
+                  f'tdec={tdec[iff]:.1E}',
+                  f'Q={Qt[-1]:.1E}')
         
+        Q = np.concatenate((Qi,Qt))
     
         # Background
         if self.path_background is not None and os.path.exists(self.path_background):

@@ -1176,10 +1176,10 @@ class Model_qg1l_jax(M):
             for name in self.init_from_bc:
                 if self.init_from_bc[name] and t0 in self.bc[name]:
                     State.setvar(self.bc[name][t0], self.name_var[name])
-        elif self.init_from_bc:
+        elif self.init_from_bc: 
             for name in self.name_var: 
                 if t0 in self.bc[name]:
-                     State.setvar(self.bc[name][t0], self.name_var[name])
+                    State.setvar(self.bc[name][t0], self.name_var[name])
 
     def set_bc(self,time_bc,var_bc):
 
@@ -4080,8 +4080,24 @@ class Model_multi:
 
     def init(self,State,t0=0):
 
+        # Intialization
+        var_tot_tmp = {}
+
         for M in self.Models:
             M.init(State,t0)
+
+        ### CHANGE TO FIX : TO INIT SSH_TOT ###
+        # for M in self.Models:
+        #     M.init(State,t0)
+        #     # Add to total variables
+        #     for name in self.name_var:
+        #         if name in M.name_var:
+        #             var_tot_tmp[name] += State.var[M.name_var[name]]
+            
+        # # Update state
+        # for name in self.name_var:
+        #     State.var[self.name_var[name]] = var_tot_tmp[name]
+        
 
     def set_bc(self,time_bc,var_bc):
 

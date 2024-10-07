@@ -107,12 +107,32 @@ class Variational:
 
         # Dictionnary to save States (to avoid storing them with nc)
         self.States = {}
-        
+
+        # Computing RMSE at each iteration (for OSSE framework)
+        self.save_rmse = config.INV.save_rmse 
+        self.tmp_DA_path = config.EXP.tmp_DA_path
+        if self.save_rmse :
+            self.path_reference = config.INV.path_reference 
+            self.var_to_compare = config.INV.var_to_compare 
+            self.name_var_reference = config.INV.name_var_reference
+
+            self.ds_reference = xr.open_mfdataset(self.path_reference)
+            self.ds_reference = self.ds_reference.sel(time=slice(np.datetime64(config.EXP.init_date),np.datetime64(config.EXP.final_date)+np.timedelta64(1,"h")))
+            self.ds_reference = self.ds_reference.interp({self.name_var_reference["lon"]:State.lon[0,:],
+                                                        self.name_var_reference["lat"]:State.lat[:,0]})
+            self.n_compute_cost=0 # variable of number of cost funtion computation
+            # Dictionnary to save cross differences  
+            self.cross_diff = {}
+            for _var in self.var_to_compare: 
+                self.cross_diff[_var]=np.empty((len(self.checkpoints)-1,
+                                                self.ds_reference.dims[self.name_var_reference["lon"]],
+                                                self.ds_reference.dims[self.name_var_reference["lat"]]))
+
         # Grad test
         if config.INV.compute_test:
             print('Gradient test:')
             if self.prec:
-                X = 1e-3*(np.random.random(self.basis.nbasis)-0.5)
+                X = (np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
@@ -155,7 +175,20 @@ class Variational:
             if self.H.is_obs(timestamp):
                 misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
-                #print("Jo at "+str(timestamp)+" : ",Jo,"(",misfit.dot(self.R.inv(misfit)),")")
+                if self.save_rmse:
+                    # ds_rmse = xr.Dataset()
+                    for _var in self.var_to_compare.keys():
+                        self.cross_diff[_var][i,:,:] = (self.ds_reference[_var][t//3600,:,:]-State.var[self.var_to_compare[_var]])**2
+
+                        # _var_rmse = xr.DataArray(np.sqrt(np.mean((self.ds_reference[_var][t//3600,:,:]-State.var[self.var_to_compare[_var]])**2)), 
+                        #                          dims=('time','lon', 'lat'), 
+                        #                          coords={'time': self.ds_reference.time[0]+np.timedelta64(t//3600,'h'),
+                        #                                  'lon': self.ds_reference[self.name_var_reference["lon"]], 
+                        #                                  'lat': self.ds_reference[self.name_var_reference["lat"]]},
+                        #                          name=_var)
+                        # ds_rmse[_var]=_var_rmse
+                    
+
 
             # Measuring computation times
             #t_misfit.append(datetime.now()-t0)
@@ -215,6 +248,17 @@ class Variational:
             #             self.Jb[param].append(np.dot(X0_specific,B_specific.inv(X0_specific))) # cost of background term
             #     else:
             #         self.Jb[param].append(0)
+        
+        if self.save_rmse:
+            self.n_compute_cost+=1
+            now = datetime.now()
+            current_time = now.strftime("%Y-%m-%d_%H%M%S")
+            ds = xr.Dataset()
+            for _var in self.var_to_compare.keys():
+                ds["rmse_"+_var] = xr.DataArray([np.sqrt(np.nansum(self.cross_diff[_var])/self.cross_diff[_var].size)], 
+                                        dims=["i"], coords={"i": [self.n_compute_cost]})
+            ds.to_netcdf(os.path.join(self.tmp_DA_path,'rmse-'+current_time+'.nc'))
+            ds.close()
 
         # Measuring computation times
         #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")

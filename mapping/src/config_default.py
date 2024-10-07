@@ -705,7 +705,15 @@ INV_4DVAR = dict(
 
     anomaly_from_bc = False, # Whether to perform the minimization with anomalies from boundary condition field(s)
 
-    cost_function_coeff = 1 #coefficient multiplying the cost function (for testing)
+    cost_function_coeff = 1, #coefficient multiplying the cost function (for testing)
+
+    save_rmse = False, # if True RMSE w. reference field will be computed at each iteration and saved in the tmp_DA_path path. Useful for OSSE development framework. 
+
+    path_reference = None, # Path to reference dataset 
+
+    name_var_reference = {"lon":"","lat":""},
+
+    var_to_compare = {} # variable to compare each State object var with 
 
 )
 
@@ -903,7 +911,9 @@ BASIS_BM = dict(
 
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
-    var_background = None # name of the variable of the basis vector
+    var_background = None, # name of the variable of the basis vector
+
+    wavelet_init = False, # Estimate the initial state 
 
 )
 
