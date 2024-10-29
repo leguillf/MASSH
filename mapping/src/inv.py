@@ -21,7 +21,7 @@ from . import grid
 
 
 
-def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=None, Bc=None, Xa_prescribed=None, ssh_truth=None, *args, **kwargs):
+def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=None, Bc=None, ssh_truth=None, *args, **kwargs):
 
     """
     NAME
@@ -43,7 +43,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=
         return Inv_bfn(config, State=State, Model=Model, dict_obs=dict_obs, Bc=Bc)
     
     elif config.INV.super=='INV_4DVAR':
-        return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc, Xa_prescribed=Xa_prescribed)
+        return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc, X=X)
     
     elif config.INV.super=='INV_4DVAR_JAX':
         return Inv_4Dvar_jax(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
@@ -85,8 +85,8 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
 
         
     present_date = config.EXP.init_date
-    if config.EXP.saveoutputs:
-        State.save_output(present_date,name_var=Model.var_to_save)
+    # if config.EXP.saveoutputs:
+    #     State.save_output(present_date,name_var=Model.var_to_save)
         
     nstep = int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt)
 
@@ -103,6 +103,8 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
     square_diff = 0 
     i = 1
 
+    print(X)
+
     while present_date < config.EXP.final_date :
         
         State.plot(present_date)
@@ -113,9 +115,12 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
         if Basis!=None:
             # Reduced basis
             Basis.operg(t/3600/24,X,State=State)
-        
-        #print(State.params['itg'][0,98:102,70:130])
-        
+
+        # Save
+        if config.EXP.saveoutputs:
+
+            Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
+
         # Propagation
         Model.step(State,nstep,t=t)
 
@@ -129,11 +134,11 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
             square_diff += np.nansum((State.var['SSH_tot']-ssh_truth[i,:,:].values)**2)
             i += 1 
         #####################################################
-
-        # Save
-        if config.EXP.saveoutputs:
-            Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
     
+    #   Last timestep 
+    if config.EXP.saveoutputs:
+        Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
+
     if ssh_truth is not None:
         # Returning the  rmse with truth ssh - TEST for BM dev
         return np.sqrt(square_diff/(i*State.nx*State.ny))
@@ -547,7 +552,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
     return
 
 
-def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,Xa_prescribed=None) :
+def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,X=None) :
     
     '''
     Run a 4Dvar analysis
@@ -620,9 +625,9 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
     
     # Initial Control vector 
     if config.INV.path_init_4Dvar is None:
-        if Xa_prescribed is not None : 
-            print("Prescribed parameter vector in Xa_prescribed will be used to start the minimization.")
-            Xopt = Xa_prescribed
+        if X is not None : 
+            print("Prescribed parameter vector with X will be used to start the minimization.")
+            Xopt = X
         else :
             Xopt = np.zeros((Xb.size,))
     else:
@@ -729,35 +734,64 @@ def Inv_4Dvar(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,ver
 
     # Init
     State0 = State.copy()
-    date = config.EXP.init_date
+    present_date = config.EXP.init_date
 
-    # Forward propagation
-    while date<config.EXP.final_date:
+    nstep = int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt)
+
+    while present_date < config.EXP.final_date :
         
+        State0.plot(present_date)
+
         # current time in secondes
-        t = (date - config.EXP.init_date).total_seconds()
+        t = (present_date - config.EXP.init_date).total_seconds()
         
-        # Reduced basis
-        Basis.operg(t/3600/24,Xa,State=State0)
+        if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
+            # Reduced basis
+            Basis.operg(t/3600/24,Xa,State=State0)
 
-        # Forward
-        for j in range(nstep_check):
+        # Save
+        if config.EXP.saveoutputs:
+
+            Model.save_output(State0,present_date,name_var=Model.var_to_save,t=t)
+
+        # Propagation
+        Model.step(State0,nstep,t=t)
+
+        # Time increment
+        present_date += timedelta(seconds=nstep*Model.dt)
+        t += nstep*Model.dt
+    
+    #   Last timestep 
+    if config.EXP.saveoutputs:
+        Model.save_output(State0,present_date,name_var=Model.var_to_save,t=t)
+
+    # # Forward propagation
+    # while date<config.EXP.final_date:
+        
+    #     # current time in secondes
+    #     t = (date - config.EXP.init_date).total_seconds()
+        
+    #     # Reduced basis
+    #     Basis.operg(t/3600/24,Xa,State=State0)
+
+    #     # Forward
+    #     for j in range(nstep_check):
             
-            if (((date - config.EXP.init_date).total_seconds()
-                 /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
-                State0.plot(date)
+    #         if (((date - config.EXP.init_date).total_seconds()
+    #              /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
+    #             & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
+    #             Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+    #             State0.plot(date)
 
-            # Forward propagation
-            Model.step(t=t+j*Model.dt,State=State0,nstep=1)
-            date += timedelta(seconds=Model.dt)
+    #         # Forward propagation
+    #         Model.step(t=t+j*Model.dt,State=State0,nstep=1)
+    #         date += timedelta(seconds=Model.dt)
 
-    # Last timestep
-    if (((date - config.EXP.init_date).total_seconds()
-                 /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+    # # Last timestep
+    # if (((date - config.EXP.init_date).total_seconds()
+    #              /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
+    #             & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
+    #     Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
     
         
     del State, State0, Xa, dict_obs, B, R

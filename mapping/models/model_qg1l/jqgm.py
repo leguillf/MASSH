@@ -60,6 +60,7 @@ def inverse_elliptic_dst(f, operator_dst):
     """Inverse elliptic operator (e.g. Laplace, Helmoltz)
     using float32 discrete sine transform."""
     return dstI2D(dstI2D(f.astype(jnp.float64)) / operator_dst)
+
 @jit
 def inverse_elliptic_dst_tgl(dh0, h0):
     _, dh1 = jvp(inverse_elliptic_dst, (h0,), (dh0,))
@@ -71,7 +72,6 @@ def inverse_elliptic_dst_adj(adh0, h0):
     _, adf = vjp(inverse_elliptic_dst, h0)
 
     return adf(adh0)[0]
-
 
 class Qgm:
 
@@ -104,7 +104,6 @@ class Qgm:
             self.f = (np.nanmean(f) * np.ones((self.ny,self.nx))).astype('float64')
         else:
             self.f = (f * np.ones((self.ny,self.nx))).astype('float64')
-
 
         # Rossby radius
         if hasattr(c, "__len__"):
@@ -583,6 +582,8 @@ class Qgm:
         
         # Compute increment
         incr = self.rhs_jit(u,v,ua,va,var0,way=way)
+
+        # jax.debug.print("incr : {x}", x=incr)
         
         # Time integration 
         if self.time_scheme == 'Euler':
@@ -591,6 +592,8 @@ class Qgm:
             var1 = self.rk2_jit(var0, incr, ua, va, hb, qb, way)
         elif self.time_scheme == 'rk4':
             var1 = self.rk4_jit(var0, incr, ua, va, hb, qb, way)
+        
+        # jax.debug.print("diff var1 {x}", x=var1-var0)
 
         # Elliptical inversion 
         if len(var1.shape)==3:
@@ -650,8 +653,11 @@ class Qgm:
             c0 = c0.at[:,self.ind0].set(0)
             cb = cb.at[:,self.ind0].set(0)
         # h-->q
+
         q0 = self.h2pv_jit(h0, hb)
         qb = self.h2pv_jit(hb, hb)
+
+        # jax.debug.print("q : {x}", x=q0)
 
         # Init
         h1 = +h0
@@ -1037,6 +1043,8 @@ class Qgm_bins:
              (h[1:-1, 2:] + h[1:-1, :-2] - 2 * h[1:-1, 1:-1]) / self.dx ** 2) - \
             self.g * self.f[ib] / (self.c[ib] ** 2) * h[1:-1, 1:-1])
 
+        
+
         q = jnp.where(jnp.isnan(q),0.,q)
         q = jnp.where(self.ind12[ib], 
                       - self.g * self.f[ib] / (self.c[ib] ** 2) * hbc, q) 
@@ -1141,12 +1149,6 @@ class Qgm_bins:
             res = res.at[2:-2,2:-2].set(self._adv2_jit(up, vp, um, vm, var0))
         elif self.upwind == 3:
             res = res.at[2:-2,2:-2].set(self._adv3_jit(up, vp, um, vm, var0))
-
-        # Use first order scheme for boundary pixels
-        if self.upwind>1 and self.bc_trac=='OBC':
-            res_tmp = jnp.zeros_like(var0,dtype='float64')
-            res_tmp = res_tmp.at[1:-1, 1:-1].set(self._adv1_jit(up, vp, um, vm, var0))
-            res = jnp.where(self.ind2[ib], res_tmp, res)
         
         return res
 
@@ -1183,22 +1185,21 @@ class Qgm_bins:
         return res
 
     def _adv3(self, up, vp, um, vm, var0):
-
         """
-            3rd-order upwind scheme
+        3rd-order upwind scheme.
         """
-
         res = \
-            - up[1:-1,1:-1] * 1 / (6 * self.dx) * \
+            - up[1:-1, 1:-1] * 1 / (6 * self.dx) * \
             (2 * var0[2:-2, 3:-1] + 3 * var0[2:-2, 2:-2] - 6 * var0[2:-2, 1:-3] + var0[2:-2, :-4]) \
-            + um[1:-1,1:-1] * 1 / (6 * self.dx) * \
+            + um[1:-1, 1:-1] * 1 / (6 * self.dx) * \
             (var0[2:-2, 4:] - 6 * var0[2:-2, 3:-1] + 3 * var0[2:-2, 2:-2] + 2 * var0[2:-2, 1:-3]) \
-            - vp[1:-1,1:-1] * 1 / (6 * self.dy) * \
+            - vp[1:-1, 1:-1] * 1 / (6 * self.dy) * \
             (2 * var0[3:-1, 2:-2] + 3 * var0[2:-2, 2:-2] - 6 * var0[1:-3, 2:-2] + var0[:-4, 2:-2]) \
-            + vm[1:-1,1:-1] * 1 / (6 * self.dy) * \
+            + vm[1:-1, 1:-1] * 1 / (6 * self.dy) * \
             (var0[4:, 2:-2] - 6 * var0[3:-1, 2:-2] + 3 * var0[2:-2, 2:-2] + 2 * var0[1:-3, 2:-2])
 
         return res
+
 
     def euler(self, q0, c0, rhs):
 
@@ -1342,6 +1343,7 @@ class Qgm_bins:
 
         return h1, c1
 
+    
     def one_step_for_scan(self, X0, X, ib=0):
 
         h1, c1, hb, cb, qb = X0

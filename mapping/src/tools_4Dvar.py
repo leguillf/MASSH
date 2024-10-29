@@ -158,9 +158,9 @@ class Variational:
         Jo = 0.
 
         # Measuring computation times 
-        #t_misfit = []
-        #t_basis = []
-        #t_model = []
+        # t_misfit = []
+        # t_basis = []
+        # t_model = []
 
         for i in range(len(self.checkpoints)-1):
             
@@ -168,8 +168,12 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
 
+            # Setting up initial state if it is controlled 
+            if self.basis.wavelet_init == True and t==0:
+                self.basis.operg(t/3600/24, X, State=State)
+
             # Measuring computation times
-            #t0 = datetime.now()
+            # t0 = datetime.now()
 
             # 1. Misfit
             if self.H.is_obs(timestamp):
@@ -188,11 +192,9 @@ class Variational:
                         #                          name=_var)
                         # ds_rmse[_var]=_var_rmse
                     
-
-
             # Measuring computation times
-            #t_misfit.append(datetime.now()-t0)
-            #t0 = datetime.now()
+            # t_misfit.append(datetime.now()-t0)
+            # t0 = datetime.now()
 
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -201,16 +203,15 @@ class Variational:
             self.States[self.checkpoints[i]] = State.copy()
 
             # Measuring computation times
-            #t_basis.append(datetime.now()-t0)
-            #t0 = datetime.now()
+            # t_basis.append(datetime.now()-t0)
+            # t0 = datetime.now()
 
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
 
             # Measuring computation times
-            #t_model.append(datetime.now()-t0)
+            # t_model.append(datetime.now()-t0)
         
-
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
             misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobsx
@@ -219,8 +220,8 @@ class Variational:
         # Cost function 
         J = 1/2 * (Jo + Jb)
 
-        # print("Jb = ",Jb)
-        # print("Jo = ",Jo)
+        print("Jb = ",Jb)
+        print("Jo = ",Jo)
         
         State.plot(title='State variables at the end of cost function evaluation')
         ### TO DO : HOW TO PLOT THE PARAMETERS ### 
@@ -261,7 +262,7 @@ class Variational:
             ds.close()
 
         # Measuring computation times
-        #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
+        # print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
         
         return J*self.cost_function_coeff
     
@@ -303,6 +304,8 @@ class Variational:
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
+
+            print(timestamp)
             
             # Measuring computation times
             #t0 = datetime.now()
@@ -333,15 +336,46 @@ class Variational:
             # Measuring computation times
             #t_misfit.append(datetime.now()-t0)
 
+        # For first timestamp #
+        
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
         
+        plt.figure()
+        plt.plot(adX)
+        plt.title("adX")
+        plt.show()
+
+        plt.figure()
+        plt.plot(gb)
+        plt.title("gb")
+        plt.show()
+
         g = adX + gb  # total gradient
 
+
+        # plt.figure()
+        # plt.plot(adX)
+        # plt.title("grad of obs")
+        # plt.show()
+
+        # plt.figure()
+        # plt.plot(gb)
+        # plt.title("grad of background")
+        # plt.show()
+        
         adState.plot(title='adjoint variables at the end of gradient function evaluation')
         self.basis.operg(t/3600/24,adX,State=State)
 
+        ### PLOTTING PARAMETERS OF INIT STATE ### 
+        # self.basis.operg(0/3600/24,adX,State=State)
+        # plt.figure()
+        # plt.pcolormesh(State.var["ssh_bm"])
+        # plt.title('init state parameters at the end of gradient function evaluation')
+        # plt.colorbar()
+        # plt.show()
+        
         ### TO DO : HOW TO PLOT THE PARAMETERS ### 
         #State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
         
@@ -492,6 +526,7 @@ def grad_test(J, G, X):
     JX = J(X)
     GX = G(X)
     #print("GX",GX)
+    # plt.plot(GX)
     Gh = h.dot(np.where(np.isnan(GX),0,GX))
     #print("Gh",Gh)
     L = [[],[]]

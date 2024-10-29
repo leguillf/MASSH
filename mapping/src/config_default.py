@@ -309,7 +309,7 @@ MOD_QG1L_NP = dict(
 
 MOD_QG1L_JAX = dict(
 
-    name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc.)
+    name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc. and/or ageostrophic velocities U, V)
 
     name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
 
@@ -318,6 +318,8 @@ MOD_QG1L_JAX = dict(
     var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
     upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
+
+    advect_pv = True,
 
     advect_tracer = False, # Whether or not to advect tracers. If True, need to add tracer variables (e.g. SST) in *name_var*
 
@@ -345,7 +347,16 @@ MOD_QG1L_JAX = dict(
 
     bc_trac = 'OBC', # Either OBC or fixed
 
+    forcing_tracer_from_bc = False, # Whether to use BC fields to force tracer advection,
+
+    split_in_bins = False, # Whether to split the spatial domain in bins, each of them being associated with constant c & f
+
+    lenght_bins = 1000, # Length of one spatial bin (in km). 
+
+    facbin = 1
+
 )
+
 
 MOD_QG1L_JAX_FULL = dict(
 
@@ -898,6 +909,8 @@ BASIS_BM = dict(
     facQ= 1, # factor to be multiplied to the estimated Q
 
     Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    Qmax_init_state = 1e-3, # Maximim Q for the initial state estimation
 
     slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
 

@@ -455,6 +455,7 @@ class Basis_bm:
         self.factdec = config.BASIS.factdec
         self.sloptdec = config.BASIS.sloptdec
         self.Qmax = config.BASIS.Qmax
+        self.Qmax_init_state = config.BASIS.Qmax_init_state
         self.facQ = config.BASIS.facQ
         self.slopQ = config.BASIS.slopQ
         self.lmeso = config.BASIS.lmeso
@@ -636,8 +637,10 @@ class Basis_bm:
                 
         # Fill the Q diagonal matrix (expected variance for each wavelet)     
          
-        Qi = np.array([])
-        Qt = np.array([]) # Initial state      
+        # Qi = np.array([])
+        # Qt = np.array([]) # Initial state  
+
+        Q = np.array([])
 
         iwave = 0
         self.iff_wavebounds = [None]*(nf+1)
@@ -646,24 +649,28 @@ class Basis_bm:
             _nwavei = 2*ntheta*NP[iff] # just in space
             _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
             if 1/ff[iff]>self.lmeso:
-                if self.wavelet_init:
-                    Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavei,))))
-                    iwave += _nwavei
-                Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
+                # Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
+                Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
                 iwave += _nwavet
+                if self.wavelet_init:
+                    # Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavei,))))
+                    Q = np.concatenate((Q,self.Qmax_init_state/(self.facns*self.facnlt)**.5*np.ones((_nwavei,))))
+                    iwave += _nwavei
             else:
-                if self.wavelet_init:
-                    Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavei,)))) 
-                    iwave += _nwavei
-                Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
+                # Qt = np.concatenate((Qt,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
+                Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
                 iwave += _nwavet
-                
+                if self.wavelet_init:
+                    # Qi = np.concatenate((Qi,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavei,)))) 
+                    Q = np.concatenate((Q,self.Qmax_init_state/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavei,)))) 
+                    iwave += _nwavei
+            
             print(f'lambda={1/ff[iff]:.1E}',
                   f'nlocs={NP[iff]:.1E}',
                   f'tdec={tdec[iff]:.1E}',
-                  f'Q={Qt[-1]:.1E}')
-        
-        Q = np.concatenate((Qi,Qt))
+                  f'Q={Q[-1]:.1E}',)
+            
+        # Q = np.concatenate((Qi,Qt))
                     
         self.iff_wavebounds[-1] = iwave
         
@@ -825,10 +832,30 @@ class Basis_bm:
         # Update State
         if State is not None:
             if self.wavelet_init and t==0 : 
+                phi_i = phi_i.reshape(self.shape_phys)
                 State.setvar(phi_i,self.name_mod_var)
             State.params[self.name_mod_var] = phi
         else:
             return phi
+        
+        ### VERSION ONLY WITH CONTROL OF INITIAL PARAMETERS ###
+        # Projection
+        # phi_i = np.zeros(self.shape_phys).ravel() # control vector in physical space for initial state estimation 
+        # for iff in range(self.nf):
+        #     if self.wavelet_init :
+        #         # if initial state is estimated 
+        #         Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]-2*self.ntheta*self.NP[iff]] # control vector in reduced space for forcing parameters 
+        #         Xi = X[self.iff_wavebounds[iff+1]-2*self.ntheta*self.NP[iff]:self.iff_wavebounds[iff+1]] # control vector in reduced space for initial state estimation 
+        #         # Computing initial state 
+        #         phi_i += self.Gx[iff].dot(Xi)
+
+        # # Update State
+        # if State is not None:
+        #     if self.wavelet_init and t==0 : 
+        #         phi_i = phi_i.reshape(self.shape_phys)
+        #         State.setvar(phi_i,self.name_mod_var)
+        # else:
+        #     return phi_i
 
     def operg_transpose(self, t, adState):
         
@@ -860,6 +887,22 @@ class Basis_bm:
         adState.params[self.name_mod_var] *= 0.
         
         return adX
+
+        # ### VERSION ONLY WITH CONTROL OF INITIAL PARAMETERS ###
+        # if adState.params[self.name_mod_var] is None:
+        #     adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+
+        # adX = np.zeros(self.nbasis)
+        # # adparams = adState.params[self.name_mod_var].ravel()
+        # adparams_init = adState.getvar(self.name_mod_var).ravel()
+        # for iff in range(self.nf):
+        #     if t==0 and self.wavelet_init: 
+        #         adXi = self.Gx[iff].T.dot(adparams_init)
+        #         adX[self.iff_wavebounds[iff+1]-2*self.ntheta*self.NP[iff]:self.iff_wavebounds[iff+1]] += adXi
+
+        # adState.params[self.name_mod_var] *= 0.
+        
+        # return adX
 
 
     def test_operg(self, t, State):
