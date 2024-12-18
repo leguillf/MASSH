@@ -15,6 +15,8 @@ def ssh2uv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81):
     # if lon and lat are provided, we compute grid spacing. 
     # Otherwise, state grid will be used
     if lon is not None and lat is not None:
+        if len(lon.shape)==1: 
+            lon,lat = np.meshgrid(lon,lat)
         f = 4*np.pi/86164*np.sin(lat*np.pi/180)
         dx,dy = grid.lonlat2dxdy(lon,lat)
     else:
@@ -57,6 +59,8 @@ def ssh2rv(ssh, State=None, lon=None, lat=None, xac=None,g=9.81,norm=False):
     # if lon and lat are provided, we compute grid spacing. 
     # Otherwise, state grid will be used
     if lon is not None and lat is not None:
+        if len(lon.shape)==1: 
+            lon,lat = np.meshgrid(lon,lat)
         f = 4*np.pi/86164*np.sin(lat*np.pi/180)
         dx,dy = grid.lonlat2dxdy(lon,lat)
     else:

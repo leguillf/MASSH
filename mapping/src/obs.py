@@ -226,7 +226,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     varobs[name].data = varobs[name].data + np.random.normal(0,obs_attr.synthetic_noise,varobs[name].size).reshape(varobs[name].shape) 
                 # Remove high values
                 if 'varmax' in obs_attr and obs_attr.varmax is not None:
-                    varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
+                    varobs[name] = varobs[name].where(np.abs(varobs[name]) <= obs_attr.varmax, np.nan)
                 # Subsampling
                 if obs_attr.subsampling is not None:
                     d = {}

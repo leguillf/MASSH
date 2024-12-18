@@ -663,11 +663,16 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         else:
             options['disp'] = False
         options['maxiter'] = maxiter
+
+        if config.INV.ftol is not None:
+            options['ftol'] = config.INV.ftol
+
         if config.INV.gtol is not None:
             _ = var.cost(Xopt*0)
             g0 = var.grad(Xopt*0)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
+        
             
         # Run minimization 
         res = opt.minimize(var.cost, Xopt,
@@ -747,11 +752,14 @@ def Inv_4Dvar_parallel(config, State=None) :
     from . import state
     from .tools import gaspari_cohn
     from multiprocessing import Process
+    import concurrent.futures
     from scipy.interpolate import griddata
 
     # Split full experimental time window in sub windows
     list_config = []
     list_State = []
+    list_config_1d = []
+    list_State_1d = []
     weights_space = [] 
     weights_space_sum = np.zeros((State.ny, State.nx))
     processes = []
@@ -823,6 +831,7 @@ def Inv_4Dvar_parallel(config, State=None) :
                     _config.INV.path_save_control_vectors += f'/subwindow_{name_subwindow}' 
                 # append to list
                 list_config[i].append(_config)
+                list_config_1d.append(_config)
                 # create directories
                 if not os.path.exists(_config.EXP.tmp_DA_path):
                     os.makedirs(_config.EXP.tmp_DA_path)
@@ -831,9 +840,8 @@ def Inv_4Dvar_parallel(config, State=None) :
                 # initialize State 
                 _State = state.State(_config, verbose=0)
                 list_State[i].append(_State)   
-                # create subprocess instance
-                p = Process(target=Inv_4Dvar, args=(_config, _State, None, None, None, None, None, 0))
-                processes.append(p)
+                list_State_1d.append(_State)   
+                
                 # Compute spatial window tappering for merging outputs after inversion
                 if i==0: # Only for first time window (useless to compute it for the others, because is identical)
                     winy = np.ones(_State.ny)
@@ -858,25 +866,43 @@ def Inv_4Dvar_parallel(config, State=None) :
         if config.INV.JAX_mem_fraction is not None and config.INV.JAX_mem_fraction>0:
             os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
         elif len(processes)>0:
-            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/min(len(processes),config.INV.nprocs))
-    old_stdout = sys.stdout # backup current stdout
-    sys.stdout = open(os.devnull, "w") # prevent printoing outputs
+            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/config.INV.nprocs)
 
     # Run tasks in parallel with a maximum of config.INV.nprocs processes
-    ip0 = 0 # First process index to start in parallel
-    ip1 = min(config.INV.nprocs, len(processes)) # Last process index to start in parallel
-    while ip0<len(processes):
-        # start the processes
-        for ip in range(ip0,ip1):
-            processes[ip].start()
-        # join the processes
-        for ip in range(ip0,ip1):
-            processes[ip].join()
-        ip0 = ip1
-        if ip1==len(processes):
-            ip1 += 1 # +1 to exit the loop
-        ip1 = min(ip1+config.INV.nprocs, len(processes))
-    sys.stdout = old_stdout # reset old stdout
+    # Collect the results as they complete
+    with concurrent.futures.ProcessPoolExecutor(max_workers=config.INV.nprocs) as executor:
+        old_stdout = sys.stdout # backup current stdout
+        sys.stdout = open(os.devnull, "w") # prevent printoing outputs
+        futures = [executor.submit(Inv_4Dvar, _config, _State) for (_config, _State) in zip(list_config_1d, list_State_1d)]
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                result = future.result()  # Get the result of each task
+                sys.stdout = old_stdout # reset old stdout
+                print(f"Processed and saved: {result}")
+                old_stdout = sys.stdout # backup current stdout
+                sys.stdout = open(os.devnull, "w") # prevent printoing outputs
+            except Exception as exc:
+                sys.stdout = old_stdout # reset old stdout
+                print(f"An error occurred: {exc}")
+                
+        
+
+    if False:
+        ip0 = 0 # First process index to start in parallel
+        ip1 = min(config.INV.nprocs, len(processes)) # Last process index to start in parallel
+        while ip0<len(processes):
+            # start the processes
+            for ip in range(ip0,ip1):
+                processes[ip].start()
+            # join the processes
+            for ip in range(ip0,ip1):
+                processes[ip].join()
+            ip0 = ip1
+            if ip1==len(processes):
+                ip1 += 1 # +1 to exit the loop
+            ip1 = min(ip1+config.INV.nprocs, len(processes))
+
+    
 
 
     # Merge output trajectories 

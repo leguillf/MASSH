@@ -928,6 +928,7 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
             bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var]
+            bas = bas.transpose(self.name_bas_time, self.name_bas_lat, self.name_bas_lon)
             if np.sign(bas[self.name_bas_lon].data.min())==-1 and State.lon_unit=='0_360':
                 bas = bas.assign_coords({self.name_bas_lon:((bas[self.name_bas_lon].dims, bas[self.name_bas_lon].data % 360))})
             elif np.sign(bas[self.name_bas_lon].data.min())>=0 and State.lon_unit=='-180_180':

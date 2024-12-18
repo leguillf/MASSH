@@ -523,7 +523,9 @@ INV_4DVAR = dict(
 
     restart_4Dvar = False, # To restart the minimization process from the last control vector
 
-    gtol = None, # Gradient norm must be less than gtol before successful termination.
+    ftol = None, # The iteration stops when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
+
+    gtol = None, # Gradient norm must be less than gtol*g0 (g0 being the gradient at first iteration) before successful termination.
 
     maxiter = 10, # Maximal number of iterations for the minimization process
 
@@ -583,7 +585,9 @@ INV_4DVAR_PARALLEL = dict(
 
     restart_4Dvar = False, # To restart the minimization process from the last control vector
 
-    gtol = None, # Gradient norm must be less than gtol before successful termination.
+    ftol = None, # The iteration stops when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
+
+    gtol = None, # Gradient norm must be less than gtol*g0 (g0 being the gradient at first iteration) before successful termination.
 
     maxiter = 10, # Maximal number of iterations for the minimization process
 
