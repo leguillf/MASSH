@@ -1630,10 +1630,9 @@ That could be due to non regular grid or bad written netcdf file')
             ax.set_ylim(0,1)
             plt.legend(loc='best', title="resolved scales")
             plt.grid(which='both')
-            
-            
-            plt.show()
             plt.savefig(f'{self.dir_output}/psd.png', dpi=100)
+
+            plt.show()
 
 
     def _compute_segment_alongtrack(self,time_alongtrack, 

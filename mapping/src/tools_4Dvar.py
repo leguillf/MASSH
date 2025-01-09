@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd 
 from datetime import timedelta
 from src import grid as grid
+import datetime
 import jax.numpy as jnp 
 import jax.lax as lax
 import jax
@@ -92,6 +93,8 @@ class Variational:
 
         
     def cost(self,X0):
+
+        now = datetime.datetime.now()
                 
         # Initial state
         State = self.State.copy()
@@ -138,7 +141,7 @@ class Variational:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
-        
+         
         State.plot(title='State variables at the end of cost function evaluation')
         State.plot(title='Parameters at the end of cost function evaluation',params=True)
         
@@ -148,6 +151,8 @@ class Variational:
         return J
     
     def grad(self,X0): 
+
+        now = datetime.datetime.now()
                 
         X = +X0 
         
@@ -201,9 +206,7 @@ class Variational:
         
         g = adX + gb  # total gradient
 
-        
         adState.plot(title='adjoint variables at the end of gradient function evaluation')
-        self.basis.operg(t/3600/24,adX,State=State)
         State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
         
         if self.save_minimization:

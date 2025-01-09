@@ -326,6 +326,8 @@ MOD_QG1L_JAX = dict(
 
     cmax = None, # Maximum value of phase velocity to consider
 
+    solver = 'spectral', # Solver for Elliptical Equation inversion (either spectral or cg - for Conjugate Gradient)
+
     init_from_bc = False, # Whether or not to initialize the model with boundary fields.
 
     dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
@@ -342,7 +344,11 @@ MOD_QG1L_JAX = dict(
 
     lenght_bins = 1000, # Length of one spatial bin (in km). 
 
-    facbin = 1
+    facbin = 1,
+
+    constant_c = True,
+
+    constant_f = True
 
 )
 

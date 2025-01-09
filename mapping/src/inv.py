@@ -743,7 +743,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
     
         
-    del State, State0, Xa, dict_obs, B, R
+    del State, State0, Xa, dict_obs, B, R, Model, Basis, var, Xopt, Xres, checkpoints, time_checkpoints, t_checkpoints
     gc.collect()
     print()
     
@@ -751,7 +751,6 @@ def Inv_4Dvar_parallel(config, State=None) :
     
     from . import state
     from .tools import gaspari_cohn
-    from multiprocessing import Process
     import concurrent.futures
     from scipy.interpolate import griddata
 
@@ -824,6 +823,11 @@ def Inv_4Dvar_parallel(config, State=None) :
                 _config.GRID.lon_max = lon1
                 _config.GRID.lat_min = lat0
                 _config.GRID.lat_max = lat1
+                # initialize State 
+                _State = state.State(_config, verbose=0)
+                #if _State.mask is not None and np.all(_State.mask):
+                #    print('All masked, we skip this subwindow')
+                #    continue
                 name_subwindow = f'{str(list_date[-1])[:10]}_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
                 _config.EXP.tmp_DA_path += f'/subwindow_{name_subwindow}'
                 _config.EXP.path_save += f'/subwindow_{name_subwindow}'
@@ -837,8 +841,6 @@ def Inv_4Dvar_parallel(config, State=None) :
                     os.makedirs(_config.EXP.tmp_DA_path)
                 if not os.path.exists(_config.EXP.path_save):
                     os.makedirs(_config.EXP.path_save)
-                # initialize State 
-                _State = state.State(_config, verbose=0)
                 list_State[i].append(_State)   
                 list_State_1d.append(_State)   
                 
@@ -869,42 +871,15 @@ def Inv_4Dvar_parallel(config, State=None) :
             os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/config.INV.nprocs)
 
     # Run tasks in parallel with a maximum of config.INV.nprocs processes
-    # Collect the results as they complete
     with concurrent.futures.ProcessPoolExecutor(max_workers=config.INV.nprocs) as executor:
-        old_stdout = sys.stdout # backup current stdout
-        sys.stdout = open(os.devnull, "w") # prevent printoing outputs
         futures = [executor.submit(Inv_4Dvar, _config, _State) for (_config, _State) in zip(list_config_1d, list_State_1d)]
         for future in concurrent.futures.as_completed(futures):
             try:
-                result = future.result()  # Get the result of each task
-                sys.stdout = old_stdout # reset old stdout
+                result = future.result()
                 print(f"Processed and saved: {result}")
-                old_stdout = sys.stdout # backup current stdout
-                sys.stdout = open(os.devnull, "w") # prevent printoing outputs
             except Exception as exc:
-                sys.stdout = old_stdout # reset old stdout
                 print(f"An error occurred: {exc}")
                 
-        
-
-    if False:
-        ip0 = 0 # First process index to start in parallel
-        ip1 = min(config.INV.nprocs, len(processes)) # Last process index to start in parallel
-        while ip0<len(processes):
-            # start the processes
-            for ip in range(ip0,ip1):
-                processes[ip].start()
-            # join the processes
-            for ip in range(ip0,ip1):
-                processes[ip].join()
-            ip0 = ip1
-            if ip1==len(processes):
-                ip1 += 1 # +1 to exit the loop
-            ip1 = min(ip1+config.INV.nprocs, len(processes))
-
-    
-
-
     # Merge output trajectories 
     from . import mod
     from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
@@ -925,6 +900,7 @@ def Inv_4Dvar_parallel(config, State=None) :
                 _var1 = np.zeros((State.ny, State.nx)) 
                 for j in range(len(list_lonlat)):
                     _State1 = list_State[i][j]
+                    #try:
                     _ds1 = _State1.load_output(date)
                     lon = _ds1.lon.values
                     lat = _ds1.lat.values
@@ -938,6 +914,8 @@ def Inv_4Dvar_parallel(config, State=None) :
                                         method='linear').reshape(State.lon.shape)
                     ind = ~np.isnan(_var_interp)
                     _var1[ind] += (weights_space[j]*_var_interp/weights_space_sum)[ind]
+                    #except:
+                        #print(f'Warning: no output for tile {list_lonlat[j]} at date {date}, we take 0')
                 if State.mask is not None and np.any(State.mask):
                     _var1[State.mask] = np.nan
                 # Time smoothing (except last window)
@@ -946,6 +924,7 @@ def Inv_4Dvar_parallel(config, State=None) :
                     _var2 = np.zeros((State.ny, State.nx))
                     for j in range(len(list_lonlat)):
                         _State2 = list_State[i+1][j]
+                        #try:
                         _ds2 = _State2.load_output(date)
                         lon = _ds2.lon.values
                         lat = _ds2.lat.values
@@ -959,6 +938,8 @@ def Inv_4Dvar_parallel(config, State=None) :
                                             method='linear').reshape(State.lon.shape)
                         ind = ~np.isnan(_var_interp)
                         _var2[ind] += (weights_space[j]*_var_interp/weights_space_sum)[ind]
+                        #except:
+                        #    print(f'Warning: no output for tile {list_lonlat[j]} at date {date}, we take 0')
                     if State.mask is not None and np.any(State.mask):
                         _var2[State.mask] = np.nan
                     # Weight coefficients

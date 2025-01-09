@@ -669,6 +669,7 @@ class Model_qg1l_jax(M):
             
             if config.MOD.cmin is not None:
                 self.c[self.c<config.MOD.cmin] = config.MOD.cmin
+                self.c[np.isnan(self.c)] = config.MOD.cmin
             
             if config.MOD.cmax is not None:
                 self.c[self.c>config.MOD.cmax] = config.MOD.cmax
@@ -763,11 +764,11 @@ class Model_qg1l_jax(M):
                          Kdiffus=config.MOD.Kdiffus,
                          Kdiffus_trac=config.MOD.Kdiffus_trac,
                          bc_trac=config.MOD.bc_trac,
-                         split_in_bins=config.MOD.split_in_bins,
-                         lenght_bins=config.MOD.lenght_bins,
-                         facbin=config.MOD.facbin,
                          advect_pv=self.advect_pv,
-                         ageo_velocities=self.ageo_velocities)
+                         ageo_velocities=self.ageo_velocities,
+                         constant_c=config.MOD.constant_c,
+                         constant_f=config.MOD.constant_f,
+                         solver=config.MOD.solver)
 
         # Model functions initialization
         self.qgm_step = self.qgm.step_jit
