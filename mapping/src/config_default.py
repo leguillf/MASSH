@@ -112,6 +112,10 @@ GRID_CAR = dict(
 
     dx = 25.,                                              # grid spacing in km
 
+    nx = None,                                             # If not None, use nx to compute dx 
+
+    ny = None,                                             #
+
     name_init_mask = None,
 
     name_var_mask = {'lon':'','lat':'','var':''}
@@ -298,6 +302,8 @@ MOD_QG1L_NP = dict(
 
 MOD_QG1L_JAX = dict(
 
+    name_class = 'Qgm', # Name of the model class in jqgm.py
+
     name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc. and/or ageostrophic velocities U, V)
 
     name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
@@ -340,15 +346,13 @@ MOD_QG1L_JAX = dict(
 
     forcing_tracer_from_bc = False, # Whether to use BC fields to force tracer advection,
 
-    split_in_bins = False, # Whether to split the spatial domain in bins, each of them being associated with constant c & f
-
-    lenght_bins = 1000, # Length of one spatial bin (in km). 
-
-    facbin = 1,
-
     constant_c = True,
 
-    constant_f = True
+    constant_f = True,
+
+    tile_size = 32, # Only for name_class=='QgmWithTiles'
+            
+    tile_overlap = 16  # Only for name_class=='QgmWithTiles'
 
 )
 

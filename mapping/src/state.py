@@ -136,25 +136,38 @@ class State:
                 config (module): configuration module
         """
 
-        km2deg = 1./110
+        km2deg = 1./111
 
-        ENSLAT = np.arange(
-            config.lat_min,
-            config.lat_max + config.dx*km2deg,
-            config.dx*km2deg)
+        if None in [config.ny,config.nx]:
 
-        ENSLON = np.arange(
-                    config.lon_min,
-                    config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
-                    config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
+            ENSLAT = np.arange(
+                config.lat_min,
+                config.lat_max + config.dx*km2deg,
+                config.dx*km2deg)
 
-        lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
-        lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
+            ENSLON = np.arange(
+                        config.lon_min,
+                        config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
+                        config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
 
-        for I in range(len(ENSLAT)):
-            for J in range(len(ENSLON)):
-                lat2d[I,J] = ENSLAT[I]
-                lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.)*km2deg
+            lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
+            lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
+
+            for I in range(len(ENSLAT)):
+                for J in range(len(ENSLON)):
+                    lat2d[I,J] = ENSLAT[I]
+                    lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.) * km2deg
+
+
+        else:
+            Ly = (config.lat_max-config.lat_min) / km2deg
+            Lx = Ly * config.nx/config.ny
+            lon_max = config.lon_min + Lx / (0.5 * (np.cos(config.lat_min/180*np.pi) + np.cos(config.lat_max/180*np.pi)) / km2deg)
+            x_cor = np.linspace(config.lon_min, lon_max, config.nx+1)
+            y_cor = np.linspace(config.lat_min, config.lat_max, config.ny+1)
+            x_cen = 0.5 * (x_cor[1:] + x_cor[:-1])
+            y_cen = 0.5 * (y_cor[1:] + y_cor[:-1])
+            lon2d, lat2d = np.meshgrid(x_cen, y_cen)
         
         self.lon = lon2d
         self.lat = lat2d

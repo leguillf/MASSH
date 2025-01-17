@@ -641,8 +641,8 @@ class Model_qg1l_jax(M):
                              '..','models','model_qg1l'))
         else:
             dir_model = config.MOD.dir_model  
-        qgm = SourceFileLoader("qgm",dir_model + "/jqgm.py").load_module() 
-        model = qgm.Qgm
+        qgm = SourceFileLoader("qgm",f'{dir_model}/jqgm.py').load_module() 
+        model = getattr(qgm, config.MOD.name_class)
 
         # Coriolis
         self.f = State.f
@@ -768,7 +768,9 @@ class Model_qg1l_jax(M):
                          ageo_velocities=self.ageo_velocities,
                          constant_c=config.MOD.constant_c,
                          constant_f=config.MOD.constant_f,
-                         solver=config.MOD.solver)
+                         solver=config.MOD.solver,
+                         tile_size=config.MOD.tile_size,
+                         tile_overlap=config.MOD.tile_overlap)
 
         # Model functions initialization
         self.qgm_step = self.qgm.step_jit
