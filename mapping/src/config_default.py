@@ -614,6 +614,8 @@ INV_4DVAR_PARALLEL = dict(
     sigma_B = None,
 
     prec = False, # preconditoning
+
+    merge_outputs_only = False,
     
     prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
 

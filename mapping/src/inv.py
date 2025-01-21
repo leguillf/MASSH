@@ -714,7 +714,9 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
     # Init
     State0 = State.copy()
     date = config.EXP.init_date
-
+    Model.save_output(State0,date,name_var=Model.var_to_save,t=0) 
+    
+    nstep = min(nstep_check, int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt))
     # Forward propagation
     while date<config.EXP.final_date:
         
@@ -724,24 +726,40 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         # Reduced basis
         Basis.operg(t/3600/24,Xa,State=State0)
 
-        # Forward
-        for j in range(nstep_check):
-            
-            if (((date - config.EXP.init_date).total_seconds()
-                 /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+        # Forward propagation
+        Model.step(t=t,State=State0,nstep=nstep)
+        date += timedelta(seconds=nstep_check*Model.dt)
 
-            # Forward propagation
-            Model.step(t=t+j*Model.dt,State=State0,nstep=1)
-            date += timedelta(seconds=Model.dt)
+        # Save output
+        if (((date - config.EXP.init_date).total_seconds()
+            /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
+            & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
+            Model.save_output(State0,date,name_var=Model.var_to_save,t=t) 
+
+        if False:
+            # Forward
+            for j in range(nstep_check):
+                
+                if (((date - config.EXP.init_date).total_seconds()
+                    /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
+                    & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
+                    Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+
+                # Forward propagation
+                Model.step(t=t+j*Model.dt,State=State0,nstep=1)
+                date += timedelta(seconds=Model.dt)
+        
+
+        
+        State0.plot(date)
 
     # Last timestep
-    if (((date - config.EXP.init_date).total_seconds()
-                 /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
-                & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-        Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
-    
+    if False:
+        if (((date - config.EXP.init_date).total_seconds()
+                    /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
+                    & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
+            Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
+        
         
     del State, State0, Xa, dict_obs, B, R, Model, Basis, var, Xopt, Xres, checkpoints, time_checkpoints, t_checkpoints
     gc.collect()
@@ -823,11 +841,7 @@ def Inv_4Dvar_parallel(config, State=None) :
                 _config.GRID.lon_max = lon1
                 _config.GRID.lat_min = lat0
                 _config.GRID.lat_max = lat1
-                # initialize State 
-                _State = state.State(_config, verbose=0)
-                #if _State.mask is not None and np.all(_State.mask):
-                #    print('All masked, we skip this subwindow')
-                #    continue
+        
                 name_subwindow = f'{str(list_date[-1])[:10]}_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
                 _config.EXP.tmp_DA_path += f'/subwindow_{name_subwindow}'
                 _config.EXP.path_save += f'/subwindow_{name_subwindow}'
@@ -841,6 +855,9 @@ def Inv_4Dvar_parallel(config, State=None) :
                     os.makedirs(_config.EXP.tmp_DA_path)
                 if not os.path.exists(_config.EXP.path_save):
                     os.makedirs(_config.EXP.path_save)
+
+                # initialize State 
+                _State = state.State(_config, verbose=0)
                 list_State[i].append(_State)   
                 list_State_1d.append(_State)   
                 
@@ -863,22 +880,23 @@ def Inv_4Dvar_parallel(config, State=None) :
         lat1 = config.GRID.lat_min
     
     # Run the subprocesses
-    if 'JAX' in config.MOD.super: # Avoid preallocating GPU memory for multi JAX processes
-        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-        if config.INV.JAX_mem_fraction is not None and config.INV.JAX_mem_fraction>0:
-            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
-        elif len(processes)>0:
-            os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/config.INV.nprocs)
+    if not config.INV.merge_outputs_only:
+        if 'JAX' in config.MOD.super: # Avoid preallocating GPU memory for multi JAX processes
+            os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+            if config.INV.JAX_mem_fraction is not None and config.INV.JAX_mem_fraction>0:
+                os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(min(config.INV.JAX_mem_fraction,1))
+            elif len(processes)>0:
+                os.environ['XLA_PYTHON_CLIENT_MEM_FRACTION'] = str(.9/config.INV.nprocs)
 
-    # Run tasks in parallel with a maximum of config.INV.nprocs processes
-    with concurrent.futures.ProcessPoolExecutor(max_workers=config.INV.nprocs) as executor:
-        futures = [executor.submit(Inv_4Dvar, _config, _State) for (_config, _State) in zip(list_config_1d, list_State_1d)]
-        for future in concurrent.futures.as_completed(futures):
-            try:
-                result = future.result()
-                print(f"Processed and saved: {result}")
-            except Exception as exc:
-                print(f"An error occurred: {exc}")
+        # Run tasks in parallel with a maximum of config.INV.nprocs processes
+        with concurrent.futures.ProcessPoolExecutor(max_workers=config.INV.nprocs) as executor:
+            futures = [executor.submit(Inv_4Dvar, _config, _State) for (_config, _State) in zip(list_config_1d, list_State_1d)]
+            for future in concurrent.futures.as_completed(futures):
+                try:
+                    result = future.result()
+                    print(f"Processed and saved: {result}")
+                except Exception as exc:
+                    print(f"An error occurred: {exc}")
                 
     # Merge output trajectories 
     from . import mod
@@ -900,15 +918,14 @@ def Inv_4Dvar_parallel(config, State=None) :
                 _var1 = np.zeros((State.ny, State.nx)) 
                 for j in range(len(list_lonlat)):
                     _State1 = list_State[i][j]
-                    #try:
                     _ds1 = _State1.load_output(date)
                     lon = _ds1.lon.values
                     lat = _ds1.lat.values
                     if len(lon.shape)==1:
                         lon,lat = np.meshgrid(lon,lat)
                     _var = _ds1[name].values
-                    if np.any(np.isnan(_var)):
-                        _var = interpolate_replace_nans(_var, kernel)
+                    #if np.any(np.isnan(_var)):
+                    #    _var = interpolate_replace_nans(_var, kernel)
                     _var_interp = griddata((lon.ravel(),lat.ravel()),_var.ravel(),
                                         (State.lon.ravel(),State.lat.ravel()), 
                                         method='linear').reshape(State.lon.shape)

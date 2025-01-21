@@ -103,7 +103,7 @@ class Qgm:
     ###########################################################################
     #                             Initialization                              #
     ###########################################################################
-    def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None, upwind=3, g=9.81, f=1e-4, time_scheme='Euler', ** kwargs):
+    def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None, upwind=3, g=9.81, f=1e-4, time_scheme='Euler', compile=True, ** kwargs):
 
         # Grid shape
         ny, nx, = np.shape(dx)
@@ -196,18 +196,19 @@ class Qgm:
         self.Kdiffus = Kdiffus
 
         # JIT compiling functions
-        self.h2uv_jit = jit(self.h2uv)
-        self.h2pv_jit = jit(self.h2pv)
-        self.pv2h_jit = jit(self.pv2h)
-        self.rhs_jit = jit(self.rhs)
-        self.adv_jit = jit(self.adv)
-        self.euler_jit = jit(self.euler)
-        self.rk2_jit = jit(self.rk2)
-        self.one_step_jit = jit(self.one_step)
-        self.one_step_for_scan_jit = jit(self.one_step_for_scan)
-        self.step_jit = jit(self.step, static_argnums=2)
-        self.step_tgl_jit = jit(self.step_tgl, static_argnums=3)
-        self.step_adj_jit = jit(self.step_adj, static_argnums=3)
+        if compile:
+            self.h2uv_jit = jit(self.h2uv)
+            self.h2pv_jit = jit(self.h2pv)
+            self.pv2h_jit = jit(self.pv2h)
+            self.rhs_jit = jit(self.rhs)
+            self.adv_jit = jit(self.adv)
+            self.euler_jit = jit(self.euler)
+            self.rk2_jit = jit(self.rk2)
+            self.one_step_jit = jit(self.one_step)
+            self.one_step_for_scan_jit = jit(self.one_step_for_scan)
+            self.step_jit = jit(self.step, static_argnums=2)
+            self.step_tgl_jit = jit(self.step_tgl, static_argnums=3)
+            self.step_adj_jit = jit(self.step_adj, static_argnums=3)
 
     def h2uv(self, h):
         """ SSH to U,V
@@ -477,7 +478,343 @@ class Qgm:
         return adf(adh0)[0]
 
 
+
 class QgmWithTiles(Qgm):
+    def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None,
+                 upwind=3, g=9.81, f=1e-4, time_scheme='Euler', 
+                 tile_size=64, tile_overlap=8, **kwargs):
+        """
+        Initialize the QGM model with tiling and overlapping.
+        """
+        super().__init__(dx, dy, dt, SSH, c, Kdiffus, upwind, g, f, time_scheme, compile=False, **kwargs)
+
+        # Coriolis
+        if hasattr(f, "__len__"):
+            self.f = f.astype('float64')
+        else:
+            self.f = (f * np.ones((self.ny,self.nx))).astype('float64')
+
+
+        # Rossby radius
+        if hasattr(c, "__len__"):
+            self.c = c.astype('float64')
+        else:
+            self.c = c * np.ones((self.ny,self.nx)).astype('float64')
+
+        # Tiling parameters
+        self.tile_size = tile_size
+        self.tile_overlap = tile_overlap
+
+        # Compute tile boundaries
+        self.tiles = self.construct_overlapping_tiles()
+
+        # For Elliptical solver
+        x, y = np.meshgrid(np.arange(1, self.tile_size - 1, dtype='float64'),
+                    np.arange(1, self.tile_size - 1, dtype='float64'))
+        self.laplace_dst_tile = 2 * (np.cos(np.pi / (self.tile_size - 1) * x) - 1) / self.dx ** 2 + \
+                    2 * (np.cos(np.pi / (self.tile_size - 1) * y) - 1) / self.dy ** 2
+        
+        # Spatial window for each tile
+        win = np.ones(tile_size)
+        win[:tile_overlap] = gaspari_cohn(np.arange(0,self.tile_size),tile_overlap)[:tile_overlap][::-1]
+        win[-tile_overlap:] = gaspari_cohn(np.arange(0,self.tile_size),tile_overlap)[:tile_overlap]
+        self.weights_space = win[:,np.newaxis] * win[np.newaxis,:]
+
+        self.weights_space_sum = np.zeros((self.ny, self.nx))
+        for i,j in self.tiles:
+            self.weights_space_sum[i:i+tile_size,j:j+tile_size] += self.weights_space
+
+        # JIT compiling functions
+        self.step_jit = jit(self.step, static_argnums=2)
+        self.step_tgl_jit = jit(self.step_tgl, static_argnums=3)
+        self.step_adj_jit = jit(self.step_adj, static_argnums=3)
+
+    def construct_overlapping_tiles(self):
+        ny, nx = self.ny, self.nx
+        tiles = []
+        
+        for y in range(0, ny, self.tile_size - self.tile_overlap):
+            for x in range(0, nx, self.tile_size - self.tile_overlap):
+                y_start = max(y, 0)
+                if y_start + self.tile_size > ny:
+                    y_start = ny - self.tile_size
+                x_start = max(x, 0)
+                if x_start + self.tile_size > nx:
+                    x_start = nx - self.tile_size
+                tiles.append((y_start, x_start))
+        
+        return tiles
+    
+    def h2uv(self, h, f):
+        """ SSH to U,V
+
+        Args:
+            h (2D array): SSH field.
+
+        Returns:
+            u (2D array): Zonal velocity
+            v (2D array): Meridional velocity
+
+        """
+    
+        u = jnp.zeros_like(h)
+        v = jnp.zeros_like(h)
+
+        u = u.at[1:-1,1:].set(- self.g/f*\
+         (h[2:,:-1]+h[2:,1:]-h[:-2,1:]-h[:-2,:-1])/(4*self.dy))
+             
+        v = v.at[1:,1:-1].set(self.g/f*\
+            (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx))
+        
+        u = jnp.where(jnp.isnan(u),0,u)
+        v = jnp.where(jnp.isnan(v),0,v)
+            
+        return u,v
+
+    def h2pv(self, h, hb, f, c, ind12, ind0):
+        """ SSH to PV
+
+        Args:
+            h (2D array): SSH field.
+            hb (2D array): Background SSH field
+
+        Returns:
+            q: Potential Vorticity field
+        """
+
+       
+
+        q = jnp.zeros((self.tile_size, self.tile_size), dtype='float64')
+
+        q = q.at[1:-1, 1:-1].set(
+            self.g / f * \
+            ((h[2:, 1:-1] + h[:-2, 1:-1] - 2 * h[1:-1, 1:-1]) / self.dy ** 2 + \
+             (h[1:-1, 2:] + h[1:-1, :-2] - 2 * h[1:-1, 1:-1]) / self.dx ** 2) - \
+            self.g * f / (c ** 2) * h[1:-1, 1:-1])
+
+        q = jnp.where(jnp.isnan(q),0,q)
+
+        q = jnp.where(ind12, - self.g * f / (c ** 2) * hb, q)
+        
+        q = jnp.where(ind0, 0, q)
+
+        return q
+    
+    def pv2h(self, q, hb, qb, f, c):
+
+        """ PV to SSH 
+
+        Args:
+            q (2D array): SSH field.
+            hb (2D array): Background SSH field
+            qb (2D array): Background PV field
+
+        Returns:
+            h: SSH field
+        """
+
+        # Interior pv
+        qin = q[1:-1,1:-1] - qb[1:-1,1:-1]
+        
+        # Inverse sine tranfrom to get reconstructed SSH
+        h = jnp.zeros_like(q, dtype='float64')
+        helmoltz_dst  = (self.g / f * self.laplace_dst_tile - self.g * f / c ** 2)
+        inv = inverse_elliptic_dst(qin, helmoltz_dst)
+        h = h.at[1:-1, 1:-1].set(inv)
+
+        # add the boundary value
+        h += hb
+
+        return h
+
+    def rhs(self,u,v,q,ind12,ind0,way=1):
+
+        """ increment
+
+        Args:
+            u (2D array): Zonal velocity
+            v (2D array): Meridional velocity
+            q : PV start
+            way: forward (+1) or backward (-1)
+
+        Returns:
+            rhs (2D array): advection increment
+
+        """
+
+        q0 = +q
+
+
+        #######################
+        # Upwind current
+        #######################
+        u_on_T = way*0.5*(u[1:-1,1:-1]+u[1:-1,2:])
+        v_on_T = way*0.5*(v[1:-1,1:-1]+v[2:,1:-1])
+        up = jnp.where(u_on_T < 0, 0, u_on_T)
+        um = jnp.where(u_on_T > 0, 0, u_on_T)
+        vp = jnp.where(v_on_T < 0, 0, v_on_T)
+        vm = jnp.where(v_on_T > 0, 0, v_on_T)
+
+        #######################
+        # PV advection
+        #######################
+        rhs_q = self.adv(up, vp, um, vm, q0)
+
+        # PV Diffusion
+        if self.Kdiffus is not None:
+            rhs_q = rhs_q.at[2:-2,2:-2].set(
+                rhs_q[2:-2,2:-2] +\
+                self.Kdiffus/(self.dx**2)*\
+                    (q0[2:-2,3:-1]+q0[2:-2,1:-3]-2*q0[2:-2,2:-2]) +\
+                self.Kdiffus/(self.dy**2)*\
+                    (q0[3:-1,2:-2]+q0[1:-3,2:-2]-2*q0[2:-2,2:-2])
+            )
+        rhs_q = jnp.where(jnp.isnan(rhs_q), 0, rhs_q)
+        rhs_q = jnp.where(ind12, 0, rhs_q) 
+        rhs_q = jnp.where(ind0, 0, rhs_q) 
+            
+        return rhs_q
+    
+    def rk2(self, var0, incr, hb, qb, f, c, ind12, ind0, way):
+
+        """
+            2rd-order Runge-Kutta time scheme
+        """
+
+        # k2
+        var12 = var0 + 0.5*incr*self.dt
+        if len(incr.shape)==3:
+            q12 = var12[0]
+            c12 = var12[1:]
+        else:
+            q12 = +var12
+        h12 = self.pv2h(q12,hb,qb,f,c)
+        u12,v12 = self.h2uv(h12,f)
+        u12 = jnp.where(jnp.isnan(u12),0,u12)
+        v12 = jnp.where(jnp.isnan(v12),0,v12)
+        if len(incr.shape)==3:
+            var12 = jnp.append(q12[jnp.newaxis,:,:],c12,axis=0)
+        else:
+            var12 = +q12
+        incr12 = self.rhs(u12,v12,var12,ind12,ind0,way=way)
+
+        var1 = var0 + self.dt * incr12
+
+        return var1
+    
+    def one_step(self, h0, q0, hb, qb, f, c, ind12, ind0, way=1):
+
+        """
+            One step forward
+        """
+
+        # Compute geostrophic velocities
+        u, v = self.h2uv(h0, f)
+
+        # Compute increment
+        incr = self.rhs(u,v,q0,ind12,ind0,way=way)
+        
+        # Time integration 
+        if self.time_scheme == 'Euler':
+            q1 = self.euler(q0, incr, way)
+        elif self.time_scheme == 'rk2':
+            q1 = self.rk2(q0, incr, hb, qb, f, c, ind12, ind0, way)
+
+        # Elliptical inversion 
+        h1 = self.pv2h(q1, hb, qb, f, c)
+
+        return h1, q1
+
+    def one_step_for_scan(self, X0, X, f, c, ind12, ind0):
+
+        """
+            One step forward for scan
+        """
+
+        h1, q1, hb, qb = X0
+        h1, q1 = self.one_step(h1, q1, hb, qb, f, c, ind12, ind0)
+        X = (h1, q1, hb, qb)
+
+        return X,X
+    
+
+    def step_tile(self, y_start, x_start, h0, hb, nstep=1):
+
+        """ Propagation
+
+        Args:
+            h0 (2D array): initial SSH
+            hb (2D array): background SSH
+            nstep (int): number of time-step
+
+        Returns:
+            h1 (2D array): propagated SSH
+
+        """
+        # Compute potential voriticy
+        h0_tile = dynamic_slice_tile(h0, y_start, x_start, self.tile_size, self.tile_size)
+        hb_tile = dynamic_slice_tile(hb, y_start, x_start, self.tile_size, self.tile_size)
+
+        f_tile = jnp.nanmean(dynamic_slice_tile(self.f, y_start, x_start, self.tile_size, self.tile_size))
+        c_tile = jnp.nanmean(dynamic_slice_tile(self.c, y_start, x_start, self.tile_size, self.tile_size))
+
+        ind12_tile = dynamic_slice_tile(self.ind12, y_start, x_start, self.tile_size, self.tile_size)
+        ind0_tile = dynamic_slice_tile(self.ind0, y_start, x_start, self.tile_size, self.tile_size)
+
+        q0_tile = self.h2pv(h0_tile, hb_tile, f_tile, c_tile, ind12_tile, ind0_tile)
+        qb_tile = self.h2pv(hb_tile, hb_tile, f_tile, c_tile, ind12_tile, ind0_tile)
+
+        # Init
+        h1_tile = +h0_tile
+        q1_tile = +q0_tile
+    
+        # Time propagation
+        X1_tile, _ = scan(partial(self.one_step_for_scan, f=f_tile, c=c_tile, ind12=ind12_tile, ind0=ind0_tile), init=(h1_tile, q1_tile, hb_tile, qb_tile), xs=jnp.zeros(nstep))
+        h1_tile, q1_tile, hb_tile, qb_tile = X1_tile
+
+        # Mask
+        h1_tile = jnp.where(ind0_tile, jnp.nan, h1_tile)
+
+        return h1_tile
+    
+
+    def compute_step_tile(self, y_start, x_start,  h, hb, nstep=1):
+        
+        h1_tile = self.step_tile(y_start, x_start,  h, hb, nstep)
+        # Create an empty array for h updates
+        h1 = jnp.zeros_like(h)
+        h1 = dynamic_update_slice(h1, self.weights_space * h1_tile, (y_start, x_start))
+        return h1
+
+    def step(self, h, hb, nstep=1):
+
+        # Prepare arguments for all tiles
+        tiles_args = jnp.array(self.tiles, dtype=jnp.int32)
+
+        # Compute updates for all tiles in parallel
+        h1_map = jax.vmap(lambda args: partial(self.compute_step_tile, h=h, hb=hb, nstep=nstep)(*args))(tiles_args)
+
+        # Combine updates from all tiles
+        ssh = jnp.sum(h1_map, axis=0) / self.weights_space_sum
+
+        return ssh
+    
+    def step_tgl(self, dh0, h0, hb, nstep=1):
+
+        _, dh1 = jvp(partial(self.step_jit, hb=hb, nstep=nstep), (h0,), (dh0,))
+
+        return dh1
+    
+    def step_adj(self,adh0,h0,hb,nstep=1):
+        
+        _, adf = vjp(partial(self.step_jit,hb=hb,nstep=nstep), h0)
+        
+        return adf(adh0)[0]
+
+
+
+
+class QgmWithTiles_2(Qgm):
     def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None,
                  upwind=3, g=9.81, f=1e-4, time_scheme='Euler', 
                  tile_size=64, tile_overlap=8, **kwargs):
@@ -541,24 +878,24 @@ class QgmWithTiles(Qgm):
         
         return tiles
     
-    def process_tile(self, y_start, x_start, q, qb, hb):
+    def pv2h_tile(self, y_start, x_start, q, qb, hb):
         """
-        Process a single tile.
+        PV to SSH for a single tile.
         """
         # Extract tile-specific data
         q_tile = dynamic_slice_tile(q, y_start, x_start, self.tile_size, self.tile_size)
         qb_tile = dynamic_slice_tile(qb, y_start, x_start, self.tile_size, self.tile_size)
         hb_tile = dynamic_slice_tile(hb, y_start, x_start, self.tile_size, self.tile_size)
-        f_tile = jnp.nanmean(dynamic_slice_tile(self.f, y_start, x_start, self.tile_size, self.tile_size))*jnp.ones((self.tile_size,self.tile_size))
-        c_tile = jnp.nanmean(dynamic_slice_tile(self.c, y_start, x_start, self.tile_size, self.tile_size))*jnp.ones((self.tile_size,self.tile_size))
+        f_tile = jnp.nanmean(dynamic_slice_tile(self.f, y_start, x_start, self.tile_size, self.tile_size))
+        c_tile = jnp.nanmean(dynamic_slice_tile(self.c, y_start, x_start, self.tile_size, self.tile_size))
 
         # Compute Helmholtz DST over the tile
         helmholtz_dst_tile = (
-            self.g / dynamic_slice_tile(f_tile, 1, 1, self.tile_size - 2, self.tile_size - 2)
+            self.g / f_tile
             * self.laplace_dst_tile
             - self.g
-            * dynamic_slice_tile(f_tile, 1, 1, self.tile_size - 2, self.tile_size - 2)
-            / dynamic_slice_tile(c_tile, 1, 1, self.tile_size - 2, self.tile_size - 2) ** 2
+            * f_tile
+            / c_tile ** 2
         )
 
         # Initialize h_tile and compute the inversion
@@ -575,7 +912,7 @@ class QgmWithTiles(Qgm):
         """
         Compute the updated h array for a single tile.
         """
-        h_tile = self.process_tile(y_start, x_start,  q, qb, hb)
+        h_tile = self.pv2h_tile(y_start, x_start,  q, qb, hb)
         # Create an empty array for h updates
         h_update = jnp.zeros_like(q)
         h_update = dynamic_update_slice(h_update, self.weights_space * h_tile, (y_start, x_start))
@@ -596,6 +933,58 @@ class QgmWithTiles(Qgm):
         h = jnp.sum(h_updates, axis=0) / self.weights_space_sum
 
         return h
+    
+    def h2pv_tile(self, y_start, x_start, h, hb, ind12, ind0):
+
+
+        # Extract tile-specific data
+        h_tile = dynamic_slice_tile(h, y_start, x_start, self.tile_size, self.tile_size)
+        hb_tile = dynamic_slice_tile(hb, y_start, x_start, self.tile_size, self.tile_size)
+        f_tile = jnp.nanmean(dynamic_slice_tile(self.f, y_start, x_start, self.tile_size, self.tile_size))
+        c_tile = jnp.nanmean(dynamic_slice_tile(self.c, y_start, x_start, self.tile_size, self.tile_size))
+
+        ind12_tile = dynamic_slice_tile(ind12, y_start, x_start, self.tile_size, self.tile_size)
+        ind0_tile = dynamic_slice_tile(ind0, y_start, x_start, self.tile_size, self.tile_size)
+
+
+        q_tile = jnp.zeros_like(h_tile,dtype='float64')
+
+        q_tile = q_tile.at[1:-1, 1:-1].set(
+            self.g / f_tile * \
+            ((h_tile[2:, 1:-1] + h_tile[:-2, 1:-1] - 2 * h_tile[1:-1, 1:-1]) / self.dy ** 2 + \
+             (h_tile[1:-1, 2:] + h_tile[1:-1, :-2] - 2 * h_tile[1:-1, 1:-1]) / self.dx ** 2) - \
+            self.g * f_tile / (c_tile ** 2) * h_tile[1:-1, 1:-1])
+
+        q_tile = jnp.where(jnp.isnan(q_tile), 0, q_tile)
+
+        q_tile = jnp.where(ind12_tile, self.g * f_tile / (c_tile ** 2) * hb_tile, q_tile)
+
+        q_tile = jnp.where(ind0_tile, 0, q_tile)
+
+        return q_tile
+    
+    def compute_updated_q(self, y_start, x_start,  h, hb, ind12, ind0):
+        """
+        Compute the updated h array for a single tile.
+        """
+        q_tile = self.h2pv_tile(y_start, x_start,  h, hb, ind12, ind0)
+        # Create an empty array for h updates
+        q_update = jnp.zeros_like(h)
+        q_update = dynamic_update_slice(q_update, self.weights_space * q_tile, (y_start, x_start))
+        return q_update
+
+    def h2pv(self, h, hb):
+
+        # Prepare arguments for all tiles
+        tiles_args = jnp.array(self.tiles, dtype=jnp.int32)
+
+        # Compute updates for all tiles in parallel
+        q_updates = jax.vmap(lambda args: partial(self.compute_updated_q, h=h, hb=hb, ind12=self.ind12, ind0=self.ind0)(*args))(tiles_args)
+
+        # Combine updates from all tiles
+        q = jnp.sum(q_updates, axis=0) / self.weights_space_sum
+
+        return q
 
 
 class Qgm_trac:
