@@ -577,7 +577,8 @@ class Basis_bmaux:
                 _ENSLON = np.arange(
                         LON_MIN - (DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
                         LON_MAX+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg)
+                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg
+                        )
                 _ENSLAT = np.repeat(ENSLAT1[I],len(_ENSLON))
                 if self.mask1d is None:
                     _ENSLON1 = _ENSLON
@@ -589,7 +590,7 @@ class Basis_bmaux:
                     for (lon,lat) in zip(_ENSLON,_ENSLAT):
                         indphys = np.where(
                             (np.abs((self.lon1d - lon) / self.km2deg * np.cos(lat * np.pi / 180.)) <= .5/ff[iff]) &
-                            (np.abs((self.lat1d - lat) / self.km2deg) <= .5/ff[iff])
+                            (np.abs((self.lat1d - lat) / self.km2deg) <= 1/ff[iff])
                             )[0]
                         if not np.all(self.mask1d[indphys]):
                             _ENSLON1.append(lon)

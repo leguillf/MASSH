@@ -477,9 +477,8 @@ class Qgm:
         
         return adf(adh0)[0]
 
-
-
 class QgmWithTiles(Qgm):
+    
     def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None,
                  upwind=3, g=9.81, f=1e-4, time_scheme='Euler', 
                  tile_size=64, tile_overlap=8, **kwargs):
