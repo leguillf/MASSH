@@ -93,8 +93,6 @@ class Variational:
 
         
     def cost(self,X0):
-
-        print('test')
                 
         # Initial state
         State = self.State.copy()
