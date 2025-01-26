@@ -597,9 +597,9 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         R = Cov(config.INV.sigma_R)
         
     # Variational object initialization
-    from .tools_4Dvar import Variational as Variational
+    from .tools_4Dvar import Variational_jax as Variational
     var = Variational(
-        config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints)
+        config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints, nstep=nstep_check)
     
     # Initial Control vector 
     if config.INV.path_init_4Dvar is None:
@@ -675,9 +675,24 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         
             
         # Run minimization 
-        res = opt.minimize(var.cost, Xopt,
+        from jax import jit, value_and_grad
+        fun = jit(value_and_grad(var.cost))
+        class Wrapper:
+            def __init__(self):
+                self.cache = {}
+
+            def __call__(self, x, *args):
+                cost, grad = fun(x)
+                self.cache['grad'] = grad
+                return cost
+
+            def jac(self, x, *args):
+                return self.cache.pop('grad')
+        
+        wrapper = Wrapper()
+        res = opt.minimize(wrapper, Xopt,
                         method=config.INV.opt_method,
-                        jac=var.grad,
+                        jac=wrapper.jac,
                         options=options,
                         callback=callback)
 
@@ -713,6 +728,8 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
 
     # Init
     State0 = State.copy()
+    State_var = State0.var
+    State_params = State0.params
     date = config.EXP.init_date
     Model.save_output(State0,date,name_var=Model.var_to_save,t=0) 
     
@@ -724,43 +741,21 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         t = (date - config.EXP.init_date).total_seconds()
         
         # Reduced basis
-        Basis.operg(t/3600/24,Xa,State=State0)
+        Basis.operg(t/3600/24,Xa,State_params)
 
         # Forward propagation
-        Model.step(t=t,State=State0,nstep=nstep)
+        State_var = Model.step(t, State_var, State_params, nstep=nstep)
         date += timedelta(seconds=nstep_check*Model.dt)
 
         # Save output
         if (((date - config.EXP.init_date).total_seconds()
             /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
             & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
+            State0.var = State_var
             Model.save_output(State0,date,name_var=Model.var_to_save,t=t) 
 
-        if False:
-            # Forward
-            for j in range(nstep_check):
-                
-                if (((date - config.EXP.init_date).total_seconds()
-                    /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
-                    & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
-                    Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
-
-                # Forward propagation
-                Model.step(t=t+j*Model.dt,State=State0,nstep=1)
-                date += timedelta(seconds=Model.dt)
-        
-
-        
         State0.plot(date)
-
-    # Last timestep
-    if False:
-        if (((date - config.EXP.init_date).total_seconds()
-                    /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
-                    & (date>config.EXP.init_date) & (date<=config.EXP.final_date) :
-            Model.save_output(State0,date,name_var=Model.var_to_save,t=t+j*Model.dt) # Save output
-        
-        
+                
     del State, State0, Xa, dict_obs, B, R, Model, Basis, var, Xopt, Xres, checkpoints, time_checkpoints, t_checkpoints
     gc.collect()
     print()

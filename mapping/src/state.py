@@ -327,7 +327,7 @@ class State:
         var = {}              
         for name in name_var:
 
-            var_to_save = +self.var[name]
+            var_to_save = +np.array(self.var[name])
 
             # Apply Mask
             if self.mask is not None:

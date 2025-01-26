@@ -149,8 +149,6 @@ class Variational:
         return J
     
     def grad(self,X0): 
-
-        now = datetime.datetime.now()
                 
         X = +X0 
         
@@ -212,7 +210,146 @@ class Variational:
 
         return g     
     
+class Variational_jax:
     
+    def __init__(self, 
+                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None, nstep=None):
+        
+        # Objects
+        self.M = M # model
+        self.H = H # observational operator
+        self.State = State # state variables
+    
+        # Covariance matrixes
+        self.B = B
+        self.R = R
+        
+        # Background state
+        self.Xb = jnp.array(Xb)
+        
+        # Temporary path where to save model trajectories
+        self.tmp_DA_path = config.EXP.tmp_DA_path
+
+        # checkpoint 
+        self.checkpoints = jnp.asarray(checkpoints)
+
+        # Timetamps
+        self.T = jnp.asarray(M.T)
+
+        self.nstep = nstep
+                                    
+        # preconditioning
+        self.prec = config.INV.prec
+        
+        # Wavelet reduced basis
+        self.dtbasis = int(config.INV.timestep_checkpoint.total_seconds()//M.dt)
+        self.basis = Basis 
+        
+        # Save cost function and its gradient at each iteration 
+        self.save_minimization = config.INV.save_minimization
+        if self.save_minimization:
+            self.J = []
+            self.dJ = [] # For incremental 4Dvar only
+            self.G = []
+        
+        # For incremental 4Dvar only
+        self.X0 = self.Xb*0
+        
+        # Grad test
+        if config.INV.compute_test:
+            print('Gradient test:')
+            if self.prec:
+                X = jnp.array(np.random.random(self.basis.nbasis)-0.5)
+            else:
+                X = jnp.array(self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb)
+            grad_test(self.cost,self.grad,X)
+            
+    
+    def misfit_update(self, args):
+        Jo, State_var, t = args
+        misfit = self.H.misfit(State_var, t)  # d=Hx-xobs
+        return Jo + misfit.dot(self.R.inv(misfit)), State_var, t
+    
+    def no_update(self,args):
+        return args
+    
+    def body_fn(self, i, val):
+        t, Jo, State_var, State_params, X = val
+
+        # 1. Misfit
+        Jo, State_var, t = lax.cond(
+            self.H.is_obs_time(t),
+            self.misfit_update,
+            self.no_update,
+            (Jo, State_var, t)
+        )
+
+        # 2. Basis
+        self.basis.operg(t / 3600 / 24, X, State_params)
+
+        # 3. Run forward model
+        State_var = self.M.step(t, State_var, State_params, nstep=self.nstep)
+
+        # Update time
+        t += self.nstep * self.M.dt
+
+        return t, Jo, State_var, State_params, X 
+    
+    def cost(self, X0):
+        # Initial state
+        State = self.State.copy()
+        
+        # Background cost function evaluation 
+        if self.B is not None:
+            if self.prec:
+                X = self.B.sqr(X0) + self.Xb
+                Jb = X0.dot(X0)  # cost of background term
+            else:
+                X = X0 + self.Xb
+                Jb = jnp.dot(X0, self.B.inv(X0))  # cost of background term
+        else:
+            X = X0 - self.Xb
+            Jb = 0
+
+        # Observational cost function evaluation
+        Jo = 0.0
+        State_var = State.var
+        State_params = State.params
+    
+        # Initial values
+        t_init = 0.0
+        Jo_init = Jo
+        val_init = (t_init, Jo_init, State_var, State_params, X)
+
+        # Use fori_loop to iterate
+        t_final = self.M.T[-1]
+        n_iters = int(t_final // (self.nstep * self.M.dt)) + 1
+        t, Jo, State_var, State_params, X = lax.fori_loop(0, n_iters, self.body_fn, val_init)
+
+        # Handle the final timestamp after the loop
+        Jo, State_var, t = lax.cond(
+            self.H.is_obs_time(t),
+            self.misfit_update,
+            self.no_update,
+            (Jo, State_var, t)
+        )
+
+        # Cost function
+        J = 0.5 * (Jo + Jb)
+
+        if self.save_minimization:
+            self.J.append(J)
+
+        return J
+    
+    
+    def grad(self,X0): 
+
+        grad_fun = jax.grad(self.cost)
+
+        return grad_fun(X0)
+
+
 def grad_test(J, G, X):
     h = np.random.random(X.size)
     h /= np.linalg.norm(h)

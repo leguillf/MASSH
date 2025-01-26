@@ -15,10 +15,9 @@ from scipy.sparse import csc_matrix
 from scipy.integrate import quad
 import jax.numpy as jnp 
 from jax.experimental import sparse as sparse
-from jax import jit
-from jax import vjp
+from jax import jit, lax
 import jax
-from functools import partial
+
 jax.config.update("jax_enable_x64", True)
 
 from .tools import gaspari_cohn
@@ -51,6 +50,9 @@ def Basis(config, State, verbose=True, *args, **kwargs):
     
         elif config.BASIS.super=='BASIS_BMaux':
             return Basis_bmaux(config,State)
+        
+        elif config.BASIS.super=='BASIS_BMaux_JAX':
+            return Basis_bmaux_jax(config,State)
         
         elif config.BASIS.super=='BASIS_IT':
             return Basis_it(config, State)
@@ -838,6 +840,161 @@ class Basis_bmaux:
         
         return adX
 
+class Basis_bmaux_jax(Basis_bmaux):
+    def __init__(self,config, State):
+        super().__init__(config, State)
+
+        self.operg_jit = jit(self.operg, static_argnums=0)
+
+    def set_basis(self,time,return_q=False,**kwargs):
+        res = super().set_basis(time,return_q=return_q,**kwargs)
+
+        # Convert dictionary to keys and values arrays
+        self.Gt_keys = jnp.array(list(self.Gt.keys()))
+        self.Gt_values = jnp.array(list(self.Gt.values()))
+        self.Nt_values = jnp.array(list(self.Nt.values()))
+
+        return res
+
+    def _compute_component_space(self):
+
+        Gx = [None,]*self.nf
+        Nx = [None,]*self.nf
+
+        for iff in range(self.nf):
+
+            data = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,))
+            indices = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,),dtype=int)
+            sizes = np.zeros((2*self.ntheta*self.NP[iff],),dtype=int)
+
+            ind_tmp = 0
+            iwave = 0
+
+            for P in range(self.NP[iff]):
+                # Obs selection around point P
+                indphys = np.where(
+                    (np.abs((self.lon1d - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
+                    (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
+                    )[0]
+                xx = (self.lon1d[indphys] - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
+                yy = (self.lat1d[indphys] - self.ENSLAT[iff][P]) / self.km2deg
+                # Spatial tapering shape of the wavelet 
+                if self.mask1d is not None:
+                    indmask = self.mask1d[indphys]
+                    indphys = indphys[~indmask]
+                    xx = xx[~indmask]
+                    yy = yy[~indmask]
+                facd = np.ones((indphys.size))
+                if self.depth is not None:
+                    facd = (self.depth[indphys]-self.depth1)/(self.depth2-self.depth1)
+                    facd[facd>1]=1.
+                    facd[facd<0]=0.
+                    indphys = indphys[facd>0]
+                    xx = xx[facd>0]
+                    yy = yy[facd>0]
+                    facd = facd[facd>0]
+
+                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
+
+                for itheta in range(self.ntheta):
+                    # Wave vector components
+                    kx = self.k[iff] * np.cos(self.theta[itheta])
+                    ky = self.k[iff] * np.sin(self.theta[itheta])
+                    # Cosine component
+                    sizes[iwave] = indphys.size
+                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.cos(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
+                    # Sine component
+                    sizes[iwave] = indphys.size
+                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.sin(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
+
+            nwaves = iwave
+            Nx[iff] = nwaves
+
+            sizes = sizes[:nwaves]
+            indices = indices[:ind_tmp]
+            data = data[:ind_tmp]
+
+            indptr = np.zeros((nwaves+1),dtype=int)
+            indptr[1:] = np.cumsum(sizes)
+
+            Gx[iff] = sparse.CSC((data, indices, indptr), shape=(self.nphys, nwaves))
+                        
+
+        return Gx, Nx
+
+
+    def _compute_component_time(self, time):
+
+        Gt = {} # Time operator that gathers the time factors for each frequency 
+        Nt = {} # Number of wave times tw such as abs(tw-t)<tdec
+
+        for t in time:
+
+            Gt[t] = [None,]*self.nf
+            Nt[t] = [0,]*self.nf
+
+            for iff in range(self.nf):
+                Gt[t][iff] = np.zeros((self.nbasis,)) 
+                ind_tmp = self.iff_wavebounds[iff]
+                for it in range(len(self.enst[iff])):
+                    dt = t - self.enst[iff][it]
+                    for P in range(self.NP[iff]):
+                        if abs(dt) < self.tdec_max[iff]:
+                            fact = self.window(dt / self.tdec[iff][P]) 
+                            fact /= self.norm_fact[iff][P]
+                            Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta] = fact   
+                            if P==0:
+                                Nt[t][iff] += 1
+                        ind_tmp += 2*self.ntheta
+        return Gt, Nt     
+    
+    def get_Gt_value(self, t):
+        idx = jnp.where(self.Gt_keys == t, size=1)[0]  # Find index
+        return self.Gt_values[idx][0], self.Nt_values[idx][0]  # Get corresponding value
+    
+    def operg(self, t, X, State_params=None):
+        """
+            Project to physical space
+        """
+
+        # Initialize phi
+        phi = jnp.zeros(self.shape_phys).ravel()
+
+        for iff in range(self.nf):
+            # Get Gt value
+            Gt, Nt = self.get_Gt_value(t)
+
+            # Compute GtXf
+            GtXf = (Gt[iff] * X)[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
+
+            # Replace NaNs with 0 (use jnp.nan_to_num for JAX compatibility)
+            GtXf_no_nan = jnp.nan_to_num(GtXf)
+
+            # Use shape-safe slicing instead of boolean indexing
+            Nx_val = self.Nx[iff]
+
+            # Dynamically reshape the sliced array
+            reshaped_GtXf = GtXf_no_nan.reshape((-1, Nx_val))  # Ensure reshaping works dynamically
+
+            # Update phi
+            phi += self.Gx[iff] @ reshaped_GtXf.sum(axis=0)
+
+        # Reshape phi back to physical space shape
+        phi = phi.reshape(self.shape_phys)
+
+        if State_params is not None:
+            State_params[self.name_mod_var] = phi
+
+        return phi
+    
+    
+    
 class Basis_wavelet3d:
    
     def __init__(self,config,State):

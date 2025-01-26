@@ -56,6 +56,8 @@ def Model(config, State, verbose=True):
             return Model_qg1l_np(config,State)
         elif config.MOD.super=='MOD_QG1L_JAX':
             return Model_qg1l_jax(config,State)
+        elif config.MOD.super=='MOD_QG1L_JAX_FULL':
+            return Model_qg1l_jax_full(config,State)
         elif config.MOD.super=='MOD_SW1L_NP':
             return Model_sw1l_np(config,State)
         elif config.MOD.super=='MOD_SW1L_JAX':
@@ -1060,6 +1062,85 @@ class Model_qg1l_jax(M):
                     adState.setvar(adX1[i],self.name_var[name])
         else:
             adState.setvar(adX1,self.name_var['SSH'])
+
+
+class Model_qg1l_jax_full(Model_qg1l_jax):
+    def __init__(self,config,State):
+        super().__init__(config,State)
+
+    def set_bc(self,time_bc,var_bc):
+
+        super().set_bc(time_bc,var_bc)
+        self.t_bc = jnp.array(list(self.bc['SSH'].keys()))
+        self.SSHb = jnp.array(list(self.bc['SSH'].values()))
+    
+
+    def _apply_bc(self,t0,t1):
+        
+        Xb = jnp.zeros((self.ny,self.nx,))
+
+        if 'SSH' not in self.bc:
+            return Xb
+        elif len(self.bc['SSH'].keys())==0:
+             return Xb
+        else:
+            idt = jnp.where(self.t_bc==t0, size=1)[0]
+            Xb = self.SSHb[idt][0]
+
+        if self.advect_tracer:
+            Xb = Xb[np.newaxis,:,:]
+            for name in self.name_var:
+                if name!='SSH' and name in self.bc and len(self.bc[name].keys())>0:
+                    if t1 in self.bc[name]: 
+                        Cb = self.bc[name][t1]
+                    else:
+                        # Find closest time
+                        t_list = np.array(list(self.bc['SSH'].keys()))
+                        idx_closest = np.argmin(np.abs(t_list-t1))
+                        new_t1 = t_list[idx_closest]
+                        Cb = self.bc[name][new_t1]
+                    Xb = np.append(Xb, Cb[np.newaxis,:,:], axis=0)     
+        return Xb.astype('float64')
+
+    def step(self, t, State_var, State_params, nstep=1):
+
+        # Get state variable(s)
+        X0 = +State_var[self.name_var['SSH']]
+        if self.advect_tracer:
+            X0 = X0[np.newaxis,:,:]
+            for name in self.name_var:
+                if name!='SSH':
+                    C0 = +State_var[self.name_var[name]][jnp.newaxis,:,:]
+                    X0 = np.append(X0, C0, axis=0)
+
+        # Boundary field
+        Xb = self._apply_bc(t,t+nstep*self.dt)
+        
+        # init
+        X1 = +X0.astype('float64')
+        State_var1 = State_var.copy()
+
+        # Time propagation
+        X1 = self.qgm_step(X1,Xb,nstep=nstep)
+
+        # Update state
+        if self.name_var['SSH'] in State_params:
+            Fssh = State_params[self.name_var['SSH']] # Forcing term for SSH
+            if self.advect_tracer:
+                X1[0] += nstep*self.dt/(3600*24) * Fssh
+                State_var1[self.name_var['SSH']] = X1[0]
+                for i,name in enumerate(self.name_var):
+                    if name!='SSH':
+                        Fc = State_params[self.name_var[name]] # Forcing term for tracer
+                        X1[i] += nstep*self.dt/(3600*24) * Fc
+                        State_var1[self.name_var[name]] = X1[i]
+            else:
+                X1 += nstep*self.dt/(3600*24) * Fssh
+                State_var1[self.name_var['SSH']] = X1
+
+        return State_var1
+
+
 
 ###############################################################################
 #                         Shallow Water Models                                #
