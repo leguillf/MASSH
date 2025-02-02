@@ -152,6 +152,7 @@ class Variational:
                 
         X = +X0 
         
+        
         if self.B is not None:
             if self.prec :
                 X  = self.B.sqr(X0) + self.Xb
@@ -208,7 +209,111 @@ class Variational:
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))
 
-        return g     
+        return g  
+
+    def cost_and_grad(self, X0):
+         
+        ########################################
+        # COST FUNCTION
+        ########################################
+
+        # Initial state
+        State = self.State.copy()
+
+        # Background cost function
+        if self.B is not None:
+            if self.prec :
+                X  = self.B.sqr(X0) + self.Xb
+                Jb = X0.dot(X0) # cost of background term
+            else:
+                X  = X0 + self.Xb
+                Jb = np.dot(X0,self.B.inv(X0)) # cost of background term
+        else:
+            X  = X0 - self.Xb
+            Jb = 0
+    
+        # Observational cost function evaluation
+        State_dict = {}
+        misfit_dict = {}
+        Jo = 0.
+        for i in range(len(self.checkpoints)-1):
+            
+            t = self.M.T[self.checkpoints[i]]
+            nstep = self.checkpoints[i+1] - self.checkpoints[i]
+            
+            # 1. Misfit
+            if self.H.is_obs_time(t):
+                misfit = self.H.misfit(t,State) # d=Hx-xobs   
+                misfit_dict[t] = misfit
+                Jo += misfit.dot(self.R.inv(misfit))
+            
+            # 2. Reduced basis
+            if self.checkpoints[i]%self.dtbasis==0:
+                self.basis.operg(t/3600/24, X, State=State)
+            
+            State_dict[t] = State.copy()
+
+            # 3. Run forward model
+            self.M.step(t=t,State=State,nstep=nstep)
+
+        t = self.M.T[-1]
+        State_dict[t] = State.copy()
+        if self.H.is_obs_time(t):
+            misfit = self.H.misfit(t,State) # d=Hx-xobsx
+            misfit_dict[t] = misfit
+            Jo += misfit.dot(self.R.inv(misfit))  
+        
+        # Cost function 
+        J = 1/2 * (Jo + Jb)
+
+        ########################################
+        # GRAD FUNCTION
+        ########################################
+
+        # Gradient of the background term
+        if self.B is not None:
+            if self.prec :
+                gb = X0      # gradient of background term
+            else:
+                gb = self.B.inv(X0) # gradient of background term
+        else:
+            gb = 0
+
+        # Ajoint initialization   
+        adState = self.State.copy(free=True)
+        adX = X*0
+
+        # Last timestamp
+        t = self.M.T[self.checkpoints[i]]
+        if self.H.is_obs_time(t):
+            self.H.adj(t,adState,State_dict[t], misfit_dict[t])
+
+        # Time loop
+        for i in reversed(range(0,len(self.checkpoints)-1)):
+            
+            nstep = self.checkpoints[i+1] - self.checkpoints[i]
+            t = self.M.T[self.checkpoints[i]]
+            
+            # Read model state & misfit
+            State = State_dict[t]
+
+            # 3. Run adjoint model 
+            self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
+            
+            # 2. Reduced basis
+            if self.checkpoints[i]%self.dtbasis==0:
+                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
+            
+            # 1. Misfit 
+            if self.H.is_obs_time(t):
+                self.H.adj(t,adState,State,misfit_dict[t])
+
+        if self.prec :
+            adX = np.transpose(self.B.sqr(adX)) 
+        
+        G = adX + gb  # total gradient
+
+        return J, G  
     
 class Variational_jax:
     

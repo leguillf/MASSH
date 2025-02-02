@@ -530,7 +530,6 @@ class Basis_bmaux:
         LAT_MAX = self.lat_max
         if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
 
-        
         # Ensemble of pseudo-frequencies for the wavelets (spatial)
         logff = np.arange(
             np.log(1./self.lmin),
@@ -639,8 +638,12 @@ class Basis_bmaux:
         Q = np.array([]) 
         iwave = 0
         self.iff_wavebounds = [None]*(nf+1)
+        
         for iff in range(nf):
             self.iff_wavebounds[iff] = iwave
+            _nwavef = 0
+            #for _ in range(len(enst[iff])):
+            Qf = np.array([])
             for P in range(NP[iff]):
                 dlon = DX[iff]*self.km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)
                 dlat = DX[iff]*self.km2deg
@@ -654,14 +657,16 @@ class Basis_bmaux:
                     Q_tmp = np.nanmean(Q_tmp)
                 Q_tmp *= self.facQ
                 # Fill Q
-                _nwavet = 2*len(enst[iff])*ntheta
-                Q = np.concatenate((Q,Q_tmp*np.ones((_nwavet,))))
-                iwave += _nwavet
+                Qf = np.concatenate((Qf,Q_tmp*np.ones(2*ntheta)))
+                _nwavef += 2*ntheta
+            _nwavef *= len(enst[iff])
+            Q = np.concatenate((Q,np.array([Qf]*len(enst[iff])).ravel()))
+            iwave += _nwavef
 
             print(f'lambda={1/ff[iff]:.1E}',
                     f'nlocs={NP[iff]:.1E}',
                     f'tdec={np.mean(tdec[iff]):.1E}',
-                    f'Q={np.mean(Q[self.iff_wavebounds[iff]:]):.1E}')
+                    f'Q={np.mean(Q[self.iff_wavebounds[iff]:iwave]):.1E}')
         self.iff_wavebounds[-1] = iwave
 
         # Background
@@ -689,6 +694,7 @@ class Basis_bmaux:
 
 
         # Compute basis components
+        #self._compute_components(time)
         self.Gx, self.Nx = self._compute_component_space() # in space
         self.Gt, self.Nt = self._compute_component_time(time) # in time
         
@@ -696,7 +702,7 @@ class Basis_bmaux:
             
         if return_q:
             return Xb, Q
-    
+        
     def _compute_component_space(self):
 
         Gx = [None,]*self.nf
@@ -782,16 +788,19 @@ class Basis_bmaux:
                 Gt[t][iff] = np.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],)) * np.nan
                 ind_tmp = 0
                 for it in range(len(self.enst[iff])):
-                    dt = t - self.enst[iff][it]
                     for P in range(self.NP[iff]):
+                        dt = t - self.enst[iff][it]
                         if abs(dt) < self.tdec_max[iff]:
-                            fact = self.window(dt / self.tdec[iff][P]) 
-                            fact /= self.norm_fact[iff][P]
+                            if abs(dt)>self.tdec[iff][P]:
+                                fact = 0
+                            else:
+                                fact = self.window(dt / self.tdec[iff][P]) 
+                                fact /= self.norm_fact[iff][P]
                             Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta] = fact   
                             if P==0:
                                 Nt[t][iff] += 1
                         ind_tmp += 2*self.ntheta
-        return Gt, Nt     
+        return Gt, Nt      
 
     def operg(self, t, X, State=None):
         
@@ -844,7 +853,8 @@ class Basis_bmaux_jax(Basis_bmaux):
     def __init__(self,config, State):
         super().__init__(config, State)
 
-        self.operg_jit = jit(self.operg, static_argnums=0)
+        self._operg_jit = jit(self._operg)
+        self._operg_reduced_jit = jit(self._operg_reduced)
 
     def set_basis(self,time,return_q=False,**kwargs):
         res = super().set_basis(time,return_q=return_q,**kwargs)
@@ -928,7 +938,6 @@ class Basis_bmaux_jax(Basis_bmaux):
 
         return Gx, Nx
 
-
     def _compute_component_time(self, time):
 
         Gt = {} # Time operator that gathers the time factors for each frequency 
@@ -958,9 +967,10 @@ class Basis_bmaux_jax(Basis_bmaux):
         idx = jnp.where(self.Gt_keys == t, size=1)[0]  # Find index
         return self.Gt_values[idx][0], self.Nt_values[idx][0]  # Get corresponding value
     
-    def operg(self, t, X, State_params=None):
+    def _operg(self, t, X):
+
         """
-            Project to physical space
+            Project to physicial space
         """
 
         # Initialize phi
@@ -988,11 +998,62 @@ class Basis_bmaux_jax(Basis_bmaux):
         # Reshape phi back to physical space shape
         phi = phi.reshape(self.shape_phys)
 
-        if State_params is not None:
-            State_params[self.name_mod_var] = phi
-
         return phi
-    
+
+    def _operg_reduced(self, t, phi_2d):
+        """
+        Project a 2D physical space field back to the reduced space.
+
+        Parameters:
+            t: Current time
+            phi_2d: 2D physical space field to project back.
+
+        Returns:
+            Reduced space representation (1D vector).
+        """
+
+        # Define a wrapper function for _operg that computes the forward projection
+        def operg_func(X):
+            return self._operg_jit(t, X)
+
+        # Compute the vector-Jacobian product (vjp) for the forward projection
+        _, vjp_func = jax.vjp(operg_func, jnp.zeros(self.nbasis))  # Provide a zero vector matching the reduced space shape
+
+        # Use the vjp_func to compute the reduced space projection
+        X_reduced, = vjp_func(phi_2d)
+
+        return X_reduced
+
+
+    def operg(self, t, X, State=None):
+        
+        """
+            Project to physicial space
+        """
+
+        # Projection
+        phi = self._operg_jit(t, X)
+
+        # Update State
+        if State is not None:
+            State.params[self.name_mod_var] = phi
+        else:
+            return phi
+        
+    def operg_transpose(self, t, adState):
+        
+        """
+            Project to reduced space
+        """
+
+        if adState.params[self.name_mod_var] is None:
+            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+        adparams = adState.params[self.name_mod_var]
+        adX = self._operg_reduced_jit(t, adparams)
+        
+        adState.params[self.name_mod_var] *= 0.
+        
+        return adX
     
     
 class Basis_wavelet3d:

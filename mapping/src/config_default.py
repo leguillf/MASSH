@@ -253,6 +253,23 @@ MOD_DIFF = dict(
     dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
 )
 
+MOD_DIFF_JAX = dict(
+
+    name_var = {'SSH':"ssh"},
+
+    var_to_save = None,
+
+    name_init_var = {},
+
+    dtmodel = 300, # model timestep
+
+    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
+
+    init_from_bc = False,
+
+    dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
+)
+
 # 1.5-layer Quasi-Geostrophic models
 MOD_QG1L_NP = dict(
 
@@ -648,13 +665,72 @@ INV_4DVAR = dict(
  
 )
 
+
+INV_4DVAR_JAX = dict(
+
+    compute_test = False, # TLM, ADJ & GRAD tests
+
+    JAX_mem_fraction = None,
+
+    path_init_4Dvar = None, # To restart the minimization process from a specified control vector
+
+    restart_4Dvar = False, # To restart the minimization process from the last control vector
+
+    ftol = None, # The iteration stops when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
+
+    gtol = None, # Gradient norm must be less than gtol*g0 (g0 being the gradient at first iteration) before successful termination.
+
+    maxiter = 10, # Maximal number of iterations for the minimization process
+
+    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
+
+    save_minimization = False, # save cost function and its gradient at each iteration 
+
+    path_save_control_vectors = None, # Path where to save the control vector at each 4Dvar iteration 
+
+    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
+
+    sigma_R = None, # Observational standard deviation
+
+    sigma_B = None,
+
+    prec = False, # preconditoning
+    
+    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
+
+    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
+
+    path_background = None, # Path to the precribed background on BM basis
+    
+    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
+
+    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
+
+    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
+
+    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
+
+    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
+
+    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
+
+    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
+ 
+)
+
 INV_4DVAR_PARALLEL = dict(
+
+    name_4Dvar = 'function',
 
     nprocs = 1, # Number of parallelized processes
     
     JAX_mem_fraction = None, # GPU Memory fraction (bw [0,1]) used for one process
 
     space_window_size_proc = 10, # Space window size of one process (in °). Set to None for no split in space.
+
+    nx_proc = 123,
+
+    ny_proc = 123,
 
     space_overlap_frac = .5, # Overlap fraction of two succesive space windows 
 

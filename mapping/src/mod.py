@@ -52,6 +52,8 @@ def Model(config, State, verbose=True):
             print(config.MOD)
         if config.MOD.super=='MOD_DIFF':
             return Model_diffusion(config,State)
+        elif config.MOD.super=='MOD_DIFF_JAX':
+            return Model_diffusion_jax(config,State)
         elif config.MOD.super=='MOD_QG1L_NP':
             return Model_qg1l_np(config,State)
         elif config.MOD.super=='MOD_QG1L_JAX':
@@ -214,14 +216,6 @@ class Model_diffusion(M):
                 if _name_var_bc==_name_var_mod:
                     for i,t in enumerate(time_bc):
                         self.bc[_name_var_mod][t] = var_bc[_name_var_bc][i]
-        
-
-    def _apply_bc(self,State,t0,t):
-
-        for name in self.name_var:
-            if t not in self.bc[name]:
-                State.var[self.name_var[name]] +=\
-                    self.Wbc * (self.bc[name][t]-self.bc[name][t0]) 
 
 
     def step(self,State,nstep=1,t=None):
@@ -249,10 +243,8 @@ class Model_diffusion(M):
                 var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
             State.setvar(var1, self.name_var[name])
         
-        # Boundary conditions
-        #self._apply_bc(State,t,t+nstep*self.dt)
 
-        
+
     def step_tgl(self,dState,State,nstep=1,t=None):
 
         # Loop on model variables
@@ -307,6 +299,38 @@ class Model_diffusion(M):
                 adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0
             advar1[np.isnan(advar1)] = 0
             adState.setvar(advar1,self.name_var[name])
+
+class Model_diffusion_jax(Model_diffusion):
+    def __init__(self,config,State):
+        super().__init__(config,State)
+
+    def step(self, t, State_var, State_params, nstep=1):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Get state variable
+            var0 = State_var[self.name_var[name]]
+            
+            # Init
+            var1 = +var0
+
+            # Time propagation
+            if self.Kdiffus>0:
+                for _ in range(nstep):
+                    var1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
+                        (var1[1:-1,2:]+var1[1:-1,:-2]-2*var1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                        (var1[2:,1:-1]+var1[:-2,1:-1]-2*var1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+            
+            # Update state
+            if self.name_var[name] in State_params:
+                params = State_params[self.name_var[name]]
+                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+
+            State_var1 = State_var.copy()
+            State_var1[self.name_var[name]] = var1
+            
+            return State_var1
 
 ###############################################################################
 #                       Quasi-Geostrophic Models                              #
@@ -1072,8 +1096,7 @@ class Model_qg1l_jax_full(Model_qg1l_jax):
 
         super().set_bc(time_bc,var_bc)
         self.t_bc = jnp.array(list(self.bc['SSH'].keys()))
-        self.SSHb = jnp.array(list(self.bc['SSH'].values()))
-    
+        self.SSHb = jnp.array(list(self.bc['SSH'].values()))  
 
     def _apply_bc(self,t0,t1):
         
@@ -1139,6 +1162,8 @@ class Model_qg1l_jax_full(Model_qg1l_jax):
                 State_var1[self.name_var['SSH']] = X1
 
         return State_var1
+    
+
 
 
 
