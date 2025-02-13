@@ -49,7 +49,7 @@ def Model(config, State, verbose=True):
         return
     
     elif config.MOD.super is None:
-        return Model_multi(config,State)
+        return Model_multi(config,State,verbose)
 
     elif config.MOD.super is not None:
         if verbose:
@@ -2336,17 +2336,25 @@ class Model_sw1l_jax(M):
 
         # Read tidal velocities
         if config.EXP.path_tidal_velocity is not None and os.path.exists(config.EXP.path_tidal_velocity): 
-
-            # Variables
-            self.tidal_U = {}
-            self.tidal_V = {}
             
-            for name in self.omega_names:
-                self.tidal_U[name] = self.open_interpolate(config,name,"U",State)
-                self.tidal_V[name] = self.open_interpolate(config,name,"V",State)
-
+            # Variables
+            
+            self.tidal_U = np.zeros((len(self.omega_names), # Number of tidal components
+                                     State.lon[0,:].size, # Number of longitude grid points 
+                                     State.lat[:,0].size, # Number of latitude grid points 
+                                     ))
+            
+            self.tidal_V = np.zeros((len(self.omega_names), # Number of tidal components
+                                     State.lon[0,:].size, # Number of longitude grid points 
+                                     State.lat[:,0].size, # Number of latitude grid points 
+                                     ))
+            
+            for (i,name) in enumerate(self.omega_names):
+                self.tidal_U[i,:,:] = self.open_interpolate(config,name,"U",State)
+                self.tidal_V[i,:,:] = self.open_interpolate(config,name,"V",State)
+        
         else: # No tidal velocity file prescripted
-            warnings.warn("No tidal velocity field prescribed. This is not suitable if Internal Tide generation is being controlled.")
+            warnings.warn("No tidal velocity field prescribed. This is not suitable if Internal Tide generation ('itg') is being controlled.")
             return None 
         
     def open_interpolate(self,config,name,direction,State):
@@ -4466,14 +4474,14 @@ class Model_tracadv_vel(M):
 
 class Model_multi:
 
-    def __init__(self,config,State):
+    def __init__(self,config,State,verbose):
 
         self.Models = []
         _config = config.copy()
 
         for _MOD in config.MOD:
             _config.MOD = config.MOD[_MOD]
-            self.Models.append(Model(_config,State))
+            self.Models.append(Model(config=_config,State=State,verbose=verbose))
             print()
 
         # Time parameters
@@ -4517,21 +4525,23 @@ class Model_multi:
 
         # Intialization
         var_tot_tmp = {}
+        for name in self.name_var:
+            var_tot_tmp[name] = 0
 
-        for M in self.Models:
-            M.init(State,t0)
-
-        ### CHANGE TO FIX : TO INIT SSH_TOT ###
         # for M in self.Models:
         #     M.init(State,t0)
-        #     # Add to total variables
-        #     for name in self.name_var:
-        #         if name in M.name_var:
-        #             var_tot_tmp[name] += State.var[M.name_var[name]]
+
+        ### CHANGE TO FIX : TO INIT SSH_TOT ###
+        for M in self.Models:
+            M.init(State,t0)
+            # Add to total variables
+            for name in self.name_var:
+                if name in M.name_var:
+                    var_tot_tmp[name] += State.var[M.name_var[name]]
             
         # # Update state
-        # for name in self.name_var:
-        #     State.var[self.name_var[name]] = var_tot_tmp[name]
+        for name in self.name_var:
+            State.var[self.name_var[name]] = var_tot_tmp[name]
         
 
     def set_bc(self,time_bc,var_bc):

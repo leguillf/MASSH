@@ -14,8 +14,14 @@ from scipy import signal
 import matplotlib.pylab as plt
 import glob 
 
+# from datetime import datetime 
+
+import warnings
+
 from .tools import detrendn,read_auxdata_mdt
 from .exp import Config
+
+from functools import partial
 
 def Obs(config, State, *args, **kwargs):
     """
@@ -40,11 +46,15 @@ def Obs(config, State, *args, **kwargs):
         return {}
     
     if config.EXP.time_obs_min is not None:
+        if config.EXP.time_obs_min < config.EXP.init_date:
+            warnings.warn("The minimum time for observation is before the initial date.", UserWarning)
         time_obs_min = config.EXP.time_obs_min
     else:
         time_obs_min = config.EXP.init_date
     
     if config.EXP.time_obs_max is not None:
+        if config.EXP.time_obs_max > config.EXP.final_date:
+            warnings.warn("The maximum time for observation is after the final date.", UserWarning)
         time_obs_max = config.EXP.time_obs_max
     else:
         time_obs_max = config.EXP.final_date
@@ -88,14 +98,26 @@ def Obs(config, State, *args, **kwargs):
         if '.nc' in OBS.path and '*' not in OBS.path:
             _ds = xr.open_dataset(OBS.path)
         else:
-            if '*' in OBS.path:
-                path = OBS.path
-            else:
-                path = f'{OBS.path}*.nc'
+            if type(OBS.path)==list: # if a list of path is specified 
+                path = []
+                for _path in OBS.path:
+                    path += glob.glob(_path)
+                path.sort()
+            else : # if a single path is specified 
+                if '*' in OBS.path:
+                    path = OBS.path
+                else:
+                    path = f'{OBS.path}*.nc'
+
             try:
 
                 if OBS.super=='OBS_SSH_SWATH' : # no need to specify the dimension along which to concatenate 
-                    _ds = xr.open_mfdataset(path,combine='nested',concat_dim = OBS.concat_dim)
+                    if OBS.drop_dims is not None : # dropping dims in the opening 
+                        _preprocess =  partial(preprocess, dims=OBS.drop_dims)
+                    else :
+                        _preprocess = None
+
+                    _ds = xr.open_mfdataset(path,combine='nested',concat_dim = OBS.concat_dim,preprocess=_preprocess)
                 else :
                     _ds = xr.open_mfdataset(path)
                 
@@ -156,7 +178,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
 
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
-            ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
+        ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
     elif np.sign(ds[obs_attr.name_lon].data.min())==1 and lon_unit=='-180_180':
         ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
     
@@ -171,13 +193,20 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         finterpmdt = read_auxdata_mdt(obs_attr.path_mdt,obs_attr.name_var_mdt)
     else:
         finterpmdt = None
+
+    # Masking data according to the quality_flag_variable
+    if (obs_attr.quality_flag_variable is not None) and (obs_attr.list_index_valid_data is not None): 
+        for name in obs_attr.name_var:
+            ds[obs_attr.name_var[name]] = ds[obs_attr.name_var[name]].where(
+                ds[obs_attr.quality_flag_variable].isin(obs_attr.list_index_valid_data),drop=False
+            )
     
     # Time loop
     count = 0
     for dt_curr in dt_list:
         dt1 = np.datetime64(dt_curr-dt_timestep/2)
         dt2 = np.datetime64(dt_curr+dt_timestep/2)
-
+        
         try:
             _ds = ds.sel({obs_attr.name_time:slice(dt1,dt2)})
         except:
@@ -187,16 +216,14 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
             except:
                 print(dt_curr,': Warning: impossible to select data for this time')
                 continue
-        
 
         lon = _ds[obs_attr.name_lon].values
         lat = _ds[obs_attr.name_lat].values
         
         is_obs = np.any(~np.isnan(lon.ravel()*lat.ravel())) * (lon.size>0)
-        
-
 
         if is_obs:
+
             # Save the selected dataset in a new nc file
             varobs = {}
             for name in obs_attr.name_var:
@@ -209,6 +236,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     else:
                         sign = -1
                     varobs[name].data = varobs[name].data + sign*mdt_on_obs
+
                 # Remove high values
                 if 'varmax' in obs_attr and obs_attr.varmax is not None:
                     #varobs[name][np.abs(varobs[name])>obs_attr.varmax] = np.nan
@@ -520,3 +548,10 @@ def get_obs(dict_obs,box,time_init,name_var='SSH'):
             coords[coords_att['time']] = time      
         
         return [var, coords, coords_att]
+
+def preprocess(ds,dims):
+    try:
+        ds = ds.drop_dims(dims)
+    except:
+        pass
+    return ds

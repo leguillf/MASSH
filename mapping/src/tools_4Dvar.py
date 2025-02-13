@@ -39,6 +39,8 @@ class Cov :
     def sqr(self,X):
         return self.sigma * X
     
+    def invsqr(self,X):
+        return 1/self.sigma * X
     
 class Variational:
     
@@ -132,13 +134,13 @@ class Variational:
         if config.INV.compute_test:
             print('Gradient test:')
             if self.prec:
-                X = (np.random.random(self.basis.nbasis)-0.5)
+                X = 1e-2*(np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
             grad_test(self.cost,self.grad,X)
     
     def cost(self,X0):
-                
+       
         # Initial state
         State = self.State.copy()
 
@@ -168,10 +170,6 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
 
-            # Setting up initial state if it is controlled 
-            if self.basis.wavelet_init == True and t==0:
-                self.basis.operg(t/3600/24, X, State=State)
-
             # Measuring computation times
             # t0 = datetime.now()
 
@@ -199,8 +197,16 @@ class Variational:
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 self.basis.operg(t/3600/24, X, State=State)
+                # plt.figure()
+                # plt.pcolormesh(State.params["He"])
+                # plt.colorbar()
+                # plt.show()
 
             self.States[self.checkpoints[i]] = State.copy()
+
+            # if i%2==0:
+            if i == int(len(self.checkpoints)/2):
+                State.plot(title=f'State variables at {i}')
 
             # Measuring computation times
             # t_basis.append(datetime.now()-t0)
@@ -223,7 +229,7 @@ class Variational:
         print("Jb = ",Jb)
         print("Jo = ",Jo)
         
-        State.plot(title='State variables at the end of cost function evaluation')
+        # State.plot(title='State variables at the end of cost function evaluation')
         ### TO DO : HOW TO PLOT THE PARAMETERS ### 
         #State.plot(title='Parameters at the end of cost function evaluation',params=True)
         
@@ -294,9 +300,9 @@ class Variational:
             self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
         # Measuring computation times 
-        #t_misfit = []
-        #t_basis = []
-        #t_model = []
+        # t_misfit = []
+        # t_basis = []
+        # t_model = []
 
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
@@ -304,11 +310,9 @@ class Variational:
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
             timestamp = self.M.timestamps[self.checkpoints[i]]
             t = self.M.T[self.checkpoints[i]]
-
-            print(timestamp)
             
-            # Measuring computation times
-            #t0 = datetime.now()
+            # # Measuring computation times
+            # t0 = datetime.now()
 
             State = self.States[self.checkpoints[i]]
             
@@ -316,56 +320,35 @@ class Variational:
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
 
             # Measuring computation times
-            #t_model.append(datetime.now()-t0)
-            #t0 = datetime.now()
+            # t_model.append(datetime.now()-t0)
+            # t0 = datetime.now()
 
-            adState.plot(title=f'adjoint variables at i = {i}')
+            # adState.plot(title=f'adjoint variables at i = {i}')
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
 
             # Measuring computation times
-            #t_basis.append(datetime.now()-t0)
-            #t0 = datetime.now()
+            # t_basis.append(datetime.now()-t0)
+            # t0 = datetime.now()
             
             # 1. Misfit 
             if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
             # Measuring computation times
-            #t_misfit.append(datetime.now()-t0)
+            # t_misfit.append(datetime.now()-t0)
 
         # For first timestamp #
         
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
-        
-        plt.figure()
-        plt.plot(adX)
-        plt.title("adX")
-        plt.show()
-
-        plt.figure()
-        plt.plot(gb)
-        plt.title("gb")
-        plt.show()
 
         g = adX + gb  # total gradient
-
-
-        # plt.figure()
-        # plt.plot(adX)
-        # plt.title("grad of obs")
-        # plt.show()
-
-        # plt.figure()
-        # plt.plot(gb)
-        # plt.title("grad of background")
-        # plt.show()
         
-        adState.plot(title='adjoint variables at the end of gradient function evaluation')
+        # adState.plot(title='adjoint variables at the end of gradient function evaluation')
         self.basis.operg(t/3600/24,adX,State=State)
 
         ### PLOTTING PARAMETERS OF INIT STATE ### 
@@ -403,7 +386,7 @@ class Variational:
             #         self.Gb[param].append(0)
 
         # Measuring computation times
-        #print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
+        # print(f"MEAN COMPUTATION TIME FOR GRAD FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
 
         return g
     

@@ -213,6 +213,10 @@ def read_auxdata_mdt(filemdt_aux,name_var):
     if len(lon.shape)==1:
         finterpMDT = scipy.interpolate.RegularGridInterpolator((lon,lat),mdt,bounds_error=False,fill_value=None)
     else:
-        finterpMDT = scipy.interpolate.NearestNDInterpolator(list(zip(lon.ravel(),lat.ravel())),mdt.ravel())
+        # finterpMDT = scipy.interpolate.NearestNDInterpolator(list(zip(lon.ravel(),lat.ravel())),mdt.ravel())
+
+        finterpMDT = scipy.interpolate.RegularGridInterpolator([lat,lon],
+                                                        mdt,
+                                                        bounds_error=False)
     return finterpMDT
 

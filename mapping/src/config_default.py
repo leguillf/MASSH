@@ -197,7 +197,11 @@ OBS_SSH_NADIR = dict(
 
     delta_t = None, # Sampling period of the satellite (in s), used for computing geostrophic current 
 
-    velocity = None # Velocity of the satellite (in m/s), used for computing geostrophic current 
+    velocity = None, # Velocity of the satellite (in m/s), used for computing geostrophic current 
+
+    quality_flag_variable = None, # name of the variable flagging the quality of the measurement 
+
+    list_index_valid_data = None, # list of index of valid datas 
 
 )
 
@@ -232,7 +236,13 @@ OBS_SSH_SWATH = dict(
 
     nudging_params_relvort = None, # dictionary of nudging parameters on Relative Vorticity {'sigma':<float>,'K':<float>,'Tau':<datetime.timedelta>}. Note that *sigma* parameter is useless now, and will be removed soon
     
-    concat_dim = "num_lines" # dimension name along which to concatenate 
+    concat_dim = "num_lines", # dimension name along which to concatenate 
+
+    quality_flag_variable = None, # name of the variable flagging the quality of the measurement (if provided in the SWOT files)
+
+    list_index_valid_data = None, # list of index of valid datas 
+
+    drop_dims = None, # dims to drop when opening the files
     
 )
 
@@ -585,6 +595,8 @@ OBSOP_INTERP_L3 = dict(
     mask_borders = False,
 
     normalize_misfit = False, # normalizing misfit by the number of observations 
+    
+    parallel_computing = False, # if True, observational operators are calculated with parallel computing. Needs to False if INV_4DVAR_PARALLEL is used 
 
 )
 
@@ -616,7 +628,9 @@ OBSOP_INTERP_L4 = dict(
 
     mask_borders = False,
 
-    interp_method = 'linear' # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
+    interp_method = 'linear', # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
+
+    parallel_computing = False, # if True, observational operators are calculated with parallel computing. Needs to False if INV_4DVAR_PARALLEL is used 
 
 )
 
@@ -679,6 +693,8 @@ INV_4DVAR = dict(
     restart_4Dvar = False, # To restart the minimization process from the last control vector
 
     gtol = None, # Gradient norm must be less than gtol before successful termination.
+
+    ftol = None, # Cost function value must be less than ftol before successful termination.
 
     maxiter = 10, # Maximal number of iterations for the minimization process
 
@@ -772,17 +788,25 @@ INV_4DVAR_JAX = dict(
 
     only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
 
-    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
+    anomaly_from_bc = False, # Whether to perform the minimization with anomalies from boundary condition field(s)
+
+    cost_function_coeff = 1 #coefficient multiplying the cost function (for testing)
  
 )
 
 INV_4DVAR_PARALLEL = dict(
 
-    nprocs = 1,
+    nprocs = 1, # Number of parallelized processes
+    
+    JAX_mem_fraction = None, # GPU Memory fraction (bw [0,1]) used for one process
 
-    overlap_frac = .5,
+    space_window_size_proc = 10, # Space window size of one process (in °). Set to None for no split in space.
 
-    window_size_proc = timedelta(days=30),
+    space_overlap_frac = .5, # Overlap fraction of two succesive space windows 
+
+    time_window_size_proc = 30, # Time window size of one process (days). Set to None for no split in time.
+
+    time_overlap_frac = .5, # Overlap fraction of two succesive time windows 
 
     compute_test = False, # TLM, ADJ & GRAD tests
 
@@ -826,8 +850,12 @@ INV_4DVAR_PARALLEL = dict(
 
     only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
 
-    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
- 
+    anomaly_from_bc = False, # Whether to perform the minimization with anomalies from boundary condition field(s)
+
+    cost_function_coeff = 1, #coefficient multiplying the cost function (for testing)
+
+    merge_output = True,
+
 )
 
 # Multi-scale Optimal Interpolation (Ubelmann et al. 2021) 
@@ -928,6 +956,8 @@ BASIS_BM = dict(
 
     wavelet_init = False, # Estimate the initial state 
 
+    path_restart = None, # Path to the get the vector at the start of the minimization for the specified Basis  
+    
 )
 
 BASIS_GEOCUR = dict(
@@ -1064,25 +1094,23 @@ BASIS_CONSTANT = dict(
 # Balanced Motions with auxilliary data 
 BASIS_BMaux = dict(
 
-    name_mod_var = None, # Name of the related model variable
+    name_mod_var = None, # Name of the related model variable 
     
-    flux = True,
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
-    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+    facns = 1., #factor for wavelet spacing in space
 
-    wavelet_init = True, # Estimate the initial state 
+    facnlt = 2., #factor for wavelet spacing in time
 
-    facns = 1., #factor for wavelet spacing= space
+    npsp = 3.5, # Defines the wavelet shape
 
-    facnlt = 2., #factor for wavelet spacing= time
+    facpsp = 1.5, # factor to fix df between wavelets
 
-    npsp= 3.5, # Defines the wavelet shape
+    file_aux = '', # Name of auxilliary file in which are stored the std and tdec for each locations at different wavelengths.
 
-    facpsp= 1.5, # factor to fix df between wavelets
+    lmin = 80, # minimal wavelength (in km)
 
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
+    lmax = 970., # maximal wavelength (in km)
 
     factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
 
@@ -1090,29 +1118,21 @@ BASIS_BMaux = dict(
 
     tdecmax = 40., # maximum time of decorrelation 
 
-    facQ= 1, # factor to be multiplied to the estimated Q
+    facQ = 1, # factor to be multiplied to the estimated Q
 
-    distortion_eq = 2.,
+    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
 
-    lat_distortion_eq = 5.,
+    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
 
-    distortion_eq_law = 2.,
+    depth1 = 0.,
 
-    file_aux = None,
-
-    filec_aux = None,
-
-    tssr = 0.5,
-
-    facRo = 8.,
-
-    Romax = 150.,
-
-    cutRo =  1.6,
+    depth2 = 30.,
 
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
-    var_background = None # name of the variable of the basis vector
+    var_background = None, # name of the variable of the basis vector
+
+    path_restart = None, # Path to the get the vector at the start of the minimization for the specified Basis  
 
 )
 
@@ -1157,6 +1177,8 @@ BASIS_IT = dict(
 
     var_background = None, # name of the variable of the basis vector 
 
+    path_restart = None, # Path to the get the vector at the start of the minimization for the specified Basis  
+
     facgauss = 3.5,  # factor for gaussian spacing= both space/time
 
     ### - HBC PARAMETER ### 
@@ -1187,13 +1209,19 @@ BASIS_IT = dict(
 
     ### - HE PARAMETER - ### 
 
-    sigma_B_He = 0.2, # Background variance for He
+    control_He_offset = False, # if True an offset on the equivalent height is controlled
 
-    He_time_dependant = True, # True if equivalent height parameter changes in time  
+    control_He_variation = True, # if True the spatial variations of equivalent height are controlled 
+
+    He_time_dependant = True, # True if equivalent height variations change in time (if control_He_variation = True)
 
     D_He = 200, # Space scale of gaussian decomposition for He (in km)
 
     T_He = 20, # Time scale of gaussian decomposition for He (in days)
+
+    sigma_B_He = 0.2, # Background variance for He
+
+    sigma_B_He_offset = 0.2, # Background variance for He offset (if control_He_offset = True)
 
 )
 

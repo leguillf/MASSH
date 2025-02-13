@@ -463,8 +463,9 @@ class Basis_bm:
         self.name_mod_var = config.BASIS.name_mod_var
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
-        self.wavelet_init = config.BASIS.wavelet_init
-        
+        self.wavelet_init = config.BASIS.wavelet_init        
+        self.path_restart = config.BASIS.path_restart # Path to the get the vector at the start of the minimization for the specified Basis  
+
         # Grid params
         self.nphys= State.lon.size
         self.shape_phys = (State.ny,State.nx)
@@ -952,7 +953,6 @@ class Basis_bm:
         ps2 = np.inner(phi0,phi1)
             
         print(f'test G[{t}]:', ps1/ps2)
-
 
 class Basis_geocur:
    
@@ -2126,31 +2126,23 @@ class Basis_bmaux:
 
         self.km2deg=1./110
         
+        # Internal params
+        self.file_aux = config.BASIS.file_aux
         self.flux = config.BASIS.flux
-        self.facns = config.BASIS.facns # factor for wavelet spacing= space
+        self.facns = config.BASIS.facns 
         self.facnlt = config.BASIS.facnlt
-        self.npsp = config.BASIS.npsp # Defines the wavelet shape (nb de pseudopériode)
-        self.facpsp = config.BASIS.facpsp # 1.5 # factor to fix df between wavelets 
+        self.npsp = config.BASIS.npsp 
+        self.facpsp = config.BASIS.facpsp 
         self.lmin = config.BASIS.lmin 
         self.lmax = config.BASIS.lmax
         self.tdecmin = config.BASIS.tdecmin
         self.tdecmax = config.BASIS.tdecmax
         self.factdec = config.BASIS.factdec
         self.facQ = config.BASIS.facQ
-        self.save_wave_basis = config.BASIS.save_wave_basis
-        self.file_aux = config.BASIS.file_aux
-        self.filec_aux = config.BASIS.filec_aux
-        self.Romax = config.BASIS.Romax
-        self.facRo = config.BASIS.facRo
-        self.cutRo = config.BASIS.cutRo
-        self.tssr = config.BASIS.tssr
-        self.distortion_eq = config.BASIS.distortion_eq
-        self.distortion_eq_law = config.BASIS.distortion_eq_law
-        self.lat_distortion_eq = config.BASIS.lat_distortion_eq
         self.name_mod_var = config.BASIS.name_mod_var
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
-
+        
         # Grid params
         self.nphys= State.lon.size
         self.shape_phys = (State.ny,State.nx)
@@ -2162,10 +2154,29 @@ class Basis_bmaux:
         self.lat1d = State.lat.flatten()
 
         # Mask
-        if State.mask is not None:
+        if State.mask is not None and np.any(State.mask):
             self.mask1d = State.mask.ravel()
         else:
             self.mask1d = None
+
+        # Depth data
+        if config.BASIS.file_depth is not None:
+            ds = xr.open_dataset(config.BASIS.file_depth)
+            lon_depth = ds[config.BASIS.name_var_depth['lon']].values
+            lat_depth = ds[config.BASIS.name_var_depth['lat']].values
+            var_depth = ds[config.BASIS.name_var_depth['var']].values
+            finterpDEPTH = scipy.interpolate.RegularGridInterpolator((lon_depth,lat_depth),var_depth,bounds_error=False,fill_value=None)
+            self.depth = -finterpDEPTH((self.lon1d,self.lat1d))
+            self.depth[np.isnan(self.depth)] = 0.
+            self.depth[np.isnan(self.depth)] = 0.
+
+            self.depth1 = config.BASIS.depth1
+            self.depth2 = config.BASIS.depth2
+        else:
+            self.depth = None
+
+        # Dictionnaries to save wave coefficients and indexes for repeated runs
+        self.path_save_tmp = config.EXP.tmp_DA_path
 
         # Time window
         if self.flux:
@@ -2173,20 +2184,18 @@ class Basis_bmaux:
         else:
             self.window = mywindow
 
-    def set_basis(self,time,return_q=False):
+        self.path_restart = config.BASIS.path_restart 
+
+    def set_basis(self,time,return_q=False,**kwargs):
         
         TIME_MIN = time.min()
         TIME_MAX = time.max()
-        LON_MIN = self.lon1d.min()
-        LON_MAX = self.lon1d.max()
-        LAT_MIN = self.lat1d.min()
-        LAT_MAX = self.lat1d.max()
+        LON_MIN = self.lon_min
+        LON_MAX = self.lon_max
+        LAT_MIN = self.lat_min
+        LAT_MAX = self.lat_max
         if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
 
-        lat_tmp = np.arange(-90,90,0.1)
-        alpha = (self.distortion_eq-1)*np.sin(self.lat_distortion_eq*np.pi/180)**self.distortion_eq_law
-        finterpdist = scipy.interpolate.interp1d(
-            lat_tmp, 1+alpha/(np.sin(np.maximum(self.lat_distortion_eq,np.abs(lat_tmp))*np.pi/180)**self.distortion_eq_law))
         
         # Ensemble of pseudo-frequencies for the wavelets (spatial)
         logff = np.arange(
@@ -2194,37 +2203,38 @@ class Basis_bmaux:
             np.log(1. / self.lmax) - np.log(1 + self.facpsp / self.npsp),
             -np.log(1 + self.facpsp / self.npsp))[::-1]
         ff = np.exp(logff)
+        ff = ff[1/ff<=self.lmax]
         dff = ff[1:] - ff[:-1]
         
         # Ensemble of directions for the wavelets (2D plane)
         theta = np.linspace(0, np.pi, int(np.pi * ff[0] / dff[0] * self.facpsp))[:-1]
         ntheta = len(theta)
         nf = len(ff)
+        logging.info('spatial normalized wavelengths: %s', 1./np.exp(logff))
+        logging.info('ntheta: %s', ntheta)
 
         # Global time window
         deltat = TIME_MAX - TIME_MIN
 
-        # Read aux data
-        aux = xr.open_dataset(self.file_aux)
-        daPSDS = aux['PSDS']
-        auxc = xr.open_dataset(self.filec_aux)
-        daC = auxc['c1']
+        aux = xr.open_dataset(self.file_aux,decode_times=False)
+        daTdec = aux['Tdec']
+        daStd = aux['Std']
 
         # Wavelet space-time coordinates
         ENSLON = [None]*nf # Ensemble of longitudes of the center of each wavelets
         ENSLAT = [None]*nf # Ensemble of latitudes of the center of each wavelets
-        enst = list() #  Ensemble of times of the center of each wavelets
-        tdec = list() # Ensemble of equivalent decorrelation times. Used to define enst.
-        Cb1 = list() # First baroclinic phase speed
+        enst = [None]*nf #  Ensemble of times of the center of each wavelets
+        tdec = [None]*nf # Ensemble of equivalent decorrelation times. Used to define enst.
+        tdec_max = [None]*nf
+        norm_fact = [None]*nf # integral of the time component (for normalization)
         
         DX = 1./ff*self.npsp * 0.5 # wavelet extension
         DXG = DX / self.facns # distance (km) between the wavelets grid in space
-        NP = np.empty(nf, dtype='int16') # Nomber of spatial wavelet locations for a given frequency
-        nwave = 0
-        self.nwavemeso = 0
+        NP = np.empty(nf, dtype='int32') # Nomber of spatial wavelet locations for a given frequency
 
         for iff in range(nf):
-                
+            
+            # Spatial coordinates of wavelet components
             ENSLON[iff]=[]
             ENSLAT[iff]=[]
             ENSLAT1 = np.arange(
@@ -2232,118 +2242,92 @@ class Basis_bmaux:
                 LAT_MAX + DX[iff]*self.km2deg,
                 DXG[iff]*self.km2deg)
             for I in range(len(ENSLAT1)):
-                ENSLON1 = np.mod(
-                    np.arange(
-                        LON_MIN - (DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
-                        LON_MAX + DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I]),
-                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg*finterpdist(ENSLAT1[I])),
-                    360)
-                ENSLAT[iff]=np.concatenate(([ENSLAT[iff],np.repeat(ENSLAT1[I],len(ENSLON1))]))
-                ENSLON[iff]=np.concatenate(([ENSLON[iff],ENSLON1]))
-            
+                _ENSLON = np.arange(
+                        LON_MIN - (DX[iff]-DXG[iff])/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                        LON_MAX+DX[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                        DXG[iff]/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg)
+                _ENSLAT = np.repeat(ENSLAT1[I],len(_ENSLON))
+                if self.mask1d is None:
+                    _ENSLON1 = _ENSLON
+                    _ENSLAT1 = _ENSLAT
+                else:
+                    # Avoid wave component for which the state grid points are full masked
+                    _ENSLON1 = []
+                    _ENSLAT1 = []
+                    for (lon,lat) in zip(_ENSLON,_ENSLAT):
+                        indphys = np.where(
+                            (np.abs((self.lon1d - lon) / self.km2deg * np.cos(lat * np.pi / 180.)) <= .5/ff[iff]) &
+                            (np.abs((self.lat1d - lat) / self.km2deg) <= .5/ff[iff])
+                            )[0]
+                        if not np.all(self.mask1d[indphys]):
+                            _ENSLON1.append(lon)
+                            _ENSLAT1.append(lat)                    
+                ENSLAT[iff] = np.concatenate(([ENSLAT[iff],_ENSLAT1]))
+                ENSLON[iff] = np.concatenate(([ENSLON[iff],_ENSLON1]))
             NP[iff] = len(ENSLON[iff])
-            enst.append(list())
-            tdec.append(list())
-            Cb1.append(list())
-            for P in range(NP[iff]):
-                enst[-1].append(list())
-                tdec[-1].append(list()) 
-                Cb1[-1].append(list())
 
-                # First baroclinic phase speed
-                dlon = DX[iff]*self.km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)*finterpdist(ENSLAT[iff][P])
+            # Time decorrelation
+            tdec[iff] = [None]*NP[iff]
+            norm_fact[iff] = [None]*NP[iff]
+            for P in range(NP[iff]):
+                dlon = DX[iff]*self.km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)
                 dlat = DX[iff]*self.km2deg
                 elon = np.linspace(ENSLON[iff][P]-dlon,ENSLON[iff][P]+dlon,10)
                 elat = np.linspace(ENSLAT[iff][P]-dlat,ENSLAT[iff][P]+dlat,10)
                 elon2,elat2 = np.meshgrid(elon,elat)
-                Ctmp = daC.interp(lon=elon2.flatten(),lat=elat2.flatten()).values
-                Ctmp = Ctmp[np.isnan(Ctmp)==False]
-                if len(Ctmp)>0:
-                    C = np.nanmean(Ctmp)
-                else: 
-                    C = np.nan
-                if np.isnan(C): 
-                    C=0.
-                Cb1[-1][-1] = C
-
-                # Decorrelation time
-                fc = 2*2*np.pi/86164 * np.sin(ENSLAT[iff][P]*np.pi/180.)
-                Ro = C / np.abs(fc) /1000. # Rossby radius (km)
-                if Ro>self.Romax: 
-                    Ro = self.Romax
-                if C>0: 
-                    td1 = self.factdec / (1./(self.facRo*Ro)*C/1000*86400)
-                else: 
-                    td1 = np.nan
-                PSDS = daPSDS.interp(f=ff[iff],lat=ENSLAT[iff][P],lon=ENSLON[iff][P]).values
-                if Ro>0: 
-                    PSDSR = daPSDS.interp(f=1./(self.facRo*Ro),lat=ENSLAT[iff][P],lon=ENSLON[iff][P]).values
-                else: 
-                    PSDSR = np.nan
-                if PSDS<=PSDSR: 
-                    tdec[-1][-1] = td1 * (PSDS/PSDSR)**self.tssr
-                else: 
-                    tdec[-1][-1] = td1
-                if tdec[-1][-1]>self.tdecmax: 
-                    tdec[-1][-1] = self.tdecmax
-                cp = 1./(2*2*np.pi/86164*np.sin(max(10,np.abs(ENSLAT[iff][P]))*np.pi/180.))/300000
-                tdecp = (1./ff[iff])*1000/cp/86400/4
-                if tdecp<tdec[-1][-1]: 
-                    tdec[-1][-1] = tdecp
-
-                enst[-1][-1] = np.arange(-tdec[-1][-1]*(1-1./self.facnlt),deltat+tdec[-1][-1]/self.facnlt , tdec[-1][-1]/self.facnlt)
-                nwave += ntheta*2*len(enst[iff][P])
-                
-        # Fill the Q diagonal matrix (expected variance for each wavelet)            
-        Q = np.zeros((nwave))
-        self.wavetest=[None]*nf
-        # Loop on all wavelets of given pseudo-period 
-        iwave=-1 
-        self.iff_wavebounds = [None]*(nf+1)
-        self.P_wavebounds = [None]*(nf+1)
-        for iff in range(nf):
-            self.iff_wavebounds[iff] = iwave+1
-            self.P_wavebounds[iff] = [None]*(NP[iff]+1)
-            self.wavetest[iff] = np.ones((NP[iff]), dtype=bool)
-            for P in range(NP[iff]):
-                self.P_wavebounds[iff][P] = iwave+1
-                PSDLOC = abs(daPSDS.interp(f=ff[iff],lat=ENSLAT[iff][P],lon=ENSLON[iff][P]).values)
-                C = Cb1[iff][P]
-                fc = (2*2*np.pi/86164*np.sin(ENSLAT[iff][P]*np.pi/180.))
-                if fc==0: 
-                    Ro=self.Romax
+                tdec_tmp = daTdec.interp(f=ff[iff],lon=elon2.flatten(),lat=elat2.flatten()).values
+                if np.all(np.isnan(tdec_tmp)):
+                    tdec[iff][P] = 0
                 else:
-                    Ro = C / np.abs(fc) /1000.  # Rossby radius (km)
-                    if Ro>self.Romax: 
-                        Ro=self.Romax
-                # Tests
-                if ((1./ff[iff] < self.cutRo * Ro)): 
-                    self.wavetest[iff][P]=False
-                if tdec[iff][P]<self.tdecmin: 
-                    self.wavetest[iff][P]=False
-                if np.isnan(PSDLOC): 
-                    self.wavetest[iff][P]=False
-                if ((np.isnan(Cb1[iff][P]))|(Cb1[iff][P]==0)): 
-                    self.wavetest[iff][P]=False
-
-                if self.wavetest[iff][P]==True:
-                    for it in range(len(enst[iff][P])):
-                        for itheta in range(len(theta)):
-                            iwave += 1
-                            Q[iwave] = (PSDLOC*ff[iff]**2 * self.facQ * np.exp(-3*(self.cutRo * Ro*ff[iff])**3))**.5
-                            iwave += 1
-                            Q[iwave] = (PSDLOC*ff[iff]**2 * self.facQ* np.exp(-3*(self.cutRo * Ro*ff[iff])**3))**.5
-                
-            print(f'lambda={1/ff[iff]:.1E}',
-                  f'nlocs={P:.1E}',
-                  f'tdec={np.nanmean(tdec[iff]):.1E}',
-                  f'Q={np.nanmean(Q[self.iff_wavebounds[iff]:iwave+1]):.1E}')
-                  
-            self.P_wavebounds[iff][P+1] = iwave +1
-        self.iff_wavebounds[-1] = iwave +1
+                    tdec[iff][P] = np.nanmean(tdec_tmp)
+                tdec[iff][P] *= self.factdec
+                if tdec[iff][P]<self.tdecmin:
+                        tdec[iff][P] = self.tdecmin
+                if tdec[iff][P]>self.tdecmax:
+                    tdec[iff][P] = self.tdecmax 
+                # Compute time integral for each frequency for normalization
+                tt = np.linspace(-tdec[iff][P],tdec[iff][P])
+                tmp = np.zeros_like(tt)
+                for i in range(tt.size-1):
+                    tmp[i+1] = tmp[i] + self.window(tt[i]/tdec[iff][P])*(tt[i+1]-tt[i])
+                norm_fact[iff][P] = tmp.max()
             
-        nwave = iwave+1
-        Q = Q[:nwave]
+            if len(tdec[iff])>0:
+                tdec_max[iff] = np.max(tdec[iff])
+                # Time coordinates, uniform for all points, set with the minimum tdec
+                tdec_min = np.min(tdec[iff]) 
+                enst[iff] = np.arange(-tdec_min/self.facnlt,deltat+tdec_min/self.facnlt , tdec_min/self.facnlt)
+            else:
+                enst[iff] = []
+                
+        # Fill the Q diagonal matrix (expected variance for each wavelet)     
+        Q = np.array([]) 
+        iwave = 0
+        self.iff_wavebounds = [None]*(nf+1)
+        for iff in range(nf):
+            self.iff_wavebounds[iff] = iwave
+            for P in range(NP[iff]):
+                dlon = DX[iff]*self.km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)
+                dlat = DX[iff]*self.km2deg
+                elon = np.linspace(ENSLON[iff][P]-dlon,ENSLON[iff][P]+dlon,10)
+                elat = np.linspace(ENSLAT[iff][P]-dlat,ENSLAT[iff][P]+dlat,10)
+                elon2,elat2 = np.meshgrid(elon,elat)
+                Q_tmp = daStd.interp(f=ff[iff],lon=elon2.flatten(),lat=elat2.flatten()).values
+                if np.all(np.isnan(Q_tmp)):
+                    Q_tmp = 10**-10 # Not zero otherwise a ZeroDivisionError exception will be raised
+                else:
+                    Q_tmp = np.nanmean(Q_tmp)
+                Q_tmp *= self.facQ
+                # Fill Q
+                _nwavet = 2*len(enst[iff])*ntheta
+                Q = np.concatenate((Q,Q_tmp*np.ones((_nwavet,))))
+                iwave += _nwavet
+
+            print(f'lambda={1/ff[iff]:.1E}',
+                    f'nlocs={NP[iff]:.1E}',
+                    f'tdec={np.mean(tdec[iff]):.1E}',
+                    f'Q={np.mean(Q[self.iff_wavebounds[iff]:]):.1E}')
+        self.iff_wavebounds[-1] = iwave
 
         # Background
         if self.path_background is not None and os.path.exists(self.path_background):
@@ -2352,110 +2336,127 @@ class Basis_bmaux:
                 Xb = ds[self.var_background].values
         else:
             Xb = np.zeros_like(Q)
-        
 
         self.DX=DX
         self.ENSLON=ENSLON
         self.ENSLAT=ENSLAT
         self.NP=NP
+        self.tdec=tdec
+        self.tdec_max = tdec_max
+        self.norm_fact = norm_fact
         self.enst=enst
-        self.nbasis=nwave
+        self.nbasis=Q.size
         self.nf=nf
         self.theta=theta
         self.ntheta=ntheta
         self.ff=ff
         self.k = 2 * np.pi * ff
-        self.tdec=tdec
-        
+
+
         # Compute basis components
-        self.G, self.N = self._compute_component(time) # in space
+        self.Gx, self.Nx = self._compute_component_space() # in space
+        self.Gt, self.Nt = self._compute_component_time(time) # in time
         
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
             
         if return_q:
             return Xb, Q
     
-    def _compute_component(self,time):
+    def _compute_component_space(self):
 
-        G = {}
-        N = {}
+        Gx = [None,]*self.nf
+        Nx = [None,]*self.nf
+
+        for iff in range(self.nf):
+
+            data = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,))
+            indices = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,),dtype=int)
+            sizes = np.zeros((2*self.ntheta*self.NP[iff],),dtype=int)
+
+            ind_tmp = 0
+            iwave = 0
+
+            for P in range(self.NP[iff]):
+                # Obs selection around point P
+                indphys = np.where(
+                    (np.abs((self.lon1d - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
+                    (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
+                    )[0]
+                xx = (self.lon1d[indphys] - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
+                yy = (self.lat1d[indphys] - self.ENSLAT[iff][P]) / self.km2deg
+                # Spatial tapering shape of the wavelet 
+                if self.mask1d is not None:
+                    indmask = self.mask1d[indphys]
+                    indphys = indphys[~indmask]
+                    xx = xx[~indmask]
+                    yy = yy[~indmask]
+                facd = np.ones((indphys.size))
+                if self.depth is not None:
+                    facd = (self.depth[indphys]-self.depth1)/(self.depth2-self.depth1)
+                    facd[facd>1]=1.
+                    facd[facd<0]=0.
+                    indphys = indphys[facd>0]
+                    xx = xx[facd>0]
+                    yy = yy[facd>0]
+                    facd = facd[facd>0]
+
+                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
+
+                for itheta in range(self.ntheta):
+                    # Wave vector components
+                    kx = self.k[iff] * np.cos(self.theta[itheta])
+                    ky = self.k[iff] * np.sin(self.theta[itheta])
+                    # Cosine component
+                    sizes[iwave] = indphys.size
+                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.cos(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
+                    # Sine component
+                    sizes[iwave] = indphys.size
+                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
+                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.sin(kx*(xx)+ky*(yy))
+                    ind_tmp += indphys.size
+                    iwave += 1
+
+            nwaves = iwave
+            Nx[iff] = nwaves
+
+            sizes = sizes[:nwaves]
+            indices = indices[:ind_tmp]
+            data = data[:ind_tmp]
+
+            indptr = np.zeros((nwaves+1),dtype=int)
+            indptr[1:] = np.cumsum(sizes)
+
+            Gx[iff] = csc_matrix((data, indices, indptr), shape=(self.nphys, nwaves))
+
+        return Gx, Nx
+    
+    def _compute_component_time(self, time):
+
+        Gt = {} # Time operator that gathers the time factors for each frequency 
+        Nt = {} # Number of wave times tw such as abs(tw-t)<tdec
 
         for t in time:
 
-            G[t] = [None,]*self.nf
-            N[t] = [None,]*self.nf
-            
+            Gt[t] = [None,]*self.nf
+            Nt[t] = [0,]*self.nf
+
             for iff in range(self.nf):
-
-                data = np.empty(((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff])*self.nphys,))
-                indices = np.empty(((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff])*self.nphys,),dtype=int)
-                sizes = np.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],),dtype=int)
-
-                N[t][iff] = np.zeros(self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],dtype=bool)
-
+                Gt[t][iff] = np.zeros((self.iff_wavebounds[iff+1]-self.iff_wavebounds[iff],)) * np.nan
                 ind_tmp = 0
-                iwave = 0
-
-                for P in range(self.NP[iff]):
-
-                    if self.wavetest[iff][P]:
-                        # Obs selection around point P
-                        indphys = np.where(
-                            (np.abs((self.lon1d - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
-                            (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
-                            )[0]
-                        xx = (self.lon1d[indphys] - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
-                        yy = (self.lat1d[indphys] - self.ENSLAT[iff][P]) / self.km2deg
-                        # Spatial tapering shape of the wavelet 
-                        if self.mask1d is not None:
-                            indmask = self.mask1d[indphys]
-                            indphys = indphys[~indmask]
-                            xx = xx[~indmask]
-                            yy = yy[~indmask]
-        
-                        facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) 
-
-                        for it in range(len(self.enst[iff][P])):
-                            dt = t - self.enst[iff][P][it]
-                            if abs(dt) < self.tdec[iff][P]:
-                                fact = self.window(dt / self.tdec[iff][P]) 
-                                tt = np.linspace(-self.tdec[iff][P],self.tdec[iff][P])
-                                # Normalization
-                                I =  np.sum(mywindow(tt/self.tdec[iff][P]))*(tt[1]-tt[0])
-                                fact /= I
-                                for itheta in range(self.ntheta):
-                                    # Wave vector components
-                                    kx = self.k[iff] * np.cos(self.theta[itheta])
-                                    ky = self.k[iff] * np.sin(self.theta[itheta])
-                                    # Cosine component
-                                    N[t][iff][iwave] = True
-                                    sizes[iwave] = indphys.size
-                                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
-                                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * fact * np.cos(kx*(xx)+ky*(yy))
-                                    ind_tmp += indphys.size
-                                    iwave += 1
-                                    # Sine component
-                                    N[t][iff][iwave] = True
-                                    sizes[iwave] = indphys.size
-                                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
-                                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * fact * np.sin(kx*(xx)+ky*(yy))
-                                    ind_tmp += indphys.size
-                                    iwave += 1
-                            else:
-                                iwave += 2*self.ntheta
-
-                sizes = sizes[N[t][iff]]
-                nwaves = sizes.size
-                indices = indices[:ind_tmp]
-                data = data[:ind_tmp]
-
-                indptr = np.zeros((nwaves+1),dtype=int)
-                indptr[1:] = np.cumsum(sizes)
-
-                G[t][iff] = csc_matrix((data, indices, indptr), shape=(self.nphys, nwaves))
-
-        return G, N
- 
+                for it in range(len(self.enst[iff])):
+                    dt = t - self.enst[iff][it]
+                    for P in range(self.NP[iff]):
+                        if abs(dt) < self.tdec_max[iff]:
+                            fact = self.window(dt / self.tdec[iff][P]) 
+                            fact /= self.norm_fact[iff][P]
+                            Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta] = fact   
+                            if P==0:
+                                Nt[t][iff] += 1
+                        ind_tmp += 2*self.ntheta
+        return Gt, Nt     
 
     def operg(self, t, X, State=None):
         
@@ -2466,10 +2467,12 @@ class Basis_bmaux:
         # Projection
         phi = np.zeros(self.shape_phys).ravel()
         for iff in range(self.nf):
-
-            Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][self.N[t][iff]]
-            phi += self.G[t][iff] @ Xf
-
+            Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
+            GtXf = self.Gt[t][iff] * Xf
+            indNoNan = ~np.isnan(self.Gt[t][iff])
+            if indNoNan.size>0:
+                GtXf = GtXf[indNoNan].reshape(self.Nt[t][iff],self.Nx[iff])
+                phi += self.Gx[iff].dot(GtXf.sum(axis=0))
         phi = phi.reshape(self.shape_phys)
 
         # Update State
@@ -2490,8 +2493,13 @@ class Basis_bmaux:
         adX = np.zeros(self.nbasis)
         adparams = adState.params[self.name_mod_var].ravel()
         for iff in range(self.nf):
-            adGtXf = self.G[t][iff].T.dot(adparams)
-            adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][self.N[t][iff]] += adGtXf.ravel()
+            Gt = +self.Gt[t][iff]
+            indNoNan = ~np.isnan(self.Gt[t][iff])
+            if indNoNan.size>0:
+                Gt = Gt[indNoNan].reshape(self.Nt[t][iff],self.Nx[iff])
+                adGtXf = self.Gx[iff].T.dot(adparams)
+                adGtXf = np.repeat(adGtXf[np.newaxis,:],self.Nt[t][iff],axis=0)
+                adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][indNoNan] += (Gt*adGtXf).ravel()
         
         adState.params[self.name_mod_var] *= 0.
         
@@ -2721,6 +2729,9 @@ class Basis_it:
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
 
+        # Information for seeting initial control parameter vector 
+        self.path_restart = config.BASIS.path_restart # Path to the get the vector at the start of the minimization for the specified Basis 
+
         ################################
         ### - EQUIVALENT HEIGHT He - ###
         ################################
@@ -2728,9 +2739,16 @@ class Basis_it:
         self.D_He = config.BASIS.D_He # Space scale of gaussian decomposition for He (in km)
         self.T_He = config.BASIS.T_He # Time scale of gaussian decomposition for He (in days)
 
-        self.He_time_dependant = config.BASIS.He_time_dependant # True if the He parameter is time dependant (True by default)
+        self.control_He_offset = config.BASIS.control_He_offset # if True an offset on the equivalent height is controlled
+        self.control_He_variation = config.BASIS.control_He_variation # if True the spatial variations of equivalent height are controlled 
+
+        if "He" in self.name_params and not(self.control_He_offset or self.control_He_variation):
+            print("Warning : He is in the controlled parameters but neither control_He_offset or control_He_variation are set to True")
+
+        self.He_time_dependant = config.BASIS.He_time_dependant # True if the equivalent height variation parameters are time dependant (True by default)
 
         self.sigma_B_He = config.BASIS.sigma_B_He # Covariance sigma for equivalent height He parameter
+        self.sigma_B_He_offset = config.BASIS.sigma_B_He_offset # Covariance sigma for equivalent height He parameter (used if self.control_He_offset = True)
 
         ##########################################
         ### - HEIGHT BOUNDARY CONDITIONS hbc - ###
@@ -2832,7 +2850,22 @@ class Basis_it:
         ############################################
 
         # Dictionary with the number of parameters in reduced space 
-        self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) 
+        self.n_params = {}
+        for param in self.shape_params.keys():
+            # if param == "He" :#and (self.control_He_offset and not self.control_He_variation):
+                
+            #     self.n_params[param] = int(1) 
+            # else : 
+            if self.shape_params[param] == []:
+                self.n_params[param] = 0
+            else :
+                self.n_params[param] = np.prod(self.shape_params[param])
+
+        if "He" in self.name_params and self.control_He_offset : # Adding the offset in the He control parameter 
+            self.n_params["He"] += 1 
+        # self.n_params = dict(zip(self.shape_params.keys(), map(np.prod, self.shape_params.values()))) 
+        # if "He" in self.name_params and self.control_He_offset : # Adding the offset in the He control parameter 
+        #     self.n_params["He"] += 1 
         # Dictionary with the number of parameters in pysical space
         self.n_params_phys = dict(zip(self.shape_params_phys.keys(), map(np.prod, self.shape_params_phys.values()))) 
         # Total number of parameters in the reduced space
@@ -2869,6 +2902,8 @@ class Basis_it:
                     # - Equivalent Height He - #
                     if name == "He" : 
                         Q[self.slice_params[name]]=self.sigma_B_He
+                        if self.control_He_offset : 
+                            Q[0] = self.sigma_B_He_offset
 
                     # - Height boundary conditions hbc - #
                     if name in ["hbcS","hbcN","hbcW","hbcE"] : 
@@ -2943,44 +2978,46 @@ class Basis_it:
         ###   - SPACE DIMENSION -   ###
         ###############################
 
-        # - COORDINATES - # 
-        ENSLAT1 = np.arange(
-            LAT_MIN - self.D_He*(1-1./self.facns)*self.km2deg,
-            LAT_MAX + 1.5*self.D_He/self.facns*self.km2deg, self.D_He/self.facns*self.km2deg)
-        ENSLAT_He = []
-        ENSLON_He = []
-        for I in range(len(ENSLAT1)):
-            ENSLON1 = np.mod(
-                np.arange(
-                    LON_MIN - self.D_He*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                    LON_MAX + 1.5*self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
-                    self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
-                360)
-            ENSLAT_He = np.concatenate(([ENSLAT_He,np.repeat(ENSLAT1[I],len(ENSLON1))]))
-            ENSLON_He = np.concatenate(([ENSLON_He,ENSLON1]))
-        self.ENSLAT_He = ENSLAT_He
-        self.ENSLON_He = ENSLON_He
+        if self.control_He_variation: 
 
-        # - GAUSSIAN FUNCTIONS - # 
-        He_xy_gauss = np.zeros((ENSLAT_He.size,self.lon1d.size))
-        for i,(lat0,lon0) in enumerate(zip(ENSLAT_He,ENSLON_He)):
-            iobs = np.where(
-                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_He) &
-                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_He)
-                    )[0]
-            xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
-            yy = (self.lat1d[iobs] - lat0) / self.km2deg
-            
-            He_xy_gauss[i,iobs] = mywindow(xx / self.D_He) * mywindow(yy / self.D_He)
+            # - COORDINATES - # 
+            ENSLAT1 = np.arange(
+                LAT_MIN - self.D_He*(1-1./self.facns)*self.km2deg,
+                LAT_MAX + 1.5*self.D_He/self.facns*self.km2deg, self.D_He/self.facns*self.km2deg)
+            ENSLAT_He = []
+            ENSLON_He = []
+            for I in range(len(ENSLAT1)):
+                ENSLON1 = np.mod(
+                    np.arange(
+                        LON_MIN - self.D_He*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                        LON_MAX + 1.5*self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                        self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+                    360)
+                ENSLAT_He = np.concatenate(([ENSLAT_He,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+                ENSLON_He = np.concatenate(([ENSLON_He,ENSLON1]))
+            self.ENSLAT_He = ENSLAT_He
+            self.ENSLON_He = ENSLON_He
 
-        He_xy_gauss = He_xy_gauss.reshape((ENSLAT_He.size,self.ny,self.nx))
-        self.He_xy_gauss = He_xy_gauss
+            # - GAUSSIAN FUNCTIONS - # 
+            He_xy_gauss = np.zeros((ENSLAT_He.size,self.lon1d.size))
+            for i,(lat0,lon0) in enumerate(zip(ENSLAT_He,ENSLON_He)):
+                iobs = np.where(
+                        (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_He) &
+                        (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_He)
+                        )[0]
+                xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+                yy = (self.lat1d[iobs] - lat0) / self.km2deg
+                
+                He_xy_gauss[i,iobs] = mywindow(xx / self.D_He) * mywindow(yy / self.D_He)
+
+            He_xy_gauss = He_xy_gauss.reshape((ENSLAT_He.size,self.ny,self.nx))
+            self.He_xy_gauss = He_xy_gauss
         
         ##############################
         ###   - TIME DIMENSION -   ###
         ##############################
         
-        if self.He_time_dependant:
+        if self. control_He_variation and self.He_time_dependant:
 
             # - COORDINATES - # 
             ENST_He = np.arange(-self.T_He*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_He/self.facnlt , self.T_He/self.facnlt)
@@ -2992,14 +3029,36 @@ class Basis_it:
                 He_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_He)
 
             self.He_t_gauss = He_t_gauss
-            shapeHe = [ENST_He.size,ENSLAT_He.size]
 
-        else : 
-            shapeHe = [ENSLAT_He.size]
+        ####################################  
+        ###   - PARAMETER DIMENSIONS -   ###
+        ####################################
+
+        # Note : shapeHe is the shape of the He variation control. The He offset isn't taken into account into it. 
+
+        nHe = 0
+        if self.control_He_variation: 
+
+            if self.He_time_dependant:
+            
+                shapeHe = [ENST_He.size,ENSLAT_He.size]
+
+            else : 
+
+                shapeHe = [ENSLAT_He.size]
+            
+            nHe += np.prod(shapeHe)
+            if self.control_He_offset:
+                nHe +=1
+
+        elif self.control_He_offset:
+
+            shapeHe = []
+            nHe +=1
 
         shapeHe_phys = [self.nx,self.ny]
 
-        print('nHe:',np.prod(shapeHe))
+        print('nHe:',nHe)
 
         return shapeHe, shapeHe_phys
         
@@ -3387,12 +3446,26 @@ class Basis_it:
 
             # - Equivalent Height He - # 
             if name == "He":
-                if self.He_time_dependant:
-                    phi[self.slice_params_phys[name]] = np.tensordot(
-                                                            np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.He_xy_gauss,(1,0)),
-                                                            self.He_t_gauss[:,indt],(0,0)).flatten()
-                else : 
-                    phi[self.slice_params_phys[name]] = np.tensordot(X[self.slice_params[name]].reshape(self.shape_params[name]),self.He_xy_gauss,(-1,0)).flatten()
+
+                if self.control_He_offset:
+                    X_offset = X[self.slice_params[name]][0] # He offset value
+                    phi[self.slice_params_phys[name]] += X_offset
+
+                if self.control_He_variation:
+
+                    # extracting the He variation control vector 
+                    if self.control_He_offset: # if offset is controled, first element is withdrawed
+                        X_variation = X[self.slice_params[name]][1:]
+                    else : 
+                        X_variation = X[self.slice_params[name]]
+
+                    # computing He in physical space 
+                    if self.He_time_dependant:
+                        phi[self.slice_params_phys[name]] += np.tensordot(
+                                                                np.tensordot(X_variation.reshape(self.shape_params[name]),self.He_xy_gauss,(1,0)),
+                                                                self.He_t_gauss[:,indt],(0,0)).flatten()
+                    else : 
+                        phi[self.slice_params_phys[name]] += np.tensordot(X_variation.reshape(self.shape_params[name]),self.He_xy_gauss,(-1,0)).flatten()
 
             # - Height boundary conditions hbc - #
             if name in ["hbcS","hbcN","hbcW","hbcE"]:
@@ -3492,12 +3565,21 @@ class Basis_it:
 
             # - Equivalent Height He - #  
             if name == "He":
-                if self.He_time_dependant:
-                    adX[self.slice_params[name]] = np.tensordot(param[name][:,:,np.newaxis]*self.He_t_gauss[:,indt],
-                                                                self.He_xy_gauss[:,:,:],([0,1],[1,2])).flatten()
-                else : 
-                    adX[self.slice_params[name]] = np.tensordot(param[name],
-                                                                self.He_xy_gauss,([0,1],[1,2])).flatten()
+
+                if self.control_He_offset:
+                    adX[self.slice_params[name]][0] = np.sum(param[name])
+                if self.control_He_variation:
+
+                    slice_variation = self.slice_params[name]
+                    if self.control_He_offset: # if offset is controled, first element is withdrawed from slice
+                        slice_variation = slice(slice_variation.start+1,slice_variation.stop) 
+
+                    if self.He_time_dependant:
+                        adX[slice_variation] = np.tensordot(param[name][:,:,np.newaxis]*self.He_t_gauss[:,indt],
+                                                                    self.He_xy_gauss[:,:,:],([0,1],[1,2])).flatten()
+                    else : 
+                        adX[slice_variation] = np.tensordot(param[name],
+                                                                    self.He_xy_gauss,([0,1],[1,2])).flatten()
             
             # - Height boundary conditions hbc - #        
             if name in ["hbcS","hbcN","hbcW","hbcE"]:

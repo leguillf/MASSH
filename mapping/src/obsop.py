@@ -185,6 +185,10 @@ class Obsop_interp_l3(Obsop_interp):
         # misfit normalization 
         self.normalize_misfit = config.OBSOP.normalize_misfit
 
+        self.parallel_computing = config.OBSOP.parallel_computing # if True, observational operators are calculated with parallel computing
+
+
+
     ## NEW VERSION OF OBSOP INTERPL3 (PARALLELIZED) ## 
     def process_obs(self, var_bc=None):
 
@@ -194,7 +198,30 @@ class Obsop_interp_l3(Obsop_interp):
         self.lat_obs = {}
         self.Hop = {}
 
-        data_obs = Parallel(n_jobs=self.n_workers,backend='threading')(jb_delayed(compute_obs_L3)(i=i,
+        if self.parallel_computing : # COMPUTED WITH PARALLEL COMPUTING #
+            data_obs = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(jb_delayed(compute_obs_L3)(i=i,
+                                                                                                        t=t,
+                                                                                                        dict_obs=self.dict_obs[t],
+                                                                                                        name_obs=self.name_obs,
+                                                                                                        path_save=self.path_save,
+                                                                                                        name_H=self.name_H,
+                                                                                                        compute_op=self.compute_op,
+                                                                                                        write_op=self.write_op,
+                                                                                                        coords_car=self.coords_car,
+                                                                                                        coords_geo=self.coords_geo,
+                                                                                                        Npix=self.Npix,
+                                                                                                        ind_borders=self.ind_borders,
+                                                                                                        ind_mask=self.ind_mask,
+                                                                                                        dmax=self.dmax,
+                                                                                                        var_bc=var_bc) for i,t in enumerate(self.date_obs))
+            
+            for i,t in enumerate(self.date_obs):
+                self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t], self.Hop[t], _n_obs = data_obs[i]
+                self.n_obs+=_n_obs
+
+        else : # COMPUTED WITH NORMAL COMPUTING #
+            for i,t in enumerate(self.date_obs):
+                self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t], self.Hop[t], _n_obs = compute_obs_L3(i=i,
                                                                                                     t=t,
                                                                                                     dict_obs=self.dict_obs[t],
                                                                                                     name_obs=self.name_obs,
@@ -208,12 +235,9 @@ class Obsop_interp_l3(Obsop_interp):
                                                                                                     ind_borders=self.ind_borders,
                                                                                                     ind_mask=self.ind_mask,
                                                                                                     dmax=self.dmax,
-                                                                                                    var_bc=var_bc) for i,t in enumerate(self.date_obs))
-        
-        for i,t in enumerate(self.date_obs):
-            self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t], self.Hop[t], _n_obs = data_obs[i]
-
-            self.n_obs+=_n_obs
+                                                                                                    var_bc=var_bc)
+                
+                self.n_obs+=_n_obs
 
     def misfit(self,t,State):
 
@@ -631,6 +655,8 @@ class Obsop_interp_l4(Obsop_interp):
 
         self.name_H += f'_L4_{config.OBSOP.interp_method}'
 
+        self.parallel_computing = config.OBSOP.parallel_computing # if True, observational operators are calculated with parallel computing
+
 
     # NEWER VERSION OF PROCESS_OBS L4 (5TH JUNE 2024) - BETTER PARALLELIZATION #
     def process_obs(self, var_bc=None):
@@ -640,22 +666,22 @@ class Obsop_interp_l4(Obsop_interp):
         self.var_obs = {}
         self.err_obs = {}
 
-        # for t in self.date_obs:
-        #     self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t] = compute_obs_L4(t=t,dict_obs=self.dict_obs[t],name_obs=self.name_obs,path_save=self.path_save,
-        #                                                                  name_H=self.name_H,compute_op=self.compute_op,write_op=self.write_op,
-        #                                                                  coords_geo=self.coords_geo,interp_method=self.interp_method,
-        #                                                                  dist_min = self.dist_min, var_bc=var_bc,date_obs=self.date_obs)
+        if self.parallel_computing : # COMPUTED WITH PARALLEL COMPUTING #
+            data_obs = Parallel(n_jobs=self.n_workers,backend='multiprocessing')(jb_delayed(compute_obs_L4)(t=t,dict_obs=self.dict_obs[t],name_obs=self.name_obs,path_save=self.path_save,
+                                                                    name_H=self.name_H,compute_op=self.compute_op,write_op=self.write_op,
+                                                                    coords_geo=self.coords_geo,interp_method=self.interp_method,
+                                                                    dist_min = self.dist_min, var_bc=var_bc,date_obs=self.date_obs) for t in self.date_obs)
+            
+            for i,t in enumerate(self.date_obs):
+                self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t] = data_obs[i]
 
-
-        data_obs = Parallel(n_jobs=self.n_workers,backend='threading')(jb_delayed(compute_obs_L4)(t=t,dict_obs=self.dict_obs[t],name_obs=self.name_obs,path_save=self.path_save,
-                                                                         name_H=self.name_H,compute_op=self.compute_op,write_op=self.write_op,
-                                                                         coords_geo=self.coords_geo,interp_method=self.interp_method,
-                                                                         dist_min = self.dist_min, var_bc=var_bc,date_obs=self.date_obs) for t in self.date_obs)
+        else : # COMPUTED WITH NORMAL COMPUTING #
+            for t in self.date_obs:
+                self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t] = compute_obs_L4(t=t,dict_obs=self.dict_obs[t],name_obs=self.name_obs,path_save=self.path_save,
+                                                                                name_H=self.name_H,compute_op=self.compute_op,write_op=self.write_op,
+                                                                                coords_geo=self.coords_geo,interp_method=self.interp_method,
+                                                                                dist_min = self.dist_min, var_bc=var_bc,date_obs=self.date_obs)
         
-        for i,t in enumerate(self.date_obs):
-            self.lon_obs[t], self.lat_obs[t], self.var_obs[t], self.err_obs[t] = data_obs[i]
-
-    
     def misfit(self,t,State):
 
         '''
@@ -794,6 +820,7 @@ def compute_obs_L4(t,dict_obs,name_obs,path_save,name_H,compute_op,write_op,coor
                     pickle.dump((_var_obs[name],_err_obs[name]), f)
             if var_bc is not None and name in var_bc:
                 _var_obs[name] -= var_bc[name][date_obs.index(t)].flatten()
+
 
     return _lon_obs, _lat_obs, _var_obs, _err_obs
 

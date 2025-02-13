@@ -4,8 +4,7 @@ from jax import jvp,vjp
 from jax import debug
 #from jax.config import config
 #config.update("jax_enable_x64", True)
-from jax.lax import scan
-from jax import vmap
+from jax.lax import scan, dynamic_index_in_dim
 
 import matplotlib.pylab as plt
 import numpy as np
@@ -149,6 +148,17 @@ class Swm:
         self.one_step_for_scan_jit = jit(self.one_step_for_scan)
         self.step_tgl_jit = jit(self.step_tgl, static_argnums=2)
         self.step_adj_jit = jit(self.step_adj, static_argnums=2)
+
+        self.compute_rhs_itg_jit = jit(self.compute_rhs_itg)
+
+        self._compute_w1_IT_scan_w_N_jit = jit(self._compute_w1_IT_scan_w_N)
+        self._compute_w1_IT_scan_w_S_jit = jit(self._compute_w1_IT_scan_w_S)
+        self._compute_w1_IT_scan_w_W_jit = jit(self._compute_w1_IT_scan_w_W)
+        self._compute_w1_IT_scan_w_E_jit = jit(self._compute_w1_IT_scan_w_E)
+        self._compute_w1_IT_scan_theta_N_jit = jit(self._compute_w1_IT_scan_theta_N)
+        self._compute_w1_IT_scan_theta_S_jit = jit(self._compute_w1_IT_scan_theta_S)
+        self._compute_w1_IT_scan_theta_W_jit = jit(self._compute_w1_IT_scan_theta_W)
+        self._compute_w1_IT_scan_theta_E_jit = jit(self._compute_w1_IT_scan_theta_E)
         
     ###########################################################################
     #                           Spatial scheme                                #
@@ -289,19 +299,248 @@ class Swm:
     
     
     ###########################################################################
-    #                      Open Boundary Conditions                           #
+    #                      OPEN BOUNDARY CONDITIONS                           #
     ###########################################################################
+
+    #######################
+    #    - NORTH OBC -    # 
+    #######################
+
+    # - Scan on omega 
+    def _compute_w1_IT_scan_w_N(self,w1,_i,t,He,f,h_SN):
+        """
+        This function is used for the scanning over the tidal frequencies omega. 
+        Compute the first characteristic variable for a given tidal frequency w_incr, by scanning over the angles of  self.bc_theta. 
+
+        Parameters
+        ----------
+        w1 : array-like
+            Initial value of `w1` that will be updated by adding the value for the given tidal frequency.
+        _i : int
+            Index to be used for dynamic indexing of tidal frequency within `self.omegas` and `h_SN`.
+        t : float
+            Time.
+        He : float
+            Equivalent height.
+        f : float
+            Coriolis frequency field.
+        h_SN : array-like
+            Parameter of external SSH for South and North border.
+
+        Returns
+        -------
+        tuple
+            A tuple containing:
+            - Updated `w1` (array-like): The vamue carried out in the scan over tidal frequencies.
+            - `w1_incr` (array-like): The value for the given tidal frequency.
+        """
+
+        w = dynamic_index_in_dim(operand = self.omegas, index = _i, axis = 0, keepdims=False)
+
+        # if orientation == 0 or orientation == 1:
+        h_SN = dynamic_index_in_dim(operand = h_SN, index = _i, axis = 3, keepdims=False)
+
+        k = jnp.sqrt((w**2-f**2)/(self.g*He))
+
+        w1_incr, _ = scan(partial(self._compute_w1_IT_scan_theta_N_jit,t=t,He=He,f=f,h_SN=h_SN,w=w,k=k),init=w1,xs=jnp.arange(len(self.bc_theta)))
+
+        return w1+w1_incr,w1_incr
+
+    # - Scan on theta 
+    def _compute_w1_IT_scan_theta_N(self,w1,_j,t,He,f,h_SN,w,k):
+        """
+        Compute the updated value of `w1` for a given index `_j` by calculating wave interactions.
+
+        This function performs calculations related to wave interactions in a domain characterized 
+        by spatial coordinates and boundary conditions. The computations include indexing into input 
+        arrays, determining wave components, and calculating intermediate variables to produce the 
+        updated `w1` value.
+
+        Parameters
+        ----------
+        w1 : array-like
+            Initial value of `w1` that is to be incremented.
+        _j : int
+            Index used for dynamic indexing within `h_SN` and `self.bc_theta`.
+        t : float
+            Time.
+        He : float
+            Equivalent height.
+        f : float
+            Coriolis frequency field.
+        h_SN : array-like
+            Parameter of external SSH for South and North border.
+        w : float
+            Tidal frequency.
+        k : float
+            Wave number.
+
+        Returns
+        -------
+        tuple
+            A tuple containing:
+            - Updated `w1` (array-like): The value carried out in the scan over angles theta.
+            - 'w1' (array-like): The value for the theta.
+
+        """
+
+
+        h_SN = dynamic_index_in_dim(operand = h_SN, index = _j, axis = 0, keepdims=False)
+        theta = dynamic_index_in_dim(operand = self.bc_theta, index = _j, axis = 0, keepdims=False)
+
+        kx = jnp.sin(theta) * k
+        ky = jnp.cos(theta) * k
+        kxy = kx*self.Xv[0,:] + ky*self.Yv[0,:]
+        
+        h = h_SN[0,0]* jnp.cos(w*t-kxy)  +\
+                h_SN[0,1]* jnp.sin(w*t-kxy) 
+        v = self.g/(w**2-f**2)*( \
+            h_SN[0,0]* (w*ky*jnp.cos(w*t-kxy) \
+                        - f*kx*jnp.sin(w*t-kxy)
+                            ) +\
+            h_SN[0,1]* (w*ky*jnp.sin(w*t-kxy) \
+                        + f*kx*jnp.cos(w*t-kxy)
+                            )
+                )
+        
+        # w1 += v + jnp.sqrt(self.g/He) * h
+        return w1 + v + jnp.sqrt(self.g/He) * h, w1
+    
+    #######################
+    #    - SOUTH OBC -    # 
+    #######################
+
+    # - Scan on omega    
+    def _compute_w1_IT_scan_w_S(self,w1,_i,t,He,f,h_SN):
+
+        w = dynamic_index_in_dim(operand = self.omegas, index = _i, axis = 0, keepdims=False)
+
+        # if orientation == 0 or orientation == 1:
+        h_SN = dynamic_index_in_dim(operand = h_SN, index = _i, axis = 3, keepdims=False)
+
+        k = jnp.sqrt((w**2-f**2)/(self.g*He))
+
+        w1_incr, _ = scan(partial(self._compute_w1_IT_scan_theta_S_jit,t=t,He=He,f=f,h_SN=h_SN,w=w,k=k),init=w1,xs=jnp.arange(len(self.bc_theta)))
+
+        return w1+w1_incr,w1_incr
+    
+    # - Scan on theta      
+    def _compute_w1_IT_scan_theta_S(self,w1,_j,t,He,f,h_SN,w,k):
+
+        h_SN = dynamic_index_in_dim(operand = h_SN, index = _j, axis = 0, keepdims=False)
+        theta = dynamic_index_in_dim(operand = self.bc_theta, index = _j, axis = 0, keepdims=False)
+
+        kx = jnp.sin(theta) * k
+        ky = -jnp.cos(theta) * k
+        kxy = kx*self.Xv[-1,:] + ky*self.Yv[-1,:]
+        h = h_SN[1,0]* jnp.cos(w*t-kxy)+\
+                h_SN[1,1]* jnp.sin(w*t-kxy) 
+        v = self.g/(w**2-f**2)*(\
+            h_SN[1,0]* (w*ky*jnp.cos(w*t-kxy) \
+                        - f*kx*jnp.sin(w*t-kxy)
+                            ) +\
+            h_SN[1,1]* (w*ky*jnp.sin(w*t-kxy) \
+                        + f*kx*jnp.cos(w*t-kxy)
+                            )
+                )
+        # w1 += v - jnp.sqrt(self.g/He) * h
+        return w1 + v - jnp.sqrt(self.g/He) * h, w1
+    
+    ######################
+    #    - WEST OBC -    # 
+    ######################
+
+    # - Scan on omega    
+    def _compute_w1_IT_scan_w_W(self,w1,_i,t,He,f,h_WE):
+
+        w = dynamic_index_in_dim(operand = self.omegas, index = _i, axis = 0, keepdims=False)
+
+        # if orientation == 0 or orientation == 1:
+        h_WE = dynamic_index_in_dim(operand = h_WE, index = _i, axis = 3, keepdims=False)
+
+        k = jnp.sqrt((w**2-f**2)/(self.g*He))
+
+        w1_incr, _ = scan(partial(self._compute_w1_IT_scan_theta_W_jit,t=t,He=He,f=f,h_WE=h_WE,w=w,k=k),init=w1,xs=jnp.arange(len(self.bc_theta)))
+
+        return w1+w1_incr,w1_incr
+
+    # - Scan on theta    
+    def _compute_w1_IT_scan_theta_W(self,w1,_j,t,He,f,h_WE,w,k):
+                
+        h_WE = dynamic_index_in_dim(operand = h_WE, index = _j, axis = 0, keepdims=False)
+        theta = dynamic_index_in_dim(operand = self.bc_theta, index = _j, axis = 0, keepdims=False)
+
+        kx = jnp.cos(theta)* k
+        ky = jnp.sin(theta)* k
+        kxy = kx*self.Xu[:,0] + ky*self.Yu[:,0]
+        h = h_WE[0,0]*jnp.cos(w*t-kxy) +\
+                h_WE[0,1]*jnp.sin(w*t-kxy)
+        u = self.g/(w**2-f**2)*(\
+            h_WE[0,0]*(w*kx*jnp.cos(w*t-kxy) \
+                        + f*ky*jnp.sin(w*t-kxy)
+                            ) +\
+            h_WE[0,1]*(w*kx*jnp.sin(w*t-kxy) \
+                        - f*ky*jnp.cos(w*t-kxy)
+                            )
+                )
+        # w1 += u + jnp.sqrt(self.g/He) * h
+        return w1 + u + jnp.sqrt(self.g/He) * h, w1
+    
+    ######################
+    #    - EAST OBC -    # 
+    ######################
+
+    # - Scan on omega
+    def _compute_w1_IT_scan_w_E(self,w1,_i,t,He,f,h_WE):
+
+        w = dynamic_index_in_dim(operand = self.omegas, index = _i, axis = 0, keepdims=False)
+
+        # if orientation == 0 or orientation == 1:
+        h_WE = dynamic_index_in_dim(operand = h_WE, index = _i, axis = 3, keepdims=False)
+
+        k = jnp.sqrt((w**2-f**2)/(self.g*He))
+
+        w1_incr, _ = scan(partial(self._compute_w1_IT_scan_theta_E_jit,t=t,He=He,f=f,h_WE=h_WE,w=w,k=k),init=w1,xs=jnp.arange(len(self.bc_theta)))
+
+        return w1+w1_incr,w1_incr
+
+    # - Scan on theta
+    def _compute_w1_IT_scan_theta_E(self,w1,_j,t,He,f,h_WE,w,k):
+        
+        h_WE = dynamic_index_in_dim(operand = h_WE, index = _j, axis = 0, keepdims=False)
+        theta = dynamic_index_in_dim(operand = self.bc_theta, index = _j, axis = 0, keepdims=False)
+
+        kx = -jnp.cos(theta)* k
+        ky = jnp.sin(theta)* k
+        kxy = kx*self.Xu[:,-1] + ky*self.Yu[:,-1]
+        h = h_WE[1,0]*jnp.cos(w*t-kxy) +\
+                h_WE[1,1]*jnp.sin(w*t-kxy)
+        u = self.g/(w**2-f**2)*(\
+            h_WE[1,0]* (w*kx*jnp.cos(w*t-kxy) \
+                        + f*ky*jnp.sin(w*t-kxy)
+                            ) +\
+            h_WE[1,1]*(w*kx*jnp.sin(w*t-kxy) \
+                        - f*ky*jnp.cos(w*t-kxy)
+                            )
+                )
+        # w1 += u - jnp.sqrt(self.g/He) * h
+        return w1 + u - jnp.sqrt(self.g/He) * h, w1
+    
+    ######################
+    #    - EAST OBC -    # 
+    ######################
 
     def _compute_w1_IT(self,t,He,h_SN,h_WE):
         """
-        Compute first characteristic variable w1 for internal tides from external 
-        data
+        Wrapper to compute the first characteristic variable w1 for internal tides from external 
+        SSH field data. It scans over the tidal frequencies omega.
 
         Parameters
         ----------
         t : float 
             time in seconds
         He : 2D array
+            equivalent height field
         h_SN : ND array
             amplitude of SSH for southern/northern borders
         h_WE : ND array
@@ -309,102 +548,47 @@ class Swm:
 
         Returns
         -------
-        w1ext: 1D array
-            flattened  first characteristic variable (South/North/West/East)
+        w1N : 1D array
+            flattened first characteristic variable for South border
+        w1S : 1D array
+            flattened first characteristic variable for South border
+        w1W : 1D array
+            flattened first characteristic variable for South border
+        w1E : 1D array
+            flattened first characteristic variable for South border 
         """
-        
+
+        # VERSION WITH SCAN # 
+
+        # North
+        HeN = (He[-1,:]+He[-2,:])/2
+        fN = (self.f[-1,:]+self.f[-2,:])/2
+        w1N = jnp.zeros(self.nx)
+
+        w1N, _ = scan(partial(self._compute_w1_IT_scan_w_N_jit,t=t,He=HeN,f=fN,h_SN=h_SN),init=w1N,xs=jnp.arange(len(self.omegas)))
+
         # South
         HeS = (He[0,:]+He[1,:])/2
         fS = (self.f[0,:]+self.f[1,:])/2
         w1S = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = jnp.cos(theta) * k
-                kxy = kx*self.Xv[0,:] + ky*self.Yv[0,:]
-                
-                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
-                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fS**2)*( \
-                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fS*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fS*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                
-                w1S += v + jnp.sqrt(self.g/HeS) * h
-        
-        # North
-        fN = (self.f[-1,:]+self.f[-2,:])/2
-        HeN = (He[-1,:]+He[-2,:])/2
-        w1N = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = -jnp.cos(theta) * k
-                kxy = kx*self.Xv[-1,:] + ky*self.Yv[-1,:]
-                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
-                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fN**2)*(\
-                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fN*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fN*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                w1N += v - jnp.sqrt(self.g/HeN) * h
+
+        w1S, _ = scan(partial(self._compute_w1_IT_scan_w_S_jit,t=t,He=HeS,f=fS,h_SN=h_SN),init=w1S,xs=jnp.arange(len(self.omegas)))
 
         # West
-        fW = (self.f[:,0]+self.f[:,1])/2
         HeW = (He[:,0]+He[:,1])/2
+        fW = (self.f[:,0]+self.f[:,1])/2
         w1W = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.Xu[:,0] + ky*self.Yu[:,0]
-                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fW**2)*(\
-                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
-                              + fW*ky*jnp.sin(w*t-kxy)
-                                  ) +\
-                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fW*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1W += u + jnp.sqrt(self.g/HeW) * h
 
-        
+        w1W, _ = scan(partial(self._compute_w1_IT_scan_w_W_jit,t=t,He=HeW,f=fW,h_WE=h_WE),init=w1W,xs=jnp.arange(len(self.omegas)))
+
         # East
         HeE = (He[:,-1]+He[:,-2])/2
         fE = (self.f[:,-1]+self.f[:,-2])/2
         w1E = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
-            for i,theta in enumerate(self.bc_theta):
-                kx = -jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.Xu[:,-1] + ky*self.Yu[:,-1]
-                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fE**2)*(\
-                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
-                                + fE*ky*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fE*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1E += u - jnp.sqrt(self.g/HeE) * h
-        
-        return w1S,w1N,w1W,w1E     
+
+        w1E, _ = scan(partial(self._compute_w1_IT_scan_w_E_jit,t=t,He=HeE,f=fE,h_WE=h_WE),init=w1E,xs=jnp.arange(len(self.omegas)))
+
+        return w1S,w1N,w1W,w1E   
 
     def obcs(self,u,v,h,u0,v0,h0,He,w1ext):
         
@@ -813,6 +997,25 @@ class Swm:
                                                                                                                      uE,hE)]).T
         return _vN, _hN, _vS, _hS, _uW, _hW, _uE, _hE
 
+    def compute_rhs_itg(self,rhs_itg,_i,itg,t):
+
+        # -- VARIABLES OF THE TIDAL MODE -- # 
+        tidal_U = dynamic_index_in_dim(operand = self.tidal_U, index = _i, axis = 0, keepdims=False) # U tidal velocity
+        tidal_V = dynamic_index_in_dim(operand = self.tidal_V, index = _i, axis = 0, keepdims=False) # V tidal velocity
+        omega = dynamic_index_in_dim(operand = self.omegas, index = _i, axis = 0) # tidal mode frequency
+        itg_omega = dynamic_index_in_dim(operand = itg, index = _i, axis = 0, keepdims=False) # internal tide generation 
+
+        # - ITG COMPONENT FOR X AXIS - #
+        rhs_itg_x = itg_omega[0,:]*jnp.cos(omega*jnp.array(t))+itg_omega[1,:]*jnp.sin(omega*jnp.array(t)) # Sum of cos and sin 
+        rhs_itg_x *= self.grad_bathymetry_x*tidal_U # multiplying by bathymetry gradient and tidal velocity
+
+        # - ITG COMPONENT FOR X AXIS - #
+        rhs_itg_y = itg_omega[2,:]*jnp.cos(omega*jnp.array(t))+itg_omega[3,:]*jnp.sin(omega*jnp.array(t)) # Sum of cos and sin
+        rhs_itg_y *= self.grad_bathymetry_y*tidal_V # multiplying by bathymetry gradient and tidal velocity
+
+        return rhs_itg+rhs_itg_x+rhs_itg_y,rhs_itg_x+rhs_itg_y
+
+    
     def one_step(self, X0):
         
         ########################## 
@@ -861,13 +1064,25 @@ class Swm:
             He = self.Heb # value of He by default 
 
         # - ITG : Internal Tide Generation - # 
+        # if 'itg' in self.name_params:
+        #     itg = params[self.slice_params['itg']].reshape(self.shape_params['itg']) # parameters for itg forcing 
+        #     rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
+        #     for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
+        #         rhs_itg+=self.grad_bathymetry_x*self.tidal_U[_w_name]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
+        #         rhs_itg+=self.grad_bathymetry_y*self.tidal_V[_w_name]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
+
+        # VERSION OF ITG WT. jax.lax.scan # 
+        # Time propagation
+        #X1, _ = scan(self.one_step_for_scan_jit, init=X0, xs=jnp.zeros(nstep))
+        # for _ in range(nstep):
+        #     # One time step
+        #    X1 = self.one_step_jit(X0)
+
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg']) # parameters for itg forcing 
-            rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
-            for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
-                rhs_itg+=self.grad_bathymetry_x*self.tidal_U[_w_name]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
-                rhs_itg+=self.grad_bathymetry_y*self.tidal_V[_w_name]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
-    
+            rhs_itg0 = jnp.zeros_like(self.X)
+            rhs_itg,rhs_itg_omega = scan(partial(self.compute_rhs_itg_jit,itg = itg,t = t),init=rhs_itg0,xs=jnp.arange(len(self.omegas)))
+
         else : 
             rhs_itg = jnp.zeros((self.ny, self.nx))
 
