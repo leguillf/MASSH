@@ -477,39 +477,8 @@ MOD_SW1L_JAX = dict(
 
 )
 
-# Linear Shallow-Water model
-MOD_SW1L = dict(
-
-    name_var = {'U':'u','V':'v','SSH':'ssh'},
-
-    name_init_var = [],
-
-    name_params = ['He', 'hbcx', 'hbcy'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
-
-    dir_model = None,
-
-    var_to_save = None,
-
-    dtmodel = 300, # model timestep
-
-    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
-
-    bc_kind = '1d', # Either 1d or 2d
-
-    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
-
-    He_init = 0.9, # Mean height (in m)
-
-    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
-    g = 9.81
-
-)
 
 # Tracer advection
-
 MOD_TRACADV_SSH = dict(
 
     name_var = {'SST':'sst','SSH':'ssh'}, # Dictionnary of variable names (need to be at least one tracer e.g SST and SSH variables.)
@@ -1223,6 +1192,41 @@ BASIS_IT = dict(
 
     sigma_B_He_offset = 0.2, # Background variance for He offset (if control_He_offset = True)
 
+)
+
+
+## INTERNAL TIDE VERSION FLO ## 
+BASIS_IT_FLO = dict(
+
+    Nwaves = 1, # number of wave component 
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    sigma_B_He = 0.2, # Background variance for He
+
+    sigma_B_bc = 1e-2, # Background variance for bc
+
+    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    D_He = 200, # Space scale of gaussian decomposition for He (in km)
+
+    T_He = 20, # Time scale of gaussian decomposition for He (in days)
+
+    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
+
+    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+
+    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
+
+    scalemodes = None, # Only for SW1LM model, 
+
+    scalew_igws = None,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 )
 
 

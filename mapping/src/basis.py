@@ -66,6 +66,9 @@ def Basis(config, State, verbose=True, *args, **kwargs):
         elif config.BASIS.super=='BASIS_IT':
             return Basis_it(config, State)
 
+        elif config.BASIS.super=='BASIS_IT_FLO':
+            return Basis_it_flo(config, State)
+
         elif config.BASIS.super=='BASIS_CONSTANT':
             return Basis_constant(config, State)
 
@@ -2745,6 +2748,9 @@ class Basis_it:
         if "He" in self.name_params and not(self.control_He_offset or self.control_He_variation):
             print("Warning : He is in the controlled parameters but neither control_He_offset or control_He_variation are set to True")
 
+        if (self.control_He_offset or self.control_He_variation) and "He" not in self.name_params:
+            print("Warning : He is set up being controlled in the reduced basis but it is not in the controlled parameters.")
+
         self.He_time_dependant = config.BASIS.He_time_dependant # True if the equivalent height variation parameters are time dependant (True by default)
 
         self.sigma_B_He = config.BASIS.sigma_B_He # Covariance sigma for equivalent height He parameter
@@ -3634,6 +3640,367 @@ class Basis_it:
 
         adState1 = State.random()
 
+        psi1 = adState1.getparams(vect=True)
+
+        phi1 = self.operg_transpose(t,adState=adState1)
+        self.operg(t,phi0,State=State0)
+        psi0 = State0.getparams(vect=True)
+        
+        ps1 = np.inner(psi0,psi1)
+        ps2 = np.inner(phi0,phi1)
+            
+        print(f'test G[{t}]:', ps1/ps2)
+
+## VERSION DES BASES IT DE FLO ## 
+
+class Basis_it_flo:
+   
+    def __init__(self,config, State):
+        self.km2deg =1./110
+    
+        self.facns = config.BASIS.facgauss
+        self.facnlt = config.BASIS.facgauss
+        self.D_He = config.BASIS.D_He
+        self.T_He = config.BASIS.T_He
+        self.D_bc = config.BASIS.D_bc
+        self.T_bc = config.BASIS.T_bc
+        
+        self.sigma_B_He = config.BASIS.sigma_B_He
+        self.sigma_B_bc = config.BASIS.sigma_B_bc
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
+        
+        if config.BASIS.Ntheta>0:
+            self.Ntheta = 2*(config.BASIS.Ntheta-1)+3 # We add -pi/2,0,pi/2
+        else:
+            self.Ntheta = 1 # Only angle 0°
+            
+        self.Nwaves = config.BASIS.Nwaves
+
+        # Grid params
+        self.nphys= State.lon.size
+        self.shape_phys = (State.ny,State.nx)
+        self.ny = State.ny
+        self.nx = State.nx
+        self.lon_min = State.lon_min
+        self.lon_max = State.lon_max
+        self.lat_min = State.lat_min
+        self.lat_max = State.lat_max
+        self.lon1d = State.lon.flatten()
+        self.lat1d = State.lat.flatten()
+        self.lonS = State.lon[0,:]
+        self.lonN = State.lon[-1,:]
+        self.latE = State.lat[:,0]
+        self.latW = State.lat[:,-1]
+    
+    def set_basis(self,time,return_q=False,**kwargs):
+        
+        TIME_MIN = time.min()
+        TIME_MAX = time.max()
+        LON_MIN = self.lon_min
+        LON_MAX = self.lon_max
+        LAT_MIN = self.lat_min
+        LAT_MAX = self.lat_max
+        if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
+
+        self.time = time
+        
+        ##########################
+        # He 
+        ##########################
+        # coordinates in space
+        ENSLAT1 = np.arange(
+            LAT_MIN - self.D_He*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_He/self.facns*self.km2deg, self.D_He/self.facns*self.km2deg)
+        ENSLAT_He = []
+        ENSLON_He = []
+        for I in range(len(ENSLAT1)):
+            ENSLON1 = np.mod(
+                np.arange(
+                    LON_MIN - self.D_He*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    LON_MAX + 1.5*self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                    self.D_He/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg),
+                360)
+            ENSLAT_He = np.concatenate(([ENSLAT_He,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+            ENSLON_He = np.concatenate(([ENSLON_He,ENSLON1]))
+        self.ENSLAT_He = ENSLAT_He
+        self.ENSLON_He = ENSLON_He
+        
+        # coordinates in time
+        ENST_He = np.arange(-self.T_He*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_He/self.facnlt , self.T_He/self.facnlt)
+        
+        
+        # Gaussian functions in space
+        He_xy_gauss = np.zeros((ENSLAT_He.size,self.lon1d.size))
+        for i,(lat0,lon0) in enumerate(zip(ENSLAT_He,ENSLON_He)):
+            iobs = np.where(
+                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_He) &
+                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_He)
+                    )[0]
+            xx = (np.mod(self.lon1d[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+            yy = (self.lat1d[iobs] - lat0) / self.km2deg
+            
+            He_xy_gauss[i,iobs] = mywindow(xx / self.D_He) * mywindow(yy / self.D_He)
+
+        He_xy_gauss = He_xy_gauss.reshape((ENSLAT_He.size,self.ny,self.nx))
+        
+        # Gaussian functions in time
+        He_t_gauss = np.zeros((ENST_He.size,time.size))
+        for i,time0 in enumerate(ENST_He):
+            iobs = np.where(abs(time-time0) < self.T_He)
+            He_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_He)
+        
+        self.He_xy_gauss = He_xy_gauss
+        self.He_t_gauss = He_t_gauss
+        self.nHe = ENST_He.size * ENSLAT_He.size
+        self.sliceHe = slice(0,self.nHe)
+        self.shapeHe = [ENST_He.size,ENSLAT_He.size]
+        print('nHe:',self.nHe)
+        
+        ##########################
+        # bc 
+        ##########################
+        ## in space
+        ENSLAT = np.arange(
+            LAT_MIN - self.D_bc*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_bc/self.facns*self.km2deg, 
+            self.D_bc/self.facns*self.km2deg)
+        
+        # South
+        ENSLON_S = np.mod(
+                np.arange(
+                    LON_MIN - self.D_bc*(1-1./self.facns)/np.cos(LAT_MIN*np.pi/180.)*self.km2deg,
+                    LON_MAX + 1.5*self.D_bc/self.facns/np.cos(LAT_MIN*np.pi/180.)*self.km2deg,
+                    self.D_bc/self.facns/np.cos(LAT_MIN*np.pi/180.)*self.km2deg),
+                360)
+        bc_S_gauss = np.zeros((ENSLON_S.size,self.nx))
+        for i,lon0 in enumerate(ENSLON_S):
+            iobs = np.where((np.abs((np.mod(self.lonS - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)) <= self.D_bc))[0] 
+            xx = (np.mod(self.lonS[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MIN * np.pi / 180.)     
+            bc_S_gauss[i,iobs] = mywindow(xx / self.D_bc) 
+        
+        # North
+        ENSLON_N = np.mod(
+                np.arange(
+                    LON_MIN - self.D_bc*(1-1./self.facns)/np.cos(LAT_MAX*np.pi/180.)*self.km2deg,
+                    LON_MAX + 1.5*self.D_bc/self.facns/np.cos(LAT_MAX*np.pi/180.)*self.km2deg,
+                    self.D_bc/self.facns/np.cos(LAT_MAX*np.pi/180.)*self.km2deg),
+                360)
+        bc_N_gauss = np.zeros((ENSLON_N.size,self.nx))
+        for i,lon0 in enumerate(ENSLON_N):
+            iobs = np.where((np.abs((np.mod(self.lonN - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)) <= self.D_bc))[0] 
+            xx = (np.mod(self.lonN[iobs] - lon0+180,360)-180) / self.km2deg * np.cos(LAT_MAX * np.pi / 180.)     
+            bc_N_gauss[i,iobs] = mywindow(xx / self.D_bc) 
+        
+        # East
+        bc_E_gauss = np.zeros((ENSLAT.size,self.ny))
+        for i,lat0 in enumerate(ENSLAT):
+            iobs = np.where(np.abs((self.latE - lat0) / self.km2deg) <= self.D_bc)[0]
+            yy = (self.latE[iobs] - lat0) / self.km2deg
+            bc_E_gauss[i,iobs] = mywindow(yy / self.D_bc) 
+
+        # West 
+        bc_W_gauss = np.zeros((ENSLAT.size,self.ny))
+        for i,lat0 in enumerate(ENSLAT):
+            iobs = np.where(np.abs((self.latW - lat0) / self.km2deg) <= self.D_bc)[0]
+            yy = (self.latW[iobs] - lat0) / self.km2deg
+            bc_W_gauss[i,iobs] = mywindow(yy / self.D_bc) 
+
+        
+        self.bc_S_gauss = bc_S_gauss
+        self.bc_N_gauss = bc_N_gauss
+        self.bc_E_gauss = bc_E_gauss
+        self.bc_W_gauss = bc_W_gauss
+        
+        ## in time
+        ENST_bc = np.arange(-self.T_bc*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_bc/self.facnlt , self.T_bc/self.facnlt)
+        bc_t_gauss = np.zeros((ENST_bc.size,time.size))
+        for i,time0 in enumerate(ENST_bc):
+            iobs = np.where(abs(time-time0) < self.T_bc)
+            bc_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_bc)
+        self.bc_t_gauss = bc_t_gauss
+        
+        self.nbcS = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_S_gauss.shape[0]
+        self.nbcN = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_N_gauss.shape[0]
+        self.nbcE = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_E_gauss.shape[0]
+        self.nbcW = self.Nwaves * 2 * self.Ntheta * ENST_bc.size * bc_W_gauss.shape[0]
+        self.nbc = self.nbcS + self.nbcN + self.nbcE + self.nbcW
+        print('nbc:',self.nbc)
+        
+        
+        self.shapehbcS = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_S_gauss.shape[0]]
+        self.shapehbcN = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_N_gauss.shape[0]]
+        self.shapehbcE = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_E_gauss.shape[0]]
+        self.shapehbcW = [self.Nwaves, 2, self.Ntheta, ENST_bc.size, bc_W_gauss.shape[0]]
+        
+        self.slicebcS = slice(self.nHe,
+                              self.nHe + self.nbcS)
+        self.slicebcN = slice(self.nHe+ self.nbcS,
+                              self.nHe + self.nbcS + self.nbcN)
+        self.slicebcE = slice(self.nHe+ self.nbcS + self.nbcN,
+                              self.nHe + self.nbcS + self.nbcN + self.nbcE)
+        self.slicebcW = slice(self.nHe+ self.nbcS + self.nbcN + self.nbcE,
+                              self.nHe + self.nbcS + self.nbcN + self.nbcE + self.nbcW)
+        self.slicebc = slice(self.nHe,
+                             self.nHe + self.nbc)
+        
+        self.nbasis = self.nHe + self.nbc
+        
+        # OUTPUT SHAPES (physical space)
+        self.shapeHe_phys = (self.ny,self.nx)
+        self.shapehbcx_phys = [self.Nwaves, # tide frequencies
+                          2, # North/South
+                          2, # cos/sin
+                          self.Ntheta, # Angles
+                          self.nx # NX
+                          ]
+        print("self.shapehbcx_phys : ",self.shapehbcx_phys)
+        self.shapehbcy_phys = [self.Nwaves, # tide frequencies
+                          2, # North/South
+                          2, # cos/sin
+                          self.Ntheta, # Angles
+                          self.ny # NY
+                          ]
+        self.nphys = np.prod(self.shapeHe_phys) + np.prod(self.shapehbcx_phys) + np.prod(self.shapehbcy_phys)
+        self.sliceHe_phys = slice(0,np.prod(self.shapeHe_phys))
+        self.slicehbcx_phys = slice(np.prod(self.shapeHe_phys),
+                               np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys))
+        self.slicehbcy_phys = slice(np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys),
+                               np.prod(self.shapeHe_phys)+np.prod(self.shapehbcx_phys)+np.prod(self.shapehbcy_phys))
+        
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
+        
+        # Fill Q matrix
+        if return_q:
+            if None not in [self.sigma_B_He, self.sigma_B_bc]:
+                Q = np.zeros((self.nbasis,)) 
+                # variance on He
+                Q[self.sliceHe] = self.sigma_B_He 
+                if hasattr(self.sigma_B_bc,'__len__'):
+                    if len(self.sigma_B_bc)==self.Nwaves:
+                        # Different background values for each frequency
+                        nw = self.nbc//self.Nwaves
+                        for iw in range(self.Nwaves):
+                                slicew = slice(iw*nw,(iw+1)*nw)
+                                Q[self.slicebc][slicew] = self.sigma_B_bc[iw]
+                    else:
+                        # Not the right number of frequency prescribed in the config file 
+                        # --> we use only the first one
+                        Q[self.slicebc] = self.sigma_B_bc[0]
+                else:
+                    Q[self.slicebc] = self.sigma_B_bc
+            else:
+                Q = None
+            
+            # Background
+            if self.path_background is not None and os.path.exists(self.path_background):
+                with xr.open_dataset(self.path_background) as ds:
+                    print(f'Load background from file: {self.path_background}')
+                    Xb = ds[self.var_background].values
+            else:
+                Xb = np.zeros_like(Q)
+
+            return Xb, Q
+        
+        
+    def operg(self,t,X,State=None):
+        """
+            Project to physicial space
+        """
+        
+        # Get variables in reduced space
+        X_He = X[self.sliceHe].reshape(self.shapeHe)
+        X_bcS = X[self.slicebcS].reshape(self.shapehbcS)
+        X_bcN = X[self.slicebcN].reshape(self.shapehbcN)
+        X_bcE = X[self.slicebcE].reshape(self.shapehbcE)
+        X_bcW = X[self.slicebcW].reshape(self.shapehbcW)
+        
+        # Project to physical space
+        indt = np.argmin(np.abs(self.time-t))        
+        He = np.tensordot(
+            np.tensordot(X_He,self.He_xy_gauss,(1,0)),
+                                self.He_t_gauss[:,indt],(0,0))
+    
+        hbcx = np.zeros(self.shapehbcx_phys)
+        hbcy = np.zeros(self.shapehbcy_phys)
+        
+        hbcx[:,0] = np.tensordot(
+            np.tensordot(X_bcS,self.bc_S_gauss,(-1,0)),
+                                 self.bc_t_gauss[:,indt],(-2,0))
+        hbcx[:,1] = np.tensordot(
+            np.tensordot(X_bcN,self.bc_N_gauss,(-1,0)),
+                                 self.bc_t_gauss[:,indt],(-2,0))
+        hbcy[:,0] = np.tensordot(
+            np.tensordot(X_bcE,self.bc_E_gauss,(-1,0)),
+                                 self.bc_t_gauss[:,indt],(-2,0))
+        hbcy[:,1] = np.tensordot(
+            np.tensordot(X_bcW,self.bc_W_gauss,(-1,0)),
+                                 self.bc_t_gauss[:,indt],(-2,0))
+        
+        if State is not None:
+            State.params['He'] = +He
+            State.params['hbcx'] = +hbcx
+            State.params['hbcy'] = +hbcy
+        else:
+            phi = np.concatenate((He.flatten(),hbcx.flatten(),hbcy.flatten()))
+            return phi
+
+
+    def operg_transpose(self,t,phi=None,adState=None):
+        """
+            Project to reduced space
+        """
+        
+        # Get variable in physical space
+        if phi is not None:
+            He = phi[self.sliceHe_phys].reshape(self.shapeHe_phys)
+            hbcx = phi[self.slicehbcx_phys].reshape(self.shapehbcx_phys)
+            hbcy = phi[self.slicehbcy_phys].reshape(self.shapehbcy_phys)
+        elif adState is not None:
+            He = +adState.params['He'].reshape(self.shapeHe_phys)
+            hbcx = +adState.params['hbcx'].reshape(self.shapehbcx_phys)
+            hbcy = +adState.params['hbcy'].reshape(self.shapehbcy_phys)
+            adState.params['He'] *= 0
+            adState.params['hbcx'] *= 0
+            adState.params['hbcy'] *= 0
+
+        else:
+            sys.exit('Provide either phi or adState')
+        
+        # Project to reduced space
+        indt = np.argmin(np.abs(self.time-t))   
+        
+        adX_He = np.tensordot(
+            He[:,:,np.newaxis]*self.He_t_gauss[:,indt],
+                                   self.He_xy_gauss[:,:,:],([0,1],[1,2])) 
+        adX_bcS = np.tensordot(
+               hbcx[:,0,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
+                                              self.bc_S_gauss,(-2,-1))
+        adX_bcN = np.tensordot(
+               hbcx[:,1,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
+                                              self.bc_N_gauss,(-2,-1))
+        adX_bcE = np.tensordot(
+               hbcy[:,0,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
+                                              self.bc_E_gauss,(-2,-1))
+        adX_bcW = np.tensordot(
+               hbcy[:,1,:,:,:,np.newaxis]*self.bc_t_gauss[:,indt],
+                                              self.bc_W_gauss,(-2,-1))
+        
+        adX = np.concatenate((adX_He.flatten(),
+                              adX_bcS.flatten(),
+                              adX_bcN.flatten(),
+                              adX_bcE.flatten(),
+                              adX_bcW.flatten()))
+            
+        return adX
+
+        
+    def test_operg(self, t, State):
+
+
+        State0 = State.random()
+        phi0 = np.random.random((self.nbasis,))
+        adState1 = State.random()
         psi1 = adState1.getparams(vect=True)
 
         phi1 = self.operg_transpose(t,adState=adState1)
