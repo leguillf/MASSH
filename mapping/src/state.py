@@ -84,7 +84,8 @@ class State:
                 self.lon_unit = '0_360'
 
             # Mask
-            self.ini_mask(config.GRID)
+            if config.GRID.super != 'GRID_FROM_FILE' or config.GRID.var_name_mask is None:
+                self.ini_mask(config.GRID)
 
             # Compute cartesian grid 
             DX,DY = grid.lonlat2dxdy(self.lon,self.lat)
@@ -199,6 +200,14 @@ class State:
         self.lon = lon 
         self.lat = lat
         self.present_date = config.init_date
+
+        if config.var_name_mask is not None:
+            if config.time_name_mask == 'time':
+                self.mask = np.isnan(dsin[config.var_name_mask].isel(time=0).values)  
+            else: 
+                self.mask = np.isnan(dsin.rename_dims({config.time_name_mask:'time'})[config.var_name_mask].isel(time=0).values)
+
+
         dsin.close()
         del dsin
         
@@ -441,7 +450,7 @@ class State:
             
     
     def random(self,ampl=1):
-        other = self.copy(free=True)
+        other = self.copy(free=True) 
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
             other.var[name][self.mask] = np.nan

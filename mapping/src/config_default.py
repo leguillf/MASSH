@@ -74,6 +74,10 @@ GRID_FROM_FILE = dict(
 
     subsampling = None,
 
+    var_name_mask = None,
+    
+    time_name_mask = 'time'
+
 )
 
 # Regular geodetic grid
@@ -236,6 +240,26 @@ OBS_SSH_SWATH = dict(
 NAME_MOD = None # Either DIFF, QG1L, QG1LM, SW1L, SW1LM    
 
 # Diffusion model
+MOD_Id = dict(
+
+    name_var = {'SSH':"ssh"},
+
+    var_to_save = None,
+
+    name_init_var = {},
+
+    dtmodel = 300, # model timestep
+
+    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
+
+    SIC_mod = False, # flag to activate variable limits [0,100] (i.e., for sea ice concentration)
+
+    init_from_bc = False,
+
+    dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
+)
+
+# Diffusion model
 MOD_DIFF = dict(
 
     name_var = {'SSH':"ssh"},
@@ -247,6 +271,8 @@ MOD_DIFF = dict(
     dtmodel = 300, # model timestep
 
     Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
+
+    SIC_mod = False, # flag to activate variable limits [0,100] (i.e., for sea ice concentration)
 
     init_from_bc = False,
 
@@ -696,10 +722,63 @@ BASIS_BM = dict(
 
 )
 
+
+BASIS_GAUSSV2 = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    facns = 1., #factor for wavelet spacing in space
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    lmeso = 300, # Largest mesoscale wavelenght 
+
+    tmeso = 20, # Largest mesoscale time of decorrelation 
+
+    sloptdec = -1.28, # Slope such as tdec = lambda^slope where lamda is the wavelength
+
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    depth1 = 0.,
+
+    depth2 = 30.,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
 # Wavelet 3D
 BASIS_WAVELET3D = dict(
 
     name_mod_var = None, # Name of the related model variable 
+
+    flux = False,
 
     facnst = 1., #factor for wavelet spacing in space and time 
 
@@ -720,6 +799,29 @@ BASIS_WAVELET3D = dict(
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
     var_background = None # name of the variable of the basis vector
+
+)
+
+
+BASIS_GAUSS3D = dict(
+
+    name_mod_var = '', # Name of the related model variable 
+
+    flux = False,
+
+    facns = 2., # Factor for gaussian spacing in space
+
+    facnlt = 1., # Factor for gaussian spacing in time
+
+    sigma_D = 300, # Spatial scale (km)
+
+    sigma_T = 20, # Time scale (days)
+
+    sigma_Q = 0.01, # Standard deviation for matrix Q 
+
+    normalize_fact = True,
+
+    time_spinup = None # days
 
 )
 
