@@ -29,7 +29,7 @@ def gaspari_cohn(r,c):
         Returns:  smoothed values 
             
     """ 
-    if type(r) is float or type(r) is int:
+    if type(r) in [float,int,np.float32,np.float64]:
         ra = np.array([r])
     else:
         ra = r

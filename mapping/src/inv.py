@@ -19,6 +19,9 @@ from importlib.machinery import SourceFileLoader
 
 from . import grid
 
+import time
+import subprocess
+
 
 
 def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=None, Bc=None, ssh_truth=None, *args, **kwargs):
@@ -103,7 +106,9 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
     square_diff = 0 
     i = 1
 
-    print(X)
+    basis_exec_time = []
+    saving_exec_time = []
+    model_exec_time = []
 
     while present_date < config.EXP.final_date :
         
@@ -112,17 +117,38 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
                 # current time in secondes
         t = (present_date - config.EXP.init_date).total_seconds()
         
+        start_time = time.perf_counter()
+
         if Basis!=None:
             # Reduced basis
             Basis.operg(t/3600/24,X,State=State)
+
+        end_time = time.perf_counter()
+        execution_time = end_time - start_time
+        basis_exec_time.append(execution_time)
+        # print(f"Basis Execution Time: {execution_time:.6f} seconds")
+
+        start_time = time.perf_counter()
 
         # Save
         if config.EXP.saveoutputs:
 
             Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
 
+        end_time = time.perf_counter()
+        execution_time = end_time - start_time
+        saving_exec_time.append(execution_time)
+        # print(f"Saving Execution Time: {execution_time:.6f} seconds")
+
+        start_time = time.perf_counter()
+
         # Propagation
         Model.step(State,nstep,t=t)
+
+        end_time = time.perf_counter()
+        execution_time = end_time - start_time
+        model_exec_time.append(execution_time)
+        # print(f"Model propagation Execution Time: {execution_time:.6f} seconds")
 
         # Time increment
         present_date += timedelta(seconds=nstep*Model.dt)
@@ -134,6 +160,10 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
             square_diff += np.nansum((State.var['SSH_tot']-ssh_truth[i,:,:].values)**2)
             i += 1 
         #####################################################
+
+    print("Basis Execution Time:",np.mean(np.array(basis_exec_time)))
+    print("Saving Execution Time:",np.mean(np.array(saving_exec_time)))
+    print("Model Propagation Execution Time:",np.mean(np.array(model_exec_time)))
     
     #   Last timestep 
     if config.EXP.saveoutputs:
@@ -698,20 +728,20 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
 
 
     # - Specifying vector from config.BASIS.path_restart (multi Basis) - #
-    elif (config.BASIS.super is None) and np.any([_Basis.path_restart!=None for _Basis in Basis.Basis]):
-        array_restart_basis = np.array(Basis.Basis)[[_Basis.path_restart!=None for _Basis in Basis.Basis]] # array of basis for which Basis.path_restart!=None
-        print(f"Latest control parameter vector specified in config.BASIS.path_restart will be used to start the minimization of {array_restart_basis}.")
-        Xopt = np.zeros((Xb.size,))
-        for _i in np.where([_Basis.path_restart!=None for _Basis in Basis.Basis])[0]: 
-            tmp_files = sorted(glob.glob(os.path.join(Basis.Basis[_i].path_restart,'X_it-*.nc')))
-            if len(tmp_files)>0:
-                print('Restart at:',tmp_files[-1])
-                ds = xr.open_dataset(tmp_files[-1])
-                try : 
-                    Xopt[Basis.slice_basis[_i]] = ds.res.values #### SET UP THE CONTROL PARAMETER VECTOR ### 
-                except ValueError : 
-                    print(f"Control parameter vector prescribed in {Basis.Basis[_i].path_restart} is not functioning.")
-                ds.close()
+    # elif (config.BASIS.super is None) and np.any([_Basis.path_restart!=None for _Basis in Basis.Basis]):
+    #     array_restart_basis = np.array(Basis.Basis)[[_Basis.path_restart!=None for _Basis in Basis.Basis]] # array of basis for which Basis.path_restart!=None
+    #     print(f"Latest control parameter vector specified in config.BASIS.path_restart will be used to start the minimization of {array_restart_basis}.")
+    #     Xopt = np.zeros((Xb.size,))
+    #     for _i in np.where([_Basis.path_restart!=None for _Basis in Basis.Basis])[0]: 
+    #         tmp_files = sorted(glob.glob(os.path.join(Basis.Basis[_i].path_restart,'X_it-*.nc')))
+    #         if len(tmp_files)>0:
+    #             print('Restart at:',tmp_files[-1])
+    #             ds = xr.open_dataset(tmp_files[-1])
+    #             try : 
+    #                 Xopt[Basis.slice_basis[_i]] = ds.res.values #### SET UP THE CONTROL PARAMETER VECTOR ### 
+    #             except ValueError : 
+    #                 print(f"Control parameter vector prescribed in {Basis.Basis[_i].path_restart} is not functioning.")
+    #             ds.close()
 
     # - Starting with a null vector - #
     else : 
@@ -727,21 +757,30 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
     if not os.path.exists(path_save_control_vectors):
         os.makedirs(path_save_control_vectors)
             
-    if not ((config.INV.restart_4Dvar or 
-            (config.BASIS.super is not None and (config.BASIS.path_restart is not None)) or 
-            (config.BASIS.super is None and np.any([_Basis.path_restart!=None for _Basis in Basis.Basis]))) and config.INV.maxiter==0):
+    # if not ((config.INV.restart_4Dvar or 
+    #         (config.BASIS.super is not None and (config.BASIS.path_restart is not None)) or 
+    #         (config.BASIS.super is None and np.any([_Basis.path_restart!=None for _Basis in Basis.Basis]))) and config.INV.maxiter==0):
+    if not (config.INV.restart_4Dvar and config.INV.maxiter==0):
+        
         print('\n*** Minimization ***\n')
         ###################
         # Minimization    #
         ###################
 
+        iteration = 0
+
         # Callback function called at every minimization iterations
         def callback(XX):
+            nonlocal iteration
+            # Iteration +=1
+            iteration += 1
+            print(f"\n \n At iterate   {iteration} \n")
             now = datetime.now()
             current_time = now.strftime("%Y-%m-%d_%H%M%S")
             ds = xr.Dataset({'res':(('x',),XX)})
             ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
             ds.close()
+            
         
         # Minimization options
         options = {}
@@ -749,6 +788,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
             options['disp'] = True
         else:
             options['disp'] = False
+
         options['maxiter'] = config.INV.maxiter
 
 
@@ -825,7 +865,8 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
 
         # Save
         if config.EXP.saveoutputs:
-
+            # print(State0.var)
+            # print(State0.params)
             Model.save_output(State0,present_date,name_var=Model.var_to_save,t=t)
 
         # Propagation
@@ -960,6 +1001,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
                 
         # Minimization options
         options = {}
+
         if verbose:
             options['disp'] = True
         else:

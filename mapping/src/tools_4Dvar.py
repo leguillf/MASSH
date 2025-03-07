@@ -160,9 +160,9 @@ class Variational:
         Jo = 0.
 
         # Measuring computation times 
-        # t_misfit = []
-        # t_basis = []
-        # t_model = []
+        t_misfit = []
+        t_basis = []
+        t_model = []
 
         for i in range(len(self.checkpoints)-1):
             
@@ -171,36 +171,23 @@ class Variational:
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
 
             # Measuring computation times
-            # t0 = datetime.now()
+            t0 = datetime.now()
 
             # 1. Misfit
             if self.H.is_obs(timestamp):
                 misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
                 if self.save_rmse:
-                    # ds_rmse = xr.Dataset()
                     for _var in self.var_to_compare.keys():
                         self.cross_diff[_var][i,:,:] = (self.ds_reference[_var][t//3600,:,:]-State.var[self.var_to_compare[_var]])**2
-
-                        # _var_rmse = xr.DataArray(np.sqrt(np.mean((self.ds_reference[_var][t//3600,:,:]-State.var[self.var_to_compare[_var]])**2)), 
-                        #                          dims=('time','lon', 'lat'), 
-                        #                          coords={'time': self.ds_reference.time[0]+np.timedelta64(t//3600,'h'),
-                        #                                  'lon': self.ds_reference[self.name_var_reference["lon"]], 
-                        #                                  'lat': self.ds_reference[self.name_var_reference["lat"]]},
-                        #                          name=_var)
-                        # ds_rmse[_var]=_var_rmse
                     
             # Measuring computation times
-            # t_misfit.append(datetime.now()-t0)
-            # t0 = datetime.now()
+            t_misfit.append(datetime.now()-t0)
+            t0 = datetime.now()
 
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 self.basis.operg(t/3600/24, X, State=State)
-                # plt.figure()
-                # plt.pcolormesh(State.params["He"])
-                # plt.colorbar()
-                # plt.show()
 
             self.States[self.checkpoints[i]] = State.copy()
 
@@ -209,14 +196,14 @@ class Variational:
                 State.plot(title=f'State variables at {i}')
 
             # Measuring computation times
-            # t_basis.append(datetime.now()-t0)
-            # t0 = datetime.now()
+            t_basis.append(datetime.now()-t0)
+            t0 = datetime.now()
 
             # 3. Run forward model
             self.M.step(t=t,State=State,nstep=nstep)
 
             # Measuring computation times
-            # t_model.append(datetime.now()-t0)
+            t_model.append(datetime.now()-t0)
         
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
@@ -226,8 +213,13 @@ class Variational:
         # Cost function 
         J = 1/2 * (Jo + Jb)
 
-        print("Jb = ",Jb)
-        print("Jo = ",Jo)
+        # print(f"Jb = {Jb/2:.3e}")
+        # print(f"Jo = {Jo/2:.3e}")
+        print(f"Jtot=  {J:.5e}     (Jo= {Jo/2:.4e} ; Jb= {Jb/2:.4e})")
+        
+        
+        # print("Jb = ",Jb)
+        # print("Jo = ",Jo)
         
         # State.plot(title='State variables at the end of cost function evaluation')
         ### TO DO : HOW TO PLOT THE PARAMETERS ### 
@@ -268,7 +260,7 @@ class Variational:
             ds.close()
 
         # Measuring computation times
-        # print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
+        # print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT {len(t_misfit)} CALLS : {np.mean(np.array(t_misfit))} \n - BASIS {len(t_basis)} CALLS : {np.mean(np.array(t_basis))} \n - MODEL {len(t_model)} CALLS : {np.mean(np.array(t_model))} \n ")
         
         return J*self.cost_function_coeff
     
@@ -300,9 +292,9 @@ class Variational:
             self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
         # Measuring computation times 
-        # t_misfit = []
-        # t_basis = []
-        # t_model = []
+        t_misfit = []
+        t_basis = []
+        t_model = []
 
         # Time loop
         for i in reversed(range(0,len(self.checkpoints)-1)):
@@ -312,16 +304,17 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
             
             # # Measuring computation times
-            # t0 = datetime.now()
-
+            
             State = self.States[self.checkpoints[i]]
+
+            t0 = datetime.now()
             
             # 3. Run adjoint model 
             self.M.step_adj(t=t, adState=adState, State=State, nstep=nstep) # i+1 --> i
 
             # Measuring computation times
-            # t_model.append(datetime.now()-t0)
-            # t0 = datetime.now()
+            t_model.append(datetime.now()-t0)
+            t0 = datetime.now()
 
             # adState.plot(title=f'adjoint variables at i = {i}')
             
@@ -330,15 +323,15 @@ class Variational:
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
 
             # Measuring computation times
-            # t_basis.append(datetime.now()-t0)
-            # t0 = datetime.now()
+            t_basis.append(datetime.now()-t0)
+            t0 = datetime.now()
             
             # 1. Misfit 
             if self.H.is_obs(timestamp):
                 self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
             # Measuring computation times
-            # t_misfit.append(datetime.now()-t0)
+            t_misfit.append(datetime.now()-t0)
 
         # For first timestamp #
         
@@ -387,6 +380,9 @@ class Variational:
 
         # Measuring computation times
         # print(f"MEAN COMPUTATION TIME FOR GRAD FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
+        # print(f"MEAN COMPUTATION TIME FOR GRAD FUNCTION : \n - MISFIT {len(t_misfit)} CALLS : {np.mean(np.array(t_misfit))} \n - BASIS {len(t_basis)} CALLS : {np.mean(np.array(t_basis))} \n - MODEL {len(t_model)} CALLS : {np.mean(np.array(t_model))} \n ")
+        
+        print(f"|proj g|=  {np.max(np.abs(g)):.5e}")
 
         return g
     

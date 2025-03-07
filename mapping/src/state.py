@@ -22,6 +22,8 @@ import pyinterp.fill
 
 import warnings
 
+import time
+
 from . import grid
 
 class State:
@@ -113,6 +115,104 @@ class State:
 
             # Bathymetry field 
             self.init_bathy(config)
+
+
+    # def __init__(self, config, first=True, verbose=True):
+    #     start_time = time.time()  # Start timing the entire function
+
+    #     if first and verbose:
+    #         print(config.GRID)
+
+    #     self.config = config
+
+    #     # Parameters
+    #     section_start = time.time()
+    #     self.name_time = config.EXP.name_time
+    #     self.name_lon = config.EXP.name_lon
+    #     self.name_lat = config.EXP.name_lat
+    #     self.name_exp_save = config.EXP.name_exp_save
+    #     self.path_save = config.EXP.path_save
+    #     if not os.path.exists(self.path_save):
+    #         os.makedirs(self.path_save)
+    #     self.flag_plot = config.EXP.flag_plot
+    #     print(f"Parameter initialization time: {time.time() - section_start:.4f} seconds")
+
+    #     # Initialize state variables dictionary
+    #     self.var = {}
+
+    #     # Initialize control parameters dictionary
+    #     self.params = {}
+
+    #     # Initialize grid
+    #     if first:
+    #         section_start = time.time()
+    #         self.geo_grid = False
+    #         self.mask = None
+    #         if config.GRID.super == 'GRID_GEO':
+    #             self.ini_geo_grid(config.GRID)
+    #         elif config.GRID.super == 'GRID_CAR':
+    #             self.ini_car_grid(config.GRID)
+    #         elif config.GRID.super == 'GRID_FROM_FILE':
+    #             self.ini_grid_from_file(config.GRID)
+    #         elif config.GRID.super == 'GRID_RESTART':
+    #             self.ini_grid_restart()
+    #         else:
+    #             sys.exit("Initialization '" + config.GRID.name_grid + "' not implemented yet")
+    #         print(f"Grid initialization time: {time.time() - section_start:.4f} seconds")
+
+    #         section_start = time.time()
+    #         self.nx, self.ny = self.lon.shape  # ATTENTION: PAS self.ny, self.nx
+    #         self.lon_min = np.nanmin(self.lon)
+    #         self.lon_max = np.nanmax(self.lon)
+    #         self.lat_min = np.nanmin(self.lat)
+    #         self.lat_max = np.nanmax(self.lat)
+    #         if np.sign(self.lon_min) == -1:
+    #             self.lon_unit = '-180_180'
+    #         else:
+    #             self.lon_unit = '0_360'
+    #         print(f"Lon/Lat calculations time: {time.time() - section_start:.4f} seconds")
+
+    #         # Mask
+    #         section_start = time.time()
+    #         self.ini_mask(config)
+    #         print(f"Mask initialization time: {time.time() - section_start:.4f} seconds")
+
+    #         # Compute cartesian grid 
+    #         section_start = time.time()
+    #         DX, DY = grid.lonlat2dxdy(self.lon, self.lat)
+    #         dx = np.nanmean(DX)
+    #         dy = np.nanmean(DY)
+    #         DX[np.isnan(DX)] = dx  # For cartesian grid
+    #         DY[np.isnan(DY)] = dy  # For cartesian grid
+    #         X, Y = grid.dxdy2xy(DX, DY)
+    #         self.DX = DX
+    #         self.DY = DY
+    #         self.X = X
+    #         self.Y = Y
+    #         self.dx = dx
+    #         self.dy = dy
+    #         print(f"Cartesian grid computation time: {time.time() - section_start:.4f} seconds")
+
+    #         # Coriolis
+    #         section_start = time.time()
+    #         if config.EXP.coriolis_force:
+    #             self.f = 4 * np.pi / 86164 * np.sin(self.lat * np.pi / 180)
+    #         else:
+    #             self.f = 0 * self.lat
+    #         print(f"Coriolis force computation time: {time.time() - section_start:.4f} seconds")
+
+    #         # Gravity
+    #         section_start = time.time()
+    #         self.g = 9.81
+    #         print(f"Gravity assignment time: {time.time() - section_start:.4f} seconds")
+
+    #         # Bathymetry field
+    #         section_start = time.time()
+    #         self.init_bathy(config)
+    #         print(f"Bathymetry initialization time: {time.time() - section_start:.4f} seconds")
+
+    #     print(f"Total execution time: {time.time() - start_time:.4f} seconds")
+
 
     def ini_geo_grid(self,config):
         """

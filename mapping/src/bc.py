@@ -52,7 +52,7 @@ class Bc_ext:
         # Get grid coordinates
         self.lon = State.lon
         self.lat = State.lat
-        self.mask = +State.mask
+        self.mask = State.mask
 
         # Study domain borders
         lon_min = np.nanmin(self.lon)
