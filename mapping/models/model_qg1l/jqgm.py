@@ -676,6 +676,12 @@ class Qgm:
         # Time propagation
         X1, _ = scan(self.one_step_for_scan_jit, init=(h1, ua, va, var1, hb, varb), xs=jnp.zeros(nstep))
         h1, ua, va, var1, hb, varb = X1
+        
+        # For loop without scan 
+        # for _ in range(nstep):
+        #     # One time step
+        #     h1, var1 = self.one_step_jit(h1, ua, va, var1, hb, varb)
+
 
         # Mask
         h1 = h1.at[self.ind0].set(jnp.nan)

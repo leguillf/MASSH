@@ -4,7 +4,7 @@ from jax import jvp,vjp
 from jax import debug
 #from jax.config import config
 #config.update("jax_enable_x64", True)
-from jax.lax import scan, dynamic_index_in_dim
+from jax.lax import scan, dynamic_index_in_dim, fori_loop
 
 import matplotlib.pylab as plt
 import numpy as np
@@ -159,6 +159,8 @@ class Swm:
         self._compute_w1_IT_scan_theta_S_jit = jit(self._compute_w1_IT_scan_theta_S)
         self._compute_w1_IT_scan_theta_W_jit = jit(self._compute_w1_IT_scan_theta_W)
         self._compute_w1_IT_scan_theta_E_jit = jit(self._compute_w1_IT_scan_theta_E)
+
+        self.one_step_for_fori_loop_jit = jit(self.one_step_for_fori_loop)
         
     ###########################################################################
     #                           Spatial scheme                                #
@@ -1152,13 +1154,20 @@ class Swm:
 
         return X1,X1
     
+    def one_step_for_fori_loop(self,i, X):
+        return self.one_step_jit(X)
+    
     def step(self, X0, nstep=1):
 
         # Time propagation
-        X1, _ = scan(self.one_step_for_scan_jit, init=X0, xs=jnp.zeros(nstep))
-        # for _ in range(nstep):
-        #     # One time step
-        #    X1 = self.one_step_jit(X0)
+        # X1, _ = scan(self.one_step_for_scan_jit, init=X0, xs=jnp.zeros(nstep))
+        for _ in range(nstep):
+            # One time step
+           X1 = self.one_step_jit(X0)
+
+        # X1 = fori_loop(0, nstep, self.one_step_for_fori_loop_jit,X0)
+        
+        # X1 = X0
         
         return X1
     
