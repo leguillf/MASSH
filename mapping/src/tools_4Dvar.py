@@ -170,33 +170,31 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
 
-            # Measuring computation times
-            t0 = datetime.now()
-
+            
             # 1. Misfit
             if self.H.is_obs(timestamp):
+                # Measuring computation times
+                t0 = datetime.now()
                 misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobs   
                 Jo += misfit.dot(self.R.inv(misfit))
                 if self.save_rmse:
                     for _var in self.var_to_compare.keys():
                         self.cross_diff[_var][i,:,:] = (self.ds_reference[_var][t//3600,:,:]-State.var[self.var_to_compare[_var]])**2
                     
-            # Measuring computation times
-            t_misfit.append(datetime.now()-t0)
-            t0 = datetime.now()
+                # Measuring computation times
+                t_misfit.append(datetime.now()-t0)
+                
 
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
+                t0 = datetime.now()
                 self.basis.operg(t/3600/24, X, State=State)
+                # Measuring computation times
+                t_basis.append(datetime.now()-t0)
 
             self.States[self.checkpoints[i]] = State.copy()
 
-            # if i%2==0:
-            if i == int(len(self.checkpoints)/2):
-                State.plot(title=f'State variables at {i}')
-
-            # Measuring computation times
-            t_basis.append(datetime.now()-t0)
+            
             t0 = datetime.now()
 
             # 3. Run forward model
@@ -314,24 +312,27 @@ class Variational:
 
             # Measuring computation times
             t_model.append(datetime.now()-t0)
-            t0 = datetime.now()
+            
 
             # adState.plot(title=f'adjoint variables at i = {i}')
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
+                t0 = datetime.now()
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
 
-            # Measuring computation times
-            t_basis.append(datetime.now()-t0)
-            t0 = datetime.now()
+                # Measuring computation times
+                t_basis.append(datetime.now()-t0)
+
+            
             
             # 1. Misfit 
             if self.H.is_obs(timestamp):
+                t0 = datetime.now()
                 self.H.adj(timestamp,adState,self.misfits[timestamp],self.R)
 
-            # Measuring computation times
-            t_misfit.append(datetime.now()-t0)
+                # Measuring computation times
+                t_misfit.append(datetime.now()-t0)
 
         # For first timestamp #
         
@@ -379,7 +380,6 @@ class Variational:
             #         self.Gb[param].append(0)
 
         # Measuring computation times
-        # print(f"MEAN COMPUTATION TIME FOR GRAD FUNCTION : \n - MISFIT : {np.mean(np.array(t_misfit))} \n - BASIS : {np.mean(np.array(t_basis))} \n - MODEL : {np.mean(np.array(t_model))} \n ")
         # print(f"MEAN COMPUTATION TIME FOR GRAD FUNCTION : \n - MISFIT {len(t_misfit)} CALLS : {np.mean(np.array(t_misfit))} \n - BASIS {len(t_basis)} CALLS : {np.mean(np.array(t_basis))} \n - MODEL {len(t_model)} CALLS : {np.mean(np.array(t_model))} \n ")
         
         print(f"|proj g|=  {np.max(np.abs(g)):.5e}")

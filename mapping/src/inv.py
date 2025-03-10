@@ -884,6 +884,8 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
     gc.collect()
     print()
 
+    return res
+
 def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
     
     '''
