@@ -1060,10 +1060,11 @@ class Swm:
 
 
         # - Equivalent height - #
+        He = self.Heb # value of He by default 
         if 'He' in self.name_params:
-            He = params[self.slice_params['He']].reshape(self.shape_params['He'])+self.Heb
-        else :
-            He = self.Heb # value of He by default 
+            He += params[self.slice_params['He']].reshape(self.shape_params['He'])
+        if 'He_offset' in self.name_params:
+            He += params[self.slice_params['He_offset']].reshape(self.shape_params['He_offset']) 
 
         # - ITG : Internal Tide Generation - # 
         # if 'itg' in self.name_params:
@@ -1074,11 +1075,7 @@ class Swm:
         #         rhs_itg+=self.grad_bathymetry_y*self.tidal_V[_w_name]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
 
         # VERSION OF ITG WT. jax.lax.scan # 
-        # Time propagation
-        #X1, _ = scan(self.one_step_for_scan_jit, init=X0, xs=jnp.zeros(nstep))
-        # for _ in range(nstep):
-        #     # One time step
-        #    X1 = self.one_step_jit(X0)
+
 
         if 'itg' in self.name_params:
             itg = params[self.slice_params['itg']].reshape(self.shape_params['itg']) # parameters for itg forcing 

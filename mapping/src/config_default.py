@@ -1305,6 +1305,36 @@ BASIS_IT = dict(
 
 )
 
+BASIS_HBC = dict(
+
+    name_params = ['hbcx', 'hbcy'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+
+    ### COMMON PARAMETER ### 
+
+    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    ### - HBC PARAMETER ### 
+
+    sigma_B_bc = 1e-2, # Background variance for bc
+
+    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
+
+    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    Nwaves = 1, # igw frequencies (in seconds)
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+)
+
+BASIS_OFFSET = dict(
+
+    name_mod_var = None,
+
+    sigma_B = None, 
+
+)
+
 
 
 #################################################################################################################################

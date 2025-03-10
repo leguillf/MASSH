@@ -1547,114 +1547,6 @@ class Model_sw1l_jax(M):
             print('Adjoint test:')
             adjoint_test(self,State,nstep=100)
 
-    # def __init__(self, config, State):
-    #     total_start = time.time()  # Start timing the entire function
-
-    #     section_start = time.time()
-    #     super().__init__(config, State)
-    #     print(f"Superclass initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-    #     self.config = config
-    #     print(f"Environment setup time: {time.time() - section_start:.4f} seconds")
-
-    #     ############################
-    #     ### MODEL SPECIFICATIONS ###
-    #     ############################
-
-    #     section_start = time.time()
-    #     self.time_scheme = config.MOD.time_scheme
-    #     self.bc_kind = config.MOD.bc_kind
-    #     self.bc_island = config.MOD.bc_island
-    #     print(f"Model specification time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     self.ny = State.ny
-    #     self.nx = State.nx
-    #     print(f"Grid specification time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     self.f = State.f
-    #     f0 = np.nanmean(self.f)
-    #     self.f[np.isnan(self.f)] = f0
-    #     print(f"Coriolis initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     self.g = State.g
-    #     print(f"Gravity assignment time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     self.omegas = np.asarray(config.MOD.w_waves)
-    #     self.omega_names = config.MOD.w_names
-    #     print(f"Tidal frequency computation time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     self.init_tidal_velocity(config, State)
-    #     print(f"Tidal velocity initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     ####################################
-    #     ### INITIALIZING MODEL VARIABLES ###
-    #     ####################################
-
-    #     section_start = time.time()
-    #     self.name_var = config.MOD.name_var
-    #     self.mask = {}
-    #     self.set_mask(State.mask, config)
-    #     self.init_variables(config, State)
-    #     print(f"Model variable initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     #############################################
-    #     ### INITIALIZING MODEL CONTROL PARAMETERS ###
-    #     #############################################
-
-    #     section_start = time.time()
-    #     self.name_params = config.MOD.name_params
-    #     self.init_params(config, State)
-    #     print(f"Model parameter initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     #################################
-    #     ### LOADING MODEL PYTHON FILE ### 
-    #     #################################
-
-    #     section_start = time.time()
-    #     if config.MOD.dir_model is None:
-    #         dir_model = os.path.realpath(
-    #             os.path.join(os.path.dirname(os.path.realpath(__file__)),
-    #                         '..', 'models', 'model_sw1l'))
-    #     else:
-    #         dir_model = config.MOD.dir_model
-
-    #     swm = SourceFileLoader("swm", dir_model + "/jswm.py").load_module()
-    #     print(f"Model loading time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     self.swm = swm.Swm(Model=self, State=State)
-    #     print(f"Model initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     section_start = time.time()
-    #     if config.INV is not None and config.INV.super in ['INV_4DVAR', 'INV_4DVAR_PARALLEL']:
-    #         self.swm_step = self.swm.step_jit
-    #         self.swm_step_tgl = self.swm.step_tgl_jit
-    #         self.swm_step_adj = self.swm.step_adj_jit
-    #     else:
-    #         self.swm_step = self.swm.step_jit
-    #     print(f"Model function initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     if config.INV is not None and config.INV.super == 'INV_4DVAR' and config.INV.compute_test:
-    #         section_start = time.time()
-    #         print('Tangent test:')
-    #         tangent_test(self, State, nstep=100)
-    #         print(f"Tangent test time: {time.time() - section_start:.4f} seconds")
-
-    #         section_start = time.time()
-    #         print('Adjoint test:')
-    #         adjoint_test(self, State, nstep=100)
-    #         print(f"Adjoint test time: {time.time() - section_start:.4f} seconds")
-
-    #     print(f"Total execution time: {time.time() - total_start:.4f} seconds")
-
-
     def init (self,State,t0=0):
 
         return
@@ -1877,14 +1769,19 @@ class Model_sw1l_jax(M):
         for param in self.name_params : 
 
             # If the parameter is not implemented 
-            if param not in ['He', 'hbcx', 'hbcy', 'itg'] : 
+            if param not in ['He','He_offset', 'hbcx', 'hbcy', 'itg'] : 
                 sys.exit(param+" not implemented. Please choose parameters among ['He', 'hbcx', 'hbcy', 'itg'].")
 
             # - Equivalent Height : He 
             elif param =='He' : 
                 self.shape_params['He'] = [State.nx,    # - Number of grid points along x axis.
                                            State.ny]    # - Number of grid points along y axis.
-            
+
+            # - Equivalent Height Offset : He_offset
+            elif param =='He_offset' : 
+                self.shape_params['He_offset'] = [State.nx,    # - Number of grid points along x axis.
+                                                  State.ny]    # - Number of grid points along y axis.
+
             # - Height Boundary Conditions along x : hbcx 
             elif param =='hbcx' : 
                 self.shape_params['hbcx'] = [len(self.omegas),      # - Number of tidal frequency components 
@@ -3996,8 +3893,12 @@ def adjoint_test(M,State,t0=0,nstep=1):
 
     mask = np.isnan(adX0+dX0)
     
+    
     ps1 = np.inner(dX1[~mask],adX0[~mask])
     ps2 = np.inner(dX0[~mask],adX1[~mask]) 
+
+    # print(ps1)
+    # print(ps2)
     
     print(ps1/ps2)
 
