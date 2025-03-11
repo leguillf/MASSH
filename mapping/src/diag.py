@@ -848,18 +848,17 @@ class Diag_ose():
                 _ds0.close()
                 # Open nested files
                 _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal').load()
-                
+            
+            _ref = _ref.assign_coords({self.name_ref_time:_ref[self.name_ref_time]})
+            _ref = _ref.swap_dims({_ref[self.name_ref_time].dims[0]:self.name_ref_time})
+
             if np.sign(_ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].data % 360))})
-                _ref = _ref.sortby(self.name_ref_lon)
+                #_ref = _ref.sortby(self.name_ref_lon)
             elif np.sign(_ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, (_ref[self.name_ref_lon].data + 180) % 360 - 180))})
-                _ref = _ref.sortby(self.name_ref_lon)
-            _ref = _ref.swap_dims({_ref[self.name_ref_time].dims[0]:self.name_ref_time})
-            lon_ref = _ref[self.name_ref_lon] 
-            lat_ref = _ref[self.name_ref_lat]
-            _ref = _ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max), drop=True)
-            _ref = _ref.where((lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
+                #_ref = _ref.sortby(self.name_ref_lon)
+
             try:
                 _ref = _ref.sel(
                     {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
@@ -867,6 +866,12 @@ class Diag_ose():
             except:
                 _ref = _ref.where(((_ref[self.name_ref_time]<=np.datetime64(self.time_max)) &\
                             (_ref[self.name_ref_time]>=np.datetime64(self.time_min))).compute(),drop=True)
+            
+            lon_ref = _ref[self.name_ref_lon] 
+            lat_ref = _ref[self.name_ref_lat]
+            _ref = _ref.where(((self.lon_min<=lon_ref) & (self.lon_max>=lon_ref) & 
+                  (self.lat_min<=lat_ref) & (self.lat_max>=lat_ref)).compute(), drop=True)
+            
             # Mean spatial resolution of alongtrack data
             if len(_ref[self.name_ref_lat].shape)==2:
                 _lon = _ref[self.name_ref_lon][:,0].values
@@ -878,8 +883,7 @@ class Diag_ose():
                                                                 _lat[:-1],
                                                                 _lon[1:],
                                                                 _lat[1:])))
-
-            _ref.close()
+            print(_ref)
 
             # Add MDT to reference data
             if config.DIAG.add_mdt_to_ref:
@@ -889,6 +893,9 @@ class Diag_ose():
 
             # Append to list
             ref.append(_ref[self.name_ref_var])
+
+            _ref.close()
+
         self.ref = ref
         self.delta_x = delta_x
 
@@ -1384,7 +1391,7 @@ That could be due to non regular grid or bad written netcdf file')
             ax1.legend()
             ax1.set_xticklabels(ax1.get_xticklabels(), rotation=45)
 
-            im2 = ax2.pcolormesh(binning.x, binning.y, rmse_xy_exp,cmap='Reds')
+            im2 = ax2.pcolormesh(binning.x, binning.y, rmse_xy_exp,cmap='Reds',vmin=np.nanmin(rmse_xy_exp),vmax=np.nanmax(rmse_xy_exp))
 
             if self.compare_to_baseline:
                 ax3.pcolormesh(binning.x, binning.y, rmse_xy_bas,cmap='Reds',vmin=np.nanmin(rmse_xy_exp),vmax=np.nanmax(rmse_xy_exp))
