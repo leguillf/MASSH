@@ -13,7 +13,7 @@ import scipy
 
 
 
-def gaspari_cohn(r,c):
+def gaspari_cohn(r,c=1):
     """
     NAME 
         bfn_gaspari_cohn
@@ -218,6 +218,8 @@ def read_auxdata(file_aux,name_var,lon_unit):
         data = ds[name_var['data']].values.squeeze()
     elif 'mdt' in name_var:
         data = ds[name_var['mdt']].values.squeeze()
+    elif 'var' in name_var:
+        data = ds[name_var['var']].values.squeeze()
     
     if data.shape[1]==lon.size:
         data = data.transpose()
