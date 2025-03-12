@@ -14,7 +14,7 @@ import matplotlib.pylab as plt
 from scipy.interpolate import griddata
 from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
-from scipy.spatial import distance_matrix, cKDTree
+from scipy.spatial import KDTree
 import pandas as pd
 from jax.experimental import sparse
 import jax.numpy as jnp 
@@ -67,7 +67,27 @@ class Obsop_interp:
         self.date_obs = []
         
         # Pattern for saving files
-        box = f'{int(State.lon_min)}_{int(State.lon_max)}_{int(State.lat_min)}_{int(State.lat_max)}'
+        if config.EXP.lon_obs_max is not None:
+            lon_obs_max = config.EXP.lon_obs_max
+        else:
+            lon_obs_max = State.lon_max
+
+        if config.EXP.lon_obs_min is not None:
+            lon_obs_min = config.EXP.lon_obs_min
+        else:
+            lon_obs_min = State.lon_min
+        
+        if config.EXP.lat_obs_max is not None:
+            lat_obs_max = config.EXP.lat_obs_max
+        else:
+            lat_obs_max = State.lat_max
+
+        if config.EXP.lat_obs_min is not None:
+            lat_obs_min = config.EXP.lat_obs_min
+        else:
+            lat_obs_min = State.lat_min
+
+        box = f'{int(lon_obs_min)}_{int(lon_obs_max)}_{int(lat_obs_min)}_{int(lat_obs_max)}'
         self.name_H = f'H_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}_{int(State.dx)}_{int(State.dy)}'
 
         # Path to save operators
@@ -396,37 +416,32 @@ class Obsop_interp_l3_jax(Obsop_interp):
         self._misfit_reduced_jit = jit(self._misfit_reduced)
         self._misfit_jit = jit(self._misfit)
     
-    def _sparse_op(self,lon_obs,lat_obs):
+    def _sparse_op(self, lon_obs, lat_obs):
+        """Optimized sparse observation operator using KDTree."""
         
         coords_geo_obs = np.column_stack((lon_obs, lat_obs))
         coords_car_obs = grid.geo2cart(coords_geo_obs)
 
-        row = [] # indexes of observation grid
-        col = [] # indexes of state grid
-        data = [] # interpolation coefficients
-        Nobs = coords_geo_obs.shape[0]
+        # KDTree for nearest neighbor search
+        tree = KDTree(self.coords_car)
+        D, ind_closest = tree.query(coords_car_obs, k=self.Npix)
 
-        for iobs in range(Nobs):
-            _dist = cdist(coords_car_obs[iobs][np.newaxis,:], self.coords_car, metric="euclidean")[0]
-            # Npix closest
-            ind_closest = np.argsort(_dist)
-            # Get Npix closest pixels (ignoring boundary pixels)
-            weights = []
-            for ipix in range(self.Npix):
-                if (not ind_closest[ipix] in self.ind_borders) and (not ind_closest[ipix] in self.ind_mask) and (_dist[ind_closest[ipix]]<=self.dmax):
-                    weights.append(np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*self.dmax)**2))))
-                    row.append(iobs)
-                    col.append(ind_closest[ipix])
-            sum_weights = np.sum(weights)
-            # Fill interpolation coefficients 
-            for w in weights:
-                data.append(w/sum_weights)
+        # Apply distance threshold
+        valid_mask = (D <= self.dmax)
 
-        data = jnp.array(data)
-        indices = jnp.array([row,col])
+        # Compute weights
+        weights = np.exp(-D**2 / (2 * (0.5 * self.dmax)**2)) * valid_mask
+        sum_weights = np.sum(weights, axis=1, keepdims=True)
+        weights /= sum_weights  # Normalize
 
-        return data, indices
+        # Extract valid indices
+        row, col = np.where(valid_mask)
+        data = weights[row, col]
 
+        indices = jnp.array([row, ind_closest[row, col]])
+
+        return jnp.array(data), indices
+    
     def explicit_proj_operation(self, data, indices, X, n_obs):
         """
         Perform the projection operation explicitly without using csc_matrix.
@@ -467,7 +482,6 @@ class Obsop_interp_l3_jax(Obsop_interp):
 
             sat_info_list = self.dict_obs[date]['attributes']
             obs_file_list = self.dict_obs[date]['obs_path']
-            obs_name_list = self.dict_obs[date]['obs_name']
 
         
             # Concatenate obs from different sensors
@@ -476,7 +490,7 @@ class Obsop_interp_l3_jax(Obsop_interp):
             var_obs = {}
             err_obs = {}
 
-            for sat_info,obs_file,obs_name in zip(sat_info_list,obs_file_list,obs_name_list):
+            for sat_info, obs_file in zip(sat_info_list,obs_file_list):
 
                 if sat_info.super not in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
                         continue
@@ -489,6 +503,14 @@ class Obsop_interp_l3_jax(Obsop_interp):
                     lat = ncin[sat_info['name_lat']].values.ravel()
 
                     for name in sat_info['name_var']:
+
+                        # Init lists
+                        if name not in var_obs:
+                            var_obs[name] = []
+                            err_obs[name] = []
+                            lon_obs[name] = []
+                            lat_obs[name] = []
+
                         # Observed variable
                         var = ncin[name].values.ravel() 
                         # Observed error
@@ -500,17 +522,19 @@ class Obsop_interp_l3_jax(Obsop_interp):
                         else:
                             err = np.ones_like(var)                        
                         if name in lon_obs:
-                            var_obs[name] = np.concatenate((var_obs[name],var))
-                            err_obs[name] = np.concatenate((err_obs[name],err))
-                            lon_obs[name] = np.concatenate((lon_obs[name],lon))
-                            lat_obs[name] = np.concatenate((lat_obs[name],lat))
-                        else:
-                            var_obs[name] = +var
-                            err_obs[name] = +err
-                            lon_obs[name] = +lon
-                            lat_obs[name] = +lat
+                            var_obs[name].append(var)
+                            err_obs[name].append(err)
+                            lon_obs[name].append(lon)
+                            lat_obs[name].append(lat)
             
             for name in lon_obs:
+
+                # Concatenations of lists
+                var_obs[name] = np.concatenate(var_obs[name])
+                err_obs[name] = np.concatenate(err_obs[name])
+                lon_obs[name] = np.concatenate(lon_obs[name])
+                lat_obs[name] = np.concatenate(lat_obs[name])
+
                 coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
                 file_L3 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{date.strftime('%Y%m%d_%H%M')}_{name}.pic"
                 if var_bc is not None and name in var_bc:
@@ -537,7 +561,6 @@ class Obsop_interp_l3_jax(Obsop_interp):
                     if self.write_op:
                         with open(file_L3, "wb") as f:
                             pickle.dump([data, indices], f)
-        
         
         self.n_data = np.array([self.data[t]['SSH'].size for t in self.t_obs])
         self.n_obs = np.array([self.varobs[t]['SSH'].size for t in self.t_obs])
@@ -618,6 +641,13 @@ class Obsop_interp_l3_jax(Obsop_interp):
 
         name = 'SSH'
         X = State.var[self.name_mod_var[name]].ravel() 
+
+        return self._misfit_jit(t, X)
+    
+    def misfit_jax(self, t, State_var):
+
+        name = 'SSH'
+        X = State_var[self.name_mod_var[name]].ravel() 
 
         return self._misfit_jit(t, X)
     

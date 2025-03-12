@@ -19,7 +19,12 @@ import datetime
 import jax.numpy as jnp 
 import jax.lax as lax
 import jax
+from jax import jit
 from jax.lax import scan
+import time 
+import matplotlib.pylab as plt 
+
+
 jax.config.update("jax_enable_x64", True)
 
 
@@ -45,7 +50,7 @@ class Cov :
 class Variational:
     
     def __init__(self, 
-                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None):
+                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None, nstep=None):
         
         # Objects
         self.M = M # model
@@ -89,14 +94,19 @@ class Variational:
                 X = (np.random.random(self.basis.nbasis)-0.5)
             else:
                 X = self.B.sqr(np.random.random(self.basis.nbasis)-0.5) + self.Xb
-            grad_test(self.cost,self.grad,X)
+            
+            def cost(X):
+                return self.cost_and_grad(X)[0]
+            def grad(X):
+                return self.cost_and_grad(X)[1]
+            grad_test(cost,grad,X)
 
         
     def cost(self,X0):
                 
         # Initial state
         State = self.State.copy()
-        State.plot(title='State variables at the start of cost function evaluation')
+        #State.plot(title='State variables at the start of cost function evaluation')
         # Background cost function evaluation 
         if self.B is not None:
             if self.prec :
@@ -111,6 +121,14 @@ class Variational:
     
         # Observational cost function evaluation
         Jo = 0.
+
+        time_misfit = 0
+        l = 0
+        time_model = 0
+        j = 0
+        time_basis = 0
+        k = 0
+        
         for i in range(len(self.checkpoints)-1):
             
             timestamp = self.M.timestamps[self.checkpoints[i]]
@@ -119,29 +137,50 @@ class Variational:
             
             # 1. Misfit
             if self.H.is_obs(timestamp):
+                start = time.time()
                 misfit = self.H.misfit(timestamp,State) # d=Hx-xobs   
+                end = time.time()
+                time_misfit += end - start
+                l += 1
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                self.basis.operg(t/3600/24, X, State=State)
+                start = time.time()
+                self.basis.operg(t/3600/24, X, State=State.params)
+                end = time.time()
+                time_basis += end - start
+                k += 1
             
             State.save(os.path.join(self.tmp_DA_path,
                         'model_state_' + str(self.checkpoints[i]) + '.nc'))
 
             # 3. Run forward model
+            start = time.time()
             self.M.step(t=t,State=State,nstep=nstep)
+            end = time.time()
+            time_model += end - start
+            j += 1
+
+            if i==int(len(self.checkpoints)/2):
+                State.plot(title='State variables at the middle of cost function evaluation')
 
         timestamp = self.M.timestamps[self.checkpoints[-1]]
         if self.H.is_obs(timestamp):
+            start = time.time()
             misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
+            time_misfit += end - start
+            l += 1
             Jo += misfit.dot(self.R.inv(misfit))  
         
+        print('misfit', l, time_misfit/l)
+        print('basis', k, time_basis/k)
+        print('model', j, time_model/j)
         # Cost function 
         J = 1/2 * (Jo + Jb)
-         
-        State.plot(title='State variables at the end of cost function evaluation')
-        State.plot(title='Parameters at the end of cost function evaluation',params=True)
+        
+        
+        #State.plot(title='Parameters at the end of cost function evaluation',params=True)
         
         if self.save_minimization:
             self.J.append(J)
@@ -192,7 +231,7 @@ class Variational:
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
+                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState.params)
             
             # 1. Misfit 
             if self.H.is_obs(timestamp):
@@ -203,8 +242,8 @@ class Variational:
         
         g = adX + gb  # total gradient
 
-        adState.plot(title='adjoint variables at the end of gradient function evaluation')
-        State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
+        #adState.plot(title='adjoint variables at the end of gradient function evaluation')
+        #State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
         
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))
@@ -235,6 +274,12 @@ class Variational:
         # Observational cost function evaluation
         State_dict = {}
         misfit_dict = {}
+        time_misfit = 0
+        l = 0
+        time_model = 0
+        j = 0
+        time_basis = 0
+        k = 0
         Jo = 0.
         for i in range(len(self.checkpoints)-1):
             
@@ -243,18 +288,33 @@ class Variational:
             
             # 1. Misfit
             if self.H.is_obs_time(t):
+                start = time.time()
                 misfit = self.H.misfit(t,State) # d=Hx-xobs   
+                end = time.time()
+                time_misfit += end - start
+                l += 1
                 misfit_dict[t] = misfit
                 Jo += misfit.dot(self.R.inv(misfit))
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                self.basis.operg(t/3600/24, X, State=State)
+                start = time.time()
+                self.basis.operg(t/3600/24, X, State=State.params)
+                end = time.time()
+                time_basis += end - start
+                k += 1
             
             State_dict[t] = State.copy()
 
             # 3. Run forward model
+            start = time.time()
             self.M.step(t=t,State=State,nstep=nstep)
+            end = time.time()
+            time_model += end - start
+            j += 1
+
+            if i==int(len(self.checkpoints)/2):
+                State.plot(title='State variables at the middle of cost function evaluation')
 
         t = self.M.T[-1]
         State_dict[t] = State.copy()
@@ -265,6 +325,10 @@ class Variational:
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
+
+        print('misfit', l, time_misfit/l)
+        print('basis', k, time_basis/k)
+        print('model', j, time_model/j)
 
         ########################################
         # GRAD FUNCTION
@@ -284,7 +348,7 @@ class Variational:
         adX = X*0
 
         # Last timestamp
-        t = self.M.T[self.checkpoints[i]]
+        t = self.M.T[self.checkpoints[-1]]
         if self.H.is_obs_time(t):
             self.H.adj(t,adState,State_dict[t], misfit_dict[t])
 
@@ -302,11 +366,14 @@ class Variational:
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState)
+                adX += self.basis.operg_transpose(t=t/3600/24,adState=adState.params)
             
             # 1. Misfit 
             if self.H.is_obs_time(t):
                 self.H.adj(t,adState,State,misfit_dict[t])
+
+            if i==int(len(self.checkpoints)/2):
+                adState.plot(title='Adjoint State variables at the middle of cost function evaluation')
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
@@ -372,13 +439,14 @@ class Variational_jax:
     
     def misfit_update(self, args):
         Jo, State_var, t = args
-        misfit = self.H.misfit(State_var, t)  # d=Hx-xobs
+        misfit = self.H.misfit_jax(t, State_var)  # d=Hx-xobs
         return Jo + misfit.dot(self.R.inv(misfit)), State_var, t
     
     def no_update(self,args):
         return args
     
     def body_fn(self, i, val):
+        
         t, Jo, State_var, State_params, X = val
 
         # 1. Misfit
@@ -393,7 +461,7 @@ class Variational_jax:
         self.basis.operg(t / 3600 / 24, X, State_params)
 
         # 3. Run forward model
-        State_var = self.M.step(t, State_var, State_params, nstep=self.nstep)
+        State_var = self.M.step_jax_jit(State_var, State_params, nstep=self.nstep, t=t)
 
         # Update time
         t += self.nstep * self.M.dt
@@ -447,13 +515,15 @@ class Variational_jax:
 
         return J
     
-    
     def grad(self,X0): 
 
         grad_fun = jax.grad(self.cost)
 
         return grad_fun(X0)
-
+    
+    def cost_and_grad(self, X):
+        return jax.value_and_grad(self.cost)(X)
+    
 
 def grad_test(J, G, X):
     h = np.random.random(X.size)

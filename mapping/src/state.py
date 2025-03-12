@@ -138,36 +138,27 @@ class State:
 
         km2deg = 1./111
 
-        if None in [config.ny,config.nx]:
+        ENSLAT = np.arange(
+            config.lat_min,
+            config.lat_max + config.dx*km2deg,
+            config.dx*km2deg)
 
-            ENSLAT = np.arange(
-                config.lat_min,
-                config.lat_max + config.dx*km2deg,
-                config.dx*km2deg)
+        ENSLON = np.arange(
+                    config.lon_min,
+                    config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
+                    config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
 
-            ENSLON = np.arange(
-                        config.lon_min,
-                        config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
-                        config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
+        lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
+        lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
 
-            lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
-            lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
-
-            for I in range(len(ENSLAT)):
-                for J in range(len(ENSLON)):
-                    lat2d[I,J] = ENSLAT[I]
-                    lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.) * km2deg
-
-
-        else:
-            Ly = (config.lat_max-config.lat_min) / km2deg
-            Lx = Ly * config.nx/config.ny
-            lon_max = config.lon_min + Lx / (0.5 * (np.cos(config.lat_min/180*np.pi) + np.cos(config.lat_max/180*np.pi)) / km2deg)
-            x_cor = np.linspace(config.lon_min, lon_max, config.nx+1)
-            y_cor = np.linspace(config.lat_min, config.lat_max, config.ny+1)
-            x_cen = 0.5 * (x_cor[1:] + x_cor[:-1])
-            y_cen = 0.5 * (y_cor[1:] + y_cor[:-1])
-            lon2d, lat2d = np.meshgrid(x_cen, y_cen)
+        for I in range(len(ENSLAT)):
+            for J in range(len(ENSLON)):
+                lat2d[I,J] = ENSLAT[I]
+                lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.) * km2deg
+        
+        if not None in [config.ny,config.nx]:
+            lat2d = lat2d[:config.ny,:config.nx]
+            lon2d = lon2d[:config.ny,:config.nx]
         
         self.lon = lon2d
         self.lat = lat2d
@@ -192,13 +183,13 @@ class State:
             self.geo_grid = True
             lon,lat = np.meshgrid(lon,lat)
 
-        if config.subsampling is not None:
-            lon = lon[::config.subsampling,::config.subsampling]
-            lat = lat[::config.subsampling,::config.subsampling]
+        if config.init_var:
+            for name in dsin:
+                self.var[name] = +dsin[name].values
             
         self.lon = lon 
         self.lat = lat
-        self.present_date = config.init_date
+        
         dsin.close()
         del dsin
         
@@ -220,9 +211,7 @@ class State:
                 lon,lat = np.meshgrid(lon,lat)
             self.lon = lon 
             self.lat = lat
-            self.present_date = datetime.utcfromtimestamp(dsin['time'].values.tolist()/1e9)
-            if self.first:
-                print('Restarting experiment at',self.present_date)
+
             dsin.close()
             del dsin
             
@@ -340,9 +329,8 @@ class State:
             
         ds = xr.Dataset(var, coords=coords)
         ds.to_netcdf(filename,
-                     encoding={'time': {'units': 'days since 1900-01-01'}},
+                     #encoding={'time': {'units': 'days since 1950-01-01 00:00:00'}},
                      unlimited_dims={'time':True})
-        
         ds.close()
         del ds
         
@@ -444,10 +432,16 @@ class State:
         other = self.copy(free=True)
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
-            other.var[name][self.mask] = np.nan
+            try:
+                other.var[name][self.mask] = np.nan
+            except:
+                print(f"Warning: can't mask to variable '{name}'")
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape).astype('float64')
-            other.params[name][self.mask] = np.nan
+            try:
+                other.params[name][self.mask] = np.nan
+            except:
+                print(f"Warning: can't mask to parameter '{name}'")
         return other
     
     
@@ -621,13 +615,21 @@ class State:
         else:
             for ax,name_var in zip(axs,self.params):
                 ax.set_title(name_var)
-                if np.sign(np.nanmin(self.params[name_var]))!=np.sign(np.nanmax(self.params[name_var])):
-                    cmap_range = np.nanmax(np.absolute(self.params[name_var]))
-                    im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
-                                    shading='auto', vmin = -cmap_range, vmax = cmap_range)
-                else:
-                    im = ax.pcolormesh(self.params[name_var],shading='auto')
-                plt.colorbar(im,ax=ax)
+
+                try:
+                    if np.sign(np.nanmin(self.params[name_var]))!=np.sign(np.nanmax(self.params[name_var])):
+                        cmap_range = np.nanmax(np.absolute(self.params[name_var]))
+                        im = ax.pcolormesh(self.params[name_var],cmap=cmap,\
+                                        shading='auto', vmin = -cmap_range, vmax = cmap_range)
+                    else:
+                        im = ax.pcolormesh(self.params[name_var],shading='auto')
+                    plt.colorbar(im,ax=ax)
+
+                except:
+                    try:
+                        plt.plot(self.params[name_var])
+                    except:
+                        print("Can't plot parameters")
         
         plt.show()
         

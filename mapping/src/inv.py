@@ -14,6 +14,7 @@ from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
 import xarray as xr
+import jax.numpy as jnp 
 import glob
 from importlib.machinery import SourceFileLoader 
 
@@ -509,17 +510,16 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
 
     return
 
-def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
+
+def Inv_4Dvar_old(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
 
     
     '''
     Run a 4Dvar analysis
     '''
 
-    if 'JAX' in config.MOD.super:
-        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-        
-    
+    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+
     # Module initializations
     if Model is None:
         # initialize Model operator 
@@ -680,7 +680,264 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         # Run minimization 
         from decimal import Decimal
         import time
-        fun = var.cost_and_grad
+
+        res = opt.minimize(var.cost, Xopt,
+                        method=config.INV.opt_method,
+                        jac=var.grad,
+                        options=options,
+                        callback=callback)
+        
+
+        print ('\nIs the minimization successful? {}'.format(res.success))
+        print ('\nFinal cost function value: {}'.format(res.fun))
+        print ('\nNumber of iterations: {}'.format(res.nit))
+        
+        # Save minimization trajectory
+        if config.INV.save_minimization:
+            ds = xr.Dataset({'cost':(('j'),var.J),'grad':(('g'),var.G)})
+            ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
+            ds.close()
+
+        Xres = res.x
+    else:
+        print('You ask for restart_4Dvar and maxiter==0, so we save directly the trajectory')
+        Xres = +Xopt
+        
+    ########################
+    #    Saving trajectory #
+    ########################
+    print('\n*** Saving trajectory ***\n')
+    
+    if config.INV.prec:
+        Xa = var.Xb + B.sqr(Xres)
+    else:
+        Xa = var.Xb + Xres
+        
+    # Save minimum for next experiments
+    ds = xr.Dataset({'res':(('x',),Xa)})
+    ds.to_netcdf(os.path.join(path_save_control_vectors,'Xres.nc'))
+    ds.close()
+
+    # Init
+    State0 = State.copy()
+    date = config.EXP.init_date
+    Model.save_output(State0,date,name_var=Model.var_to_save,t=0) 
+    
+    nstep = min(nstep_check, int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt))
+    # Forward propagation
+    while date<config.EXP.final_date:
+        
+        # current time in secondes
+        t = (date - config.EXP.init_date).total_seconds()
+        
+        # Reduced basis
+        if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
+            Basis.operg(t/3600/24,Xa,State=State0)
+
+        # Forward propagation
+        Model.step(t=t,State=State0,nstep=nstep)
+        date += timedelta(seconds=nstep*Model.dt)
+
+        # Save output
+        if (((date - config.EXP.init_date).total_seconds()
+            /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
+            & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
+            Model.save_output(State0,date,name_var=Model.var_to_save,t=t) 
+    
+        State0.plot(date)
+        
+    del State, State0, Xa, dict_obs, B, R, Q, Model, Basis, Obsop, var, Xopt, Xres, Xb, checkpoints, time_checkpoints, t_checkpoints, ds, var_bc 
+    gc.collect()
+    print()
+
+
+def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,gpu_device=None) :
+
+    
+    '''
+    Run a 4Dvar analysis
+    '''
+
+    #if 'JAX' in config.MOD.super:
+    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+    if gpu_device is not None:
+        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_device
+        
+    
+    # Module initializations
+    if Model is None:
+        # initialize Model operator 
+        from . import mod
+        Model = mod.Model(config, State, verbose=verbose)
+    if Bc is None:
+        # initialize Bc 
+        from . import bc
+        Bc = bc.Bc(config, verbose=verbose)
+    if dict_obs is None:
+        # initialize Obs
+        from . import obs
+        dict_obs = obs.Obs(config, State)
+    if Obsop is None:
+        # initialize Obsop
+        from . import obsop
+        Obsop = obsop.Obsop(config, State, dict_obs, Model, verbose=verbose)
+    if Basis is None:
+        # initialize Basis
+        from . import basis
+        Basis = basis.Basis(config, State, verbose=verbose)
+    
+    
+    # Compute checkpoints when the cost function will be evaluated 
+    nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
+    checkpoints = [0]
+    time_checkpoints = [np.datetime64(Model.timestamps[0])]
+    t_checkpoints = [Model.T[0]]
+    check = 0
+    for i,t in enumerate(Model.timestamps[:-1]):
+        if i>0 and (Obsop.is_obs(t) or check==nstep_check):
+            checkpoints.append(i)
+            time_checkpoints.append(np.datetime64(t))
+            t_checkpoints.append(Model.T[i])
+            if check==nstep_check:
+                check = 0
+        check += 1 
+    checkpoints.append(len(Model.timestamps)-1) # last timestep
+    time_checkpoints.append(np.datetime64(Model.timestamps[-1]))
+    t_checkpoints.append(Model.T[-1])
+    checkpoints = np.asarray(checkpoints)
+    time_checkpoints = np.asarray(time_checkpoints)
+    print(f'--> {checkpoints.size} checkpoints to evaluate the cost function')
+
+    # Boundary conditions
+    if Bc is not None:
+        var_bc = Bc.interp(time_checkpoints)
+        Model.set_bc(t_checkpoints,var_bc)
+    
+    # Observations operator 
+    if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
+        time_obs = [np.datetime64(date) for date in Obsop.date_obs]
+        var_bc = Bc.interp(time_obs)
+    else:
+        var_bc = None
+    print('process observation operators')
+    Obsop.process_obs(var_bc)
+    
+    # Initial model state
+    Model.init(State)
+    State.plot(title='Init State')
+
+    # Set Reduced Basis
+    if Basis is not None:
+        time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in days) for which the basis components will be compute (at each timestep_checkpoint)
+        Xb, Q = Basis.set_basis(time_basis, return_q=True, State=State) # Q is the standard deviation. To get the variance, use Q^2
+    else:
+        sys.exit('4Dvar only work with reduced basis!!')
+    
+    # Covariance matrix
+    from .tools_4Dvar import Cov
+    if config.INV.sigma_B is not None:     
+        print('Warning: sigma_B is prescribed --> ignore Q of the reduced basis')
+        # Least squares
+        B = Cov(config.INV.sigma_B)
+        R = Cov(config.INV.sigma_R)
+    else:
+        B = Cov(Q)
+        R = Cov(config.INV.sigma_R)
+        
+    # Variational object initialization
+    if config.INV.flag_full_jax:
+        from .tools_4Dvar import Variational_jax as Variational
+    else:
+        from .tools_4Dvar import Variational as Variational
+
+    var = Variational(
+        config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints, nstep=nstep_check)
+    
+    # Initial Control vector 
+    if config.INV.path_init_4Dvar is None:
+        if config.INV.flag_full_jax:
+            Xopt = jnp.zeros((Xb.size,))
+        else:
+            Xopt = np.zeros((Xb.size,))
+    else:
+        # Read previous minimum 
+        print('Read previous minimum:',config.INV.path_init_4Dvar)
+        ds = xr.open_dataset(config.INV.path_init_4Dvar)
+        Xopt = var.Xb*0
+        Xopt[:ds.res.size] = ds.res.values
+        ds.close()
+        if config.INV.prec:
+            Xopt = B.invsqr(Xopt - var.Xb)
+    
+    # Path where to save the control vector at each 4Dvar iteration 
+    # (carefull, depending on the number of control variables, these files may use large disk space)
+    if config.INV.path_save_control_vectors is not None:
+        path_save_control_vectors = config.INV.path_save_control_vectors
+    else:
+        path_save_control_vectors = config.EXP.tmp_DA_path
+    if not os.path.exists(path_save_control_vectors):
+        os.makedirs(path_save_control_vectors)
+
+    # Restart mode
+    maxiter = config.INV.maxiter
+    if config.INV.restart_4Dvar:
+        tmp_files = sorted(glob.glob(os.path.join(path_save_control_vectors,'X_it-*.nc')))
+        if len(tmp_files)>0:
+            print('Restart at:',tmp_files[-1])
+            try:
+                ds = xr.open_dataset(tmp_files[-1])
+            except:
+                if len(tmp_files)>1:
+                    ds = xr.open_dataset(tmp_files[-2])
+            try:
+                Xopt = ds.res.values
+                maxiter = max(config.INV.maxiter - len(tmp_files), 0)
+                ds.close()
+            except:
+                Xopt = +Xopt
+            
+    if not (config.INV.restart_4Dvar and maxiter==0):
+        print('\n*** Minimization ***\n')
+        ###################
+        # Minimization    #
+        ###################
+
+        # Callback function called at every minimization iterations
+        def callback(XX):
+            if config.INV.save_minimization:
+                now = datetime.now()
+                current_time = now.strftime("%Y-%m-%d_%H%M%S")
+                ds = xr.Dataset({'res':(('x',),XX)})
+                ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it-'+current_time+'.nc'))
+                ds.close()
+                
+        # Minimization options
+        options = {}
+        if verbose:
+            options['disp'] = True
+        else:
+            options['disp'] = False
+        options['maxiter'] = maxiter
+
+        if config.INV.ftol is not None:
+            options['ftol'] = config.INV.ftol
+
+        if config.INV.gtol is not None:
+            _ = var.cost(Xopt*0)
+            g0 = var.grad(Xopt*0)
+            projg0 = np.max(np.abs(g0))
+            options['gtol'] = config.INV.gtol*projg0
+        
+            
+        # Run minimization 
+        from decimal import Decimal
+        import time
+        if config.INV.flag_full_jax:
+            from jax import jit, value_and_grad
+            fun = jit(value_and_grad(var.cost))
+        else:
+            fun = var.cost_and_grad
+
         class Wrapper:
             def __init__(self):
                 self.cache = {}
@@ -750,7 +1007,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         t = (date - config.EXP.init_date).total_seconds()
         
         # Reduced basis
-        Basis.operg(t/3600/24,Xa,State=State0)
+        Basis.operg(t/3600/24,Xa,State=State0.params)
 
         # Forward propagation
         Model.step(t=t,State=State0,nstep=nstep)

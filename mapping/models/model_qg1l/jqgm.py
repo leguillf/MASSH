@@ -103,7 +103,7 @@ class Qgm:
     ###########################################################################
     #                             Initialization                              #
     ###########################################################################
-    def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None, upwind=3, g=9.81, f=1e-4, time_scheme='Euler', compile=True, ** kwargs):
+    def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None, upwind=3, g=9.81, f=1e-4, time_scheme='Euler', compile=True, mdt=None, ** kwargs):
 
         # Grid shape
         ny, nx, = np.shape(dx)
@@ -133,6 +133,9 @@ class Qgm:
             self.c = (np.nanmean(c) * np.ones((self.ny,self.nx))).astype('float64')
         else:
             self.c = c * np.ones((self.ny,self.nx)).astype('float64')
+
+        # MDT
+        self.mdt = mdt
 
         # Spatial scheme
         self.upwind = upwind
@@ -448,6 +451,12 @@ class Qgm:
             h1 (2D array): propagated SSH
 
         """
+
+        # Add MDT
+        if self.mdt is not None:
+            h0 += self.mdt
+            hb += self.mdt
+
         # Compute potential voriticy
         q0 = self.h2pv_jit(h0, hb)
         qb = self.h2pv_jit(hb, hb)
@@ -457,11 +466,18 @@ class Qgm:
         q1 = +q0
     
         # Time propagation
-        X1, _ = scan(self.one_step_for_scan_jit, init=(h1, q1, hb, qb), xs=jnp.zeros(nstep))
-        h1, q1, hb, qb = X1
+        #X1, _ = scan(self.one_step_for_scan_jit, init=(h1, q1, hb, qb), xs=jnp.zeros(nstep))
+        #h1, q1, hb, qb = X1
+        for _ in range(nstep):
+            h1, q1 = self.one_step_jit(h1, q1, hb, qb)
+        
 
         # Mask
         h1 = h1.at[self.ind0].set(jnp.nan)
+
+        # Back to sla
+        if self.mdt is not None:
+            h1 -= self.mdt
 
         return h1
 
@@ -480,7 +496,7 @@ class Qgm:
 class QgmWithTiles(Qgm):
     
     def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None,
-                 upwind=3, g=9.81, f=1e-4, time_scheme='Euler', 
+                 upwind=3, g=9.81, f=1e-4, time_scheme='Euler', mdt=None, 
                  tile_size=64, tile_overlap=8, **kwargs):
         """
         Initialize the QGM model with tiling and overlapping.
@@ -493,6 +509,8 @@ class QgmWithTiles(Qgm):
         else:
             self.f = (f * np.ones((self.ny,self.nx))).astype('float64')
 
+        # MDT
+        self.mdt = mdt
 
         # Rossby radius
         if hasattr(c, "__len__"):
@@ -524,6 +542,7 @@ class QgmWithTiles(Qgm):
             self.weights_space_sum[i:i+tile_size,j:j+tile_size] += self.weights_space
 
         # JIT compiling functions
+        self.one_step_jit = jit(self.one_step)
         self.step_jit = jit(self.step, static_argnums=2)
         self.step_tgl_jit = jit(self.step_tgl, static_argnums=3)
         self.step_adj_jit = jit(self.step_adj, static_argnums=3)
@@ -768,9 +787,9 @@ class QgmWithTiles(Qgm):
         q1_tile = +q0_tile
     
         # Time propagation
-        X1_tile, _ = scan(partial(self.one_step_for_scan, f=f_tile, c=c_tile, ind12=ind12_tile, ind0=ind0_tile), init=(h1_tile, q1_tile, hb_tile, qb_tile), xs=jnp.zeros(nstep))
-        h1_tile, q1_tile, hb_tile, qb_tile = X1_tile
-
+        for _ in range(nstep):
+            h1_tile, q1_tile = self.one_step_jit(h1_tile, q1_tile, hb_tile, qb_tile, f_tile, c_tile, ind12_tile, ind0_tile)
+            
         # Mask
         h1_tile = jnp.where(ind0_tile, jnp.nan, h1_tile)
 
@@ -787,6 +806,11 @@ class QgmWithTiles(Qgm):
 
     def step(self, h, hb, nstep=1):
 
+        # Add MDT
+        if self.mdt is not None:
+            h += self.mdt
+            hb += self.mdt
+
         # Prepare arguments for all tiles
         tiles_args = jnp.array(self.tiles, dtype=jnp.int32)
 
@@ -794,9 +818,13 @@ class QgmWithTiles(Qgm):
         h1_map = jax.vmap(lambda args: partial(self.compute_step_tile, h=h, hb=hb, nstep=nstep)(*args))(tiles_args)
 
         # Combine updates from all tiles
-        ssh = jnp.sum(h1_map, axis=0) / self.weights_space_sum
+        h1 = jnp.sum(h1_map, axis=0) / self.weights_space_sum
 
-        return ssh
+        # Back to SLA
+        if self.mdt is not None:
+            h1 -= self.mdt
+
+        return h1
     
     def step_tgl(self, dh0, h0, hb, nstep=1):
 
