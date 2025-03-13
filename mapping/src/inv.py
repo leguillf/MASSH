@@ -533,15 +533,16 @@ def Inv_4Dvar_old(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc
         # initialize Obs
         from . import obs
         dict_obs = obs.Obs(config, State)
+        
     if Obsop is None:
         # initialize Obsop
         from . import obsop
         Obsop = obsop.Obsop(config, State, dict_obs, Model, verbose=verbose)
+        
     if Basis is None:
         # initialize Basis
         from . import basis
         Basis = basis.Basis(config, State, verbose=verbose)
-    
     
     # Compute checkpoints when the cost function will be evaluated 
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
@@ -568,7 +569,7 @@ def Inv_4Dvar_old(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc
     if Bc is not None:
         var_bc = Bc.interp(time_checkpoints)
         Model.set_bc(t_checkpoints,var_bc)
-    
+        
     # Observations operator 
     if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
         time_obs = [np.datetime64(date) for date in Obsop.date_obs]
@@ -577,9 +578,11 @@ def Inv_4Dvar_old(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc
         var_bc = None
     Obsop.process_obs(var_bc)
     
+    
     # Initial model state
     Model.init(State)
     State.plot(title='Init State')
+ 
 
     # Set Reduced Basis
     if Basis is not None:
@@ -598,7 +601,7 @@ def Inv_4Dvar_old(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc
     else:
         B = Cov(Q)
         R = Cov(config.INV.sigma_R)
-        
+         
     # Variational object initialization
     from .tools_4Dvar import Variational as Variational
     var = Variational(

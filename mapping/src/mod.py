@@ -52,6 +52,8 @@ def Model(config, State, verbose=True):
     elif config.MOD.super is not None:
         if verbose:
             print(config.MOD)
+        if config.MOD.super=='MOD_Id':
+            return Model_Id(config,State)
         if config.MOD.super=='MOD_DIFF':
             return Model_diffusion(config,State)
         elif config.MOD.super=='MOD_DIFF_JAX':
@@ -135,6 +137,148 @@ class M:
         State.save_output(present_date,name_var)
     
 
+            
+###############################################################################
+#                            Identity Model                                   #
+###############################################################################
+
+class Model_Id(M):
+    
+    def __init__(self,config,State):
+
+        super().__init__(config,State)
+        
+
+        # Initialization 
+        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
+            dsin = xr.open_dataset(config.GRID.path_init_grid)
+            for name in self.name_var:
+                if name in config.MOD.name_init_var:
+                    var_init = dsin[config.MOD.name_init_var[name]]
+                    if len(var_init.shape)==3:
+                        var_init = var_init[0,:,:]
+                    if config.GRID.subsampling is not None:
+                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
+                    dsin.close()
+                    del dsin
+                    State.var[self.name_var[name]] = var_init.values
+                else:
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+        else:
+            for name in self.name_var:  
+                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+        
+        # Model Parameters (Flux)
+        for name in self.name_var:
+            State.params[self.name_var[name]] = np.zeros((State.ny,State.nx))
+
+
+        # Initialize boundary condition dictionnary for each model variable
+        self.bc = {}
+        for _name_var_mod in self.name_var:
+            self.bc[_name_var_mod] = {}
+        self.init_from_bc = config.MOD.init_from_bc
+        
+        # Weight map to apply BC in a smoothed way
+        if config.MOD.dist_sponge_bc is not None:
+            Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
+        else:
+            Wbc = np.zeros((State.ny,State.nx)) 
+            
+        self.Wbc = Wbc
+        
+        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+            print('Tangent test:')
+            tangent_test(self,State)
+            print('Adjoint test:')
+            adjoint_test(self,State)
+
+    def init(self, State, t0=0):
+
+        for name in self.name_var: 
+            if t0 in self.bc[name]:
+                if self.init_from_bc:
+                    State.setvar(self.bc[name][t0], self.name_var[name])
+                else:
+                    State.var[self.name_var[name]] = self.Wbc * self.bc[name][t0]
+
+    def set_bc(self,time_bc,var_bc):
+        
+        for _name_var_bc in var_bc:
+            for _name_var_mod in self.name_var:
+                if _name_var_bc==_name_var_mod:
+                    for i,t in enumerate(time_bc):
+                        self.bc[_name_var_mod][t] = var_bc[_name_var_bc][i]
+        
+
+    def _apply_bc(self,State,t0,t):
+
+        for name in self.name_var:
+            if t not in self.bc[name]:
+                State.var[self.name_var[name]] +=\
+                    self.Wbc * (self.bc[name][t]-self.bc[name][t0]) 
+
+    def step(self,State, nstep=1,**kwargs):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Current trajectory
+            var0 = State.getvar(self.name_var[name])
+            var1 = +var0
+            params = State.params[self.name_var[name]]
+            var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+
+            #var1[var1>4] = 4
+            var1[var1<0] = 0
+
+            State.setvar(var1, self.name_var[name])
+
+        
+    def step_tgl(self,dState,State, nstep=1,**kwargs):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Current trajectory
+            var0 = State.getvar(self.name_var[name])
+            var1 = +var0
+            params = State.params[self.name_var[name]]
+            var1 += params
+
+            # Tangent trajectory
+            dvar0 = dState.getvar(self.name_var[name])
+            dvar1 = +dvar0
+            dparams = dState.params[self.name_var[name]]
+            dvar1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * dparams
+            #dvar1[var1>4] = 0.
+            dvar1[var1<0] = 0.
+            
+            dState.setvar(dvar1, self.name_var[name])
+
+        
+    def step_adj(self,adState,State, nstep=1,**kwargs):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Current trajectory
+            var0 = State.getvar(self.name_var[name])
+            var1 = +var0
+            params = State.params[self.name_var[name]]
+            var1 += params
+
+            # Adjoint trajectory
+            advar0 = adState.getvar(self.name_var[name])
+            advar1 = +advar0
+            #advar1[var1>4] = 0.
+            advar1[var1<0] = 0.
+            adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar1
+            
+            adState.setvar(advar1, self.name_var[name])
+
+
+
 ###############################################################################
 #                            Diffusion Models                                 #
 ###############################################################################
@@ -146,6 +290,7 @@ class Model_diffusion(M):
         super().__init__(config,State)
         
         self.Kdiffus = config.MOD.Kdiffus
+        self.SIC_mod = config.MOD.SIC_mod
         self.dx = State.DX
         self.dy = State.DY
 
@@ -222,6 +367,7 @@ class Model_diffusion(M):
 
     def step(self,State,nstep=1,t=None):
 
+        Id_mod = False
 
         # Loop on model variables
         for name in self.name_var:
@@ -242,13 +388,21 @@ class Model_diffusion(M):
             # Update state
             if self.name_var[name] in State.params:
                 params = State.params[self.name_var[name]]
-                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+                if Id_mod :
+                    var1 = (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+                else:
+                    var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+
+            if self.SIC_mod :  
+                var1[var1>0.01] = 0.
+                #var1[var1<0] = 0 
+
             State.setvar(var1, self.name_var[name])
         
 
 
     def step_tgl(self,dState,State,nstep=1,t=None):
-
+        Id_mod = False
         # Loop on model variables
         for name in self.name_var:
 
@@ -265,19 +419,35 @@ class Model_diffusion(M):
                         (var1[1:-1,2:]+var1[1:-1,:-2]-2*var1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
                         (var1[2:,1:-1]+var1[:-2,1:-1]-2*var1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
             
+
             # Update state
             if self.name_var[name] in dState.params:
                 params = dState.params[self.name_var[name]]
-                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+                if Id_mod :
+                    var1 = (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+                else:
+                    var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+
+            if self.SIC_mod : 
+                var1[var1>0.01] = 0
+            #    #var1[var1<0] = 0
+
             dState.setvar(var1,self.name_var[name])
         
     def step_adj(self,adState,State,nstep=1,t=None):
+
+        Id_mod = False
 
         # Loop on model variables
         for name in self.name_var:
 
             # Get state variable
             advar0 = adState.getvar(self.name_var[name])
+
+            if self.SIC_mod :  
+                var0 = State.getvar(self.name_var[name])
+                advar0[var0>0.01] = 0
+                #advar1[advar1<0] = 0
             
             # Init
             advar1 = +advar0
@@ -296,11 +466,15 @@ class Model_diffusion(M):
                     
                     advar0 = +advar1
                 
+
             # Update state and parameters
             if self.name_var[name] in State.params:
-                adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0
+                    adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0 
             advar1[np.isnan(advar1)] = 0
-            adState.setvar(advar1,self.name_var[name])
+            if Id_mod :
+                adState.setvar(advar1*0,self.name_var[name])
+            else:
+                adState.setvar(advar1,self.name_var[name])
 
 class Model_diffusion_jax(Model_diffusion):
     def __init__(self,config,State):
