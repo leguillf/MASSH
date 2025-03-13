@@ -178,15 +178,7 @@ class Model_Id(M):
             Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
         else:
             Wbc = np.zeros((State.ny,State.nx)) 
-            if State.mask is not None:
-                for i,j in np.argwhere(State.mask):
-                    for p1 in [-1,0,1]:
-                        for p2 in [-1,0,1]:
-                            itest=i+p1
-                            jtest=j+p2
-                            if ((itest>=0) & (itest<=State.ny-1) & (jtest>=0) & (jtest<=State.nx-1)):
-                                if Wbc[itest,jtest]==0:
-                                    Wbc[itest,jtest] = 1
+            
         self.Wbc = Wbc
         
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
