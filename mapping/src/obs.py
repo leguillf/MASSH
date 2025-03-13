@@ -48,10 +48,30 @@ def Obs(config, State, *args, **kwargs):
         time_obs_max = config.EXP.time_obs_max
     else:
         time_obs_max = config.EXP.final_date
+    
+    if config.EXP.lon_obs_max is not None:
+        lon_obs_max = config.EXP.lon_obs_max
+    else:
+        lon_obs_max = State.lon_max
+
+    if config.EXP.lon_obs_min is not None:
+        lon_obs_min = config.EXP.lon_obs_min
+    else:
+        lon_obs_min = State.lon_min
+    
+    if config.EXP.lat_obs_max is not None:
+        lat_obs_max = config.EXP.lat_obs_max
+    else:
+        lat_obs_max = State.lat_max
+
+    if config.EXP.lat_obs_min is not None:
+        lat_obs_min = config.EXP.lat_obs_min
+    else:
+        lat_obs_min = State.lat_min
         
     date1 = time_obs_min.strftime('%Y%m%d')
     date2 = time_obs_max.strftime('%Y%m%d')
-    box = f'{int(State.lon_min)}_{int(State.lon_max)}_{int(State.lat_min)}_{int(State.lat_max)}'
+    box = f'{int(lon_obs_min)}_{int(lon_obs_max)}_{int(lat_obs_min)}_{int(lat_obs_max)}'
     
     name_dict_obs = f'dict_obs_{"_".join(config.OBS.keys())}_{date1}_{date2}_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}.txt'
     print('Observation information will be saved in',name_dict_obs)
@@ -70,7 +90,7 @@ def Obs(config, State, *args, **kwargs):
     # Read grid
     dlon = np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
     dlat = np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
-    bbox = [State.lon_min-2*dlon,State.lon_max+2*dlon,State.lat_min-2*dlat,State.lat_max+2*dlat]
+    bbox = [lon_obs_min-2*dlon,lon_obs_max+2*dlon,lat_obs_min-2*dlat,lat_obs_max+2*dlat]
     
     # Compute output observation dictionnary
     dict_obs = {}
@@ -121,6 +141,7 @@ def Obs(config, State, *args, **kwargs):
         # Copy and close dataset
         ds = _ds.copy()
         _ds.close()
+        ds = ds.load()
         
         # Name of obs files
         out_name = f'obs_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}'
@@ -154,6 +175,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         Subfunction handling observations generated from altimetric observations
         
     """
+
     
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
     ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
@@ -164,15 +186,12 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     elif np.sign(ds[obs_attr.name_lon].data.min())>=0 and lon_unit=='-180_180':
         ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
         #ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
-
-
     
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
     lat_obs = ds[obs_attr.name_lat]
     ds = ds.where(((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
                   (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs)).compute(), drop=True)
-
     # MDT 
     if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:
         finterpmdt = read_auxdata(obs_attr.path_mdt,obs_attr.name_var_mdt, lon_unit)
@@ -184,7 +203,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         finterperr = read_auxdata(obs_attr.path_err,obs_attr.name_var_err, lon_unit)
     else:
         finterperr = None
-        
+
     # Time loop
     count = 0
     for dt_curr in dt_list:

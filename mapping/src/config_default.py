@@ -49,6 +49,14 @@ EXP = dict(
 
     time_obs_max = None,
 
+    lon_obs_min = None,
+
+    lon_obs_max = None,
+
+    lat_obs_min = None,
+
+    lat_obs_max = None,
+
     write_obs = False, # save observation dictionary in *path_obs*
 
     compute_obs = False, # force computing observations 
@@ -68,9 +76,9 @@ GRID_FROM_FILE = dict(
 
     path_init_grid = '', 
 
-    name_init_lon = '',
+    name_init_lon = 'lon',
 
-    name_init_lat = '',
+    name_init_lat = 'lat',
 
     subsampling = None,
 
@@ -279,6 +287,23 @@ MOD_DIFF = dict(
     dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
 )
 
+MOD_DIFF_JAX = dict(
+
+    name_var = {'SSH':"ssh"},
+
+    var_to_save = None,
+
+    name_init_var = {},
+
+    dtmodel = 300, # model timestep
+
+    Kdiffus = 0, # coefficient of diffusion. Set to 0 for Identity model
+
+    init_from_bc = False,
+
+    dist_sponge_bc = None  # distance (in km) for which boundary fields are spatially spread close to the borders
+)
+
 # 1.5-layer Quasi-Geostrophic models
 MOD_QG1L_NP = dict(
 
@@ -376,9 +401,15 @@ MOD_QG1L_JAX = dict(
 
     constant_f = True,
 
+    f0 = None,
+
     tile_size = 32, # Only for name_class=='QgmWithTiles'
             
-    tile_overlap = 16  # Only for name_class=='QgmWithTiles'
+    tile_overlap = 16,  # Only for name_class=='QgmWithTiles'
+
+    path_mdt = None, # path of MDT 
+
+    name_var_mdt = None, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
 
 )
 
@@ -417,6 +448,41 @@ MOD_SW1L_JAX = dict(
 
     name_init_var = [],
 
+    name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+
+    dir_model = None,
+
+    var_to_save = None, # Variables to save in output netcdf files 
+
+    dtmodel = 300, # model timestep
+
+    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
+
+    bc_kind = '1d', # Either 1d or 2d
+
+    bc_island = "dirichlet", # Either "dirichlet" (orthogonal velocity forced to zero) or "radiative" (dissipative boundaries)
+
+    w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
+
+    w_names = ["m2"], # tidal components name (according to FES filenames)
+
+    He_init = 0.9, # Mean height (in m)
+
+    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    g = 9.81
+
+)
+
+
+MOD_SW1L_JAX_OLD = dict(
+
+    name_var = {'U':'u','V':'v','SSH':'ssh'},
+
+    name_init_var = [],
+
     dir_model = None,
 
     var_to_save = None,
@@ -438,6 +504,7 @@ MOD_SW1L_JAX = dict(
     g = 9.81
 
 )
+
 
 #################################################################################################################################
 # BOUNDARY CONDITIONS
@@ -466,6 +533,22 @@ BC_EXT = dict(
 NAME_OBSOP = None
 
 OBSOP_INTERP_L3 = dict(
+
+    name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+    write_op = False, # Write operator data to *path_save*
+
+    path_save = None, # Directory where to save observational operator
+
+    compute_op = True, # Force computing H 
+
+    Npix = 4, # Number of pixels to perform projection y=Hx
+
+    mask_borders = False,
+
+)
+
+OBSOP_INTERP_L3_JAX = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
 
@@ -551,6 +634,61 @@ INV_BFN = dict(
 # 4-Dimensional Variational 
 INV_4DVAR = dict(
 
+    flag_full_jax = False,
+    
+    compute_test = False, # TLM, ADJ & GRAD tests
+
+    JAX_mem_fraction = None,
+
+    path_init_4Dvar = None, # To restart the minimization process from a specified control vector
+
+    restart_4Dvar = False, # To restart the minimization process from the last control vector
+
+    ftol = None, # The iteration stops when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
+
+    gtol = None, # Gradient norm must be less than gtol*g0 (g0 being the gradient at first iteration) before successful termination.
+
+    maxiter = 10, # Maximal number of iterations for the minimization process
+
+    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
+
+    save_minimization = False, # save cost function and its gradient at each iteration 
+
+    path_save_control_vectors = None, # Path where to save the control vector at each 4Dvar iteration 
+
+    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
+
+    sigma_R = None, # Observational standard deviation
+
+    sigma_B = None,
+
+    prec = False, # preconditoning
+    
+    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
+
+    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
+
+    path_background = None, # Path to the precribed background on BM basis
+    
+    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
+
+    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
+
+    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
+
+    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
+
+    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
+
+    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
+
+    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
+ 
+)
+
+
+INV_4DVAR_JAX = dict(
+
     compute_test = False, # TLM, ADJ & GRAD tests
 
     JAX_mem_fraction = None,
@@ -603,11 +741,17 @@ INV_4DVAR = dict(
 
 INV_4DVAR_PARALLEL = dict(
 
+    name_4Dvar = 'function',
+
     nprocs = 1, # Number of parallelized processes
     
     JAX_mem_fraction = None, # GPU Memory fraction (bw [0,1]) used for one process
 
     space_window_size_proc = 10, # Space window size of one process (in °). Set to None for no split in space.
+
+    nx_proc = 123,
+
+    ny_proc = 123,
 
     space_overlap_frac = .5, # Overlap fraction of two succesive space windows 
 
@@ -721,9 +865,8 @@ BASIS_BM = dict(
     var_background = None # name of the variable of the basis vector
 
 )
-
-
-BASIS_GAUSSV2 = dict(
+ 
+BASIS_BM_JAX = dict(
 
     name_mod_var = None, # Name of the related model variable 
     
@@ -773,6 +916,116 @@ BASIS_GAUSSV2 = dict(
 
 )
 
+BASIS_GAUSSV2 = dict( 
+
+    name_mod_var = None, # Name of the related model variable 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    facns = 1., #factor for wavelet spacing in space
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    lmeso = 300, # Largest mesoscale wavelenght 
+
+    tmeso = 20, # Largest mesoscale time of decorrelation 
+
+    sloptdec = -1.28, # Slope such as tdec = lambda^slope where lamda is the wavelength
+
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
+
+    slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    depth1 = 0.,
+
+    depth2 = 30.,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+ 
+BASIS_GAUSS3D = dict(
+
+    name_mod_var = '', # Name of the related model variable 
+
+    flux = False,
+
+    facns = 2., # Factor for gaussian spacing in space
+
+    facnlt = 1., # Factor for gaussian spacing in time
+
+    sigma_D = 300, # Spatial scale (km)
+
+    sigma_T = 20, # Time scale (days)
+
+    sigma_Q = 0.01, # Standard deviation for matrix Q 
+
+    fcor = .5,
+
+    normalize_fact = True,
+
+    time_spinup = None, # days
+
+    flag_variable_Q = False,
+
+    path_sad = None,
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+)
+
+BASIS_GAUSS3D_JAX = dict(
+
+    name_mod_var = '', # Name of the related model variable 
+
+    flux = False,
+
+    facns = 2., # Factor for gaussian spacing in space
+
+    facnlt = 1., # Factor for gaussian spacing in time
+
+    sigma_D = 300, # Spatial scale (km)
+
+    sigma_T = 20, # Time scale (days)
+
+    sigma_Q = 0.01, # Standard deviation for matrix Q 
+
+    fcor = .5,
+
+    normalize_fact = True,
+
+    time_spinup = None, # days
+
+    flag_variable_Q = False,
+
+    path_sad = None,
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+) 
+
 # Wavelet 3D
 BASIS_WAVELET3D = dict(
 
@@ -801,29 +1054,7 @@ BASIS_WAVELET3D = dict(
     var_background = None # name of the variable of the basis vector
 
 )
-
-
-BASIS_GAUSS3D = dict(
-
-    name_mod_var = '', # Name of the related model variable 
-
-    flux = False,
-
-    facns = 2., # Factor for gaussian spacing in space
-
-    facnlt = 1., # Factor for gaussian spacing in time
-
-    sigma_D = 300, # Spatial scale (km)
-
-    sigma_T = 20, # Time scale (days)
-
-    sigma_Q = 0.01, # Standard deviation for matrix Q 
-
-    normalize_fact = True,
-
-    time_spinup = None # days
-
-)
+ 
 
 # Balanced Motions with auxilliary data 
 BASIS_BMaux = dict(
@@ -832,7 +1063,7 @@ BASIS_BMaux = dict(
     
     flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
-    facns = 1., #factor for wavelet spacing in space
+    facns = 1., #factor for wavelet spacing in space 
 
     facnlt = 2., #factor for wavelet spacing in time
 
@@ -864,12 +1095,228 @@ BASIS_BMaux = dict(
 
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
+    var_background = None, # name of the variable of the basis vector
+
+    norm_time = True,
+
+)
+
+BASIS_BMaux_JAX = dict(
+
+    name_mod_var = None, # Name of the related model variable 
+    
+    flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
+
+    facns = 1., #factor for wavelet spacing in space 
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    file_aux = '', # Name of auxilliary file in which are stored the std and tdec for each locations at different wavelengths.
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2.5, # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ = 1, # factor to be multiplied to the estimated Q
+
+    file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    depth1 = 0.,
+
+    depth2 = 30.,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None, # name of the variable of the basis vector
+
+    norm_time = True
+
+)
+
+BASIS_MIOST = dict(
+
+    name_mod_var = None, # Name of the related model variable
+    
+    flux = False,
+
+    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+
+    wavelet_init = False, # Estimate the initial state 
+
+    facns = 1., #factor for wavelet spacing= space
+
+    facnlt = 2., #factor for wavelet spacing= time
+
+    npsp= 3.5, # Defines the wavelet shape
+
+    facpsp= 1.5, # factor to fix df between wavelets
+
+    lmin= 80, # minimal wavelength (in km)
+
+    lmax= 970., # maximal wavelength (in km)
+
+    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2., # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    distortion_eq = 2.,
+
+    lat_distortion_eq = 5.,
+
+    distortion_eq_law = 2.,
+
+    file_aux = None,
+
+    filec_aux = None,
+
+    tssr = 0.5,
+
+    facRo = 8.,
+
+    Romax = 150.,
+
+    cutRo =  1.6,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
+BASIS_MIOST_JAX = dict(
+
+    name_mod_var = None, # Name of the related model variable
+    
+    flux = False,
+
+    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+
+    wavelet_init = False, # Estimate the initial state 
+
+    facns = 1., #factor for wavelet spacing= space
+
+    facnlt = 2., #factor for wavelet spacing= time
+
+    npsp= 3.5, # Defines the wavelet shape
+
+    facpsp= 1.5, # factor to fix df between wavelets
+
+    lmin= 80, # minimal wavelength (in km)
+
+    lmax= 970., # maximal wavelength (in km)
+
+    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2., # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    distortion_eq = 2.,
+
+    lat_distortion_eq = 5.,
+
+    distortion_eq_law = 2.,
+
+    file_aux = None,
+
+    filec_aux = None,
+
+    tssr = 0.5,
+
+    facRo = 8.,
+
+    Romax = 150.,
+
+    cutRo =  1.6,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
     var_background = None # name of the variable of the basis vector
 
 )
 
 # Internal Tides
 BASIS_IT = dict(
+
+    name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+
+    ### COMMON PARAMETER ###
+
+    scalemodes = None, # Only for SW1LM model, 
+
+    scalew_igws = None,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None, # name of the variable of the basis vector 
+
+    path_restart = None, # Path to the get the vector at the start of the minimization for the specified Basis  
+
+    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    ### - HBC PARAMETER ### 
+
+    sigma_B_bc = 1e-2, # Background variance for bc
+
+    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
+
+    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+
+    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
+
+    ### - ITG PARAMETER - ### 
+
+    sigma_B_itg = 1e-2, # Background variance for itg
+
+    itg_time_dependant = False, # True if internal tide generation parameter changes in time  
+
+    D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
+
+    T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
+
+    w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    ### - HE PARAMETER - ### 
+
+    control_He_offset = False, # if True an offset on the equivalent height is controlled
+
+    control_He_variation = True, # if True the spatial variations of equivalent height are controlled 
+
+    He_time_dependant = True, # True if equivalent height variations change in time (if control_He_variation = True)
+
+    D_He = 200, # Space scale of gaussian decomposition for He (in km)
+
+    T_He = 20, # Time scale of gaussian decomposition for He (in days)
+
+    sigma_B_He = 0.2, # Background variance for He
+
+    sigma_B_He_offset = 0.2, # Background variance for He offset (if control_He_offset = True)
+
+)
+
+BASIS_IT_OLD = dict(
 
     Nwaves = 1, # number of wave component 
 

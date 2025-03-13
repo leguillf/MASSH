@@ -14,10 +14,11 @@ import matplotlib.pylab as plt
 from scipy.interpolate import griddata
 from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
-from scipy.spatial import distance_matrix, cKDTree
+from scipy.spatial import KDTree
 import pandas as pd
 from jax.experimental import sparse
 import jax.numpy as jnp 
+from jax.lax import dynamic_slice
 from jax import jit
 import jax
 jax.config.update("jax_enable_x64", True)
@@ -45,6 +46,9 @@ def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
     elif config.OBSOP.super=='OBSOP_INTERP_L3':
         return Obsop_interp_l3(config, State, dict_obs, Model)
     
+    elif config.OBSOP.super=='OBSOP_INTERP_L3_JAX':
+        return Obsop_interp_l3_jax(config, State, dict_obs, Model)
+    
     elif config.OBSOP.super=='OBSOP_INTERP_L4':
         return Obsop_interp_l4(config, State, dict_obs, Model)
     
@@ -63,7 +67,27 @@ class Obsop_interp:
         self.date_obs = []
         
         # Pattern for saving files
-        box = f'{int(State.lon_min)}_{int(State.lon_max)}_{int(State.lat_min)}_{int(State.lat_max)}'
+        if config.EXP.lon_obs_max is not None:
+            lon_obs_max = config.EXP.lon_obs_max
+        else:
+            lon_obs_max = State.lon_max
+
+        if config.EXP.lon_obs_min is not None:
+            lon_obs_min = config.EXP.lon_obs_min
+        else:
+            lon_obs_min = State.lon_min
+        
+        if config.EXP.lat_obs_max is not None:
+            lat_obs_max = config.EXP.lat_obs_max
+        else:
+            lat_obs_max = State.lat_max
+
+        if config.EXP.lat_obs_min is not None:
+            lat_obs_min = config.EXP.lat_obs_min
+        else:
+            lat_obs_min = State.lat_min
+
+        box = f'{int(lon_obs_min)}_{int(lon_obs_max)}_{int(lat_obs_min)}_{int(lat_obs_max)}'
         self.name_H = f'H_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}_{int(State.dx)}_{int(State.dy)}'
 
         # Path to save operators
@@ -142,7 +166,6 @@ class Obsop_interp_l3(Obsop_interp):
         for t in Model.timestamps:
             delta_t = [(t - tobs).total_seconds() for tobs in dict_obs.keys()]
             if len(delta_t)>0:
-                t_obs = [tobs for tobs in dict_obs.keys()] 
                 if np.min(np.abs(delta_t))<=Model.dt/2:
                     
                     ind_obs = np.argmin(np.abs(delta_t))
@@ -343,6 +366,306 @@ class Obsop_interp_l3(Obsop_interp):
             # Update adjoint variable
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])  
 
+class Obsop_interp_l3_jax(Obsop_interp):
+
+    def __init__(self,config,State,dict_obs,Model):
+
+        super().__init__(config,State,dict_obs,Model)
+
+        # Date obs
+        self.date_obs = []
+        self.t_obs = []
+        self.name_var_obs = {}
+        self.name_obs = []
+        date_obs = list(dict_obs.keys())
+        for t,timestamp in zip(Model.T,Model.timestamps):
+            delta_t = [(timestamp - date).total_seconds() for date in date_obs]
+            if len(delta_t)>0:
+                
+                if np.min(np.abs(delta_t))<=Model.dt/2:
+                    
+                    ind_obs = np.argmin(np.abs(delta_t))
+
+                    for obs_name, sat_info in zip(dict_obs[date_obs[ind_obs]]['obs_name'], 
+                                                  dict_obs[date_obs[ind_obs]]['attributes']):
+                        
+                        # Check if this observation class is wanted
+                        if sat_info.super not in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
+                            continue
+                        if config.OBSOP.name_obs is None or (config.OBSOP.name_obs is not None and obs_name in config.OBSOP.name_obs):
+                            if obs_name not in self.name_obs:
+                                self.name_obs.append(obs_name)
+                            if t not in self.name_var_obs:
+                                self.name_var_obs[t] = []
+                                self.date_obs.append(date_obs[ind_obs])
+                                self.t_obs.append(t)
+                            # Get obs variable names (SSH,U,V,SST...) at this time
+                            for name in sat_info['name_var']:
+                                if name not in self.name_var_obs[t]:
+                                    self.name_var_obs[t].append(name)
+        
+        # For grid interpolation:
+        self.Npix = config.OBSOP.Npix
+        self.dmax = self.Npix*np.mean(np.sqrt(State.DX**2 + State.DY**2))*1e-3*np.sqrt(2)/2 # maximal distance for space interpolation
+
+        self.t_obs = np.array(self.t_obs)
+        self.t_obs_jax = jnp.array(self.t_obs)
+
+        self.name_H += f'_L3-JAX_{config.OBSOP.Npix}'
+
+        self._misfit_reduced_jit = jit(self._misfit_reduced)
+        self._misfit_jit = jit(self._misfit)
+    
+    def _sparse_op(self, lon_obs, lat_obs):
+        """Optimized sparse observation operator using KDTree."""
+        
+        coords_geo_obs = np.column_stack((lon_obs, lat_obs))
+        coords_car_obs = grid.geo2cart(coords_geo_obs)
+
+        # KDTree for nearest neighbor search
+        tree = KDTree(self.coords_car)
+        D, ind_closest = tree.query(coords_car_obs, k=self.Npix)
+
+        # Apply distance threshold
+        valid_mask = (D <= self.dmax)
+
+        # Compute weights
+        weights = np.exp(-D**2 / (2 * (0.5 * self.dmax)**2)) * valid_mask
+        sum_weights = np.sum(weights, axis=1, keepdims=True)
+        weights /= sum_weights  # Normalize
+
+        # Extract valid indices
+        row, col = np.where(valid_mask)
+        data = weights[row, col]
+
+        indices = jnp.array([row, ind_closest[row, col]])
+
+        return jnp.array(data), indices
+    
+    def explicit_proj_operation(self, data, indices, X, n_obs):
+        """
+        Perform the projection operation explicitly without using csc_matrix.
+
+        Parameters:
+        - data: list or numpy array of interpolation coefficients (non-zero values of the sparse matrix).
+        - row: list or numpy array of observation grid indices corresponding to each non-zero entry.
+        - col: list or numpy array of state grid indices corresponding to each non-zero entry.
+        - X: numpy array representing the state grid field to be projected.
+        - n_obs: number of observation points (rows of the sparse matrix).
+
+        Returns:
+        - proj_X: projected observation values as a numpy array.
+        """
+        
+        row = indices[0]
+        col = indices[1]
+
+        # Compute contributions of all sparse matrix entries to the corresponding observation indices
+        proj_X = jnp.zeros(n_obs)
+        proj_X = jnp.add.at(proj_X, row, data * X[col], inplace=False)
+
+        return proj_X
+    
+    def process_obs(self, var_bc=None):
+
+        self.varobs = {}
+        self.errobs = {}
+        self.data = {}
+        self.indices = {}
+
+        for i,(date,t) in enumerate(zip(self.date_obs,self.t_obs)):
+
+            self.varobs[t] = {}
+            self.errobs[t] = {}
+            self.data[t] = {}
+            self.indices[t] = {}
+
+            sat_info_list = self.dict_obs[date]['attributes']
+            obs_file_list = self.dict_obs[date]['obs_path']
+
+        
+            # Concatenate obs from different sensors
+            lon_obs = {}
+            lat_obs = {}
+            var_obs = {}
+            err_obs = {}
+
+            for sat_info, obs_file in zip(sat_info_list,obs_file_list):
+
+                if sat_info.super not in ['OBS_SSH_NADIR','OBS_SSH_SWATH']:
+                        continue
+                
+                ####################
+                # Merge observations
+                ####################
+                with xr.open_dataset(obs_file) as ncin:
+                    lon = ncin[sat_info['name_lon']].values.ravel() 
+                    lat = ncin[sat_info['name_lat']].values.ravel()
+
+                    for name in sat_info['name_var']:
+
+                        # Init lists
+                        if name not in var_obs:
+                            var_obs[name] = []
+                            err_obs[name] = []
+                            lon_obs[name] = []
+                            lat_obs[name] = []
+
+                        # Observed variable
+                        var = ncin[name].values.ravel() 
+                        # Observed error
+                        name_err = name + '_err'
+                        if name_err in ncin:
+                            err = ncin[name_err].values.ravel() 
+                        elif sat_info['sigma_noise'] is not None:
+                            err = sat_info['sigma_noise'] * np.ones_like(var)
+                        else:
+                            err = np.ones_like(var)                        
+                        if name in lon_obs:
+                            var_obs[name].append(var)
+                            err_obs[name].append(err)
+                            lon_obs[name].append(lon)
+                            lat_obs[name].append(lat)
+            
+            for name in lon_obs:
+
+                # Concatenations of lists
+                var_obs[name] = np.concatenate(var_obs[name])
+                err_obs[name] = np.concatenate(err_obs[name])
+                lon_obs[name] = np.concatenate(lon_obs[name])
+                lat_obs[name] = np.concatenate(lat_obs[name])
+
+                coords_obs = np.column_stack((lon_obs[name], lat_obs[name]))
+                file_L3 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{date.strftime('%Y%m%d_%H%M')}_{name}.pic"
+                if var_bc is not None and name in var_bc:
+                    mask = np.any(np.isnan(self.coords_geo),axis=1)
+                    var_bc_interp = griddata(self.coords_geo[~mask], var_bc[name][i].flatten()[~mask], coords_obs, method='cubic')
+                    var_obs[name] -= var_bc_interp
+
+                # Fill dictionnaries
+                self.varobs[t][name] = var_obs[name]
+                self.errobs[t][name] = err_obs[name]
+
+                # Compute Sparse operator
+                if not self.compute_op and self.write_op and os.path.exists(file_L3):
+                    with open(file_L3, "rb") as f:
+                        data, indices = pickle.load(f)
+                        self.data[t][name] = data
+                        self.indices[t][name] = indices
+                else:
+                    # Compute operator
+                    data, indices = self._sparse_op(lon_obs[name],lat_obs[name])
+                    self.data[t][name] = data
+                    self.indices[t][name] = indices
+                    # Save operator if asked
+                    if self.write_op:
+                        with open(file_L3, "wb") as f:
+                            pickle.dump([data, indices], f)
+        
+        self.n_data = np.array([self.data[t]['SSH'].size for t in self.t_obs])
+        self.n_obs = np.array([self.varobs[t]['SSH'].size for t in self.t_obs])
+        
+        self.data_arr = np.zeros((self.t_obs.size, self.n_data.max()))
+        self.indices_arr = np.zeros((self.t_obs.size, 2, self.n_data.max()))
+        self.varobs_arr = np.zeros((self.t_obs.size, self.n_obs.max()))
+        self.errobs_arr = np.ones((self.t_obs.size, self.n_obs.max())) * 1e7
+    
+        for i,t in enumerate(self.t_obs):
+
+            self.data_arr[i,:self.n_data[i]] = self.data[t]['SSH'] 
+            self.indices_arr[i,:,:self.n_data[i]] = self.indices[t]['SSH'] 
+            self.varobs_arr[i,:self.n_obs[i]] = self.varobs[t]['SSH'] 
+            self.errobs_arr[i,:self.n_obs[i]] = self.errobs[t]['SSH'] 
+        
+        self.n_data = jnp.array(self.n_data)
+        self.n_obs = jnp.array(self.n_obs)
+        self.data_arr = jnp.array(self.data_arr)
+        self.indices_arr = jnp.array(self.indices_arr,dtype=int)
+        self.varobs_arr = jnp.array(self.varobs_arr)
+        self.errobs_arr = jnp.array(self.errobs_arr)
+
+    def is_obs_time(self,t):
+        """Check if t is in observation times."""
+        return jnp.any(jnp.isclose(t, self.t_obs_jax))
+
+    def _misfit(self, t, X):
+
+        # Initialization
+        misfit = jnp.array([])
+
+        # Get data at time t
+        idt = jnp.where(self.t_obs_jax==t, size=1)[0]
+        data_t = self.data_arr[idt][0]
+        indices_t = self.indices_arr[idt][0]
+        varobs_t = self.varobs_arr[idt][0]
+        errobs_t = self.errobs_arr[idt][0]
+
+        # Project model state to obs space
+        HX = self.explicit_proj_operation(data_t, indices_t, X, varobs_t.size)
+
+        # Compute misfit & errors
+        misfit = HX - varobs_t
+        inverr = 1/errobs_t
+        misfit = jnp.where(jnp.isnan(misfit),0,misfit) 
+        inverr = jnp.where(jnp.isnan(inverr),0,inverr) 
+
+        return inverr * misfit
+    
+    def _misfit_reduced(self, t, grad_obs, X):
+
+        """
+        Projects a gradient in observation space back to the model state space.
+        
+        Parameters:
+            t: Current time
+            grad_obs: Gradient in observation space (adjoint variable associated with misfit).
+            X: Current model state (used to ensure consistent adjoint mapping).
+            
+        Returns:
+            Gradient in the model state space (reduced space).
+        """
+
+        # Define a wrapper for _misfit that computes the forward misfit
+        def misfit_func(X):
+            return self._misfit(t, X)
+
+        # Compute the vector-Jacobian product (vjp) for the forward operation
+        _, vjp_func = jax.vjp(misfit_func, X)
+
+        # Use the vjp function to project the gradient from observation space to model state space
+        grad_model_state, = vjp_func(grad_obs)
+
+        return grad_model_state
+    
+    def misfit(self, t, State):
+
+        name = 'SSH'
+        X = State.var[self.name_mod_var[name]].ravel() 
+
+        return self._misfit_jit(t, X)
+    
+    def misfit_jax(self, t, State_var):
+
+        name = 'SSH'
+        X = State_var[self.name_mod_var[name]].ravel() 
+
+        return self._misfit_jit(t, X)
+    
+    def adj(self, t, adState, State, misfit):
+
+        name = 'SSH'
+
+        # Read adjoint variable
+        advar = adState.var[self.name_mod_var[name]]
+        var = State.var[self.name_mod_var[name]]
+
+        # Compute adjoint operation of y = Hx
+        adX = self._misfit_reduced_jit(t, misfit , var.ravel() )
+
+        # Update adjoint variable
+        adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])  
+    
+    
 class Obsop_interp_l4(Obsop_interp):
 
     def __init__(self,config,State,dict_obs,Model):
