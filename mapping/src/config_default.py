@@ -1008,7 +1008,9 @@ BASIS_GAUSS3D = dict(
 
     name_mod_var = '', # Name of the related model variable 
 
-    facns = 2, # Factor for gaussian spacing in space
+    flux = False,
+
+    facns = 2., # Factor for gaussian spacing in space
 
     facnlt = 1., # Factor for gaussian spacing in time
 
@@ -1018,11 +1020,47 @@ BASIS_GAUSS3D = dict(
 
     sigma_Q = 0.01, # Standard deviation for matrix Q 
 
+    fcor = .5,
+
     normalize_fact = True,
 
     time_spinup = None, # days
 
-    time_dependant = True # if the Basis change in time 
+    flag_variable_Q = False,
+
+    path_sad = None,
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+)
+
+BASIS_GAUSS3D_JAX = dict(
+
+    name_mod_var = '', # Name of the related model variable 
+
+    flux = False,
+
+    facns = 2., # Factor for gaussian spacing in space
+
+    facnlt = 1., # Factor for gaussian spacing in time
+
+    sigma_D = 300, # Spatial scale (km)
+
+    sigma_T = 20, # Time scale (days)
+
+    sigma_Q = 0.01, # Standard deviation for matrix Q 
+
+    fcor = .5,
+
+    normalize_fact = True,
+
+    time_spinup = None, # days
+
+    flag_variable_Q = False,
+
+    path_sad = None,
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
 
 )
 

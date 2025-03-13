@@ -170,6 +170,8 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
 
+            # print(f"nstep at {i} : ",nstep)
+
             
             # 1. Misfit
             if self.H.is_obs(timestamp):
@@ -194,6 +196,8 @@ class Variational:
 
             self.States[self.checkpoints[i]] = State.copy()
 
+            if i == int(len(self.checkpoints)/2):
+                State.plot(title=f'State variables at {i}')
             
             t0 = datetime.now()
 
@@ -258,7 +262,7 @@ class Variational:
             ds.close()
 
         # Measuring computation times
-        # print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT {len(t_misfit)} CALLS : {np.mean(np.array(t_misfit))} \n - BASIS {len(t_basis)} CALLS : {np.mean(np.array(t_basis))} \n - MODEL {len(t_model)} CALLS : {np.mean(np.array(t_model))} \n ")
+        print(f"MEAN COMPUTATION TIME FOR COST FUNCTION : \n - MISFIT {len(t_misfit)} CALLS : {np.mean(np.array(t_misfit))} \n - BASIS {len(t_basis)} CALLS : {np.mean(np.array(t_basis))} \n - MODEL {len(t_model)} CALLS : {np.mean(np.array(t_model))} \n ")
         
         return J*self.cost_function_coeff
     
@@ -324,7 +328,12 @@ class Variational:
                 # Measuring computation times
                 t_basis.append(datetime.now()-t0)
 
-            
+            # if i == int(len(self.checkpoints)/2):
+            #     plt.figure()
+            #     plt.pcolormesh(adState.params["He"]+0.95+adState.params["He_offset"])
+            #     plt.title("Equivalent height")
+            #     plt.colorbar()
+            #     plt.show()
             
             # 1. Misfit 
             if self.H.is_obs(timestamp):
@@ -380,7 +389,7 @@ class Variational:
             #         self.Gb[param].append(0)
 
         # Measuring computation times
-        # print(f"MEAN COMPUTATION TIME FOR GRAD FUNCTION : \n - MISFIT {len(t_misfit)} CALLS : {np.mean(np.array(t_misfit))} \n - BASIS {len(t_basis)} CALLS : {np.mean(np.array(t_basis))} \n - MODEL {len(t_model)} CALLS : {np.mean(np.array(t_model))} \n ")
+        print(f"MEAN COMPUTATION TIME FOR GRAD FUNCTION : \n - MISFIT {len(t_misfit)} CALLS : {np.mean(np.array(t_misfit))} \n - BASIS {len(t_basis)} CALLS : {np.mean(np.array(t_basis))} \n - MODEL {len(t_model)} CALLS : {np.mean(np.array(t_model))} \n ")
         
         print(f"|proj g|=  {np.max(np.abs(g)):.5e}")
 

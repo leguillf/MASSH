@@ -23,6 +23,7 @@ import jax
 from functools import partial
 from jax.lax import scan
 jax.config.update("jax_enable_x64", True)
+import pyinterp
 
 import matplotlib.pylab as plt
 
@@ -59,11 +60,17 @@ def Basis(config, State, verbose=True, *args, **kwargs):
             return Basis_geocur(config,State)
 
         elif config.BASIS.super=='BASIS_GAUSS3D':
+            return Basis_gauss3d_jax(config,State)
+
+        elif config.BASIS.super=='BASIS_GAUSS3D':
             return Basis_gauss3d(config,State)
 
+        elif config.BASIS.super=='BASIS_GAUSS3D_JAX':
+            return Basis_gauss3d_jax(config,State)
+
         elif config.BASIS.super=='BASIS_GAUSS_ITG':
-            return Basis_gauss_itg(config,State)    
-        
+            return Basis_gauss_itg(config,State) 
+
         elif config.BASIS.super=='BASIS_BMaux':
             return Basis_bmaux(config,State)
 
@@ -1071,194 +1078,6 @@ class Basis_geocur:
         
         return adX
 
-class Basis_gauss3d:
-   
-    def __init__(self, config, State):
-
-        self.km2deg = 1./110
-
-        self.facns = config.BASIS.facns
-        self.facnlt = config.BASIS.facnlt
-        self.sigma_D = config.BASIS.sigma_D
-        self.sigma_T = config.BASIS.sigma_T
-        self.sigma_Q = config.BASIS.sigma_Q
-        self.normalize_fact = config.BASIS.normalize_fact
-        self.name_mod_var = config.BASIS.name_mod_var
-        self.time_spinup = config.BASIS.time_spinup
-
-        # Grid params
-        self.nphys= State.lon.size
-        self.shape_phys = (State.ny,State.nx)
-        self.ny = State.ny
-        self.nx = State.nx
-        self.lon_min = State.lon_min
-        self.lon_max = State.lon_max
-        self.lat_min = State.lat_min
-        self.lat_max = State.lat_max
-        self.lon1d = State.lon.flatten()
-        self.lat1d = State.lat.flatten()
-
-        self.time_dependant = config.BASIS.time_dependant 
-
-        # For time normalization
-        if self.normalize_fact:
-            tt = np.linspace(-self.sigma_T,self.sigma_T)
-            tmp = np.zeros_like(tt)
-            for i in range(tt.size-1):
-                tmp[i+1] = tmp[i] + gaspari_cohn(tt[i],self.sigma_T)*(tt[i+1]-tt[i])
-            self.norm_fact = tmp.max()
-    
-    def set_basis(self,time,return_q=False,**kwargs):
-        
-        TIME_MIN = time.min()
-        TIME_MAX = time.max()
-        LON_MIN = self.lon_min
-        LON_MAX = self.lon_max
-        LAT_MIN = self.lat_min
-        LAT_MAX = self.lat_max
-        if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
-
-        self.time = time
-        
-        # coordinates in space
-        dlat = self.sigma_D/self.facns*self.km2deg
-        lat0 = LAT_MIN - LAT_MIN%dlat - self.sigma_D*(1-1./self.facns)*self.km2deg  # To start at a fix latitude
-        lat1 = LAT_MAX + 1.5*dlat
-        ENSLAT1 = np.arange(lat0, lat1, dlat)
-        
-        ENSLAT = []
-        ENSLON = []
-
-        # Longitudes
-        for I in range(len(ENSLAT1)):
-            dlon = self.sigma_D/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg
-            lon0 = LON_MIN - LON_MIN%dlon - self.sigma_D*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg # To start at a fix longitude
-            lon1 = LON_MAX + dlon * 1.5
-            ENSLON1 = np.arange(lon0, lon1, dlon)
-            ENSLAT = np.concatenate(([ENSLAT,np.repeat(ENSLAT1[I],len(ENSLON1))]))
-            ENSLON = np.concatenate(([ENSLON,ENSLON1]))
-
-        self.ENSLAT = ENSLAT
-        self.ENSLON = ENSLON
-        
-        # coordinates in time
-        ENST = np.arange(-self.sigma_T*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.sigma_T/self.facnlt , self.sigma_T/self.facnlt)
-        self.ENST = ENST
-        
-        # Gaussian functions in space
-        data = np.empty((ENSLAT.size*self.lon1d.size,))
-        indices = np.empty((ENSLAT.size*self.lon1d.size,),dtype=int)
-        sizes = np.zeros((ENSLAT.size,),dtype=int)
-        ind_tmp = 0
-        for i,(lat0,lon0) in enumerate(zip(ENSLAT,ENSLON)):
-            indphys = np.where(
-                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.sigma_D) &
-                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.sigma_D)
-                    )[0]
-            xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
-            yy = (self.lat1d[indphys] - lat0) / self.km2deg
-
-            sizes[i] = indphys.size
-            indices[ind_tmp:ind_tmp+indphys.size] = indphys
-            data[ind_tmp:ind_tmp+indphys.size] = gaspari_cohn(xx, self.sigma_D) * gaspari_cohn(yy, self.sigma_D)
-            ind_tmp += indphys.size
-        indptr = np.zeros((i+2),dtype=int)
-        indptr[1:] = np.cumsum(sizes)
-        Gauss_xy = csc_matrix((data, indices, indptr), shape=(self.lon1d.size, ENSLAT.size))
-        
-        if self.time_dependant : 
-            # Gaussian functions in time
-            Gauss_t = {}
-            Nt = {}
-            for t in time:
-                Gauss_t[t] = np.zeros((ENSLAT.size*ENST.size))
-                Nt[t] = 0
-                ind_tmp = 0
-                for it in range(len(ENST)):
-                    dt = t - ENST[it]
-                    if abs(dt) < self.sigma_T:
-                        fact = gaspari_cohn(dt, self.sigma_T) 
-                        if self.normalize_fact:
-                            fact /= self.norm_fact
-                        if self.time_spinup is not None and t<self.time_spinup:
-                            fact *= (1-gaspari_cohn(t,self.time_spinup))
-                        if fact!=0:   
-                            Nt[t] += 1
-                            Gauss_t[t][ind_tmp:ind_tmp+ENSLAT.size] = fact   
-                    ind_tmp += ENSLAT.size
-
-            self.Gauss_t = Gauss_t
-            self.Nt = Nt
-        
-        
-        self.Gauss_xy = Gauss_xy
-
-        self.Nx = ENSLAT.size
-        self.nphys = self.lon1d.size
-        self.shape_phys = [self.ny, self.nx]
-        # Shape and number of basis elements 
-        if self.time_dependant : 
-            self.nbasis = ENST.size * ENSLAT.size
-            self.shape_basis = [ENST.size,ENSLAT.size]
-        else : 
-            self.nbasis = ENSLAT.size
-            self.shape_basis = [ENSLAT.size]
-        
-        # Fill Q matrix
-        Q = self.sigma_Q / (self.facns*self.facnlt)  * np.ones((self.nbasis))
-
-        if return_q:
-            return np.zeros_like(Q), Q
-        
-    def operg(self,t,X,State=None):
-
-        """
-            Project to physicial space
-        """
-        
-        phi = np.zeros(self.nphys)
-        if self.time_dependant:
-            GtX = self.Gauss_t[t] * X
-        else : 
-            GtX = X
-        ind0 = np.nonzero(self.Gauss_t[t])[0]
-        if ind0.size>0:
-                GtX = GtX[ind0].reshape(self.Nt[t],self.Nx)
-                phi += self.Gauss_xy.dot(GtX.sum(axis=0))
-        phi = phi.reshape(self.shape_phys)
-    
-        if State is not None:
-            State.params[self.name_mod_var] = phi
-        else:
-            return phi
-
-
-    def operg_transpose(self,t,adState):
-        """
-            Project to reduced space
-        """
-
-        if adState.params[self.name_mod_var] is None:
-            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
-
-        if self.time_dependant: 
-            adX = np.zeros(self.nbasis)
-            adparams = adState.params[self.name_mod_var].ravel()
-            Gt = self.Gauss_t[t]
-            ind0 = np.nonzero(Gt)[0]
-            if ind0.size>0:
-                Gt = Gt[ind0].reshape(self.Nt[t],self.Nx)
-                adGtX = self.Gauss_xy.T.dot(adparams)
-                adGtX = np.repeat(adGtX[np.newaxis,:],self.Nt[t],axis=0)
-                adX[ind0] += (Gt*adGtX).ravel()
-        
-        else : 
-            adX = self.Gauss_xy.T.dot(adparams).ravel()
-
-        adState.params[self.name_mod_var] *= 0.
-
-        return adX
-
 class Basis_gauss_itg():
 
     def __init__(self, config, State):
@@ -1266,7 +1085,6 @@ class Basis_gauss_itg():
         self.km2deg = 1./110
 
         self.facns = config.BASIS.facns
-        self.facnlt = config.BASIS.facnlt
         self.D_itg = config.BASIS.D_itg
         # self.sigma_T = config.BASIS.sigma_T
         self.sigma_Q = config.BASIS.sigma_Q
@@ -1332,7 +1150,9 @@ class Basis_gauss_itg():
 
         itg_xy_gauss = jnp.array(itg_xy_gauss)
 
+        # self.itg_xy_gauss_operg = sparse.bcsr_fromdense(itg_xy_gauss.T)
         self.itg_xy_gauss_operg = sparse.CSR.fromdense(itg_xy_gauss.T)
+        
         self.itg_xy_gauss_operg_transpose = sparse.CSR.fromdense(itg_xy_gauss)
         
         # Shape and number of basis elements 
@@ -1342,7 +1162,7 @@ class Basis_gauss_itg():
         self.nbasis = np.prod(self.shape_basis)
         
         # Fill Q matrix
-        Q = self.sigma_Q / (self.facns*self.facnlt)  * np.ones((self.nbasis))
+        Q = self.sigma_Q / (self.facns)  * np.ones((self.nbasis))
 
         if return_q:
             return np.zeros_like(Q), Q
@@ -1436,22 +1256,151 @@ class Basis_gauss_itg():
         
         return adX
 
-class Basis_gauss3d_jax(Basis_gauss3d):
-    def __init__(self,config, State):
-        super().__init__(config, State)
-        self._operg_jit = jit(self._operg)
-        self._operg_reduced_jit = jit(self._operg_reduced)
+class Basis_gauss3d:
+   
+    def __init__(self, config, State):
+
+        self.km2deg = 1./110
+
+        self.flux = config.BASIS.flux
+        self.facns = config.BASIS.facns
+        self.facnlt = config.BASIS.facnlt
+        self.sigma_D = config.BASIS.sigma_D
+        self.sigma_T = config.BASIS.sigma_T
+        self.sigma_Q = config.BASIS.sigma_Q
+        self.normalize_fact = config.BASIS.normalize_fact
+        self.name_mod_var = config.BASIS.name_mod_var
+        self.time_spinup = config.BASIS.time_spinup
+        self.fcor = config.BASIS.fcor
+        self.flag_variable_Q = config.BASIS.flag_variable_Q
+        self.path_sad = config.BASIS.path_sad
+        self.name_var_sad = config.BASIS.name_var_sad
+
+        # Grid params
+        self.nphys= State.lon.size
+        self.shape_phys = (State.ny,State.nx)
+        self.ny = State.ny
+        self.nx = State.nx
+        self.lon_min = State.lon_min
+        self.lon_max = State.lon_max
+        self.lat_min = State.lat_min
+        self.lat_max = State.lat_max
+        self.lon1d = State.lon.flatten()
+        self.lat1d = State.lat.flatten()
+
+        # Time window
+        if self.flux:
+            self.window = mywindow_flux
+        else:
+            self.window = mywindow
+
+        # For time normalization
+        if self.normalize_fact:
+            tt = np.linspace(-self.sigma_T,self.sigma_T)
+            tmp = np.zeros_like(tt)
+            for i in range(tt.size-1):
+                tmp[i+1] = tmp[i] + self.window(tt[i]/self.sigma_T)*(tt[i+1]-tt[i])
+            self.norm_fact = tmp.max()
+        
+        # Longitude unit
+        self.lon_unit = State.lon_unit
+        
+        
+    
     def set_basis(self,time,return_q=False,**kwargs):
-        res = super().set_basis(time,return_q=return_q,**kwargs)
-        # Convert dictionary to keys and values arrays
-        self.Gt_keys = jnp.array(list(self.Gauss_t.keys()))
-        self.Gt_values = jnp.array(list(self.Gauss_t.values()))
-        self.Nt_values = jnp.array(list(self.Nt.values()))
-        return res
+        
+        TIME_MIN = time.min()
+        TIME_MAX = time.max()
+        LON_MIN = self.lon_min
+        LON_MAX = self.lon_max
+        LAT_MIN = self.lat_min
+        LAT_MAX = self.lat_max
+        if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
+
+        self.time = time
+        
+        # Coordinates in space
+        dlat = self.sigma_D/self.facns*self.km2deg
+        lat0 = LAT_MIN - LAT_MIN%dlat - self.sigma_D*(1-1./self.facns)*self.km2deg  # To start at a fix latitude
+        lat1 = LAT_MAX + 1.5*dlat
+        ENSLAT1 = np.arange(lat0, lat1, dlat)
+        ENSLAT = []
+        ENSLON = []
+        for I in range(len(ENSLAT1)):
+            dlon = self.sigma_D/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg
+            lon0 = LON_MIN - LON_MIN%dlon - self.sigma_D*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg # To start at a fix longitude
+            lon1 = LON_MAX + dlon * 1.5
+            ENSLON1 = np.arange(lon0, lon1, dlon)
+            ENSLAT = np.concatenate(([ENSLAT,np.repeat(ENSLAT1[I],len(ENSLON1))]))
+            ENSLON = np.concatenate(([ENSLON,ENSLON1]))
+        self.ENSLAT = ENSLAT
+        self.ENSLON = ENSLON
+        
+        # Coordinates in time
+        ENST = np.arange(-self.sigma_T*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.sigma_T/self.facnlt , self.sigma_T/self.facnlt)
+        self.ENST = ENST
+    
+        self.nbasis = ENST.size * ENSLAT.size
+        self.nphys = self.lon1d.size
+        self.shape_phys = [self.ny, self.nx]
+        self.shape_basis = [ENST.size,ENSLAT.size]
+        
+        # Fill Q matrix
+        if self.flag_variable_Q:
+            Q = np.zeros(self.nbasis)
+            sad = xr.open_dataset(self.path_sad)[self.name_var_sad['var']]**2 # Std -> Variance
+            # Convert longitude 
+            if np.sign(sad[self.name_var_sad[self.name_var_sad['lon']]].data.min())==-1 and self.lon_unit=='0_360':
+                sad = sad.assign_coords({self.name_var_sad['lon']:((self.name_var_sad['lon'], sad[self.name_var_sad['lon']].data % 360))})
+            elif np.sign(sad[self.name_var_sad[self.name_var_sad[self.name_var_sad['lon']]]].data.min())>=0 and self.lon_unit=='-180_180':
+                sad = sad.assign_coords({self.name_var_sad['lon']:((self.name_var_sad['lon'], (sad[self.name_var_sad['lon']].data + 180) % 360 - 180 ))})
+            sad = sad.sortby(sad[self.name_var_sad['lon']])    
+            grid = pyinterp.Grid2D(pyinterp.Axis(sad[self.name_var_sad['lon']], is_circle=False), pyinterp.Axis(sad[self.name_var_sad['lat']]), sad.T)  # Note: Transpose required
+            i = 0
+            for _ in range(len(self.ENST)):
+                for (lon,lat) in zip(ENSLON,ENSLAT):
+                    indphys = np.where(
+                            (np.abs((np.mod(self.lon1d - lon+180,360)-180) / self.km2deg * np.cos(lat * np.pi / 180.)) <= self.sigma_D) &
+                            (np.abs((self.lat1d - lat) / self.km2deg) <= self.sigma_D)
+                            )[0]
+                    xx = (np.mod(self.lon1d[indphys] - lon+180,360)-180) / self.km2deg * np.cos(lat * np.pi / 180.) 
+                    yy = (self.lat1d[indphys] - lat) / self.km2deg
+                    facS = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
+                    Q_tmp = pyinterp.bivariate(grid, self.lon1d[indphys],self.lat1d[indphys], bounds_error=False)
+                    if np.all(np.isnan(Q_tmp)):
+                        Q_tmp = 10**-10 # Not zero otherwise a ZeroDivisionError exception will be raised
+                    else:
+                        Q_tmp = (np.average(Q_tmp, weights=facS) * self.fcor / (self.facns*self.facnlt))**.5 
+                    Q[i] = Q_tmp 
+                    i += 1
+        else:
+            Q = (self.fcor * self.sigma_Q**2 / (self.facns*self.facnlt))**.5   * np.ones((self.nbasis))
+        
+        print(f'lambda={self.sigma_D:.1E}',
+            f'nlocs={ENSLAT.size:.1E}',
+            f'tdec={self.sigma_T:.1E}',
+            f'ntime={ENST.size:.1E}',
+            f'Q={np.mean(Q):.1E}')
+        
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
+
+        # Compute basis components
+        Gauss_xy = self._compute_component_space()
+        Gauss_t, Nt = self._compute_component_time(time)
+        self.Gauss_xy = Gauss_xy
+        self.Gauss_t = Gauss_t
+        self.Nt = Nt
+        self.Nx = ENSLAT.size
+
+        if return_q:
+            return np.zeros_like(Q), Q
+        
+
     def _compute_component_space(self):
         """
             Gaussian functions in space
         """
+
         data = np.empty((self.ENSLAT.size*self.lon1d.size,))
         indices = np.empty((self.ENSLAT.size*self.lon1d.size,),dtype=int)
         sizes = np.zeros((self.ENSLAT.size,),dtype=int)
@@ -1461,68 +1410,218 @@ class Basis_gauss3d_jax(Basis_gauss3d):
                     (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.sigma_D) &
                     (np.abs((self.lat1d - lat0) / self.km2deg) <= self.sigma_D)
                     )[0]
-            xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)
+            xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
             yy = (self.lat1d[indphys] - lat0) / self.km2deg
+
             sizes[i] = indphys.size
             indices[ind_tmp:ind_tmp+indphys.size] = indphys
             data[ind_tmp:ind_tmp+indphys.size] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
             ind_tmp += indphys.size
         indptr = np.zeros((i+2),dtype=int)
         indptr[1:] = np.cumsum(sizes)
-        return sparse.CSC((data, indices, indptr), shape=(self.lon1d.size, self.ENSLAT.size))
-    def get_Gt_value(self, t):
-        idx = jnp.where(self.Gt_keys == t, size=1)[0]  # Find index
-        return self.Gt_values[idx][0]  # Get corresponding value
-    def _operg(self, t, X):
+
+        return csc_matrix((data, indices, indptr), shape=(self.lon1d.size, self.ENSLAT.size))
+    
+    def _compute_component_time(self, time):
+        """
+            Gaussian functions in time
+        """
+        Gauss_t = {}
+        Nt = {}
+        for t in time:
+            Gauss_t[t] = np.zeros((self.ENSLAT.size*self.ENST.size))
+            Nt[t] = 0
+            ind_tmp = 0
+            for it in range(len(self.ENST)):
+                dt = t - self.ENST[it]
+                if abs(dt) < self.sigma_T:
+                    fact = self.window(dt / self.sigma_T) 
+                    if self.normalize_fact:
+                        fact /= self.norm_fact
+                    if self.time_spinup is not None and t<self.time_spinup:
+                        fact *= (1-self.window(t / self.time_spinup))
+                    if fact!=0:   
+                        Nt[t] += 1
+                        Gauss_t[t][ind_tmp:ind_tmp+self.ENSLAT.size] = fact   
+                ind_tmp += self.ENSLAT.size
+
+        return Gauss_t, Nt
+
+    def operg(self, t, X, State=None):
+
         """
             Project to physicial space
         """
+        
+        phi = np.zeros(self.nphys)
+        GtX = self.Gauss_t[t] * X
+        ind0 = np.nonzero(self.Gauss_t[t])[0]
+        if ind0.size>0:
+            GtX = GtX[ind0].reshape(self.Nt[t],self.Nx)
+            phi += self.Gauss_xy.dot(GtX.sum(axis=0))
+        phi = phi.reshape(self.shape_phys)
+    
+        if State is not None:
+            State.params[self.name_mod_var] = phi
+        else:
+            return phi
+
+
+    def operg_transpose(self, t, adState):
+        """
+            Project to reduced space
+        """
+
+        if adState.params[self.name_mod_var] is None:
+            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+
+        adX = np.zeros(self.nbasis)
+        adparams = adState.params[self.name_mod_var].ravel()
+        Gt = self.Gauss_t[t]
+        ind0 = np.nonzero(Gt)[0]
+        if ind0.size>0:
+            Gt = Gt[ind0].reshape(self.Nt[t],self.Nx)
+            adGtX = self.Gauss_xy.T.dot(adparams)
+            adGtX = np.repeat(adGtX[np.newaxis,:],self.Nt[t],axis=0)
+            adX[ind0] += (Gt*adGtX).ravel()
+
+        adState.params[self.name_mod_var] *= 0.
+
+        return adX
+ 
+class Basis_gauss3d_jax(Basis_gauss3d):
+
+    def __init__(self,config, State):
+        super().__init__(config, State)
+
+        self._operg_jit = jit(self._operg)
+        self._operg_reduced_jit = jit(self._operg_reduced)
+        
+    def set_basis(self,time,return_q=False,**kwargs):
+        res = super().set_basis(time,return_q=return_q,**kwargs)
+
+        self.time = time
+        self.vect_time = jnp.eye(time.size)
+
+        return res
+    
+    def _compute_component_space(self):
+        """
+            Gaussian functions in space
+        """
+
+        Gauss_2d = np.zeros((self.ENSLAT.size,self.lon1d.size))
+        for i,(lat0,lon0) in enumerate(zip(self.ENSLAT,self.ENSLON)):
+            indphys = np.where(
+                    (np.abs((np.mod(self.lon1d - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.sigma_D) &
+                    (np.abs((self.lat1d - lat0) / self.km2deg) <= self.sigma_D)
+                    )[0]
+            xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
+            yy = (self.lat1d[indphys] - lat0) / self.km2deg
+            Gauss_2d[i,indphys] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
+        Gauss_2d = jnp.array(Gauss_2d)
+        return sparse.CSR.fromdense(Gauss_2d.T)
+
+    def _compute_component_time(self, time):
+
+        Gt_np = np.zeros((time.size,self.nbasis))
+        ind_tmp = 0
+        for it in range(len(self.ENST)):
+            for _ in range(self.ENSLAT.size):
+                for i,t in enumerate(time) :
+                    dt = t - self.ENST[it]
+                    if abs(dt) < self.sigma_T:
+                        fact = self.window(dt / self.sigma_T) 
+                        if self.normalize_fact:
+                            fact /= self.norm_fact
+                        if self.time_spinup is not None and t<self.time_spinup:
+                            fact *= (1-self.window(t / self.time_spinup))
+                        if fact!=0:   
+                            Gt_np[i,ind_tmp:ind_tmp+1] = fact
+                ind_tmp += 1
+        Gt = sparse.csr_fromdense(jnp.array(Gt_np).T)
+
+        return Gt, None
+    
+    def get_Gt_value(self, t):
+
+        idt = jnp.where(self.time == t, size=1)[0]  # Find index
+
+        return self.Gauss_t @ self.vect_time[idt[0]] # Get corresponding value
+    
+    def _operg(self, t, X):
+
+        """
+            Project to physicial space
+        """
+
         # Initialize phi
         phi = jnp.zeros(self.nphys)
+
         # Get Gt value
         Gt = self.get_Gt_value(t)
         GtX = Gt * X
+
         reshaped_GtX = GtX.reshape((-1, self.Nx))
+
         phi += self.Gauss_xy @ (reshaped_GtX.sum(axis=0))
+        
         phi = phi.reshape(self.shape_phys)
+        
         return phi
+
     def _operg_reduced(self, t, phi_2d):
         """
         Project a 2D physical space field back to the reduced space.
+
         Parameters:
             t: Current time
             phi_2d: 2D physical space field to project back.
+
         Returns:
             Reduced space representation (1D vector).
         """
+
         # Define a wrapper function for _operg that computes the forward projection
         def operg_func(X):
             return self._operg_jit(t, X)
+
         # Compute the vector-Jacobian product (vjp) for the forward projection
         _, vjp_func = jax.vjp(operg_func, jnp.zeros(self.nbasis))  # Provide a zero vector matching the reduced space shape
+
         # Use the vjp_func to compute the reduced space projection
         X_reduced, = vjp_func(phi_2d)
+
         return X_reduced
+
     def operg(self, t, X, State=None):
+        
         """
             Project to physicial space
         """
+
         # Projection
         phi = self._operg_jit(t, X)
+
         # Update State
         if State is not None:
             State.params[self.name_mod_var] = phi
         else:
             return phi
+        
     def operg_transpose(self, t, adState):
+        
         """
             Project to reduced space
         """
+
         if adState.params[self.name_mod_var] is None:
             adState.params[self.name_mod_var] = np.zeros((self.nphys,))
         adparams = adState.params[self.name_mod_var]
         adX = self._operg_reduced_jit(t, adparams)
+        
         adState.params[self.name_mod_var] *= 0.
+        
         return adX
 
 class Basis_bmaux:
@@ -2147,222 +2246,6 @@ class Basis_bmaux_jax(Basis_bmaux):
         X_reduced, = vjp_func(phi_2d)
 
         return X_reduced
-
-    def operg(self, t, X, State=None):
-        
-        """
-            Project to physicial space
-        """
-
-        # Projection
-        phi = self._operg_jit(t, X)
-
-        # Update State
-        if State is not None:
-            State.params[self.name_mod_var] = phi
-        else:
-            return phi
-        
-    def operg_transpose(self, t, adState):
-        
-        """
-            Project to reduced space
-        """
-
-        if adState.params[self.name_mod_var] is None:
-            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
-        adparams = adState.params[self.name_mod_var]
-        adX = self._operg_reduced_jit(t, adparams)
-        
-        adState.params[self.name_mod_var] *= 0.
-        
-        return adX
-
-class Basis_bmaux_jax_dev(Basis_bmaux):
-    def __init__(self,config, State):
-        super().__init__(config, State)
-
-        self._operg_jit = jit(self._operg)
-        self._operg_reduced_jit = jit(self._operg_reduced)
-
-    def set_basis(self,time,return_q=False,**kwargs):
-        res = super().set_basis(time,return_q=return_q,**kwargs)
-
-        # Convert dictionary to keys and values arrays
-        # self.Gt_keys = jnp.array(list(self.Gt.keys()))
-        # self.Gt_values = jnp.array(list(self.Gt.values()))
-        # self.Nt_values = jnp.array(list(self.Nt.values()))
-
-        self.time = time
-
-        return res
-
-    def _compute_component_space(self):
-
-        Gx = [None,]*self.nf
-        Nx = [None,]*self.nf
-
-        for iff in range(self.nf):
-
-            data = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,))
-            indices = np.empty((2*self.ntheta*self.NP[iff]*self.nphys,),dtype=int)
-            sizes = np.zeros((2*self.ntheta*self.NP[iff],),dtype=int)
-
-            ind_tmp = 0
-            iwave = 0
-
-            for P in range(self.NP[iff]):
-                # Obs selection around point P
-                indphys = np.where(
-                    (np.abs((self.lon1d - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.)) <= self.DX[iff]) &
-                    (np.abs((self.lat1d - self.ENSLAT[iff][P]) / self.km2deg) <= self.DX[iff])
-                    )[0]
-                xx = (self.lon1d[indphys] - self.ENSLON[iff][P]) / self.km2deg * np.cos(self.ENSLAT[iff][P] * np.pi / 180.) 
-                yy = (self.lat1d[indphys] - self.ENSLAT[iff][P]) / self.km2deg
-                # Spatial tapering shape of the wavelet 
-                if self.mask1d is not None:
-                    indmask = self.mask1d[indphys]
-                    indphys = indphys[~indmask]
-                    xx = xx[~indmask]
-                    yy = yy[~indmask]
-                facd = np.ones((indphys.size))
-                if self.depth is not None:
-                    facd = (self.depth[indphys]-self.depth1)/(self.depth2-self.depth1)
-                    facd[facd>1]=1.
-                    facd[facd<0]=0.
-                    indphys = indphys[facd>0]
-                    xx = xx[facd>0]
-                    yy = yy[facd>0]
-                    facd = facd[facd>0]
-
-                facs = mywindow(xx / self.DX[iff]) * mywindow(yy / self.DX[iff]) * facd
-
-                for itheta in range(self.ntheta):
-                    # Wave vector components
-                    kx = self.k[iff] * np.cos(self.theta[itheta])
-                    ky = self.k[iff] * np.sin(self.theta[itheta])
-                    # Cosine component
-                    sizes[iwave] = indphys.size
-                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
-                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.cos(kx*(xx)+ky*(yy))
-                    ind_tmp += indphys.size
-                    iwave += 1
-                    # Sine component
-                    sizes[iwave] = indphys.size
-                    indices[ind_tmp:ind_tmp+indphys.size] = indphys
-                    data[ind_tmp:ind_tmp+indphys.size] = np.sqrt(2) * facs * np.sin(kx*(xx)+ky*(yy))
-                    ind_tmp += indphys.size
-                    iwave += 1
-
-            nwaves = iwave
-            Nx[iff] = nwaves
-
-            sizes = sizes[:nwaves]
-            indices = indices[:ind_tmp]
-            data = data[:ind_tmp]
-
-            indptr = np.zeros((nwaves+1),dtype=int)
-            indptr[1:] = np.cumsum(sizes)
-
-            Gx[iff] = sparse.CSC((data, indices, indptr), shape=(self.nphys, nwaves))
-                        
-
-        return Gx, Nx
-
-    def _compute_component_time(self, time):
-
-        Gt = {} # Time operator that gathers the time factors for each frequency 
-        Nt = {} # Number of wave times tw such as abs(tw-t)<tdec
-
-        for iff in range(self.nf):
-
-            Gt[iff] = np.zeros((time.size,self.nbasis))
-
-            ind_tmp = self.iff_wavebounds[iff]
-
-            for it in range(self.enst[iff].shape[1]):
-                for P in range(self.NP[iff]):
-                    for i,t in enumerate(time) : 
-                        dt = t - self.enst[iff][P,it]
-                        if not (abs(dt)>self.tdec[iff][P] or np.isnan(self.enst[iff][P,it])): 
-                            fact = self.window(dt / self.tdec[iff][P]) 
-                            fact /= self.norm_fact[iff][P]
-                            Gt[iff][i,ind_tmp:ind_tmp+2*self.ntheta] = fact
-
-                    # if P==0: # at each first element of NP add 1 to Nt
-                    #     Nt[t][iff] += 1
-                    ind_tmp += 2*self.ntheta
-
-            Gt[iff] = sparse.csr_fromdense(jnp.array(Gt[iff]).T)
-
-        return Gt, Nt     
-    
-    def get_Gt_value(self, t):
-        idx = jnp.where(self.Gt_keys == t, size=1)[0]  # Find index
-        return self.Gt_values[idx][0], self.Nt_values[idx][0]  # Get corresponding value
-    
-    def _operg(self, t, X):
-
-        """
-            Project to physicial space
-        """
-
-        # Initialize phi
-        phi = jnp.zeros(self.shape_phys).ravel()
-
-        for iff in range(self.nf):
-            # Get Gt value
-            # Gt, Nt = self.get_Gt_value(t)
-
-            array_t = jnp.zeros(len(self.time))
-            idx = jnp.where(self.time == t, size=1)[0]
-            array_t=array_t.at[idx].set(1)
-
-            GtXf = (self.Gt[iff] @ array_t) * X
-
-            GtXf = GtXf[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
-
-            # Replace NaNs with 0 (use jnp.nan_to_num for JAX compatibility)
-            GtXf_no_nan = jnp.nan_to_num(GtXf)
-
-            # # Use shape-safe slicing instead of boolean indexing
-            Nx_val = self.Nx[iff]
-
-            # # Dynamically reshape the sliced array
-            reshaped_GtXf = GtXf_no_nan.reshape((-1, Nx_val))  # Ensure reshaping works dynamically
-
-            # Update phi
-            phi += self.Gx[iff] @ reshaped_GtXf.sum(axis=0)
-
-        # Reshape phi back to physical space shape
-        phi = phi.reshape(self.shape_phys)
-
-        return phi
-
-    def _operg_reduced(self, t, phi_2d):
-        """
-        Project a 2D physical space field back to the reduced space.
-
-        Parameters:
-            t: Current time
-            phi_2d: 2D physical space field to project back.
-
-        Returns:
-            Reduced space representation (1D vector).
-        """
-
-        # Define a wrapper function for _operg that computes the forward projection
-        def operg_func(X):
-            return self._operg_jit(t, X)
-
-        # Compute the vector-Jacobian product (vjp) for the forward projection
-        _, vjp_func = jax.vjp(operg_func, jnp.zeros(self.nbasis))  # Provide a zero vector matching the reduced space shape
-
-        # Use the vjp_func to compute the reduced space projection
-        X_reduced, = vjp_func(phi_2d)
-
-        return X_reduced
-
 
     def operg(self, t, X, State=None):
         

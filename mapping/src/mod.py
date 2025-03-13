@@ -1901,7 +1901,11 @@ class Model_sw1l_jax(M):
         ###   TIME PROPAGATION   ####
         #############################
 
-        X1 = self.swm_step(X0,nstep=nstep)
+        # X1 = self.swm_step(X0,nstep=nstep)
+        # Init
+        X1 = +X0
+        for _ in range(nstep):
+            X1 = self.swm.one_step_jit(X1)
         
         # Remove time in output array
         X1 = X1[1:]
@@ -1926,7 +1930,14 @@ class Model_sw1l_jax(M):
         ###   TIME PROPAGATION   ####
         #############################
 
-        dX1 = self.swm_step_tgl(dX0,X0,nstep=nstep)
+        # dX1 = self.swm_step_tgl(dX0,X0,nstep=nstep)
+        dX1 = +dX0
+        X1 = +X0
+        for i in range(nstep):
+            # One timestep
+            dX1 = self.swm.step_tgl_jit(dX1,X1)
+            if i<nstep-1:
+                X1 = self.swm.one_step_jit(X1)
 
         # Convert to numpy and reshape
         dX1 = np.array(dX1).astype('float64')
@@ -1951,31 +1962,40 @@ class Model_sw1l_jax(M):
         X0 = self.init_array(State,t)
         adX0 = self.init_array(adState,t)
 
-        #print("X0 : ",X0)
-        #print("adX0 : ",adX0)
-
-        #plt.plot(adState.params["itg"].reshape((13122,)))
-        #plt.title("Params before swm_step_adj")
-        #plt.show()
-
         #############################
         ###   TIME PROPAGATION   ####
         #############################
 
-        adX1 = self.swm_step_adj(adX0,X0,nstep=nstep)
+        # adX1 = self.swm_step_adj(adX0,X0,nstep=nstep)
 
-        #print("adX1 : ",adX1)
+        # Init
+        adX1 = +adX0
+        X1 = +X0
+
+        adX1 = adX1[1:]
+        
+        traj = [X1]
+        if nstep>1:
+            for i in range(nstep):
+                # One timestep
+                X1 = self.swm.one_step_jit(X1)
+                if i<nstep-1:
+                    traj.append(+X1)
+            
+        # Reversed time propagation
+        # Add time in control vector (for JAX)
+        adX1 = np.append(traj[-1][0],adX1)
+        for i in reversed(range(nstep)):
+            X1 = traj[i]
+            # One timestep
+            adX1 = self.swm.step_adj_jit(adX1,X1)
 
         # Convert to numpy and reshape
         adX1 = np.array(adX1).astype('float64')
 
         # Remove time in control vector
-        adX1 = adX1[1:]
+        # adX1 = adX1[1:]
 
-        #plt.plot(adX1[self.swm.nstates:][self.slice_params['itg']])
-        #plt.title("Params after swm_step_adj")
-        #plt.show()
-        
         ##################
         ###   SAVING   ###
         ##################

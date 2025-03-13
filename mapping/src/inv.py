@@ -791,7 +791,6 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
 
         options['maxiter'] = config.INV.maxiter
 
-
         if config.INV.ftol is not None:
             options['ftol'] = config.INV.ftol
 
@@ -809,6 +808,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
                         callback=callback)
 
         print ('\nIs the minimization successful? {}'.format(res.success))
+        print ('\n{}'.format(res.message))
         print ('\nFinal cost function value: {}'.format(res.fun))
         print ('\nNumber of iterations: {}'.format(res.nit))
         
