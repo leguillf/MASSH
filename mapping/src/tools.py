@@ -208,7 +208,7 @@ def read_auxdata(file_aux,name_var,lon_unit):
     
     if np.sign(ds[name_var['lon']].data.min())==-1 and lon_unit=='0_360':
         ds = ds.assign_coords({name_var['lon']:((name_var['lon'], ds[name_var['lon']].data % 360))})
-    elif np.sign(ds[name_var['lon']].data.min())==1 and lon_unit=='-180_180':
+    elif (np.sign(ds[name_var['lon']].data.min())==1 or ds[name_var['lon']].data.max()>180) and lon_unit=='-180_180':
         ds = ds.assign_coords({name_var['lon']:((name_var['lon'], (ds[name_var['lon']].data + 180) % 360 - 180))})
     ds = ds.sortby(ds[name_var['lon']])    
     

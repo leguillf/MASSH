@@ -14,7 +14,7 @@ from scipy import signal
 import matplotlib.pylab as plt
 import glob 
 
-from .tools import detrendn,read_auxdata
+from .tools import detrendn, read_auxdata
 from .exp import Config
 
 def Obs(config, State, *args, **kwargs):
@@ -183,7 +183,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
         ds[obs_attr.name_lon].data = ds[obs_attr.name_lon].data % 360
-    elif np.sign(ds[obs_attr.name_lon].data.min())>=0 and lon_unit=='-180_180':
+    elif (np.sign(ds[obs_attr.name_lon].data.min())>=0 or ds[obs_attr.name_lon].data.max()>180) and lon_unit=='-180_180':
         ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
         #ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
     
@@ -193,14 +193,14 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     ds = ds.where(((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
                   (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs)).compute(), drop=True)
     # MDT 
-    if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:
-        finterpmdt = read_auxdata(obs_attr.path_mdt,obs_attr.name_var_mdt, lon_unit)
+    if True in [obs_attr.add_mdt, obs_attr.substract_mdt]:
+        finterpmdt = read_auxdata(obs_attr.path_mdt, obs_attr.name_var_mdt, lon_unit)
     else:
         finterpmdt = None
     
     # Error file
     if obs_attr.path_err is not None:
-        finterperr = read_auxdata(obs_attr.path_err,obs_attr.name_var_err, lon_unit)
+        finterperr = read_auxdata(obs_attr.path_err, obs_attr.name_var_err, lon_unit)
     else:
         finterperr = None
 

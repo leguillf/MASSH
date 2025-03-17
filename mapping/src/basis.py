@@ -757,32 +757,28 @@ class Basis_gauss3d:
         
         # Fill Q matrix
         if self.flag_variable_Q:
-            Q = np.zeros(self.nbasis)
+            Q = []
             sad = xr.open_dataset(self.path_sad)[self.name_var_sad['var']]**2 # Std -> Variance
             # Convert longitude 
-            if np.sign(sad[self.name_var_sad[self.name_var_sad['lon']]].data.min())==-1 and self.lon_unit=='0_360':
+            if np.sign(sad[self.name_var_sad['lon']].data.min())==-1 and self.lon_unit=='0_360':
                 sad = sad.assign_coords({self.name_var_sad['lon']:((self.name_var_sad['lon'], sad[self.name_var_sad['lon']].data % 360))})
-            elif np.sign(sad[self.name_var_sad[self.name_var_sad[self.name_var_sad['lon']]]].data.min())>=0 and self.lon_unit=='-180_180':
+            elif (np.sign(sad[self.name_var_sad['lon']].data.min())>=0  or sad[self.name_var_sad['lon']].data.max()>180) and self.lon_unit=='-180_180':
                 sad = sad.assign_coords({self.name_var_sad['lon']:((self.name_var_sad['lon'], (sad[self.name_var_sad['lon']].data + 180) % 360 - 180 ))})
             sad = sad.sortby(sad[self.name_var_sad['lon']])    
-            grid = pyinterp.Grid2D(pyinterp.Axis(sad[self.name_var_sad['lon']], is_circle=False), pyinterp.Axis(sad[self.name_var_sad['lat']]), sad.T)  # Note: Transpose required
-            i = 0
-            for _ in range(len(self.ENST)):
-                for (lon,lat) in zip(ENSLON,ENSLAT):
-                    indphys = np.where(
-                            (np.abs((np.mod(self.lon1d - lon+180,360)-180) / self.km2deg * np.cos(lat * np.pi / 180.)) <= self.sigma_D) &
-                            (np.abs((self.lat1d - lat) / self.km2deg) <= self.sigma_D)
-                            )[0]
-                    xx = (np.mod(self.lon1d[indphys] - lon+180,360)-180) / self.km2deg * np.cos(lat * np.pi / 180.) 
-                    yy = (self.lat1d[indphys] - lat) / self.km2deg
-                    facS = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
-                    Q_tmp = pyinterp.bivariate(grid, self.lon1d[indphys],self.lat1d[indphys], bounds_error=False)
-                    if np.all(np.isnan(Q_tmp)):
-                        Q_tmp = 10**-10 # Not zero otherwise a ZeroDivisionError exception will be raised
-                    else:
-                        Q_tmp = (np.average(Q_tmp, weights=facS) * self.fcor / (self.facns*self.facnlt))**.5 
-                    Q[i] = Q_tmp 
-                    i += 1
+            for (lon,lat) in zip(ENSLON,ENSLAT):
+                # Precompute interpolation grid once
+                dlon = .5 * self.sigma_D/np.cos(lat*np.pi/180.)
+                dlat = .5 * self.sigma_D
+                elon = np.linspace(lon - dlon, lat + dlon, 10)
+                elat = np.linspace(lat - dlat, lat + dlat, 10)
+                elon2, elat2 = np.meshgrid(elon, elat)
+                std_tmp_values = sad.interp({self.name_var_sad['lon']:elon2.ravel(), 
+                                            self.name_var_sad['lat']:elat2.ravel()}).values
+                std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10
+                Q_tmp = (std_tmp * self.fcor / (self.facns*self.facnlt))**.5 
+                Q.append(Q_tmp) 
+            # Repeat for all time centers
+            Q = np.tile(Q, len(self.ENST))
         else:
             Q = (self.fcor * self.sigma_Q**2 / (self.facns*self.facnlt))**.5   * np.ones((self.nbasis))
         
@@ -1151,7 +1147,7 @@ class Basis_bmaux:
         # Convert longitude 
         if np.sign(aux['lon'].data.min())==-1 and self.lon_unit=='0_360':
             aux = aux.assign_coords({'lon':(('lon', aux['lon'].data % 360))})
-        elif np.sign(aux['lon'].data.min())>=0 and self.lon_unit=='-180_180':
+        elif (np.sign(aux['lon'].data.min())>=0 or aux['lon'].data.max()>180) and self.lon_unit=='-180_180':
             aux = aux.assign_coords({'lon':(('lon', (aux['lon'].data + 180) % 360 - 180 ))})
         aux = aux.sortby(aux['lon'])    
         daTdec = aux['Tdec']

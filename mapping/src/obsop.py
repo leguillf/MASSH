@@ -429,15 +429,20 @@ class Obsop_interp_l3_jax(Obsop_interp):
         # Apply distance threshold
         valid_mask = (D <= self.dmax)
 
-        # Compute weights
-        weights = np.exp(-D**2 / (2 * (0.5 * self.dmax)**2)) * valid_mask
-        sum_weights = np.sum(weights, axis=1, keepdims=True)
-        weights /= sum_weights  # Normalize
+        if np.any(valid_mask):
+            # Compute weights
+            weights = np.exp(-D**2 / (2 * (0.5 * self.dmax)**2)) * valid_mask
+
+            # Normalize
+            sum_weights = np.sum(weights, axis=1, keepdims=True)
+            weights = np.where(sum_weights>0, weights/sum_weights, 0.)  
+
+        else:
+            data = D * 0.
 
         # Extract valid indices
         row, col = np.where(valid_mask)
         data = weights[row, col]
-
         indices = jnp.array([row, ind_closest[row, col]])
 
         return jnp.array(data), indices
@@ -554,7 +559,8 @@ class Obsop_interp_l3_jax(Obsop_interp):
                         self.indices[t][name] = indices
                 else:
                     # Compute operator
-                    data, indices = self._sparse_op(lon_obs[name],lat_obs[name])
+                    result = self._sparse_op(lon_obs[name],lat_obs[name])
+                    data, indices = result
                     self.data[t][name] = data
                     self.indices[t][name] = indices
                     # Save operator if asked
@@ -606,8 +612,8 @@ class Obsop_interp_l3_jax(Obsop_interp):
         # Compute misfit & errors
         misfit = HX - varobs_t
         inverr = 1/errobs_t
-        misfit = jnp.where(jnp.isnan(misfit),0,misfit) 
-        inverr = jnp.where(jnp.isnan(inverr),0,inverr) 
+        misfit = jnp.where(jnp.isnan(misfit), 0, misfit) 
+        inverr = jnp.where(jnp.isnan(inverr), 0, inverr) 
 
         return inverr * misfit
     

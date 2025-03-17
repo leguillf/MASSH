@@ -1007,10 +1007,10 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         t = (date - config.EXP.init_date).total_seconds()
         
         # Reduced basis
-        Basis.operg(t/3600/24,Xa,State=State0.params)
+        Basis.operg(t/3600/24, Xa, State=State0.params)
 
         # Forward propagation
-        Model.step(t=t,State=State0,nstep=nstep)
+        Model.step(t=t, State=State0, nstep=nstep)
         date += timedelta(seconds=nstep_check*Model.dt)
 
         # Save output

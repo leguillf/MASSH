@@ -837,9 +837,8 @@ class Model_qg1l_jax(M):
         self.qgm_step_tgl = self.qgm.step_tgl_jit
         self.qgm_step_adj = self.qgm.step_adj_jit
 
-        self.step_jax_jit = jit(self.step_jax, static_argnums=[2,3])
+        self.step_jax_jit = jit(self.step_jax, static_argnums=[3])
 
-        
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
@@ -894,6 +893,12 @@ class Model_qg1l_jax(M):
                     for i,t in enumerate(time_bc):
                         var_bc[_name_var_bc][i][np.isnan(var_bc[_name_var_bc][i])] = 0.
                         self.forcing[_name_var_mod][t] = var_bc[_name_var_bc][i]
+        
+        # For step_jax
+        self.bc_time = jnp.array(list(self.bc['SSH'].keys()))
+        self.bc_values = {}
+        for name in var_bc:
+            self.bc_values[name] = jnp.array(list(self.bc['SSH'].values()))
 
     def ano_bc(self,t,State,sign):
 
@@ -915,7 +920,7 @@ class Model_qg1l_jax(M):
         elif t0 not in self.bc['SSH']:
             # Find closest time
             t_list = np.array(list(self.bc['SSH'].keys()))
-            idx_closest = jnp.argmin(jnp.abs(t_list-t0))
+            idx_closest = np.argmin(np.abs(t_list-t0))
             t0 = t_list[idx_closest]
 
         Xb = self.bc['SSH'][t0]
@@ -934,6 +939,22 @@ class Model_qg1l_jax(M):
                         Cb = self.bc[name][new_t1]
                     Xb = np.append(Xb, Cb[np.newaxis,:,:], axis=0)     
         
+        return Xb
+
+    def _apply_bc_jax(self,t,t1):
+
+        Xb = jnp.zeros((self.ny,self.nx,))
+
+        idt = jnp.where(self.bc_time==t, size=1)[0]
+        Xb = self.bc_values['SSH'][idt][0]
+
+        if self.advect_tracer:
+            for name in self.name_var:
+                if name!='SSH':
+                    idt = jnp.where(self.bc_time==t1, size=1)[0]
+                    Cb = self.bc_values[name][idt][0]
+                    Xb = jnp.append(Xb[jnp.newaxis,:,:], 
+                                    Cb[jnp.newaxis,:,:], axis=0)     
         return Xb
     
     def step(self,State,nstep=1,t=0):
@@ -993,10 +1014,10 @@ class Model_qg1l_jax(M):
         # Get anomaly from full field
         self.ano_bc(t1,State,-1)
     
-    def step_jax(self,State_vars,State_params,nstep=1,t=0):
+    def step_jax(self,t,State_vars,State_params,nstep=1):
 
         # Boundary field
-        Xb = self._apply_bc(t,t+nstep*self.dt)
+        Xb = self._apply_bc_jax(t,t+nstep*self.dt)
 
         # Get state variable(s)
         X0 = State_vars[self.name_var['SSH']]
@@ -1029,6 +1050,9 @@ class Model_qg1l_jax(M):
             else:
                 X1 += nstep*self.dt/(3600*24) * Fssh
                 State_vars[self.name_var['SSH']] = X1
+        
+        for name in self.name_var:
+            State_vars[self.name_var[name]] = jnp.nan_to_num(State_vars[self.name_var[name]])
             
         return State_vars
 

@@ -461,7 +461,7 @@ class Variational_jax:
         self.basis.operg(t / 3600 / 24, X, State_params)
 
         # 3. Run forward model
-        State_var = self.M.step_jax_jit(State_var, State_params, nstep=self.nstep, t=t)
+        State_var = self.M.step_jax_jit(t, State_var, State_params, nstep=self.nstep)
 
         # Update time
         t += self.nstep * self.M.dt
