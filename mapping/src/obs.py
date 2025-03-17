@@ -315,6 +315,7 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
     # Subsampling
     if obs_attr.subsampling is not None:
         ds = ds.isel({obs_attr.name_time:slice(None,None,obs_attr.subsampling)})
+        print(ds[obs_attr.name_time].values) 
     
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
