@@ -62,14 +62,17 @@ class State:
                 self.ini_geo_grid(config.GRID)
             elif config.GRID.super == 'GRID_CAR':
                 self.ini_car_grid(config.GRID)
+            elif config.GRID.super == 'GRID_CAR_CENTER':
+                self.ini_car_grid_center(config.GRID)
             elif config.GRID.super == 'GRID_FROM_FILE':
                 self.ini_grid_from_file(config.GRID)
             elif config.GRID.super == 'GRID_RESTART':
                 self.ini_grid_restart()
             else:
                 sys.exit("Initialization '" + config.GRID.name_grid + "' not implemented yet")
-
             
+            #if self.lon.min()<-180:
+            #    self.lon = self.lon%360
 
             self.ny,self.nx = self.lon.shape
 
@@ -137,17 +140,29 @@ class State:
                 config (module): configuration module
         """
 
-        km2deg = 1./111
+        km2deg = 1./111.32
 
-        ENSLAT = np.arange(
-            config.lat_min,
-            config.lat_max + config.dx*km2deg,
-            config.dx*km2deg)
+        if not None in [config.ny,config.nx]:
+            
+            ENSLAT = np.linspace(
+                config.lat_min,
+                config.lat_max,
+                config.ny)
 
-        ENSLON = np.arange(
-                    config.lon_min,
-                    config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
-                    config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
+            ENSLON = np.linspace(
+                config.lon_min,
+                config.lon_max,
+                config.nx)
+        else:
+            ENSLAT = np.arange(
+                config.lat_min,
+                config.lat_max + config.dx*km2deg,
+                config.dx*km2deg)
+
+            ENSLON = np.arange(
+                        config.lon_min,
+                        config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
+                        config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
 
         lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
         lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
@@ -157,12 +172,55 @@ class State:
                 lat2d[I,J] = ENSLAT[I]
                 lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.) * km2deg
         
-        if not None in [config.ny,config.nx]:
-            lat2d = lat2d[:config.ny,:config.nx]
-            lon2d = lon2d[:config.ny,:config.nx]
-        
         self.lon = lon2d
         self.lat = lat2d
+
+    def ini_car_grid_center(self, config):
+        """
+        Creates a 2D geographical grid (lon, lat) with constant spacing in km.
+
+        Parameters:
+        - center_lon, center_lat: Center of the grid (degrees)
+        - spacing_km: Desired spacing between points (km)
+        - shape: Tuple (ny, nx), number of points in lat and lon
+        """
+        
+        ny, nx = config.shape  # Grid size
+
+        ny = int(ny)
+        nx = int(nx)
+
+        lon_center = config.lon_center
+        lat_center = config.lat_center
+
+        spacing_km  = config.spacing_km
+
+        # Compute latitude spacing in degrees (constant)
+        lat_spacing_deg = spacing_km / 111.32  
+
+        # Generate latitude points centered at center_lat
+        lat_points = lat_center + (np.arange(ny) - ny // 2) * lat_spacing_deg
+
+        # Compute longitude spacing dynamically at each latitude
+        lon_grid = np.zeros((ny, nx))
+        lat_grid = np.zeros((ny, nx))
+
+        for i, lat in enumerate(lat_points):
+
+            lat_grid[i, :] = lat
+
+            lon_spacing_deg = spacing_km / (111.32 * np.cos(np.radians(lat)))  # Adjust for latitude
+            lon_points = lon_center + (np.arange(nx) - nx // 2) * lon_spacing_deg
+            
+            lon_grid[i, :] = lon_points
+
+        # Correct lon format
+        if lon_grid.min()<-180:
+            lon_grid = lon_grid%360
+
+        self.lon = lon_grid
+        self.lat = lat_grid
+
 
     def ini_grid_from_file(self,config):
         """
@@ -194,11 +252,11 @@ class State:
         self.present_date = config.init_date
 
         if config.var_name_mask is not None:
-            if config.time_name_mask == 'time':
-                self.mask = np.isnan(dsin[config.var_name_mask].isel(time=0).values)  
-            else: 
-                self.mask = np.isnan(dsin.rename_dims({config.time_name_mask:'time'})[config.var_name_mask].isel(time=0).values)
- 
+            if len(dsin[config.var_name_mask].shape)==3:
+                self.mask = np.isnan(dsin[config.var_name_mask][0])
+            elif len(dsin[config.var_name_mask].shape)==2:
+                self.mask = np.isnan(dsin[config.var_name_mask])
+
         dsin.close()
         del dsin
         
@@ -405,24 +463,20 @@ class State:
         
         return
 
-    def load_output(self,date,name_var=None):
-        filename = os.path.join(self.path_save,f'{self.name_exp_save}'\
-            f'_y{date.year}'\
-            f'm{str(date.month).zfill(2)}'\
-            f'd{str(date.day).zfill(2)}'\
-            f'h{str(date.hour).zfill(2)}'\
-            f'm{str(date.minute).zfill(2)}.nc')
-            
-        ds = xr.open_dataset(filename)
+    def load_output(self, date, name_var=None):
         
-        ds1 = ds.copy().squeeze()
-        
-        ds.close()
-        del ds
+
+        filename = os.path.join(
+            self.path_save,
+            f'{self.name_exp_save}_y{date.year}m{str(date.month).zfill(2)}d{str(date.day).zfill(2)}'
+            f'h{str(date.hour).zfill(2)}m{str(date.minute).zfill(2)}.nc'
+        )
+
+        with xr.open_dataset(filename) as ds:  # Ensure thread safety
+            ds1 = ds.load().copy().squeeze()  # Fully load data before closing
         
         if name_var is None:
             return ds1
-        
         else:
             return np.array([ds1[name].values for name in name_var])
     

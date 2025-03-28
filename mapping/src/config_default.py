@@ -134,6 +134,24 @@ GRID_CAR = dict(
 
 )
 
+GRID_CAR_CENTER = dict(
+
+    super = 'GRID_CAR',
+
+    lon_center = 295.,                                        # Center of the grid (degrees)                                   # domain max longitude
+
+    lat_center = 33.,                                         # Center of the grid (degrees)
+
+    spacing_km = 43.,                                         # Desired spacing between points (km)
+
+    shape = [128,128],                                        # number of points in lat and lon
+
+    name_init_mask = None,
+
+    name_var_mask = {'lon':'','lat':'','var':''}
+
+)
+
 # Restart from previous run 
 GRID_RESTART = dict(
 
@@ -370,6 +388,8 @@ MOD_QG1L_JAX = dict(
     advect_tracer = False, # Whether or not to advect tracers. If True, need to add tracer variables (e.g. SST) in *name_var*
 
     dtmodel = 300, # model timestep
+
+    cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/c
 
     time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk2,rk4)
 

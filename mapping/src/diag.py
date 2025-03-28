@@ -2,6 +2,7 @@ import os, sys
 import glob
 import numpy as np
 import xarray as xr
+import netCDF4 as nc
 import pyinterp 
 import pyinterp.fill
 from scipy.interpolate import griddata
@@ -22,7 +23,7 @@ from . import switchvar
 import cmocean
 
 
-def Diag(config,State):
+def Diag(config,State,verbose=1):
 
     """
     NAME
@@ -38,9 +39,9 @@ def Diag(config,State):
     elif config.DIAG.super is None:
         return Diag_multi(config,State)
     
-    print(config.DIAG)
-
-
+    if verbose:
+        print(config.DIAG)
+        
     if config.DIAG.super=='DIAG_OSSE':
         return Diag_osse(config,State)
     elif config.DIAG.super=='DIAG_OSE':
@@ -796,25 +797,33 @@ class Diag_ose():
         else:
             self.time_step = config.DIAG.time_step
         # lon_min
-        if config.DIAG.lon_min is None:
+        if config.DIAG.lon_min is not None:
+            self.lon_min = config.DIAG.lon_min
+        elif config.GRID.lon_max is not None:
             self.lon_min = config.GRID.lon_min
         else:
-            self.lon_min = config.DIAG.lon_min
+            self.lon_min = State.lon_min
         # lon_max
-        if config.DIAG.lon_max is None:
+        if config.DIAG.lon_max is not None:
+            self.lon_max = config.DIAG.lon_max
+        elif config.GRID.lon_max is not None:
             self.lon_max = config.GRID.lon_max
         else:
-            self.lon_max = config.DIAG.lon_max
+            self.lon_max = State.lon_max
         # lat_min
-        if config.DIAG.lat_min is None:
+        if config.DIAG.lat_min is not None:
+            self.lat_min = config.DIAG.lat_min
+        elif config.GRID.lat_min is not None:
             self.lat_min = config.GRID.lat_min
         else:
-            self.lat_min = config.DIAG.lat_min
+            self.lat_min = State.lat_min
         # lat_max
-        if config.DIAG.lat_max is None:
+        if config.DIAG.lat_max is not None:
+            self.lat_max = config.DIAG.lat_max
+        elif config.GRID.lat_max is not None:
             self.lat_max = config.GRID.lat_max
         else:
-            self.lat_max = config.DIAG.lat_max
+            self.lat_max = State.lat_max
         # Stats parameters
         self.bin_lon_step = config.DIAG.bin_lon_step
         self.bin_lat_step = config.DIAG.bin_lat_step
@@ -839,26 +848,52 @@ class Diag_ose():
         delta_x = []
         for name_ref in config.DIAG.name_ref:
             try:
-                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal').load()
+                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
             except:
-                files = glob.glob(name_ref)
+                files = sorted(glob.glob(name_ref))
+
                 # Get time dimension to concatenate
-                _ds0 = xr.open_dataset(files[0])
-                name_time_dim = _ds0[self.name_ref_time].dims[0]
-                _ds0.close()
-                # Open nested files
-                _ref = xr.open_mfdataset(name_ref,combine='nested',concat_dim=name_time_dim,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal').load()
-            
+                with nc.Dataset(files[0]) as ds0:
+                    name_time_dim = ds0.variables['time'].dimensions[0]
+
+                # List to store datasets
+                datasets = []
+
+                for file in files:
+                    with nc.Dataset(file) as ds:
+                        # Extract variables
+                        name_var = [config.DIAG.name_ref_time, config.DIAG.name_ref_lon, config.DIAG.name_ref_lat, config.DIAG.name_ref_var]
+                        data = {var: ds.variables[var][:] for var in name_var}
+                        
+                        # Convert time to numpy.datetime64
+                        time_var = config.DIAG.name_ref_time
+                        time_data = nc.num2date(data[time_var], ds.variables[time_var].units)
+                        data[time_var] = np.array(time_data, dtype='datetime64[ns]')
+                        
+                        # Convert to xarray Dataset
+                        ds_xr = xr.Dataset({
+                            var: (ds.variables[var].dimensions, data[var]) for var in name_var
+                        })
+                        
+                        datasets.append(ds_xr)
+
+                # Concatenate along the time dimension
+                _ref = xr.concat(datasets, dim=name_time_dim, **config.DIAG.options_ref)
+                _ref = _ref.assign_coords({config.DIAG.name_ref_lon:_ref[config.DIAG.name_ref_lon],
+                                           config.DIAG.name_ref_lat:_ref[config.DIAG.name_ref_lat]})
+
+                # Copy and load the dataset
+                _ref = _ref.copy(deep=True).load()
+
+
             _ref = _ref.assign_coords({self.name_ref_time:_ref[self.name_ref_time]})
             _ref = _ref.swap_dims({_ref[self.name_ref_time].dims[0]:self.name_ref_time})
 
             if np.sign(_ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].data % 360))})
-                #_ref = _ref.sortby(self.name_ref_lon)
+                
             elif np.sign(_ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
                 _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, (_ref[self.name_ref_lon].data + 180) % 360 - 180))})
-                #_ref = _ref.sortby(self.name_ref_lon)
-
             try:
                 _ref = _ref.sel(
                     {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
@@ -883,8 +918,6 @@ class Diag_ose():
                                                                 _lat[:-1],
                                                                 _lon[1:],
                                                                 _lat[1:])))
-            print(_ref)
-
             # Add MDT to reference data
             if config.DIAG.add_mdt_to_ref:
                 finterpmdt = read_auxdata(config.DIAG.path_mdt,config.DIAG.name_var_mdt,State.lon_unit)
@@ -895,23 +928,39 @@ class Diag_ose():
             ref.append(_ref[self.name_ref_var])
 
             _ref.close()
+            del datasets, _ref
 
+        
         self.ref = ref
         self.delta_x = delta_x
 
-                                      
         # Experimental data
         self.geo_grid = State.geo_grid
         self.name_exp_time = config.EXP.name_time
         self.name_exp_lon = config.EXP.name_lon
         self.name_exp_lat = config.EXP.name_lat
         self.name_exp_var = config.DIAG.name_exp_var
-        exp = xr.open_mfdataset(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc',preprocess=lambda ds: ds[[self.name_exp_var]])[self.name_exp_var].load()
-        exp = exp.assign_coords({self.name_exp_lon:exp[self.name_exp_lon]})
+        exp_files = sorted(glob.glob(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc'))
+        exp_datasets = []
+        for file in exp_files:
+            with nc.Dataset(file) as ds:
+                exp_data = ds.variables[self.name_exp_var][:]
+                time_exp = ds.variables['time'][:]
+                time_exp = nc.num2date(time_exp, ds.variables['time'].units)
+                time_exp = np.array(time_exp, dtype='datetime64[ns]')
+                
+                ds_xr = xr.Dataset({
+                    self.name_exp_var: (ds.variables[self.name_exp_var].dimensions, exp_data)
+                }, coords={'time': time_exp,
+                           self.name_exp_lon: ds.variables[self.name_exp_lon][:], 
+                           self.name_exp_lat: ds.variables[self.name_exp_lat][:]})
+                exp_datasets.append(ds_xr)
+        exp = xr.concat(exp_datasets, dim='time')[self.name_exp_var]
+        exp = exp.copy(deep=True).load()
         dt = (exp[self.name_exp_time][1]-exp[self.name_exp_time][0]).values
         self.exp = exp.sel(
             {self.name_exp_time:slice(np.datetime64(self.time_min)-dt,np.datetime64(self.time_max)+dt)},
-             )
+             ).load()
         try:
             self.exp = self.exp.sel(
                 {self.name_exp_lon:slice(self.lon_min,self.lon_max),
@@ -926,6 +975,7 @@ That could be due to non regular grid or bad written netcdf file')
                                       (self.exp.lat<=self.lat_max)).compute(),
                                       drop=True)
         exp.close()
+        del exp
 
         # Baseline data
         self.compare_to_baseline = config.DIAG.compare_to_baseline 
@@ -934,7 +984,26 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lon = config.DIAG.name_bas_lon
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
-            bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var]
+            #bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var]
+            bas_files = sorted(glob.glob(config.DIAG.name_bas))
+            bas_datasets = []
+            for file in bas_files:
+                with nc.Dataset(file) as ds:
+                    bas_data = ds.variables[self.name_bas_var][:]
+                    time_bas = ds.variables['time'][:]
+                    time_bas = nc.num2date(time_bas, ds.variables['time'].units)
+                    time_bas = np.array(time_bas, dtype='datetime64[ns]')
+                    
+                    ds_xr = xr.Dataset({
+                        self.name_bas_var: (ds.variables[self.name_bas_var].dimensions, bas_data)
+                    }, coords={'time': time_bas,
+                               self.name_bas_lon: ds.variables[self.name_bas_lon][:], 
+                               self.name_bas_lat: ds.variables[self.name_bas_lat][:]
+                               })
+                    bas_datasets.append(ds_xr)
+            bas = xr.concat(bas_datasets, dim='time')[self.name_bas_var]
+            bas = bas.copy(deep=True).load()
+            
             bas = bas.transpose(self.name_bas_time, self.name_bas_lat, self.name_bas_lon)
             if np.sign(bas[self.name_bas_lon].data.min())==-1 and State.lon_unit=='0_360':
                 bas = bas.assign_coords({self.name_bas_lon:((bas[self.name_bas_lon].dims, bas[self.name_bas_lon].data % 360))})
@@ -943,16 +1012,17 @@ That could be due to non regular grid or bad written netcdf file')
             bas = bas.sortby(bas[self.name_bas_lon])
             self.bas = bas.sel(
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
-                )
+                ).copy().load()
             
             try:
                 self.bas = self.bas.sel(
                     {self.name_bas_lon:slice(self.lon_min,self.lon_max),
                     self.name_bas_lat:slice(self.lat_min,self.lat_max)}
-                ).load()
+                )
             except:
                 print('Warning: unable to select study region in the baseline fields.')
             bas.close()
+            del bas
             
         # Ratio of pannel size for plotting functions
         self.ratio_fig = (self.lat_max-self.lat_min)/(self.lon_max-self.lon_min)
@@ -965,6 +1035,7 @@ That could be due to non regular grid or bad written netcdf file')
                 self.exp[self.name_exp_lat].values, 
                 self.exp[self.name_exp_time].values, 
                 self.exp,
+                self.name_exp_time, self.name_exp_lat, self.name_exp_lon
                 )
         else:
             self.exp_regridded = self._regrid_unstructured(
@@ -981,15 +1052,16 @@ That could be due to non regular grid or bad written netcdf file')
                 self.bas[self.name_bas_lat].values, 
                 self.bas[self.name_bas_time].values, 
                 self.bas,
+                self.name_bas_time, self.name_bas_lat, self.name_bas_lon
                 )        
     
-    def _regrid_geo(self, lon, lat, time, var):
+    def _regrid_geo(self, lon, lat, time, var, name_time, name_lat, name_lon):
 
         # Define source grid
         x_source_axis = pyinterp.Axis(lon, is_circle=False)
         y_source_axis = pyinterp.Axis(lat)
         z_source_axis = pyinterp.TemporalAxis(time)
-        var_source = var.transpose(var.dims[2], var.dims[1], var.dims[0])
+        var_source = var.transpose(name_lon,name_lat,name_time) 
         grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var_source.data)
 
         exp_regridded = []
@@ -1626,14 +1698,14 @@ That could be due to non regular grid or bad written netcdf file')
                             np.ma.max(np.ma.masked_invalid(1./ds.wavenumber)),
                             color='b',
                             alpha=0.3, 
-                            label=f'experiment: $\lambda$ > {int(res_exp)}km')
+                            label=f'experiment: λ > {int(res_exp)}km')
             if self.compare_to_baseline:
                 ax.fill_betweenx((1. - ds.psd_diff_bas/ds.psd_ref), 
                             res_bas, 
                             np.ma.max(np.ma.masked_invalid(1./ds.wavenumber)),
                             color='r',
                             alpha=0.3, 
-                            label=f'baseline: $\lambda$ > {int(res_bas)}km')
+                            label=f'baseline: λ > {int(res_bas)}km')
             ax.set_ylim(0,1)
             plt.legend(loc='best', title="resolved scales")
             plt.grid(which='both')

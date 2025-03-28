@@ -441,11 +441,16 @@ class Obsop_interp_l3_jax(Obsop_interp):
             data = D * 0.
 
         # Extract valid indices
-        row, col = np.where(valid_mask)
-        data = weights[row, col]
-        indices = jnp.array([row, ind_closest[row, col]])
-
-        return jnp.array(data), indices
+        try:
+            row, col = np.where(valid_mask)
+            data = weights[row, col]
+            indices = jnp.array([row, ind_closest[row, col]])
+            data = jnp.array(data)
+        except:
+            data = jnp.array([])
+            indices = jnp.array([])
+            
+        return data, indices
     
     def explicit_proj_operation(self, data, indices, X, n_obs):
         """

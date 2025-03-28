@@ -367,8 +367,6 @@ class Model_diffusion(M):
 
     def step(self,State,nstep=1,t=None):
 
-        Id_mod = False
-
         # Loop on model variables
         for name in self.name_var:
 
@@ -388,21 +386,14 @@ class Model_diffusion(M):
             # Update state
             if self.name_var[name] in State.params:
                 params = State.params[self.name_var[name]]
-                if Id_mod :
-                    var1 = (1-self.Wbc)*nstep*self.dt/(3600*24) * params
-                else:
-                    var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
-
-            if self.SIC_mod :  
-                var1[var1>0.01] = 0.
-                #var1[var1<0] = 0 
+                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
 
             State.setvar(var1, self.name_var[name])
         
 
 
     def step_tgl(self,dState,State,nstep=1,t=None):
-        Id_mod = False
+
         # Loop on model variables
         for name in self.name_var:
 
@@ -423,20 +414,11 @@ class Model_diffusion(M):
             # Update state
             if self.name_var[name] in dState.params:
                 params = dState.params[self.name_var[name]]
-                if Id_mod :
-                    var1 = (1-self.Wbc)*nstep*self.dt/(3600*24) * params
-                else:
-                    var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
-
-            if self.SIC_mod : 
-                var1[var1>0.01] = 0
-            #    #var1[var1<0] = 0
+                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
 
             dState.setvar(var1,self.name_var[name])
         
     def step_adj(self,adState,State,nstep=1,t=None):
-
-        Id_mod = False
 
         # Loop on model variables
         for name in self.name_var:
@@ -444,11 +426,6 @@ class Model_diffusion(M):
             # Get state variable
             advar0 = adState.getvar(self.name_var[name])
 
-            if self.SIC_mod :  
-                var0 = State.getvar(self.name_var[name])
-                advar0[var0>0.01] = 0
-                #advar1[advar1<0] = 0
-            
             # Init
             advar1 = +advar0
             
@@ -469,12 +446,10 @@ class Model_diffusion(M):
 
             # Update state and parameters
             if self.name_var[name] in State.params:
-                    adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0 
+                adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0 
+            
             advar1[np.isnan(advar1)] = 0
-            if Id_mod :
-                adState.setvar(advar1*0,self.name_var[name])
-            else:
-                adState.setvar(advar1,self.name_var[name])
+            adState.setvar(advar1,self.name_var[name])
 
 class Model_diffusion_jax(Model_diffusion):
     def __init__(self,config,State):
@@ -916,6 +891,30 @@ class Model_qg1l_jax(M):
 
         else:
             self.mdt = None
+        
+        # CFL
+        if config.MOD.cfl is not None:
+            grid_spacing = min(np.nanmean(State.DX), np.nanmean(State.DY)) 
+            dt = config.MOD.cfl * grid_spacing / np.nanmean(self.c)
+            divisors = [i for i in range(1, 3600 + 1) if 3600 % i == 0]  # Find all divisors of one hour in seconds
+            lower_divisors = [d for d in divisors if d <= dt]
+            self.dt = max(lower_divisors)  # Get closest
+            print('CFL condition for c=', np.nanmean(self.c))
+            print('Model time-step', self.dt)
+            # Time parameters
+            if self.dt>0:
+                self.nt = 1 + int((config.EXP.final_date - config.EXP.init_date).total_seconds()//self.dt)
+                self.timestamps = [] 
+                t = config.EXP.init_date
+                while t<=config.EXP.final_date:
+                    self.timestamps.append(t)
+                    t += timedelta(seconds=self.dt)
+                self.timestamps = np.asarray(self.timestamps)
+            else:
+                self.nt = 1
+                self.timestamps = np.array([config.EXP.init_date])
+            self.T = np.arange(self.nt) * self.dt
+
             
         # Initialize model state
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
@@ -982,7 +981,7 @@ class Model_qg1l_jax(M):
 
        # Masked array for model initialization
         SSH0 = State.getvar(name_var=self.name_var['SSH'])
-            
+    
         # Model initialization
         self.qgm = model(dx=State.DX,
                          dy=State.DY,
@@ -1069,8 +1068,9 @@ class Model_qg1l_jax(M):
                         self.forcing[_name_var_mod][t] = var_bc[_name_var_bc][i]
         
         # For step_jax
-        self.bc_time = jnp.array(list(self.bc['SSH'].keys()))
-        self.bc_values = {}
+        self.bc_time_jax = jnp.array(list(self.bc['SSH'].keys()))
+        self.bc_time = np.array(list(self.bc['SSH'].keys()))
+        self.bc_values = {t: jnp.array(self.bc['SSH'][t]) for t in self.bc['SSH']}
         for name in var_bc:
             self.bc_values[name] = jnp.array(list(self.bc['SSH'].values()))
 
@@ -1086,18 +1086,17 @@ class Model_qg1l_jax(M):
     def _apply_bc(self,t0,t1):
         
         Xb = jnp.zeros((self.ny,self.nx,))
-
+        
         if 'SSH' not in self.bc:
             return Xb
         elif len(self.bc['SSH'].keys())==0:
              return Xb
-        elif t0 not in self.bc['SSH']:
+        elif t0 not in self.bc_time:
             # Find closest time
-            t_list = np.array(list(self.bc['SSH'].keys()))
-            idx_closest = np.argmin(np.abs(t_list-t0))
-            t0 = t_list[idx_closest]
+            idx_closest = np.argmin(np.abs(self.bc_time-t0))
+            t0 = self.bc_time[idx_closest]
 
-        Xb = self.bc['SSH'][t0]
+        Xb = self.bc_values[t0]
 
         if self.advect_tracer:
             Xb = Xb[np.newaxis,:,:]
@@ -1119,13 +1118,13 @@ class Model_qg1l_jax(M):
 
         Xb = jnp.zeros((self.ny,self.nx,))
 
-        idt = jnp.where(self.bc_time==t, size=1)[0]
+        idt = jnp.where(self.bc_time_jax==t, size=1)[0]
         Xb = self.bc_values['SSH'][idt][0]
 
         if self.advect_tracer:
             for name in self.name_var:
                 if name!='SSH':
-                    idt = jnp.where(self.bc_time==t1, size=1)[0]
+                    idt = jnp.where(self.bc_time_jax==t1, size=1)[0]
                     Cb = self.bc_values[name][idt][0]
                     Xb = jnp.append(Xb[jnp.newaxis,:,:], 
                                     Cb[jnp.newaxis,:,:], axis=0)     
@@ -1156,18 +1155,18 @@ class Model_qg1l_jax(M):
                     X0 = np.append(X0, C0, axis=0)
         
         # init
-        X1 = +X0.astype('float64')
+        X1 = +X0#.astype('float64')
 
         # Time propagation
         X1 = self.qgm_step(X1,Xb,nstep=nstep)
         t1 = t + nstep*self.dt
 
         # Convert to numpy array
-        X1 = np.array(X1).astype('float64')
+        #X1 = np.array(X1).astype('float64')
         
         # Update state
         if self.name_var['SSH'] in State.params:
-            Fssh = State.params[self.name_var['SSH']].astype('float64') # Forcing term for SSH
+            Fssh = State.params[self.name_var['SSH']]#.astype('float64') # Forcing term for SSH
             if self.advect_tracer:
                 X1[0] += nstep*self.dt/(3600*24) * Fssh 
                 State.setvar(X1[0], name_var=self.name_var['SSH'])
@@ -1306,8 +1305,8 @@ class Model_qg1l_jax(M):
         Xb = self._apply_bc(t,int(t+nstep*self.dt))
 
         # Get state variable
-        adSSH0 = adState.getvar(name_var=self.name_var['SSH']).astype('float64')
-        SSH0 = State.getvar(name_var=self.name_var['SSH']).astype('float64')
+        adSSH0 = adState.getvar(name_var=self.name_var['SSH'])#.astype('float64')
+        SSH0 = State.getvar(name_var=self.name_var['SSH'])#.astype('float64')
         if self.advect_tracer:
             adX0 = adSSH0[np.newaxis,:,:].astype('float64')
             X0 = SSH0[np.newaxis,:,:].astype('float64')
@@ -1340,13 +1339,13 @@ class Model_qg1l_jax(M):
         adX1 = self.qgm_step_adj(adX1,X1,Xb,nstep=nstep)
 
         # Convert to numpy and reshape
-        adX1 = np.array(adX1).squeeze().astype('float64')
+        #adX1 = np.array(adX1).squeeze().astype('float64')
 
         # Update state and parameters
         if self.name_var['SSH'] in adState.params:
             for i,name in enumerate(self.name_var):
                 adparams = nstep*self.dt/(3600*24) *\
-                    adState.getvar(name_var=self.name_var[name]).astype('float64') 
+                    adState.getvar(name_var=self.name_var[name])#.astype('float64') 
                 if name!='SSH':
                     adparams *= (1-self.Wbc)
                     if self.forcing_tracer_from_bc:
@@ -2833,8 +2832,8 @@ class Model_multi:
 
         # Intialization
         var_tot_tmp = {}
-        for name in self.name_var:
-            var_tot_tmp[name] = np.zeros_like(State.var[self.name_var[name]]) 
+        #for name in self.name_var:
+        #    var_tot_tmp[name] = jnp.zeros_like(State.var[self.name_var[name]]) 
         
         # Loop over models
         for M in self.Models:
@@ -2844,7 +2843,10 @@ class Model_multi:
             # Add to total variables
             for name in self.name_var:
                 if name in M.name_var:
-                    var_tot_tmp[name] += State.var[M.name_var[name]]
+                    if name in var_tot_tmp:
+                        var_tot_tmp[name] += +State.var[M.name_var[name]]
+                    else:
+                        var_tot_tmp[name] = +State.var[M.name_var[name]]
         
         # Update state
         for name in self.name_var:

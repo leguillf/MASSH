@@ -884,7 +884,7 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
     # Restart mode
     maxiter = config.INV.maxiter
     if config.INV.restart_4Dvar:
-        tmp_files = sorted(glob.glob(os.path.join(path_save_control_vectors,'X_it-*.nc')))
+        tmp_files = sorted(glob.glob(os.path.join(path_save_control_vectors,'X_it*.nc')))
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
             try:
@@ -905,13 +905,18 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         # Minimization    #
         ###################
 
+        # Main function
+        if config.INV.flag_full_jax:
+            from jax import jit, value_and_grad
+            fun = jit(value_and_grad(var.cost))
+        else:
+            fun = var.cost_and_grad
+
         # Callback function called at every minimization iterations
         def callback(XX):
             if config.INV.save_minimization:
-                now = datetime.now()
-                current_time = now.strftime("%Y-%m-%d_%H%M%S")
                 ds = xr.Dataset({'res':(('x',),XX)})
-                ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it-'+current_time+'.nc'))
+                ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it.nc'))
                 ds.close()
                 
         # Minimization options
@@ -926,38 +931,56 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
             options['ftol'] = config.INV.ftol
 
         if config.INV.gtol is not None:
-            _ = var.cost(Xopt*0)
-            g0 = var.grad(Xopt*0)
+            _, g0 = fun(Xopt*0.)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
         
-            
         # Run minimization 
         from decimal import Decimal
         import time
-        if config.INV.flag_full_jax:
-            from jax import jit, value_and_grad
-            fun = jit(value_and_grad(var.cost))
-        else:
-            fun = var.cost_and_grad
-
         class Wrapper:
             def __init__(self):
-                self.cache = {}
+                J0, G0 = fun(Xopt)
+                self.cache = {
+                    'cost':J0,
+                    'grad':G0
+                }
+                self.J_list = []
+                self.G_list = []
                 self.time = time.time()
+                self.it = 1
+                if 'gtol' in options:
+                    self.gtol = options['gtol']
+                else:
+                    self.gtol = None
+                self.filename_out = os.path.join(path_save_control_vectors, 'iterations.txt')
+                with open(self.filename_out, "w") as f:
+                    f.write("Minimization\n")  # Header
+                
 
             def __call__(self, x, *args):
                 cost, grad = fun(x)
-                Jb = float(x.dot(x))
-                Jo = float(2*cost-Jb)
+                ftol = (cost - self.cache['cost']) / max(cost, self.cache['cost'], 1)
+                mean_grad = np.mean(np.abs(grad))
+                mean_grad_previous = np.mean(np.abs(self.cache['grad']))
+                gtol = (mean_grad - mean_grad_previous) / max(mean_grad, mean_grad_previous, 1)
+                self.cache['cost'] = cost
                 self.cache['grad'] = grad
                 time0 = time.time()
-                print("computed in %.2E second:" % (time0 - self.time), 'x=%.2E' % Decimal(float(x.mean())), 'Jo=%.2E' % Decimal(Jo), 'Jb=%.2E' % Decimal(Jb), 'Jb/Jo=%.2E' % Decimal(Jb/Jo))
+                text = "computed in %.2E second:" % (time0 - self.time) + ', x=%.2E' % Decimal(float(x.mean()))  + ', J=%.2E' % Decimal(float(cost)) + ', G=%.2E' % Decimal(float(mean_grad))  + ', ftol=%.2E' % Decimal(abs(float(ftol)))  + ', gtol=%.2E' % Decimal(abs(float(gtol))) 
+                print(f"* iteration {self.it}", text)
+                with open(self.filename_out, "a") as f:
+                    f.write(f"iteration {self.it}, {text}\n")
                 self.time = time0
+                self.it += 1
+
+                self.J_list.append(float(cost))
+                self.G_list.append(float(mean_grad))
+
                 return cost
 
             def jac(self, x, *args):
-                return self.cache.pop('grad')
+                return self.cache['grad']
         
         wrapper = Wrapper()
         res = opt.minimize(wrapper, Xopt,
@@ -973,7 +996,9 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         
         # Save minimization trajectory
         if config.INV.save_minimization:
-            ds = xr.Dataset({'cost':(('j'),var.J),'grad':(('g'),var.G)})
+            ds = xr.Dataset({'cost':(('i'),np.array(wrapper.J_list)),
+                             'grad':(('i'),np.array(wrapper.G_list))
+                             })
             ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
             ds.close()
 
@@ -999,8 +1024,10 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
 
     # Init
     State0 = State.copy()
+    Model.init(State0)
     date = config.EXP.init_date
-    Model.save_output(State0,date,name_var=Model.var_to_save,t=0) 
+    Model.save_output(State0, date, name_var=Model.var_to_save,t=0) 
+    State0.plot(date)
     
     nstep = min(nstep_check, int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt))
     # Forward propagation
@@ -1022,7 +1049,7 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
             & (date>=config.EXP.init_date) & (date<=config.EXP.final_date) :
             Model.save_output(State0,date,name_var=Model.var_to_save,t=t) 
     
-        State0.plot(date)
+            State0.plot(date)
         
     del State, State0, Xa, dict_obs, B, R, Model, Basis, var, Xopt, Xres, checkpoints, time_checkpoints, t_checkpoints
     gc.collect()

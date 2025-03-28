@@ -65,7 +65,7 @@ class Bc_ext:
         dlat = np.nanmean(self.lat[1:,:]-self.lat[:-1,:])
 
         # Read netcdf
-        _ds = xr.open_mfdataset(config.BC.file)
+        _ds = xr.open_mfdataset(config.BC.file).copy()
 
         # Convert longitude 
         if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':

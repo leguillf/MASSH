@@ -1159,12 +1159,12 @@ class Basis_gauss3d:
                 std_tmp_values = sad.interp({self.name_var_sad['lon']:elon2.ravel(), 
                                             self.name_var_sad['lat']:elat2.ravel()}).values
                 std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10
-                Q_tmp = (std_tmp * self.fcor / (self.facns*self.facnlt))**.5 
+                Q_tmp = std_tmp / ((self.facns*self.facnlt))**.5 
                 Q.append(Q_tmp) 
             # Repeat for all time centers
             Q = np.tile(Q, len(self.ENST))
         else:
-            Q = (self.fcor * self.sigma_Q**2 / (self.facns*self.facnlt))**.5   * np.ones((self.nbasis))
+            Q = self.sigma_Q / ((self.facns*self.facnlt))**.5   * np.ones((self.nbasis))
         
         print(f'lambda={self.sigma_D:.1E}',
             f'nlocs={ENSLAT.size:.1E}',
@@ -1679,6 +1679,9 @@ class Basis_bmaux:
 
                     Q_tmp *= facQ  # Multiply after NaN check
 
+                    # Normalization for taking account of the densification
+                    #Q_tmp /= (self.facns**2 * self.facnlt)**.5
+
                     # Store Q_tmp values in list for later concatenation
                     Qf_list.append(Q_tmp * np.ones(2 * ntheta))
                     _nwavef += 2 * ntheta
@@ -2076,7 +2079,7 @@ class Basis_bmaux_jax(Basis_bmaux):
         """
 
         if adState[self.name_mod_var] is None:
-            adState[self.name_mod_var] = np.zeros((self.nphys,))
+            adState[self.name_mod_var] = jnp.zeros((self.nphys,))
         adparams = adState[self.name_mod_var]
         adX = self._operg_reduced_jit(t, adparams)
         
