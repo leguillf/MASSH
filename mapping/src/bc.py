@@ -149,6 +149,9 @@ class Bc_ext:
                                             bounds_error=False).reshape(x_target.shape).T
                 for t in range(len(time)):
                     _var_interp[t][self.mask] = np.nan
+                    if time[t]>self.time_bc[-1]:
+                        ind_t = np.argmin(np.abs(time-self.time_bc[-1]))
+                        _var_interp[t] = _var_interp[ind_t]
             else:
                 grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, self.var[name].T)
                 _var_interp = pyinterp.bivariate(grid_source,

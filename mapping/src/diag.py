@@ -928,7 +928,7 @@ class Diag_ose():
             ref.append(_ref[self.name_ref_var])
 
             _ref.close()
-            del datasets, _ref
+            del _ref
 
         
         self.ref = ref

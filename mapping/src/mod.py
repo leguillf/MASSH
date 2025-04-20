@@ -1012,6 +1012,9 @@ class Model_qg1l_jax(M):
 
         self.step_jax_jit = jit(self.step_jax, static_argnums=[3])
 
+        # Test model
+        self.qgm_step(jnp.zeros((self.qgm.ny,self.qgm.nx)),jnp.zeros((self.qgm.ny,self.qgm.nx)),nstep=10)
+
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
