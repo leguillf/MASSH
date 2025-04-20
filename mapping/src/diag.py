@@ -36,7 +36,6 @@ def Diag(config,State):
     
     print(config.DIAG)
 
-
     if config.DIAG.super=='DIAG_OSSE':
         return Diag_osse(config,State)
     if config.DIAG.super=='DIAG_OSSE_UV':

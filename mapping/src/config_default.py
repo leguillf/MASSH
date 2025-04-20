@@ -319,6 +319,8 @@ MOD_QG1L_NP = dict(
 
 MOD_QG1L_JAX = dict(
 
+    name_class = 'Qgm', # Name of the model class in jqgm.py
+
     name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc. and/or ageostrophic velocities U, V)
 
     name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
@@ -347,6 +349,8 @@ MOD_QG1L_JAX = dict(
 
     cmax = None, # Maximum value of phase velocity to consider
 
+    solver = 'spectral', # Solver for Elliptical Equation inversion (either spectral or cg - for Conjugate Gradient)
+
     init_from_bc = False, # Whether or not to initialize the model with boundary fields.
 
     dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
@@ -359,13 +363,22 @@ MOD_QG1L_JAX = dict(
 
     forcing_tracer_from_bc = False, # Whether to use BC fields to force tracer advection,
 
-    split_in_bins = False, # Whether to split the spatial domain in bins, each of them being associated with constant c & f
+    constant_c = True,
 
-    lenght_bins = 1000, # Length of one spatial bin (in km). 
+    constant_f = True,
 
-    facbin = 1
+    f0 = None,
+
+    tile_size = 32, # Only for name_class=='QgmWithTiles'
+            
+    tile_overlap = 16,  # Only for name_class=='QgmWithTiles'
+
+    path_mdt = None, # path of MDT 
+
+    name_var_mdt = None, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
 
 )
+
 
 
 MOD_QG1L_JAX_FULL = dict(
@@ -637,6 +650,21 @@ OBSOP_INTERP_L4 = dict(
 #################################################################################################################################
 NAME_INV = None
 
+# Forward Integration
+INV_FORWARD = dict(
+
+    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
+
+    anomaly_from_bc = False, # Whether to perform the minimization with anomalies from boundary condition field(s)
+
+    sigma_R = None, # Observational standard deviation
+
+    sigma_B = None,
+    
+    prec = False, # preconditoning
+
+)
+
 # Optimal Interpolation
 INV_OI = dict(
 
@@ -694,6 +722,8 @@ INV_4DVAR = dict(
 
     ftol = None, # Cost function value must be less than ftol before successful termination.
 
+    n_consecutive = None, # Number of consecutive iterations over which ftol should be fulfilled
+
     maxiter = 10, # Maximal number of iterations for the minimization process
 
     opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
@@ -729,8 +759,6 @@ INV_4DVAR = dict(
     only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
 
     anomaly_from_bc = False, # Whether to perform the minimization with anomalies from boundary condition field(s)
-
-    cost_function_coeff = 1, #coefficient multiplying the cost function (for testing)
 
     save_rmse = False, # if True RMSE w. reference field will be computed at each iteration and saved in the tmp_DA_path path. Useful for OSSE development framework. 
 
@@ -1010,6 +1038,8 @@ BASIS_GAUSS3D = dict(
 
     flux = False,
 
+    time_dependant = True, # True if gaussian basis is time dependant
+
     facns = 2., # Factor for gaussian spacing in space
 
     facnlt = 1., # Factor for gaussian spacing in time
@@ -1039,6 +1069,8 @@ BASIS_GAUSS3D_JAX = dict(
     name_mod_var = '', # Name of the related model variable 
 
     flux = False,
+
+    time_dependant = True, # True if gaussian basis is time dependant
 
     facns = 2., # Factor for gaussian spacing in space
 
@@ -1153,10 +1185,6 @@ BASIS_BMaux = dict(
     flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
     facns = 1., #factor for wavelet spacing in space 
-    
-    facns_ss = 1., #factor for wavelet spacing in space for large scales
-
-    facns_ls = 1., #factor for wavelet spacing in space for small scales
 
     facnlt = 2., #factor for wavelet spacing in time
 
@@ -1170,8 +1198,6 @@ BASIS_BMaux = dict(
 
     lmax = 970., # maximal wavelength (in km)
 
-    lc = None, # cutoff wavelength (in km) for defining small/large scales
-
     factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
 
     tdecmin = 2.5, # minimum time of decorrelation 
@@ -1179,10 +1205,6 @@ BASIS_BMaux = dict(
     tdecmax = 40., # maximum time of decorrelation 
 
     facQ = 1, # factor to be multiplied to the estimated Q
-
-    facQ_ss = 1., # factor to be multiplied to the estimated Q for large scales
-
-    facQ_ls = 1., # factor to be multiplied to the estimated Q for small scales
 
     file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
 
@@ -1196,7 +1218,7 @@ BASIS_BMaux = dict(
 
     var_background = None, # name of the variable of the basis vector
 
-    norm_time = True
+    norm_time = True,
 
 )
 
@@ -1207,10 +1229,6 @@ BASIS_BMaux_JAX = dict(
     flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
     facns = 1., #factor for wavelet spacing in space 
-    
-    facns_ss = 1., #factor for wavelet spacing in space for large scales
-
-    facns_ls = 1., #factor for wavelet spacing in space for small scales
 
     facnlt = 2., #factor for wavelet spacing in time
 
@@ -1224,8 +1242,6 @@ BASIS_BMaux_JAX = dict(
 
     lmax = 970., # maximal wavelength (in km)
 
-    lc = None, # cutoff wavelength (in km) for defining small/large scales
-
     factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
 
     tdecmin = 2.5, # minimum time of decorrelation 
@@ -1233,10 +1249,6 @@ BASIS_BMaux_JAX = dict(
     tdecmax = 40., # maximum time of decorrelation 
 
     facQ = 1, # factor to be multiplied to the estimated Q
-
-    facQ_ss = 1., # factor to be multiplied to the estimated Q for large scales
-
-    facQ_ls = 1., # factor to be multiplied to the estimated Q for small scales
 
     file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
 
@@ -1321,7 +1333,7 @@ BASIS_IT = dict(
 
     T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
 
-    w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
+    Nwaves = 1, # Number of tidal frequencies modes 
 
     Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
 
@@ -1349,7 +1361,13 @@ BASIS_HBC = dict(
 
     ### COMMON PARAMETER ### 
 
-    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+    # facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    facns = 3.5, # factor for gaussian spacing in space
+
+    facnlt = 2.5, # factor for gaussian spacing in time 
+
+    time_dependant = True, # True if gaussian basis is time dependant
 
     ### - HBC PARAMETER ### 
 

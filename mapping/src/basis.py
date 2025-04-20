@@ -25,6 +25,8 @@ from jax.lax import scan
 jax.config.update("jax_enable_x64", True)
 import pyinterp
 
+from jax import debug
+
 import matplotlib.pylab as plt
 
 import datetime 
@@ -58,9 +60,6 @@ def Basis(config, State, verbose=True, *args, **kwargs):
 
         elif config.BASIS.super=='BASIS_GEOCUR':
             return Basis_geocur(config,State)
-
-        elif config.BASIS.super=='BASIS_GAUSS3D':
-            return Basis_gauss3d_jax(config,State)
 
         elif config.BASIS.super=='BASIS_GAUSS3D':
             return Basis_gauss3d(config,State)
@@ -1294,6 +1293,9 @@ class Basis_gauss3d:
         else:
             self.window = mywindow
 
+        # Time dependancy 
+        self.time_dependant = config.BASIS.time_dependant 
+
         # For time normalization
         if self.normalize_fact:
             tt = np.linspace(-self.sigma_T,self.sigma_T)
@@ -1337,13 +1339,21 @@ class Basis_gauss3d:
         self.ENSLON = ENSLON
         
         # Coordinates in time
-        ENST = np.arange(-self.sigma_T*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.sigma_T/self.facnlt , self.sigma_T/self.facnlt)
-        self.ENST = ENST
-    
-        self.nbasis = ENST.size * ENSLAT.size
+        if self.time_dependant : 
+            ENST = np.arange(-self.sigma_T*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.sigma_T/self.facnlt , self.sigma_T/self.facnlt)
+            self.ENST = ENST
+
+        # BASIS PROPERTIES 
+        if self.time_dependant:
+            self.nbasis = ENST.size * ENSLAT.size
+            self.shape_basis = [ENST.size,ENSLAT.size]
+        else : 
+            self.nbasis = ENSLAT.size
+            self.shape_basis = [ENSLAT.size]
+        # PARAMETER PROPERTIES 
         self.nphys = self.lon1d.size
         self.shape_phys = [self.ny, self.nx]
-        self.shape_basis = [ENST.size,ENSLAT.size]
+        
         
         # Fill Q matrix
         if self.flag_variable_Q:
@@ -1357,7 +1367,8 @@ class Basis_gauss3d:
             sad = sad.sortby(sad[self.name_var_sad['lon']])    
             grid = pyinterp.Grid2D(pyinterp.Axis(sad[self.name_var_sad['lon']], is_circle=False), pyinterp.Axis(sad[self.name_var_sad['lat']]), sad.T)  # Note: Transpose required
             i = 0
-            for _ in range(len(self.ENST)):
+            range_ENST = len(self.ENST) if self.time_dependant else 1
+            for _ in range(range_ENST):
                 for (lon,lat) in zip(ENSLON,ENSLAT):
                     indphys = np.where(
                             (np.abs((np.mod(self.lon1d - lon+180,360)-180) / self.km2deg * np.cos(lat * np.pi / 180.)) <= self.sigma_D) &
@@ -1374,23 +1385,31 @@ class Basis_gauss3d:
                     Q[i] = Q_tmp 
                     i += 1
         else:
-            Q = (self.fcor * self.sigma_Q**2 / (self.facns*self.facnlt))**.5   * np.ones((self.nbasis))
+            if self.time_dependant :
+                Q = (self.fcor * self.sigma_Q**2 / (self.facns*self.facnlt))**.5   * np.ones((self.nbasis))
+            else : # not normalizing by self.facnlt 
+                Q = (self.fcor * self.sigma_Q**2 / (self.facns))**.5   * np.ones((self.nbasis))
         
+        size_ENST = ENST.size if self.time_dependant else 0
         print(f'lambda={self.sigma_D:.1E}',
             f'nlocs={ENSLAT.size:.1E}',
             f'tdec={self.sigma_T:.1E}',
-            f'ntime={ENST.size:.1E}',
+            f'ntime={size_ENST:.1E}',
             f'Q={np.mean(Q):.1E}')
         
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
 
         # Compute basis components
+        # In space 
         Gauss_xy = self._compute_component_space()
-        Gauss_t, Nt = self._compute_component_time(time)
         self.Gauss_xy = Gauss_xy
-        self.Gauss_t = Gauss_t
-        self.Nt = Nt
         self.Nx = ENSLAT.size
+        # In time 
+        if self.time_dependant:
+            Gauss_t, Nt = self._compute_component_time(time)
+            self.Gauss_t = Gauss_t
+            self.Nt = Nt
+        
 
         if return_q:
             return np.zeros_like(Q), Q
@@ -1454,11 +1473,15 @@ class Basis_gauss3d:
         """
         
         phi = np.zeros(self.nphys)
-        GtX = self.Gauss_t[t] * X
-        ind0 = np.nonzero(self.Gauss_t[t])[0]
-        if ind0.size>0:
-            GtX = GtX[ind0].reshape(self.Nt[t],self.Nx)
-            phi += self.Gauss_xy.dot(GtX.sum(axis=0))
+        if self.time_dependant:
+            GtX = self.Gauss_t[t] * X
+            ind0 = np.nonzero(self.Gauss_t[t])[0]
+            if ind0.size>0:
+                GtX = GtX[ind0].reshape(self.Nt[t],self.Nx)
+                phi += self.Gauss_xy.dot(GtX.sum(axis=0))
+        else: 
+            phi = self.Gauss_xy.dot(X)
+
         phi = phi.reshape(self.shape_phys)
     
         if State is not None:
@@ -1477,13 +1500,18 @@ class Basis_gauss3d:
 
         adX = np.zeros(self.nbasis)
         adparams = adState.params[self.name_mod_var].ravel()
-        Gt = self.Gauss_t[t]
-        ind0 = np.nonzero(Gt)[0]
-        if ind0.size>0:
-            Gt = Gt[ind0].reshape(self.Nt[t],self.Nx)
-            adGtX = self.Gauss_xy.T.dot(adparams)
-            adGtX = np.repeat(adGtX[np.newaxis,:],self.Nt[t],axis=0)
-            adX[ind0] += (Gt*adGtX).ravel()
+
+        if self.time_dependant:
+            Gt = self.Gauss_t[t]
+            ind0 = np.nonzero(Gt)[0]
+            if ind0.size>0:
+                Gt = Gt[ind0].reshape(self.Nt[t],self.Nx)
+                adGtX = self.Gauss_xy.T.dot(adparams)
+                adGtX = np.repeat(adGtX[np.newaxis,:],self.Nt[t],axis=0)
+                adX[ind0] += (Gt*adGtX).ravel()
+        
+        else : 
+            adX += self.Gauss_xy.T.dot(adparams)
 
         adState.params[self.name_mod_var] *= 0.
 
@@ -1558,13 +1586,20 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         # Initialize phi
         phi = jnp.zeros(self.nphys)
 
-        # Get Gt value
-        Gt = self.get_Gt_value(t)
-        GtX = Gt * X
+        if self.time_dependant:
 
-        reshaped_GtX = GtX.reshape((-1, self.Nx))
+            # Get Gt value
+            Gt = self.get_Gt_value(t)
+            GtX = Gt * X
 
-        phi += self.Gauss_xy @ (reshaped_GtX.sum(axis=0))
+            reshaped_GtX = GtX.reshape((-1, self.Nx))
+
+            phi += self.Gauss_xy @ (reshaped_GtX.sum(axis=0))
+
+        else : 
+
+            phi += self.Gauss_xy @ X
+
         
         phi = phi.reshape(self.shape_phys)
         
@@ -1626,7 +1661,7 @@ class Basis_gauss3d_jax(Basis_gauss3d):
 
 class Basis_bmaux:
    
-    def __init__(self,config,State):
+    def __init__(self,config,State,multi_mode=False):
 
         self.km2deg=1./110
         
@@ -1694,6 +1729,8 @@ class Basis_bmaux:
             self.window = mywindow_flux
         else:
             self.window = mywindow
+        
+        self.multi_mode = multi_mode
 
     def set_basis(self,time,return_q=False,**kwargs):
 
@@ -2048,7 +2085,10 @@ class Basis_bmaux:
 
         # Update State
         if State is not None:
-            State.params[self.name_mod_var] = phi
+            if not self.multi_mode:
+                State[self.name_mod_var] = phi
+            else:
+                State[self.name_mod_var] += phi
         else:
             return phi
 
@@ -2058,11 +2098,11 @@ class Basis_bmaux:
             Project to reduced space
         """
 
-        if adState.params[self.name_mod_var] is None:
-            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+        if adState[self.name_mod_var] is None:
+            adState[self.name_mod_var] = np.zeros((self.nphys,))
 
         adX = np.zeros(self.nbasis)
-        adparams = adState.params[self.name_mod_var].ravel()
+        adparams = adState[self.name_mod_var].ravel()
         for iff in range(self.nf):
             Gt = +self.Gt[t][iff]
             indNoNan = ~np.isnan(self.Gt[t][iff])
@@ -2072,14 +2112,15 @@ class Basis_bmaux:
                 adGtXf = np.repeat(adGtXf[np.newaxis,:],self.Nt[t][iff],axis=0)
                 adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][indNoNan] += (Gt*adGtXf).ravel()
         
-        adState.params[self.name_mod_var] *= 0.
+        if not self.multi_mode:
+            adState[self.name_mod_var] *= 0.
         
         return adX
 
 class Basis_bmaux_jax(Basis_bmaux):
 
-    def __init__(self,config, State):
-        super().__init__(config, State)
+    def __init__(self,config, State, multi_mode=False):
+        super().__init__(config, State,multi_mode=multi_mode)
 
         # JIT 
         self._operg_jit = jit(self._operg)
@@ -2258,7 +2299,12 @@ class Basis_bmaux_jax(Basis_bmaux):
 
         # Update State
         if State is not None:
-            State.params[self.name_mod_var] = phi
+            if not self.multi_mode:
+                # State[self.name_mod_var] = phi
+                State.params[self.name_mod_var] = phi
+            else:
+                # State[self.name_mod_var] += phi
+                State.params[self.name_mod_var] += phi
         else:
             return phi
         
@@ -2268,12 +2314,19 @@ class Basis_bmaux_jax(Basis_bmaux):
             Project to reduced space
         """
 
+        # if adState[self.name_mod_var] is None:
         if adState.params[self.name_mod_var] is None:
+            # adState[self.name_mod_var] = np.zeros((self.nphys,))
             adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+        # adparams = adState[self.name_mod_var]
         adparams = adState.params[self.name_mod_var]
+        
         adX = self._operg_reduced_jit(t, adparams)
         
-        adState.params[self.name_mod_var] *= 0.
+        if not self.multi_mode:
+            # adState[self.name_mod_var] *= 0.
+            adState.params[self.name_mod_var] *= 0.
+
         
         return adX
 
@@ -2494,8 +2547,9 @@ class Basis_it:
         self.facnlt = config.BASIS.facgauss # Factor for gaussian spacing in time
 
         # Tidal frequencies 
-        self.Nwaves = len(config.BASIS.w_waves) # Number
-        self.omegas = np.asarray(config.BASIS.w_waves) # List of frequencies 
+        # self.Nwaves = len(config.BASIS.w_waves) # Number
+        # self.omegas = np.asarray(config.BASIS.w_waves) # List of frequencies 
+        self.Nwaves = config.BASIS.Nwaves
 
         # Information for setting parameter background
         self.path_background = config.BASIS.path_background
@@ -3445,11 +3499,14 @@ class Basis_hbc:
         self.name_params = config.BASIS.name_params 
 
         # Basis reduction factor
-        self.facns = config.BASIS.facgauss # Factor for gaussian spacing in space
-        self.facnlt = config.BASIS.facgauss # Factor for gaussian spacing in time
+        self.facns = config.BASIS.facns # Factor for gaussian spacing in space
+        self.facnlt = config.BASIS.facnlt # Factor for gaussian spacing in time
 
         # Tidal frequencies 
         self.Nwaves = config.BASIS.Nwaves # Number of tidal components
+
+        # Time dependancy 
+        self.time_dependant = config.BASIS.time_dependant
 
         ##########################################
         ### - HEIGHT BOUNDARY CONDITIONS hbc - ###
@@ -3465,6 +3522,8 @@ class Basis_hbc:
             self.Ntheta = 1 # Only angle 0°
 
         self.sigma_B_bc = config.BASIS.sigma_B_bc # Covariance sigma for hbc parameter
+
+        self.window = mywindow
 
         # JIT
         self._operg_jit = jit(self._operg)
@@ -3513,7 +3572,8 @@ class Basis_hbc:
         #############################################
 
         # - In Time - #
-        self.set_bc_gauss_t(time, TIME_MIN, TIME_MAX) 
+        if self.time_dependant:
+            self.set_bc_gauss_t(time, TIME_MIN, TIME_MAX) 
 
         # - In Space - # 
         for name in self.name_params : 
@@ -3580,7 +3640,8 @@ class Basis_hbc:
                             # --> we use only the first one
                             Q[self.slice_params[name]]=self.sigma_B_bc[0]
                     else:
-                        Q[self.slice_params[name]]=self.sigma_B_bc
+                        # Q[self.slice_params[name]]=self.sigma_B_bc
+                        Q[self.slice_params[name]]=self.sigma_B_bc/(self.facnlt*self.facns)
 
             else:
                 Q = None
@@ -3588,19 +3649,6 @@ class Basis_hbc:
             Xb = np.zeros_like(Q)
 
             return Xb, Q
-
-    def set_bc_gauss_t(self,time, TIME_MIN, TIME_MAX):
-        # Ensemble of reduced basis timesteps
-        ENST_bc = np.arange(-self.T_bc*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_bc/self.facnlt , self.T_bc/self.facnlt)
-        bc_t_gauss = np.zeros((ENST_bc.size,time.size))
-        for i,time0 in enumerate(ENST_bc):
-            iobs = np.where(abs(time-time0) < self.T_bc)
-            bc_t_gauss[i,iobs] = mywindow(abs(time-time0)[iobs]/self.T_bc)
-
-        self.ENST_bc = ENST_bc
-        
-        # Gaussian reduced basis element
-        self.Gt = bc_t_gauss
     
     def set_bc_gauss_hbcx(self, LAT_MIN, LAT_MAX, LON_MIN, LON_MAX):
 
@@ -3686,17 +3734,32 @@ class Basis_hbc:
         ####################################
 
         # - Shapes of the hbcy parameters in the reduced space.
-        shapehbcS = [self.Nwaves,           # - Number of tidal frequency components 
-                     2,                     # - Number of controlled components (cos & sin)
-                     self.Ntheta,           # - Number of angles
-                     self.ENST_bc.size,          # - Number of basis timesteps
-                     bc_S_gauss.shape[0]]   # - Number of basis spatial elements 
+
+        if self.time_dependant : # the parameters include the time dependency 
+
+            shapehbcS = [self.Nwaves,           # - Number of tidal frequency components 
+                        2,                     # - Number of controlled components (cos & sin)
+                        self.Ntheta,           # - Number of angles
+                        self.ENST_bc.size,     # - Number of basis timesteps
+                        bc_S_gauss.shape[0]]   # - Number of basis spatial elements 
+            
+            shapehbcN = [self.Nwaves,           # - Number of tidal frequency components 
+                        2,                     # - Number of controlled components (cos & sin)
+                        self.Ntheta,           # - Number of angles
+                        self.ENST_bc.size,          # - Number of basis timesteps
+                        bc_N_gauss.shape[0]]   # - Number of basis spatial elements 
         
-        shapehbcN = [self.Nwaves,           # - Number of tidal frequency components 
-                     2,                     # - Number of controlled components (cos & sin)
-                     self.Ntheta,           # - Number of angles
-                     self.ENST_bc.size,          # - Number of basis timesteps
-                     bc_N_gauss.shape[0]]   # - Number of basis spatial elements 
+        else : # the parameters do not the time dependency 
+
+            shapehbcS = [self.Nwaves,           # - Number of tidal frequency components 
+                        2,                     # - Number of controlled components (cos & sin)
+                        self.Ntheta,           # - Number of angles
+                        bc_S_gauss.shape[0]]   # - Number of basis spatial elements 
+            
+            shapehbcN = [self.Nwaves,           # - Number of tidal frequency components 
+                        2,                     # - Number of controlled components (cos & sin)
+                        self.Ntheta,           # - Number of angles
+                        bc_N_gauss.shape[0]]   # - Number of basis spatial elements 
 
         # - Shapes of the hbcy parameters in the physical space.
         shapehbcS_phys = shapehbcN_phys = [self.Nwaves,     # - Number of tidal frequency components 
@@ -3784,17 +3847,31 @@ class Basis_hbc:
         ####################################
         
         # Shapes of the hbcx parameters in the reduced space.
-        shapehbcE = [self.Nwaves,               # - Number of tidal frequency components 
-                     2,                         # - Number of controlled components (cos & sin)
-                     self.Ntheta,               # - Number of angles
-                     self.ENST_bc.size,              # - Number of basis timesteps
-                     bc_E_gauss.shape[0]]       # - Number of basis spatial elements 
+        if self.time_dependant : # the parameters include the time dependency
+
+            shapehbcE = [self.Nwaves,               # - Number of tidal frequency components 
+                        2,                         # - Number of controlled components (cos & sin)
+                        self.Ntheta,               # - Number of angles
+                        self.ENST_bc.size,              # - Number of basis timesteps
+                        bc_E_gauss.shape[0]]       # - Number of basis spatial elements 
+            
+            shapehbcW = [self.Nwaves,               # - Number of tidal frequency components 
+                        2,                         # - Number of controlled components (cos & sin)
+                        self.Ntheta,               # - Number of angles
+                        self.ENST_bc.size,              # - Number of basis timesteps
+                        bc_W_gauss.shape[0]]       # - Number of basis spatial elements 
         
-        shapehbcW = [self.Nwaves,               # - Number of tidal frequency components 
-                     2,                         # - Number of controlled components (cos & sin)
-                     self.Ntheta,               # - Number of angles
-                     self.ENST_bc.size,              # - Number of basis timesteps
-                     bc_W_gauss.shape[0]]       # - Number of basis spatial elements 
+        else : # the parameters do not the time dependency 
+
+            shapehbcE = [self.Nwaves,               # - Number of tidal frequency components 
+                        2,                         # - Number of controlled components (cos & sin)
+                        self.Ntheta,               # - Number of angles
+                        bc_E_gauss.shape[0]]       # - Number of basis spatial elements 
+            
+            shapehbcW = [self.Nwaves,               # - Number of tidal frequency components 
+                        2,                         # - Number of controlled components (cos & sin)
+                        self.Ntheta,               # - Number of angles
+                        bc_W_gauss.shape[0]]       # - Number of basis spatial elements
 
         # Shapes of the hbcx parameters in the physical space.
         shapehbcE_phys = shapehbcW_phys = [self.Nwaves,     # - Number of tidal frequency components 
@@ -3806,6 +3883,30 @@ class Basis_hbc:
 
         return shapehbcE, shapehbcW, shapehbcE_phys, shapehbcW_phys
     
+    def set_bc_gauss_t(self,time, TIME_MIN, TIME_MAX):
+        # Ensemble of reduced basis timesteps
+        ENST_bc = np.arange(-self.T_bc*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.T_bc/self.facnlt , self.T_bc/self.facnlt)
+        # bc_t_gauss = np.zeros((time.size,ENST_bc.size))
+        # for i,time0 in enumerate(ENST_bc):
+        #     iobs = np.where(abs(time-time0) < self.T_bc)
+        #     bc_t_gauss[iobs,i] = mywindow(abs(time-time0)[iobs]/self.T_bc)
+
+        # self.bc_t_gauss = bc_t_gauss
+
+        self.ENST_bc = ENST_bc
+
+        Gt = np.zeros((time.size,self.ENST_bc.size))
+
+        for i,t in enumerate(time) :
+            for it in range(len(self.ENST_bc)):
+                dt = t - self.ENST_bc[it]
+                if abs(dt) < self.T_bc:
+                    fact = self.window(dt / self.T_bc) 
+                    if fact!=0:   
+                        Gt[i,it] = fact
+        
+        self.Gt = sparse.csr_fromdense(jnp.array(Gt).T)
+
     def get_bc_t_gauss_value(self,t):
 
         idt = jnp.where(self.time == t, size=1)[0]  # Find index
@@ -3842,7 +3943,8 @@ class Basis_hbc:
         ##############################
 
         # Time gaussian function
-        _Gt = self.get_bc_t_gauss_value(t) 
+        if self.time_dependant:
+            _Gt = self.get_bc_t_gauss_value(t) 
 
         # Variable to return  
         phi = jnp.zeros((self.nphys,))
@@ -3856,20 +3958,18 @@ class Basis_hbc:
             _X = X[self.slice_params[name]]
             _X = _X.reshape(self.shape_params[name])
 
-            X_t = np.transpose(_X,axes=(4,0,1,2,3))
-            X_t = X_t.reshape(X_t.shape[0],_X.shape[0]*_X.shape[1]*_X.shape[2]*_X.shape[3])
+            if self.time_dependant:
+                _X = (_Gt[None,None,None,:, None]*_X).sum(axis=3, keepdims=False)
 
-            Gxy_X_t = sparse.csr_matmat(self.Gxy[name],X_t)
+            _X_t = _X.T
 
-            Gxy_X_t = Gxy_X_t.reshape(Gxy_X_t.shape[0],_X.shape[0],_X.shape[1],_X.shape[2],_X.shape[3])
+            Gxy_X_t = sparse.csr_matmat(self.Gxy[name],_X_t.reshape(_X_t.shape[0],-1))
 
-            Gxy_X_t = Gxy_X_t.transpose((4,1,2,3,0))
+            Gxy_X_t = Gxy_X_t.reshape((Gxy_X_t.shape[0],)+_X_t.shape[1:])
 
-            Gxy_X_t = Gxy_X_t.reshape(Gxy_X_t.shape[0],Gxy_X_t.shape[1]*Gxy_X_t.shape[2]*Gxy_X_t.shape[3]*Gxy_X_t.shape[4])
+            Gxy_X = Gxy_X_t.T
 
-            _phi = (_Gt[:, None]*Gxy_X_t).sum(axis=0, keepdims=False)
-
-            phi = phi.at[self.slice_params_phys[name]].set(_phi)#.reshape(self.shape_params_phys[name]))
+            phi = phi.at[self.slice_params_phys[name]].set(Gxy_X.flatten())#.reshape(self.shape_params_phys[name]))
         
         return phi
 
@@ -3929,8 +4029,29 @@ class Basis_hbc:
         
         # if adState.params[self.name_mod_var] is None:
         #     adState.params[self.name_mod_var] = np.zeros((self.nphys,))
-        
-        adparams = adState.getparams(self.name_params,vect=True)
+
+        # Getting the parameters 
+        # if phi is not None: # If provided through phi ndarray argument 
+        #     for name in self.slice_params_phys.keys():
+        #         param[name] = phi[self.slice_params_phys[name]].reshape(self.shape_params_phys[name])
+
+        adparams = np.zeros((self.nphys))
+        if adState is not None: # If provided through adState object argument 
+            for name in self.name_params:
+                if name == "hbcx" : 
+                    # adparams["hbcS"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcS"])
+                    # adparams["hbcN"] = adState.params[name][:,1,:,:,:].reshape(self.shape_params_phys["hbcN"])
+                    adparams[self.slice_params_phys["hbcS"]] = adState.params[name][:,0,:,:,:].flatten()
+                    adparams[self.slice_params_phys["hbcN"]] = adState.params[name][:,1,:,:,:].flatten()
+                elif name == "hbcy" : 
+                    # adparams["hbcE"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcE"])
+                    # adparams["hbcW"] = adState.params[name][:,1,:,:,:].reshape(self.shape_params_phys["hbcW"])
+                    adparams[self.slice_params_phys["hbcE"]] = adState.params[name][:,0,:,:,:].flatten()
+                    adparams[self.slice_params_phys["hbcW"]] = adState.params[name][:,1,:,:,:].flatten()
+                # else :
+                #     param[name] = adState.params[name].reshape(self.shape_params_phys[name])
+        # adparams = adparams.flatten()
+        # adparams = adState.getparams(self.name_params,vect=True)
 
         adX = self._operg_reduced_jit(t, adparams)
         

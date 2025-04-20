@@ -185,8 +185,11 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
     lat_obs = ds[obs_attr.name_lat]
-    ds = ds.where((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
-                  (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs), drop=True)
+
+    mask = ((bbox[0] <= lon_obs) & (bbox[1] >= lon_obs) & 
+        (bbox[2] <= lat_obs) & (bbox[3] >= lat_obs)).compute()  # Convert to NumPy
+
+    ds = ds.where(mask, drop=True)
 
     # MDT 
     if True in [obs_attr.add_mdt,obs_attr.substract_mdt]:

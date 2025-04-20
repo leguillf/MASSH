@@ -22,6 +22,7 @@ from . import grid
 import time
 import subprocess
 
+import jax.numpy as jnp
 
 
 def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=None, Bc=None, ssh_truth=None, *args, **kwargs):
@@ -34,9 +35,9 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=
         Main function calling subfunctions for specific Inversion algorithms
     """
     
-    if config.INV is None:
-        return Inv_forward(config, State=State, Model=Model,Basis=Basis,X=X, Bc=Bc, ssh_truth = ssh_truth)
-    
+    if config.INV.super=='INV_FORWARD':
+        return Inv_forward(config, State=State, Model=Model,X=X,Basis=Basis, Bc=Bc, Obsop = Obsop,ssh_truth=ssh_truth)
+
     print(config.INV)
     
     if config.INV.super=='INV_OI':
@@ -60,8 +61,177 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=
     else:
         sys.exit(config.INV.super + ' not implemented yet')
         
+# class Inv_forward:
+#     def __init__(self,config,State,Model,Basis,Bc,Obsop):
+#             # Compute checkpoints when the cost function will be evaluated 
 
-def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
+#         nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
+#         checkpoints = [0]
+#         time_checkpoints = [np.datetime64(Model.timestamps[0])]
+#         t_checkpoints = [Model.T[0]]
+#         check = 0
+#         for i,t in enumerate(Model.timestamps[:-1]):
+#             if i>0 and (Obsop.is_obs(t) or check==nstep_check):
+#                 checkpoints.append(i)
+#                 time_checkpoints.append(np.datetime64(t))
+#                 t_checkpoints.append(Model.T[i])
+#                 if check==nstep_check:
+#                     check = 0
+#             check += 1 
+#         checkpoints.append(len(Model.timestamps)-1) # last timestep
+#         time_checkpoints.append(np.datetime64(Model.timestamps[-1]))
+#         t_checkpoints.append(Model.T[-1])
+#         checkpoints = np.asarray(checkpoints)
+#         time_checkpoints = np.asarray(time_checkpoints)
+#         # print(f'--> {checkpoints.size} checkpoints to evaluate the cost function')
+
+#         # Boundary conditions
+#         if Bc is not None:
+#             var_bc = Bc.interp(time_checkpoints)
+#             Model.set_bc(t_checkpoints,var_bc)
+
+#         # Observations operator 
+#         if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
+#             time_obs = [np.datetime64(date) for date in Obsop.date_obs]
+#             var_bc = Bc.interp(time_obs)
+#         else:
+#             var_bc = None
+
+#         Obsop.process_obs(var_bc)
+        
+#         # Initial model state
+#         Model.init(State)
+#         State.plot(title='Init State')
+
+#         # Set Reduced Basis
+#         if Basis is not None:
+#             time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in days) for which the basis components will be compute (at each timestep_checkpoint)
+#             Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
+#         else:
+#             sys.exit('4Dvar only works with reduced basis!!')
+        
+#         # Covariance matrix
+#         from .tools_4Dvar import Cov
+#         if config.INV.sigma_B is not None:     
+#             print('Warning: sigma_B is prescribed --> ignore Q of the reduced basis')
+#             # Least squares
+#             B = Cov(config.INV.sigma_B)
+#             R = Cov(config.INV.sigma_R)
+#         else:
+#             B = Cov(Q)
+#             R = Cov(config.INV.sigma_R)
+        
+#         # self.B = B
+#         # self.R = R 
+#         # self.Xb = Xb
+#         # self.time_checkpoints = time_checkpoints
+#         # self.checkpoints = checkpoints
+        
+#         self.Xb = Xb
+#         self.B = B
+#         self.prec = config.INV.prec
+#         self.init_date = config.EXP.init_date
+#         self.final_date = config.EXP.final_date
+#         self.dt = Model.dt
+#         self.nstep = int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt)
+#         self.timestep_checkpoint = config.INV.timestep_checkpoint
+#         self.saveoutputs = config.EXP.saveoutputs
+#         if self.saveoutputs:
+#             self.var_to_save = Model.var_to_save
+
+#         ## FUNCTIONS ## 
+#         self.operg = Basis.operg
+#         self.save_output = Model.save_output
+#         self.step = Model.step
+    
+#     def integrate_trajectory(self,State,X=None,ssh_truth=None):
+
+#     # - Prescribed vector - # 
+#         if X is not None : 
+#             print("Prescribed control parameter vector with X will be used to start the integration.")
+#             Xopt = X
+#         else : 
+#             print(f"Null control parameter vector will be used to start the integration.")
+#             Xopt = np.zeros((self.Xb.size,))
+                
+#         Xres = +Xopt
+        
+#         if self.prec:
+#             Xa = self.Xb + self.B.sqr(Xres)
+#         else:
+#             Xa = self.Xb + Xres
+
+#         # Init
+#         State0 = State.copy()
+#         present_date = self.init_date
+
+        
+
+#         square_diff = 0 
+#         i = 1
+
+#         while present_date < self.final_date :
+            
+#             # State0.plot(present_date)
+
+#             # current time in secondes
+#             t = (present_date - self.final_date).total_seconds()
+            
+#             if t%int(self.timestep_checkpoint.total_seconds())==0:
+
+#                 # Reduced basis
+#                 self.operg(t/3600/24,Xa,State=State0)
+
+#             # Save
+#             if self.saveoutputs:
+#                 # print(State0.var)
+#                 # print(State0.params)
+#                 self.save_output(State0,present_date,name_var=self.var_to_save,t=t)
+
+#             # Propagation
+#             self.step(State0,self.nstep,t=t)
+
+#             #####################################################
+#             # Calculating rmse with truth ssh - TEST for BM dev #
+#             if ssh_truth is not None : 
+
+#                 square_diff += np.nansum((State0.var['ssh_bm']-ssh_truth[i,:,:].values)**2)
+
+#                 if i == 300 :
+#                     plt.figure()
+#                     plt.pcolormesh(State0.var['ssh_bm'],vmin=0.65,vmax=1.05)
+#                     plt.title("State SSH BM")
+#                     plt.colorbar()
+#                     plt.show()
+
+#                     plt.figure()
+#                     plt.pcolormesh(ssh_truth[i,:,:].values,vmin=0.65,vmax=1.05)
+#                     plt.title("SSH truth BM")
+#                     plt.colorbar()
+#                     plt.show()
+
+#                 i += 1 
+#             #####################################################
+
+#             # Time increment
+#             present_date += timedelta(seconds=self.nstep*self.dt)
+#             t += self.nstep*self.dt
+
+#         #   Last timestep 
+#         if self.saveoutputs:
+#             self.save_output(State0,present_date,name_var=self.var_to_save,t=t)
+        
+#         if ssh_truth is not None:
+#             # Returning the  rmse with truth ssh - TEST for BM dev
+#             return np.sqrt(square_diff/(i*State0.nx*State0.ny))
+#         else : 
+#             return  
+
+#         del State, State0, Xa, B, R
+#         gc.collect()
+
+
+def Inv_forward(config,State,Model,Basis,X,Bc,Obsop,ssh_truth=None):
     
     """
     NAME
@@ -70,111 +240,154 @@ def Inv_forward(config,State,Model,Basis,X,Bc,ssh_truth=None):
     DESCRIPTION
         Run a model forward integration  
     
-    """
+    """    
+    
+    # Compute checkpoints when the cost function will be evaluated 
+    nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
+    checkpoints = [0]
+    time_checkpoints = [np.datetime64(Model.timestamps[0])]
+    t_checkpoints = [Model.T[0]]
+    check = 0
+    for i,t in enumerate(Model.timestamps[:-1]):
+        if i>0 and (Obsop.is_obs(t) or check==nstep_check):
+            checkpoints.append(i)
+            time_checkpoints.append(np.datetime64(t))
+            t_checkpoints.append(Model.T[i])
+            if check==nstep_check:
+                check = 0
+        check += 1 
+    checkpoints.append(len(Model.timestamps)-1) # last timestep
+    time_checkpoints.append(np.datetime64(Model.timestamps[-1]))
+    t_checkpoints.append(Model.T[-1])
+    checkpoints = np.asarray(checkpoints)
+    time_checkpoints = np.asarray(time_checkpoints)
+    print(f'--> {checkpoints.size} checkpoints to evaluate the cost function')
 
-    if X is not None:
-        print("Doing forward run from prescribed control vector X!")
-        if Basis==None:
-            sys.exit("Please prescribe Basis!")
+    # Boundary conditions
+    if Bc is not None:
+        var_bc = Bc.interp(time_checkpoints)
+        Model.set_bc(t_checkpoints,var_bc)
 
-    if config.MOD.super is None :
-        for _mod in config.MOD.keys():
-            if 'JAX' in config.MOD[_mod]:
-                os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-    else :
-        if config.MOD.super is not None and 'JAX' in config.MOD.super:
-            os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-     
+    # Observations operator 
+    if config.INV.anomaly_from_bc: # Remove boundary fields if anomaly mode is chosen
+        time_obs = [np.datetime64(date) for date in Obsop.date_obs]
+        var_bc = Bc.interp(time_obs)
+    else:
+        var_bc = None
+    
+    # Initial model state
+    Model.init(State)
+    State.plot(title='Init State')
 
-        
+    # Set Reduced Basis
+    if Basis is not None:
+        time_basis = np.arange(0,Model.T[-1]+nstep_check*Model.dt,nstep_check*Model.dt)/24/3600 # Time (in days) for which the basis components will be compute (at each timestep_checkpoint)
+        Xb, Q = Basis.set_basis(time_basis,return_q=True) # Q is the standard deviation. To get the variance, use Q^2
+    else:
+        sys.exit('4Dvar only works with reduced basis!!')
+    
+    # Covariance matrix
+    from .tools_4Dvar import Cov
+    if config.INV.sigma_B is not None:     
+        print('Warning: sigma_B is prescribed --> ignore Q of the reduced basis')
+        # Least squares
+        B = Cov(config.INV.sigma_B)
+        R = Cov(config.INV.sigma_R)
+    else:
+        B = Cov(Q)
+        R = Cov(config.INV.sigma_R)
+    
+    ####################################################
+    ########     - INITIAL CONTROL VECTOR -     ########
+    #################################################### 
+
+    # - Prescribed vector - # 
+    if X is not None : 
+        print("Prescribed control parameter vector with X will be used to start the integration.")
+        Xopt = X
+    else : 
+        print(f"Null control parameter vector will be used to start the integration.")
+        Xopt = np.zeros((Xb.size,))
+            
+    Xres = +Xopt
+    
+    if config.INV.prec:
+        Xa = Xb + B.sqr(Xres)
+    else:
+        Xa = Xb + Xres
+
+    # Init
+    State0 = State.copy()
     present_date = config.EXP.init_date
-    # if config.EXP.saveoutputs:
-    #     State.save_output(present_date,name_var=Model.var_to_save)
-        
+
     nstep = int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt)
 
-    if Bc is not None:
-        time_bc = [np.datetime64(time) for time in Model.timestamps[::nstep]]
-        t_bc = [t for t in Model.T[::nstep]]
-        var_bc = Bc.interp(time_bc)
-        Model.set_bc(t_bc,var_bc)
-
-    t = 0
-    Model.init(State,t)
-
-    # Calculating rmse with truth ssh - TEST for BM dev # 
     square_diff = 0 
     i = 1
 
-    basis_exec_time = []
-    saving_exec_time = []
-    model_exec_time = []
-
     while present_date < config.EXP.final_date :
         
-        State.plot(present_date)
+        # State0.plot(present_date)
 
-                # current time in secondes
+        # current time in secondes
         t = (present_date - config.EXP.init_date).total_seconds()
         
-        start_time = time.perf_counter()
+        if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
 
-        if Basis!=None:
             # Reduced basis
-            Basis.operg(t/3600/24,X,State=State)
-
-        end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        basis_exec_time.append(execution_time)
-        # print(f"Basis Execution Time: {execution_time:.6f} seconds")
-
-        start_time = time.perf_counter()
+            Basis.operg(t/3600/24,Xa,State=State0)
 
         # Save
         if config.EXP.saveoutputs:
-
-            Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
-
-        end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        saving_exec_time.append(execution_time)
-        # print(f"Saving Execution Time: {execution_time:.6f} seconds")
-
-        start_time = time.perf_counter()
+            # print(State0.var)
+            # print(State0.params)
+            Model.save_output(State0,present_date,name_var=Model.var_to_save,t=t)
 
         # Propagation
-        Model.step(State,nstep,t=t)
+        Model.step(State0,nstep,t=t)
 
-        end_time = time.perf_counter()
-        execution_time = end_time - start_time
-        model_exec_time.append(execution_time)
-        # print(f"Model propagation Execution Time: {execution_time:.6f} seconds")
+        State0.plot()
+
+        #####################################################
+        # Calculating rmse with truth ssh - TEST for BM dev #
+        if ssh_truth is not None : 
+
+            square_diff += np.nansum((State0.var['ssh_bm']-ssh_truth[i,:,:].values)**2)
+
+            # if i == 300 :
+            #     plt.figure()
+            #     plt.pcolormesh(State0.var['ssh_bm'],vmin=0.65,vmax=1.05)
+            #     plt.title("State SSH BM")
+            #     plt.colorbar()
+            #     plt.show()
+
+            #     plt.figure()
+            #     plt.pcolormesh(ssh_truth[i,:,:].values,vmin=0.65,vmax=1.05)
+            #     plt.title("SSH truth BM")
+            #     plt.colorbar()
+            #     plt.show()
+
+            i += 1 
+        #####################################################
 
         # Time increment
         present_date += timedelta(seconds=nstep*Model.dt)
         t += nstep*Model.dt
 
-        #####################################################
-        # Calculating rmse with truth ssh - TEST for BM dev #
-        if ssh_truth is not None : 
-            square_diff += np.nansum((State.var['SSH_tot']-ssh_truth[i,:,:].values)**2)
-            i += 1 
-        #####################################################
-
-    print("Basis Execution Time:",np.mean(np.array(basis_exec_time)))
-    print("Saving Execution Time:",np.mean(np.array(saving_exec_time)))
-    print("Model Propagation Execution Time:",np.mean(np.array(model_exec_time)))
-    
     #   Last timestep 
     if config.EXP.saveoutputs:
-        Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
-
+        Model.save_output(State0,present_date,name_var=Model.var_to_save,t=t)
+      
     if ssh_truth is not None:
         # Returning the  rmse with truth ssh - TEST for BM dev
-        return np.sqrt(square_diff/(i*State.nx*State.ny))
+        return np.sqrt(square_diff/(i*State0.nx*State0.ny))
     else : 
-        return 
+        return  
 
+    # del State, State0, Xa, B, R
+    # gc.collect()
+
+    # return res
          
 def Inv_oi(config,State,dict_obs):
     
@@ -701,7 +914,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         if len(tmp_files)>0:
             print('Restart at:',tmp_files[-1])
             ds = xr.open_dataset(tmp_files[-1])
-            Xopt = ds.res.values
+            Xopt = ds.res.values[0]
             ds.close()
         else :
             print("No vector has been found to restart.")
@@ -770,17 +983,59 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         iteration = 0
 
         # Callback function called at every minimization iterations
-        def callback(XX):
+        # def callback(XX):
+        #     nonlocal iteration
+        #     # Iteration +=1
+        #     iteration += 1
+        #     print(f"\n \n At iterate   {iteration} \n")
+        #     now = datetime.now()
+        #     current_time = now.strftime("%Y-%m-%d_%H%M%S")
+        #     ds = xr.Dataset({'res':(('x',),XX)})
+        #     ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
+        #     ds.close()
+
+        list_J=[]
+        iteration = 0
+        n_consecutive = config.INV.n_consecutive
+        ftol = config.INV.ftol
+
+
+        def callback(intermediate_result):
+            nonlocal list_J
             nonlocal iteration
+            nonlocal ftol
+            nonlocal n_consecutive
             # Iteration +=1
             iteration += 1
+
             print(f"\n \n At iterate   {iteration} \n")
+            print(f"Jtot=  {intermediate_result.fun:.5e}")
+
+            # Saving the control parameters
             now = datetime.now()
             current_time = now.strftime("%Y-%m-%d_%H%M%S")
-            ds = xr.Dataset({'res':(('x',),XX)})
+            ds = xr.Dataset(
+                data_vars={
+                    "res": (["Nit", "X"], np.expand_dims(intermediate_result.x, axis=0)),  # 3D data
+                    "J": (["Nit"], [intermediate_result.fun]),  # Another 3D variable
+                },
+                coords={
+                    "Nit": [iteration], 
+                    "X": np.arange(len(intermediate_result.x)),
+                },
+            )
             ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
             ds.close()
             
+            # Saving the 
+            list_J.append(intermediate_result.fun)
+            if (n_consecutive is not None) and (ftol is not None) and len(list_J)>n_consecutive+1:
+                arrayJ_k =  np.array(list_J[-n_consecutive-1:-2])
+                arrayJ_k1 =  np.array(list_J[-n_consecutive:-1])
+                d_J = np.abs(arrayJ_k1-arrayJ_k)/np.maximum(arrayJ_k1,arrayJ_k)
+                if np.all(d_J<ftol):
+                    print(f"Criterion on ftol has been satisfied for a consecutive number of {n_consecutive} iterations (n_consecutive specified).")
+                    raise StopIteration
         
         # Minimization options
         options = {}
@@ -791,7 +1046,9 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
 
         options['maxiter'] = config.INV.maxiter
 
-        if config.INV.ftol is not None:
+        # If ftol stopping criterion should be raised 
+        # at the first iteration it happens (n_consecutive is None) 
+        if config.INV.ftol is not None and config.INV.n_consecutive is None : 
             options['ftol'] = config.INV.ftol
 
         if config.INV.gtol is not None:
@@ -860,6 +1117,7 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         t = (present_date - config.EXP.init_date).total_seconds()
         
         if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
+
             # Reduced basis
             Basis.operg(t/3600/24,Xa,State=State0)
 
@@ -882,7 +1140,6 @@ def Inv_4Dvar(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=Non
         
     del State, State0, Xa, dict_obs, B, R
     gc.collect()
-    print()
 
     return res
 
@@ -1026,13 +1283,13 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
         print ('\nFinal cost function value: {}'.format(res.fun))
         print ('\nNumber of iterations: {}'.format(res.nit))
         
-        # Save minimization trajectory
-        if config.INV.save_minimization:
-            ds = xr.Dataset({'J':(('N'),var.J),'Jo':(('N'),var.Jo),'grad':(('N'),var.G)})
-            for param in Basis.name_params:
-               ds["Jb_"+param]=xr.DataArray(var.J[param],dims=["N"])
-            ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
-            ds.close()
+        # # Save minimization trajectory
+        # if config.INV.save_minimization:
+        #     ds = xr.Dataset({'J':(('N'),var.J),'Jo':(('N'),var.Jo),'grad':(('N'),var.G)})
+        #     for param in Basis.name_params:
+        #        ds["Jb_"+param]=xr.DataArray(var.J[param],dims=["N"])
+        #     ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
+        #     ds.close()
 
         Xres = res.x
     else:
