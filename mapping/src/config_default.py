@@ -82,9 +82,9 @@ GRID_FROM_FILE = dict(
 
     subsampling = None,
 
-    var_name_mask = None,
-    
-    time_name_mask = 'time'
+    name_init_mask = None,
+
+    name_var_mask = {'lon':'','lat':'','var':''}
 
 )
 
@@ -381,13 +381,15 @@ MOD_QG1L_JAX = dict(
 
     var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
-    upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
+    save_diagnosed_variables = False, # Whether to save diagnosed variables (e.g. SSH, geostrophic velocies and cyclogeostrophic velocities) in the output netcdf files
 
-    advect_pv = True,
+    upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3) 
+
+    advect_pv = True, # Whether or not to advect PV. 
 
     advect_tracer = False, # Whether or not to advect tracers. If True, need to add tracer variables (e.g. SST) in *name_var*
 
-    dtmodel = 300, # model timestep
+    dtmodel = 1200, # model timestep
 
     cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/c
 
@@ -402,6 +404,12 @@ MOD_QG1L_JAX = dict(
     cmin = None, # Minimum value of phase velocity to consider
 
     cmax = None, # Maximum value of phase velocity to consider
+
+    file_bathy_aux = None, # Name of netcdf file for ocean bathymetry field. If prescribed, bathymetry will be taken into account in the model
+
+    name_var_bathy = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of bathymetry netcdf file
+
+    bathy_ratio_max = None, # Maximum value of bathymetry-related PV term
 
     solver = 'spectral', # Solver for Elliptical Equation inversion (either spectral or cg - for Conjugate Gradient)
 
@@ -496,7 +504,6 @@ MOD_SW1L_JAX = dict(
 
 )
 
-
 MOD_SW1L_JAX_OLD = dict(
 
     name_var = {'U':'u','V':'v','SSH':'ssh'},
@@ -525,6 +532,39 @@ MOD_SW1L_JAX_OLD = dict(
 
 )
 
+MOD_QGSW = dict(
+
+    name_class = 'qg', # Name of the model class (either qg or sw)
+
+    nl = 1, # number of layers in the model
+
+    name_var = {'U':'u', 'V':'v', 'H':'h', 'SSH':'ssh'},
+
+    dtmodel = 1200, # model timestep
+
+    f0 = 1e-4, # Coriolis parameter (in s^-1). If None, f0 will be computed from the grid
+
+    c0 = 2.7,
+
+    H0 = 5000., # mean water depth in meters
+
+    init_from_bc = True,
+
+    cfl = .25,
+
+    bottom_drag_coef = 0.,
+
+    slip_coef = 0., # slip coefficient for the bottom drag (in m/s)
+
+    taux = 0., # wind stress in N/m^2
+
+    tauy = 0., # wind stress in N/m^2
+
+    path_mdt = None, # path of MDT
+
+    name_var_mdt = {'lon':'','lat':'','var':''}, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
+
+)
 
 #################################################################################################################################
 # BOUNDARY CONDITIONS
@@ -556,6 +596,8 @@ OBSOP_INTERP_L3 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
 
+    name_var = 'SSH',
+
     write_op = False, # Write operator data to *path_save*
 
     path_save = None, # Directory where to save observational operator
@@ -572,6 +614,8 @@ OBSOP_INTERP_L3_JAX = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
 
+    name_var = 'SSH',
+
     write_op = False, # Write operator data to *path_save*
 
     path_save = None, # Directory where to save observational operator
@@ -587,6 +631,8 @@ OBSOP_INTERP_L3_JAX = dict(
 OBSOP_INTERP_L4 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+    name_var = 'SSH',
 
     write_op = False, # Write operator data to *path_save*
 

@@ -161,7 +161,7 @@ class Bc_ext:
 
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
                 _var_interp[self.mask] = np.nan
-
+            #_var_interp[np.isnan(_var_interp)] = 0.
             var_interp[name] = _var_interp
         
         return var_interp

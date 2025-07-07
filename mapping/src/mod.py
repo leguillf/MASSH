@@ -19,11 +19,14 @@ from datetime import timedelta
 import matplotlib.pylab as plt 
 import pyinterp
 from copy import deepcopy
+import time
 
 import jax.numpy as jnp 
 from jax import jit
 from jax import jvp,vjp
 from jax.lax import scan, fori_loop
+
+import jaxparrow
 
 from functools import partial
 
@@ -68,6 +71,8 @@ def Model(config, State, verbose=True):
             return Model_sw1l_jax(config,State)
         elif config.MOD.super=='MOD_SW1L_JAX_OLD':
             return Model_sw1l_jax_old(config,State)
+        elif config.MOD.super=='MOD_QGSW':
+            return Model_qgsw(config,State)
         else:
             sys.exit(config.MOD.super + ' not implemented yet')
     else:
@@ -137,7 +142,6 @@ class M:
         State.save_output(present_date,name_var)
     
 
-            
 ###############################################################################
 #                            Identity Model                                   #
 ###############################################################################
@@ -349,12 +353,14 @@ class Model_diffusion(M):
 
     def init(self, State, t0=0):
 
-        for name in self.name_var: 
-            if t0 in self.bc[name]:
-                if self.init_from_bc:
+        if type(self.init_from_bc)==dict:
+            for name in self.init_from_bc:
+                if self.init_from_bc[name] and name in self.bc and t0 in self.bc[name]:
                     State.setvar(self.bc[name][t0], self.name_var[name])
-                #else:
-                #    State.var[self.name_var[name]] = self.Wbc * self.bc[name][t0]
+        elif self.init_from_bc:
+            for name in self.name_var: 
+                if t0 in self.bc[name]:
+                     State.setvar(self.bc[name][t0], self.name_var[name])
 
     def set_bc(self,time_bc,var_bc):
         
@@ -573,8 +579,6 @@ class Model_qg1l_np(M):
          
         # Open Rossby Radius if provided
         if self.mdt is not None and config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
-            
-            print('Rossby Radius is prescribed, be sure to have provided MDT as well')
 
             ds = xr.open_dataset(config.MOD.filec_aux)
             
@@ -597,6 +601,26 @@ class Model_qg1l_np(M):
                 
         else:
             self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
+        
+        # Open Bathymetry if provided
+        if config.MOD.file_bathy_aux is not None and os.path.exists(config.MOD.file_bathy_aux):
+
+            ds = xr.open_dataset(config.MOD.file_bathy_aux)
+            
+            self.name_var_bathy = grid.interp2d(ds,
+                                   config.MOD.name_var_bathy,
+                                   State.lon,
+                                   State.lat)
+            
+            
+            if config.EXP.flag_plot>1:
+                plt.figure()
+                plt.pcolormesh(self.name_var_bathy)
+                plt.colorbar()
+                plt.show()
+                
+        else:
+            self.name_var_bathy = config.MOD.c0 * np.ones((State.ny,State.nx))
             
         # Initialize model state
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
@@ -849,7 +873,6 @@ class Model_qg1l_jax(M):
             
             if config.MOD.cmin is not None:
                 self.c[self.c<config.MOD.cmin] = config.MOD.cmin
-                self.c[np.isnan(self.c)] = config.MOD.cmin
             
             if config.MOD.cmax is not None:
                 self.c[self.c>config.MOD.cmax] = config.MOD.cmax
@@ -891,6 +914,43 @@ class Model_qg1l_jax(M):
 
         else:
             self.mdt = None
+        
+        # Open Bathymetry if provided
+        if config.MOD.file_bathy_aux is not None and os.path.exists(config.MOD.file_bathy_aux):
+
+            ds = xr.open_dataset(config.MOD.file_bathy_aux)
+            name_lon = config.MOD.name_var_bathy['lon']
+            lon = ds[name_lon]
+            # Convert longitude 
+            if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+                ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
+            elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+                ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
+            ds = ds.sortby(name_lon)    
+            
+            bathymetry = grid.interp2d(ds,
+                                   config.MOD.name_var_bathy,
+                                   State.lon,
+                                   State.lat)
+
+            # Get H so that we have a maximum value 
+            bathymetry[State.mask] = np.nan
+            H =  np.nanmean(bathymetry) # Mean depth
+            self.bathymetry_PV_term = - (bathymetry - H) / H
+            self.bathymetry_PV_term[self.bathymetry_PV_term>config.MOD.bathy_ratio_max] = config.MOD.bathy_ratio_max
+            self.bathymetry_PV_term[self.bathymetry_PV_term<-config.MOD.bathy_ratio_max] = -config.MOD.bathy_ratio_max
+            self.bathymetry_PV_term[np.isnan(self.bathymetry_PV_term)] = config.MOD.bathy_ratio_max
+            
+            
+            if config.EXP.flag_plot>0:
+                plt.figure()
+                plt.pcolormesh(self.bathymetry_PV_term)
+                plt.colorbar()
+                plt.title('Bathymetry PV term')
+                plt.show()
+                
+        else:
+            self.bathymetry_PV_term = np.zeros((State.ny,State.nx))
         
         # CFL
         if config.MOD.cfl is not None:
@@ -978,6 +1038,9 @@ class Model_qg1l_jax(M):
             self.ageo_velocities = True
         else:
             self.ageo_velocities = False
+        
+        # Save SSH, geostrophic velocities and cyclogeostrophic velocities
+        self.save_diagnosed_variables = config.MOD.save_diagnosed_variables
 
        # Masked array for model initialization
         SSH0 = State.getvar(name_var=self.name_var['SSH'])
@@ -1003,7 +1066,8 @@ class Model_qg1l_jax(M):
                          solver=config.MOD.solver,
                          tile_size=config.MOD.tile_size,
                          tile_overlap=config.MOD.tile_overlap,
-                         mdt=self.mdt)
+                         mdt=self.mdt,
+                         bathymetry_PV_term=self.bathymetry_PV_term)
 
         # Model functions initialization
         self.qgm_step = self.qgm.step_jit
@@ -1037,6 +1101,9 @@ class Model_qg1l_jax(M):
 
     
     def save_output(self,State,present_date,name_var=None,t=None):
+
+        State0 = State.copy()
+
         # Add geostrophic current to ageostrophic velocities
         if self.ageo_velocities:
             State0 = State.copy()
@@ -1049,10 +1116,50 @@ class Model_qg1l_jax(M):
             # Set total current
             State0.setvar(ug+ua, name_var=self.name_var['U'])
             State0.setvar(vg+va, name_var=self.name_var['V'])
-            State0.save_output(present_date,name_var)
-            State0.plot()
+            State0.save_output(present_date, name_var)
+        
+        # Save SSH and geostrophic velocities
+        elif self.save_diagnosed_variables:
+
+            name_var_diag = []
+
+            # Add MDT to sla to get SSH
+            if self.mdt is not None:
+                ssh = State0.getvar(name_var=self.name_var['SSH']) + self.mdt
+                State0.setvar(ssh, name_var='ssh')
+                if name_var is not None:
+                    name_var_diag += ['ssh']
+            else:
+                ssh = State0.getvar(name_var=self.name_var['SSH'])
+            
+            # Current velocities
+            if self.save_diagnosed_variables:
+                # Geostrophy
+                result = jaxparrow.geostrophy(ssh, State0.lat, State0.lon, State0.mask)
+                ug, vg = result[0], result[1]
+                ug_t = jaxparrow.tools.operators.interpolation(ug, State0.mask, axis=1, padding="left")  # (U(i), U(i+1)) -> T(i+1)
+                vg_t = jaxparrow.tools.operators.interpolation(vg, State0.mask, axis=0, padding="left")  # (V(j), V(j+1)) -> T(j+1)
+                # Cyclogeostrophy
+                result = jaxparrow.cyclogeostrophy(ssh, State0.lat, State0.lon, State0.mask)
+                uc, vc = result[0], result[1]
+                uc_t = jaxparrow.tools.operators.interpolation(uc, State0.mask, axis=1, padding="left")  # (U(i), U(i+1)) -> T(i+1)
+                vc_t = jaxparrow.tools.operators.interpolation(vc, State0.mask, axis=0, padding="left")  # (V(j), V(j+1)) -> T(j+1)
+                # Set geostrophic velocities
+                State0.setvar(ug_t, name_var='ug')
+                State0.setvar(vg_t, name_var='vg')
+                # Set cyclogeostrophic velocities
+                State0.setvar(uc_t, name_var='uc')
+                State0.setvar(vc_t, name_var='vc')
+                if name_var is not None:
+                    name_var_diag += ['ug', 'vg', 'uc', 'vc']
+            
+                # Save variables
+                State0.save_output(present_date, name_var + name_var_diag)
+
         else:
-            State.save_output(present_date,name_var)
+            # Save state without diagnosed variables
+            State0.save_output(present_date, name_var)
+        
 
     def set_bc(self,time_bc,var_bc):
 
@@ -1149,19 +1256,19 @@ class Model_qg1l_jax(M):
             if self.ageo_velocities:
                 U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
                 V = State.getvar(name_var=self.name_var['V'])[np.newaxis,:,:]
-                X0 = np.append(X0, U, axis=0)
-                X0 = np.append(X0, V, axis=0)
+                X0 = jnp.append(X0, U, axis=0)
+                X0 = jnp.append(X0, V, axis=0)
             # Tracers
             for name in self.name_var:
                 if name not in ['SSH', 'U', 'V']:
-                    C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
-                    X0 = np.append(X0, C0, axis=0)
+                    C0 = State.getvar(name_var=self.name_var[name])[jnp.newaxis,:,:]
+                    X0 = jnp.append(X0, C0, axis=0)
         
         # init
         X1 = +X0#.astype('float64')
 
         # Time propagation
-        X1 = self.qgm_step(X1,Xb,nstep=nstep)
+        X1 = self.qgm_step(X1, Xb, nstep=nstep)
         t1 = t + nstep*self.dt
 
         # Convert to numpy array
@@ -1171,18 +1278,23 @@ class Model_qg1l_jax(M):
         if self.name_var['SSH'] in State.params:
             Fssh = State.params[self.name_var['SSH']]#.astype('float64') # Forcing term for SSH
             if self.advect_tracer:
-                X1[0] += nstep*self.dt/(3600*24) * Fssh 
-                State.setvar(X1[0], name_var=self.name_var['SSH'])
+                #X1[0] += nstep*self.dt/(3600*24) * Fssh 
+                State.setvar(X1[0]+ nstep*self.dt/(3600*24) * Fssh, 
+                             name_var=self.name_var['SSH'])
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
-                        Fc = +State.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
+                        Fc = State.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
                         # Add Nudging to BC 
                         if self.forcing_tracer_from_bc:
-                            X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc * (Xb[i] - X0[i]) 
+                            State.setvar(X1[i] + nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc * (Xb[i] - X0[i]), 
+                                         name_var=self.name_var[name])
+                            #X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc * (Xb[i] - X0[i]) 
                         # Only forcing flux
                         else:
-                            X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc 
-                        State.setvar(X1[i], name_var=self.name_var[name])
+                            #X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc 
+                            State.setvar(X1[i] + nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc ,
+                                        name_var=self.name_var[name])
+                        #State.setvar(X1[i], name_var=self.name_var[name])
             else:
                 X1 += nstep*self.dt/(3600*24) * Fssh
                 State.setvar(X1, name_var=self.name_var['SSH'])
@@ -1269,7 +1381,7 @@ class Model_qg1l_jax(M):
         X1 = +X0.astype('float64')
 
         # Time propagation
-        dX1 = self.qgm_step_tgl(dX1,X1,hb=Xb,nstep=nstep)
+        dX1 = self.qgm_step_tgl(dX1,X1,Xb,nstep=nstep)
 
         # Convert to numpy and reshape
         dX1 = np.array(dX1).astype('float64')
@@ -1311,8 +1423,8 @@ class Model_qg1l_jax(M):
         adSSH0 = adState.getvar(name_var=self.name_var['SSH'])#.astype('float64')
         SSH0 = State.getvar(name_var=self.name_var['SSH'])#.astype('float64')
         if self.advect_tracer:
-            adX0 = adSSH0[np.newaxis,:,:].astype('float64')
-            X0 = SSH0[np.newaxis,:,:].astype('float64')
+            adX0 = adSSH0[jnp.newaxis,:,:]
+            X0 = SSH0[jnp.newaxis,:,:]
             # Ageostrophic velocities
             if self.ageo_velocities:
                 U = State.getvar(name_var=self.name_var['U'])[np.newaxis,:,:]
@@ -1326,10 +1438,10 @@ class Model_qg1l_jax(M):
             # Tracers
             for name in self.name_var:
                 if name not in ['SSH', 'U', 'V']:
-                    adC0 = adState.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
-                    adX0 = np.append(adX0, adC0, axis=0)
-                    C0 = State.getvar(name_var=self.name_var[name])[np.newaxis,:,:]
-                    X0 = np.append(X0, C0, axis=0)
+                    adC0 = adState.getvar(name_var=self.name_var[name])[jnp.newaxis,:,:]
+                    adX0 = jnp.append(adX0, adC0, axis=0)
+                    C0 = State.getvar(name_var=self.name_var[name])[jnp.newaxis,:,:]
+                    X0 = jnp.append(X0, C0, axis=0)
         else:
             adX0 = adSSH0
             X0 = SSH0
@@ -2749,6 +2861,389 @@ class Model_sw1l_jax_old(M):
                 w1E += u - jnp.sqrt(self.g/HeE) * h
         
         return w1S,w1N,w1W,w1E     
+    
+class Model_qgsw(M):
+
+    def __init__(self,config,State):
+
+        super().__init__(config,State)
+
+        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+
+        # Model specific libraries
+        if config.MOD.dir_model is None:
+            dir_model = os.path.realpath(
+                os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                             '..','models','model_qgsw'))
+        else:
+            dir_model = config.MOD.dir_model  
+        SourceFileLoader("tools", dir_model+"/tools.py").load_module() 
+        SourceFileLoader("helmholtz", dir_model+"/helmholtz.py").load_module() 
+        SourceFileLoader("masks", dir_model+"/masks.py").load_module() 
+        SourceFileLoader("flux", dir_model+"/flux.py").load_module()
+        SourceFileLoader("finite_diff", dir_model+"/finite_diff.py").load_module()
+        SourceFileLoader("reconstruction", dir_model+"/reconstruction.py").load_module() 
+        if config.MOD.name_class.lower()=='qg':
+            SourceFileLoader('sw',f'{dir_model}/sw.py').load_module() 
+        qgswm = SourceFileLoader(config.MOD.name_class.lower(),f'{dir_model}/{config.MOD.name_class.lower()}.py').load_module() 
+        model = getattr(qgswm, config.MOD.name_class.upper())
+
+        # Coriolis
+        if config.MOD.f0 is not None and config.MOD.constant_f:
+            self.f = config.MOD.f0
+        else:
+            self.f = State.f
+            f0 = np.nanmean(self.f)
+            self.f[np.isnan(self.f)] = f0
+            
+        # Open Rossby Radius if provided
+        if config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
+
+            ds = xr.open_dataset(config.MOD.filec_aux)
+            name_lon = config.MOD.name_var_c['lon']
+            lon = ds[name_lon]
+            # Convert longitude 
+            if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+                ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
+            elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+                ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
+            ds = ds.sortby(name_lon)    
+
+            self.c = grid.interp2d(ds,
+                                   config.MOD.name_var_c,
+                                   State.lon,
+                                   State.lat)
+            
+            if config.MOD.cmin is not None:
+                self.c[self.c<config.MOD.cmin] = config.MOD.cmin
+            
+            if config.MOD.cmax is not None:
+                self.c[self.c>config.MOD.cmax] = config.MOD.cmax
+            
+            if config.EXP.flag_plot>0:
+                plt.figure()
+                plt.pcolormesh(self.c)
+                plt.colorbar()
+                plt.title('Rossby phase velocity')
+                plt.show()
+                
+        else:
+            self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
+        
+        # Open MDT map if provided
+        if config.MOD.path_mdt is not None and os.path.exists(config.MOD.path_mdt):
+                      
+            ds = xr.open_dataset(config.MOD.path_mdt)
+            name_lon = config.MOD.name_var_mdt['lon']
+            lon = ds[name_lon]
+            # Convert longitude 
+            if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+                ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
+            elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+                ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
+            ds = ds.sortby(name_lon)    
+
+            self.mdt = grid.interp2d(ds,
+                                   config.MOD.name_var_mdt,
+                                   State.lon,
+                                   State.lat)
+
+            if config.EXP.flag_plot>0:
+                plt.figure()
+                plt.pcolormesh(self.mdt)
+                plt.colorbar()
+                plt.title('MDT')
+                plt.show()
+
+        else:
+            self.mdt = None
+        
+        # CFL
+        if config.MOD.cfl is not None:
+            grid_spacing = min(np.nanmean(State.DX), np.nanmean(State.DY)) 
+            dt = config.MOD.cfl * grid_spacing / np.nanmean(self.c)
+            divisors = [i for i in range(1, 3600 + 1) if 3600 % i == 0]  # Find all divisors of one hour in seconds
+            lower_divisors = [d for d in divisors if d <= dt]
+            self.dt = max(lower_divisors)  # Get closest
+            print('CFL condition for c=', np.nanmean(self.c))
+            print('Model time-step', self.dt)
+            # Time parameters
+            if self.dt>0:
+                self.nt = 1 + int((config.EXP.final_date - config.EXP.init_date).total_seconds()//self.dt)
+                self.timestamps = [] 
+                t = config.EXP.init_date
+                while t<=config.EXP.final_date:
+                    self.timestamps.append(t)
+                    t += timedelta(seconds=self.dt)
+                self.timestamps = np.asarray(self.timestamps)
+            else:
+                self.nt = 1
+                self.timestamps = np.array([config.EXP.init_date])
+            self.T = np.arange(self.nt) * self.dt
+
+            
+        # Initialize model state
+        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
+            dsin = xr.open_dataset(config.GRID.path_init_grid)
+            for name in self.name_var:
+                if name in config.MOD.name_init_var:
+                    var_init = dsin[config.MOD.name_init_var[name]]
+                    if len(var_init.shape)==3:
+                        var_init = var_init[0,:,:]
+                    if config.GRID.subsampling is not None:
+                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
+                    dsin.close()
+                    del dsin
+                    State.var[self.name_var[name]] = var_init.values
+                else:
+                    if name=='U':
+                        State.var[self.name_var[name]] = np.zeros((State.ny+1,State.nx))
+                    elif name=='V':
+                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx+1))
+                    elif name=='H':      
+                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+                    elif name=='SSH':
+                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+
+                
+        else:
+            for name in self.name_var:  
+                if name=='U':
+                    State.var[self.name_var[name]] = np.zeros((State.ny+1,State.nx))
+                elif name=='V':
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx+1))
+                elif name=='H':      
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+                elif name=='SSH':
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+
+        # Initialize model Parameters (Flux on SSH and tracers)
+        for name in self.name_var:
+            State.params[self.name_var[name]] = np.zeros_like(State.var[self.name_var[name]])
+
+        # Initialize boundary condition dictionnary for each model variable
+        self.bc = {}
+        self.forcing = {}
+        for _name_var_mod in self.name_var:
+            self.bc[_name_var_mod] = {}
+            self.forcing[_name_var_mod] = {}
+        self.init_from_bc = config.MOD.init_from_bc
+        self.Wbc = np.zeros((State.ny,State.nx))
+        if config.MOD.dist_sponge_bc is not None and State.mask is not None:
+            if config.MOD.advect_tracer and config.MOD.bc_trac=='OBC':
+                bc = False # No sponge band for open boundaries
+            else:
+                bc = True
+            self.Wbc = grid.compute_weight_map(State.lon, State.lat, deepcopy(State.mask), config.MOD.dist_sponge_bc, bc=bc)
+            if config.EXP.flag_plot>1:
+                plt.figure()
+                plt.pcolormesh(self.Wbc)
+                plt.colorbar()
+                plt.title('Wbc')
+                plt.show()
+        
+        # Model initialization
+        params = {
+            "nx": State.nx,
+            "ny": State.ny,
+            "nl": config.MOD.nl,
+            "dx": State.dx,
+            "dy": State.dy,
+            "H": np.array([[[config.MOD.H0]]]),
+            "g_prime": np.array([[[self.c.mean()**2/config.MOD.H0]]]),
+            "f": np.pad(self.f, ((0, 1), (0, 1)), mode='edge'),
+            "taux": 0.,
+            "tauy": 0.,
+            "bottom_drag_coef": config.MOD.bottom_drag_coef,
+            "dtype": jnp.float64,
+            "mask": (1-State.mask.astype(int)),
+            "compile": True,
+            "slip_coef": config.MOD.slip_coef,
+            "dt": dt,
+        }
+        self.model = model(params)
+
+        self.ssh2h = self.model.A[0,0] * State.g * self.model.H[0,0]
+
+        # Model functions initialization
+        self.model_step = self.model.step
+        self.model_step_tgl = self.model.step_tgl
+        self.model_step_adj = self.model.step_adj
+
+        # Tests tgl & adj
+        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+            print('Tangent test:')
+            #tangent_test(self,State,nstep=10)
+            print('Adjoint test:')
+            #adjoint_test(self,State,nstep=10)
+    
+    def init(self, State, t0=0):
+
+        if type(self.init_from_bc)==dict:
+            if 'SSH' in self.init_from_bc and 'H' not in self.init_from_bc:
+                g = 9.81
+                ssh0 = self.bc['SSH'][t0]
+                p_init = g * ssh0
+                p_init = np.pad(p_init, pad_width=((1, 0), (1, 0)))
+                p_init = p_init[None, None, :, :]
+                u_init, v_init, h_init = self.model.G(p_init)
+                State.setvar(u_init[0,0]/self.model.dx, self.name_var['U'])
+                State.setvar(v_init[0,0]/self.model.dy, self.name_var['V'])
+                State.setvar(h_init[0,0]/self.model.area, self.name_var['H'])
+                State.setvar(ssh0[0,0], self.name_var['SSH'])
+            for name in self.init_from_bc:
+                if self.init_from_bc[name] and t0 in self.bc[name]:
+                    State.setvar(self.bc[name][t0], self.name_var[name])
+        elif self.init_from_bc:
+            for name in self.name_var: 
+                if t0 in self.bc[name]:
+                     State.setvar(self.bc[name][t0], self.name_var[name])
+
+    
+    def save_output(self,State,present_date,name_var=None,t=None):
+
+        State0 = State.copy()
+        State0.save_output(present_date, name_var)
+        
+
+    def set_bc(self,time_bc,var_bc):
+
+        for _name_var_bc in var_bc:
+            for _name_var_mod in self.name_var:
+                if _name_var_bc==_name_var_mod:
+                    for i,t in enumerate(time_bc):
+                        var_bc_t = +var_bc[_name_var_bc][i]
+                        # Remove nan
+                        var_bc_t[np.isnan(var_bc_t)] = 0.
+                        # Fill bc dictionnary
+                        self.bc[_name_var_mod][t] = var_bc_t
+                elif _name_var_bc==f'{_name_var_mod}_params':
+                    for i,t in enumerate(time_bc):
+                        var_bc[_name_var_bc][i][np.isnan(var_bc[_name_var_bc][i])] = 0.
+                        self.forcing[_name_var_mod][t] = var_bc[_name_var_bc][i]
+        
+        # For step_jax
+        self.bc_time_jax = jnp.array(list(self.bc['SSH'].keys()))
+        self.bc_time = np.array(list(self.bc['SSH'].keys()))
+        self.bc_values = {t: jnp.array(self.bc['SSH'][t]) for t in self.bc['SSH']}
+        for name in var_bc:
+            self.bc_values[name] = jnp.array(list(self.bc['SSH'].values()))
+
+    def ano_bc(self,t,State,sign):
+
+        return
+            
+    def _apply_bc(self,t0,t1):
+        
+        Xb = jnp.zeros((self.ny,self.nx,))
+        
+        if 'SSH' not in self.bc:
+            return Xb
+        elif len(self.bc['SSH'].keys())==0:
+             return Xb
+        elif t0 not in self.bc_time:
+            # Find closest time
+            idx_closest = np.argmin(np.abs(self.bc_time-t0))
+            t0 = self.bc_time[idx_closest]
+        Xb = self.bc_values[t0]
+        
+        return Xb
+    
+    def step(self,State,nstep=1,t=0):
+ 
+        # Boundary field
+        sshb = self._apply_bc(t,int(t+nstep*self.dt))
+
+        # Get state variable(s)
+        u = np.expand_dims(State.getvar(name_var=self.name_var['U']).astype('float64'), axis=(0,1))
+        v = np.expand_dims(State.getvar(name_var=self.name_var['V']).astype('float64'), axis=(0,1))
+        h = np.expand_dims(State.getvar(name_var=self.name_var['H']).astype('float64'), axis=(0,1))
+
+        # Time propagation
+        u, v, h, ssh = self.model_step(u, v, h, nstep=nstep, return_ssh=True)
+        u = np.array(u[0,0], dtype='float64')
+        v = np.array(v[0,0], dtype='float64')
+        h = np.array(h[0,0], dtype='float64')
+        ssh = np.array(ssh[0,0], dtype='float64')
+
+        # Forcing flux
+        if self.name_var['SSH'] in State.params:
+            Fssh = State.params[self.name_var['SSH']]
+            h += nstep*self.dt/(3600*24) * Fssh * self.ssh2h 
+            #ssh += nstep*self.dt/(3600*24) * Fssh 
+        
+        # Update state
+        State.setvar(u, name_var=self.name_var['U'])
+        State.setvar(v, name_var=self.name_var['V'])
+        State.setvar(h, name_var=self.name_var['H'])
+        State.setvar(ssh, name_var=self.name_var['SSH'])
+
+    
+
+    def step_tgl(self,dState,State,nstep=1,t=0):
+
+        # Boundary field
+        sshb = self._apply_bc(t,int(t+nstep*self.dt))
+        
+        # Get state variable(s)
+        u = np.expand_dims(State.getvar(name_var=self.name_var['U']).astype('float64'), axis=(0,1))
+        v = np.expand_dims(State.getvar(name_var=self.name_var['V']).astype('float64'), axis=(0,1))
+        h = np.expand_dims(State.getvar(name_var=self.name_var['H']).astype('float64'), axis=(0,1))
+        du = np.expand_dims(dState.getvar(name_var=self.name_var['U']).astype('float64'), axis=(0,1))
+        dv = np.expand_dims(dState.getvar(name_var=self.name_var['V']).astype('float64'), axis=(0,1))
+        dh = np.expand_dims(dState.getvar(name_var=self.name_var['H']).astype('float64'), axis=(0,1))
+
+        # Time propagation
+        du, dv, dh, dssh = self.model_step_tgl(u, v, h, du, dv, dh, nstep=nstep, return_ssh=True)
+
+        du = np.array(du[0,0], dtype='float64')
+        dv = np.array(dv[0,0], dtype='float64')
+        dh = np.array(dh[0,0], dtype='float64')
+        dssh = np.array(dssh[0,0], dtype='float64')
+
+        # Forcing flux
+        if self.name_var['SSH'] in dState.params:
+            dFssh = dState.params[self.name_var['SSH']]
+            dh += nstep*self.dt/(3600*24) * dFssh * self.ssh2h 
+            #dssh += nstep*self.dt/(3600*24) * dFssh 
+        
+        # Update state
+        dState.setvar(du, name_var=self.name_var['U'])
+        dState.setvar(dv, name_var=self.name_var['V'])
+        dState.setvar(dh, name_var=self.name_var['H'])
+        dState.setvar(dssh, name_var=self.name_var['SSH'])
+
+    def step_adj(self,adState,State,nstep=1,t=0):
+
+        # Boundary field
+        Xb = self._apply_bc(t,int(t+nstep*self.dt))
+
+        # Get state variable
+        u = np.expand_dims(State.getvar(name_var=self.name_var['U']).astype('float64'), axis=(0,1))
+        v = np.expand_dims(State.getvar(name_var=self.name_var['V']).astype('float64'), axis=(0,1))
+        h = np.expand_dims(State.getvar(name_var=self.name_var['H']).astype('float64'), axis=(0,1))
+        adu = np.expand_dims(adState.getvar(name_var=self.name_var['U']).astype('float64'), axis=(0,1))
+        adv = np.expand_dims(adState.getvar(name_var=self.name_var['V']).astype('float64'), axis=(0,1))
+        adh = np.expand_dims(adState.getvar(name_var=self.name_var['H']).astype('float64'), axis=(0,1))
+        adssh = np.expand_dims(adState.getvar(name_var=self.name_var['SSH']).astype('float64'), axis=(0,1))
+
+        # Time propagation
+        result = self.model_step_adj(u, v, h, adu, adv, adh, adssh, nstep=nstep, return_ssh=True)
+        adu, adv, adh = result[0]
+        adu = np.array(adu[0,0], dtype='float64')
+        adv = np.array(adv[0,0], dtype='float64')
+        adh = np.array(adh[0,0], dtype='float64')
+        adssh = np.array(adssh[0,0], dtype='float64')
+
+        # Update state and parameters
+        if self.name_var['SSH'] in adState.params:
+            adFssh = adState.getvar(name_var=self.name_var['H']).astype('float64') 
+            adState.params[self.name_var['SSH']] += adFssh * nstep*self.dt/(3600*24) * self.ssh2h 
+    
+        adState.setvar(adu,self.name_var['U'])
+        adState.setvar(adv,self.name_var['V'])
+        adState.setvar(adh,self.name_var['H'])
+        adState.setvar(adssh*0,self.name_var['SSH'])
 
 ###############################################################################
 #                             Multi-models                                    #
@@ -2779,6 +3274,7 @@ class Model_multi:
         # Model variables: for each variable ('SSH', 'SST', 'Chl' etc...), 
         # we initialize a new variable for the sum of the different contributions
         self.name_var = {}
+        self.name_var_tot = {}
         _name_var_tmp = []
         self.var_to_save = []
         for M in self.Models:
@@ -2790,19 +3286,32 @@ class Model_multi:
                     # At least two component for the same variable, so we initialize a global variable
                     new_name = f'{name}_tot'
                     self.name_var[name] = new_name
+                    self.name_var_tot[name] = new_name
                     # Initialize new State variable
-                    State.var[new_name] = State.var[M.name_var[name]].copy()
+                    if new_name in State.var:
+                        State.var[new_name] += State.var[M.name_var[name]]
+                    else:
+                        State.var[new_name] = State.var[M.name_var[name]].copy()
                     if M.name_var[name] in M.var_to_save and new_name not in self.var_to_save:
                         self.var_to_save = np.append(self.var_to_save,new_name)
         self.var_to_save = list(self.var_to_save)
 
+        for M in self.Models:
+            for name in M.name_var:
+                if name not in self.name_var_tot:
+                    self.name_var[name] = M.name_var[name]
+
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            for M in self.Models:
-                print('Tangent test:')
-                tangent_test(M,State,nstep=10)
-                print('Adjoint test:')
-                adjoint_test(M,State,nstep=10)
+            #for M in self.Models:
+                #print('Tangent test:')
+                #tangent_test(M,State,nstep=10)
+                #print('Adjoint test:')
+                #adjoint_test(M,State,nstep=10)
+            print('Tangent test:')
+            #tangent_test(self,State,nstep=10)
+            print('Adjoint test:')
+            #adjoint_test(self,State,nstep=10)
 
     def init(self,State,t0=0):
 
@@ -2816,7 +3325,7 @@ class Model_multi:
             for name in self.name_var:
                 if name in M.name_var:
                     var_tot_tmp[name] += State.var[M.name_var[name]]
-        
+
         # Update state
         for name in self.name_var:
             State.var[self.name_var[name]] = var_tot_tmp[name]
@@ -2835,8 +3344,8 @@ class Model_multi:
 
         # Intialization
         var_tot_tmp = {}
-        #for name in self.name_var:
-        #    var_tot_tmp[name] = jnp.zeros_like(State.var[self.name_var[name]]) 
+        for name in self.name_var_tot:
+            var_tot_tmp[name] = jnp.zeros_like(State.var[self.name_var[name]]) 
         
         # Loop over models
         for M in self.Models:
@@ -2845,21 +3354,18 @@ class Model_multi:
             M.step(State,nstep=_nstep,t=t)
             # Add to total variables
             for name in self.name_var:
-                if name in M.name_var:
-                    if name in var_tot_tmp:
-                        var_tot_tmp[name] += +State.var[M.name_var[name]]
-                    else:
-                        var_tot_tmp[name] = +State.var[M.name_var[name]]
-        
+                if name in M.name_var and (name in self.name_var_tot):
+                    var_tot_tmp[name] += +State.var[M.name_var[name]]
+                    
         # Update state
-        for name in self.name_var:
-            State.var[self.name_var[name]] = var_tot_tmp[name]
+        for name in self.name_var_tot:
+            State.var[self.name_var_tot[name]] = var_tot_tmp[name]
 
     def step_tgl(self,dState,State,nstep=1,t=None):
 
         # Intialization
         var_tot_tmp = {}
-        for name in self.name_var:
+        for name in self.name_var_tot:
             var_tot_tmp[name] = np.zeros_like(State.var[self.name_var[name]]) 
 
         # Loop over models
@@ -2869,32 +3375,32 @@ class Model_multi:
             M.step_tgl(dState,State,nstep=_nstep,t=t)
             # Add to total variables
             for name in self.name_var:
-                if name in M.name_var:
+                if name in M.name_var and name in var_tot_tmp:
                     var_tot_tmp[name] += dState.var[M.name_var[name]]
         
         # Update state
-        for name in self.name_var:
-            dState.var[self.name_var[name]] = var_tot_tmp[name]
+        for name in self.name_var_tot:
+            dState.var[self.name_var_tot[name]] = var_tot_tmp[name]
 
     def step_adj(self,adState,State,nstep=1,t=None):
 
         # Intialization
         var_tot_tmp = {}
-        for name in self.name_var:
-            var_tot_tmp[name] = adState.var[self.name_var[name]]
+        for name in self.name_var_tot:
+            var_tot_tmp[name] = adState.var[self.name_var_tot[name]]
         
         # Loop over models
         for M in self.Models:
             _nstep = nstep*self.dt//M.dt
             # Add to local variable
             for name in self.name_var:
-                if name in M.name_var:
+                if name in M.name_var and name in self.name_var_tot:
                     adState.var[M.name_var[name]] += var_tot_tmp[name]  
             # Adjoint propagation
             M.step_adj(adState,State,nstep=_nstep,t=t)
         
-        for name in self.name_var:
-            adState.var[self.name_var[name]] *= 0 
+        for name in self.name_var_tot:
+            adState.var[self.name_var_tot[name]] *= 0 
                 
 
         
@@ -2907,8 +3413,8 @@ def tangent_test(M,State,t0=0,nstep=1):
     # Boundary conditions
     var_bc = {}
     for name in M.name_var:
-        var_bc[name] = {0:np.random.random((M.ny,M.nx)).astype('float64'),
-                        1:np.random.random((M.ny,M.nx)).astype('float64')}
+        var_bc[name] = {0:np.random.random((State.ny,State.nx)).astype('float64'),
+                        1:np.random.random((State.ny,State.nx)).astype('float64')}
     M.set_bc([t0,t0+nstep*M.dt],var_bc)
 
     State0 = State.random()
@@ -2946,8 +3452,8 @@ def adjoint_test(M,State,t0=0,nstep=1):
     # Boundary conditions
     var_bc = {}
     for name in M.name_var:
-        var_bc[name] = {0:np.random.random((M.ny,M.nx)).astype('float64'),
-                        1:np.random.random((M.ny,M.nx)).astype('float64')}
+        var_bc[name] = {0:np.random.random((State.ny,State.nx)).astype('float64'),
+                        1:np.random.random((State.ny,State.nx)).astype('float64')}
     M.set_bc([t0,t0+nstep*M.dt],var_bc)
     
     # Current trajectory

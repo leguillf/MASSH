@@ -221,7 +221,6 @@ class State:
         self.lon = lon_grid
         self.lat = lat_grid
 
-
     def ini_grid_from_file(self,config):
         """
         NAME
@@ -282,8 +281,6 @@ class State:
             dsin.close()
             del dsin
             
-                
-    
     def ini_mask(self,config):
         
         """
@@ -302,6 +299,7 @@ class State:
             name_lat = config.name_var_mask['lat']
             name_var = config.name_var_mask['var']
         else:
+            print('No mask provided')
             self.mask = (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
             return
 
@@ -324,6 +322,7 @@ class State:
         lon = ds[name_lon].values
         lat = ds[name_lat].values
         var = ds[name_var]
+
                 
         if len(var.shape)==2:
             mask = var
@@ -344,11 +343,12 @@ class State:
                                         x_target.flatten(),
                                         y_target.flatten(),
                                         bounds_error=False).reshape(x_target.shape).T
+
                                         
         # Convert to bool if float type     
         if mask_interp.dtype!=bool : 
             self.mask = np.empty((self.ny,self.nx),dtype='bool')
-            ind_mask = (np.isnan(mask_interp)) | (mask_interp==1) | (np.abs(mask_interp)>10)
+            ind_mask = (np.isnan(mask_interp)) 
             self.mask[ind_mask] = True
             self.mask[~ind_mask] = False
         else:

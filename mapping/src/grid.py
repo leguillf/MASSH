@@ -17,6 +17,8 @@ from scipy.spatial.distance import cdist
 import pandas as pd
 import matplotlib.pylab as plt
 
+from scipy.spatial import KDTree
+
 def lonlat2dxdy(lon,lat):
     dlon = np.gradient(lon)
     dlat = np.gradient(lat)
@@ -416,7 +418,7 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
 
     
     
-def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
+def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True,slope=10):
     
     #####################
     # Compute weights map
@@ -471,7 +473,7 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
         # Nudge values out of pixels
         df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
         # Compute weight average and save it
-        df['tapering'] = df['tapering']**10
+        df['tapering'] = df['tapering']**slope
         wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
         dfg = df.groupby('ind_mod')
         weights = dfg['weight'].apply(wa)

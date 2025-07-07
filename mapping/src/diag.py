@@ -941,22 +941,25 @@ class Diag_ose():
         self.name_exp_lat = config.EXP.name_lat
         self.name_exp_var = config.DIAG.name_exp_var
         exp_files = sorted(glob.glob(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc'))
-        exp_datasets = []
-        for file in exp_files:
-            with nc.Dataset(file) as ds:
-                exp_data = ds.variables[self.name_exp_var][:]
-                time_exp = ds.variables['time'][:]
-                time_exp = nc.num2date(time_exp, ds.variables['time'].units)
-                time_exp = np.array(time_exp, dtype='datetime64[ns]')
-                
-                ds_xr = xr.Dataset({
-                    self.name_exp_var: (ds.variables[self.name_exp_var].dimensions, exp_data)
-                }, coords={'time': time_exp,
-                           self.name_exp_lon: ds.variables[self.name_exp_lon][:], 
-                           self.name_exp_lat: ds.variables[self.name_exp_lat][:]})
-                exp_datasets.append(ds_xr)
-        exp = xr.concat(exp_datasets, dim='time')[self.name_exp_var]
-        exp = exp.copy(deep=True).load()
+        try:
+            exp = xr.open_mfdataset(exp_files)[self.name_exp_var]
+        except:
+            exp_datasets = []
+            for file in exp_files:
+                with nc.Dataset(file) as ds:
+                    exp_data = ds.variables[self.name_exp_var][:]
+                    time_exp = ds.variables['time'][:]
+                    time_exp = nc.num2date(time_exp, ds.variables['time'].units)
+                    time_exp = np.array(time_exp, dtype='datetime64[ns]')
+                    
+                    ds_xr = xr.Dataset({
+                        self.name_exp_var: (ds.variables[self.name_exp_var].dimensions, exp_data)
+                    }, coords={'time': time_exp,
+                            self.name_exp_lon: ds.variables[self.name_exp_lon][:], 
+                            self.name_exp_lat: ds.variables[self.name_exp_lat][:]})
+                    exp_datasets.append(ds_xr)
+            exp = xr.concat(exp_datasets, dim='time')[self.name_exp_var]
+            exp = exp.copy(deep=True).load()
         dt = (exp[self.name_exp_time][1]-exp[self.name_exp_time][0]).values
         self.exp = exp.sel(
             {self.name_exp_time:slice(np.datetime64(self.time_min)-dt,np.datetime64(self.time_max)+dt)},
@@ -1031,37 +1034,29 @@ That could be due to non regular grid or bad written netcdf file')
         
         if self.geo_grid:
             self.exp_regridded =  self._regrid_geo(
-                self.exp[self.name_exp_lon].values,
-                self.exp[self.name_exp_lat].values, 
-                self.exp[self.name_exp_time].values, 
                 self.exp,
                 self.name_exp_time, self.name_exp_lat, self.name_exp_lon
                 )
         else:
             self.exp_regridded = self._regrid_unstructured(
-                self.exp[self.name_exp_lon].values,
-                self.exp[self.name_exp_lat].values, 
-                self.exp[self.name_exp_time].values, 
                 self.exp,
+                self.name_exp_time, self.name_exp_lat, self.name_exp_lon, 
                 )
         
         
         if self.compare_to_baseline:
             self.bas_regridded = self._regrid_geo(
-                self.bas[self.name_bas_lon].values,
-                self.bas[self.name_bas_lat].values, 
-                self.bas[self.name_bas_time].values, 
                 self.bas,
                 self.name_bas_time, self.name_bas_lat, self.name_bas_lon
                 )        
     
-    def _regrid_geo(self, lon, lat, time, var, name_time, name_lat, name_lon):
+    def _regrid_geo(self, data, name_time, name_lat, name_lon):
 
         # Define source grid
-        x_source_axis = pyinterp.Axis(lon, is_circle=False)
-        y_source_axis = pyinterp.Axis(lat)
-        z_source_axis = pyinterp.TemporalAxis(time)
-        var_source = var.transpose(name_lon,name_lat,name_time) 
+        x_source_axis = pyinterp.Axis(data[name_lon].values, is_circle=False)
+        y_source_axis = pyinterp.Axis(data[name_lat].values)
+        z_source_axis = pyinterp.TemporalAxis(data[name_time].values)
+        var_source = data.transpose(name_lon,name_lat,name_time) 
         grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var_source.data)
 
         exp_regridded = []
@@ -1087,7 +1082,7 @@ That could be due to non regular grid or bad written netcdf file')
 
             # Save to dataset
             exp_regridded.append( xr.DataArray(
-                name=var.name,
+                name=data.name,
                 data=var_interp,
                 coords={self.name_ref_time: (_ref[self.name_ref_time].dims, _ref[self.name_ref_time].values),
                         self.name_ref_lon: (_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].values), 
@@ -1098,9 +1093,12 @@ That could be due to non regular grid or bad written netcdf file')
             )
         return exp_regridded
 
-    def _regrid_unstructured(self, lon, lat, time, var):
+    def _regrid_unstructured(self, data, name_time, name_lat, name_lon):
 
         # Define regular grid 
+        lon = data[name_lon].values
+        lat = data[name_lat].values
+        time = data[name_time].values
         dlon = np.nanmean(lon[:,1:]-lon[:,:-1])
         dlat = np.nanmean(lat[1:,:]-lat[:-1,:])
         lon1d = np.arange(np.nanmin(lon),np.nanmax(lon)+dlon,dlon)
@@ -1113,10 +1111,10 @@ That could be due to non regular grid or bad written netcdf file')
         lats = lat.ravel()
         var_regridded = np.zeros((time.size,lat_target.shape[0],lon_target.shape[1]))
         for i in range(time.size):
-            data = var[i].data.ravel()
-            mask = np.isnan(lons) + np.isnan(lats) + np.isnan(data)
-            data = data[~mask]
-            mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, data)
+            _data = data[i].data.ravel()
+            mask = np.isnan(lons) + np.isnan(lats) + np.isnan(_data)
+            _data = _data[~mask]
+            mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, _data)
             idw, _ = mesh.window_function(
                 np.vstack((lon_target.ravel(), lat_target.ravel())).T,
                 within=False,  # Extrapolation is forbidden
@@ -1127,12 +1125,12 @@ That could be due to non regular grid or bad written netcdf file')
         
         # Mask
         lon2d,lat2d = np.meshgrid(lon1d,lat1d)
-        mask_interp = griddata((lons,lats), var[0].data.ravel(), (lon2d.ravel(),lat2d.ravel()),method='nearest').reshape(lon2d.shape)
+        mask_interp = griddata((lons,lats), data[0].data.ravel(), (lon2d.ravel(),lat2d.ravel()),method='nearest').reshape(lon2d.shape)
         var_regridded[:,np.isnan(mask_interp)] = np.nan
 
         # Save to dataset
         var_regridded = xr.DataArray(
-            name=var.name,
+            name=data.name,
             data=var_regridded,
             coords={self.name_exp_time: time,
                     self.name_exp_lon: lon1d, 
@@ -1148,10 +1146,8 @@ That could be due to non regular grid or bad written netcdf file')
 
         # return regrid_geo output
         return self._regrid_geo(
-                    lon1d,
-                    lat1d, 
-                    time, 
                     var_regridded,
+                    name_time, name_lat, name_lon
                     )
           
     def rmse_based_scores(self,plot=False):

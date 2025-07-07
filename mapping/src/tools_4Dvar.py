@@ -340,7 +340,7 @@ class Variational:
         # Last timestamp
         t = self.M.T[self.checkpoints[-1]]
         if self.H.is_obs_time(t):
-            self.H.adj(t,adState,State_dict[t], misfit_dict[t])
+            self.H.adj(t, adState, State_dict[t], misfit_dict[t])
     
         grad_misfit = []
         grad_basis = []
@@ -373,8 +373,8 @@ class Variational:
                 adState.plot(title='Adjoint State variables at the middle of cost function evaluation')
         
         
-        print("[cost] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(cost_misfit), np.mean(cost_basis), np.mean(cost_model)) )   
-        print("[grad] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(grad_misfit), np.mean(grad_basis), np.mean(grad_model)) )
+        #print("[cost] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(cost_misfit), np.mean(cost_basis), np.mean(cost_model)) )   
+        #print("[grad] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(grad_misfit), np.mean(grad_basis), np.mean(grad_model)) )
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
