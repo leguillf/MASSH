@@ -112,12 +112,16 @@ class Diag_osse():
         self.name_ref_lon = config.DIAG.name_ref_lon
         self.name_ref_lat = config.DIAG.name_ref_lat
         self.name_ref_var = config.DIAG.name_ref_var
-        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref, preprocess=lambda ds: ds[[self.name_ref_var]]).squeeze()
-        if np.sign(ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
-            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, ref[self.name_ref_lon].data % 360))})
-        elif np.sign(ref[self.name_ref_lon].data.min())==1 and State.lon_unit=='-180_180':
-            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, (ref[self.name_ref_lon].data + 180) % 360 - 180))})
-        ref = ref.sortby(ref[self.name_ref_lon])    
+        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref, preprocess=lambda ds: ds[[self.name_ref_time, self.name_ref_lon, self.name_ref_lat, self.name_ref_var]]).squeeze()
+        try:
+            if np.sign(ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
+                ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, ref[self.name_ref_lon].data % 360))})
+            elif np.sign(ref[self.name_ref_lon].data.min())==1 and State.lon_unit=='-180_180':
+                ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, (ref[self.name_ref_lon].data + 180) % 360 - 180))})
+            ref = ref.sortby(ref[self.name_ref_lon])    
+        except:
+            print(end='\r')
+
         dt = (ref[self.name_ref_time][1]-ref[self.name_ref_time][0]).values/np.timedelta64(1,'s')
         idt = max(int(self.time_step.total_seconds()//dt), 1)
         self.ref = ref.sel(
@@ -133,6 +137,7 @@ class Diag_osse():
 That could be due to non regular grid or bad written netcdf file')
         ref.close()
         self.ref = self.ref.load()
+        self.ref_dims = list(self.ref.dims.keys())
 
         # Experimental data
         self.geo_grid = State.geo_grid
@@ -345,13 +350,18 @@ That could be due to non regular grid or bad written netcdf file')
             var_regridded[i,:,:] = idw.reshape(lon_target.shape)
 
         # Save to dataset
-        var_regridded = xr.DataArray(
-            data=var_regridded,
-            coords={self.name_ref_time: time,
+        if len(self.ref[self.name_ref_lon].shape)==1:
+            coords = {self.name_ref_time: time,
                     self.name_ref_lon: self.ref[self.name_ref_lon].values, 
                     self.name_ref_lat: self.ref[self.name_ref_lat].values, 
-                    },
-            dims=[self.name_ref_time, self.name_ref_lat, self.name_ref_lon]
+                    }
+        else:
+            coords = {self.name_ref_time: time,
+                    }
+        var_regridded = xr.DataArray(
+            data=var_regridded,
+            coords=coords,
+            dims=self.ref.dims
             )
 
         # Time interpolation
@@ -365,10 +375,10 @@ That could be due to non regular grid or bad written netcdf file')
 
         # RMSE(t) based score
         rmse_t = 1.0 - (((self.exp_regridded - self.ref[self.name_ref_var])**2).mean(
-            dim=(self.name_ref_lon, self.name_ref_lat)))**0.5/(((self.ref[self.name_ref_var])**2).mean(dim=(self.name_ref_lon, self.name_ref_lat)))**0.5
+            dim=self.ref_dims[1:]))**0.5/(((self.ref[self.name_ref_var])**2).mean(dim=self.ref_dims[1:]))**0.5
         if self.compare_to_baseline:
             rmse_t_bas = 1.0 - (((self.bas_regridded - self.ref[self.name_ref_var])**2).mean(
-                dim=(self.name_ref_lon, self.name_ref_lat)))**0.5/(((self.ref[self.name_ref_var])**2).mean(dim=(self.name_ref_lon, self.name_ref_lat)))**0.5
+                dim=self.ref_dims[1:]))**0.5/(((self.ref[self.name_ref_var])**2).mean(dim=self.ref_dims[1:]))**0.5
             rmse_t = xr.concat((rmse_t, rmse_t_bas), dim='run')
             rmse_t['run'] = ['experiment','baseline']
         # RMSE(x, y) based score

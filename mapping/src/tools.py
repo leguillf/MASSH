@@ -221,11 +221,16 @@ def read_auxdata(file_aux,name_var,lon_unit):
     elif 'var' in name_var:
         data = ds[name_var['var']].values.squeeze()
     
+    if len(np.shape(data))==3: 
+        data = np.mean(data,0)
+    
     if data.shape[1]==lon.size:
         data = data.transpose()
+    
     if len(lon.shape)==1:
         finterp = scipy.interpolate.RegularGridInterpolator((lon,lat),data,bounds_error=False,fill_value=None)
     else:
         finterp = scipy.interpolate.LinearNDInterpolator(list(zip(lon.ravel(),lat.ravel())),data.ravel())
+
     return finterp
 

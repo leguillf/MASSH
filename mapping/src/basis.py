@@ -657,10 +657,10 @@ class Basis_bm:
                 _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
                 if 1/ff[iff]>self.lmeso:
                     # Constant
-                    Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5*np.ones((_nwavet,))))
+                    Q = np.concatenate((Q,self.Qmax/(self.facns**2*self.facnlt)**.5*np.ones((_nwavet,))))
                 else:
                     # Slope
-                    Q = np.concatenate((Q,self.Qmax/(self.facns*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
+                    Q = np.concatenate((Q,self.Qmax/(self.facns**2*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
                 iwave += _nwavet
                 if return_q:
                     print(f'lambda={1/ff[iff]:.1E}',
@@ -692,10 +692,12 @@ class Basis_bm:
         self.ff=ff
         self.k = 2 * np.pi * ff
 
-
         # Compute basis components
+        print('Computing Spatial components')
         self.Gx, self.Nx = self._compute_component_space() # in space
+        print('Computing Time components')
         self.Gt, self.Nt = self._compute_component_time(time) # in time
+        
         
         if return_q:
             print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
@@ -847,16 +849,15 @@ class Basis_bm_jax(Basis_bm):
     def __init__(self,config, State):
         super().__init__(config, State)
 
+        # JIT 
         self._operg_jit = jit(self._operg)
         self._operg_reduced_jit = jit(self._operg_reduced)
 
     def set_basis(self,time,return_q=False,**kwargs):
         res = super().set_basis(time,return_q=return_q,**kwargs)
 
-        # Convert dictionary to keys and values arrays
-        self.Gt_keys = jnp.array(list(self.Gt.keys()))
-        self.Gt_values = jnp.array(list(self.Gt.values()))
-        self.Nt_values = jnp.array(list(self.Nt.values()))
+        self.time = time
+        self.vect_time = jnp.eye(time.size)
 
         return res
 
@@ -931,37 +932,39 @@ class Basis_bm_jax(Basis_bm):
                         
 
         return Gx, Nx  
-    
+        
     def _compute_component_time(self, time):
 
-        Gt = {} # Time operator that gathers the time factors for each frequency 
-        Nt = {} # Number of wave times tw such as abs(tw-t)<tdec
+        Gt = {} # Time operator that gathers the time factors for each frequency
+        
+        for iff in range(self.nf):
+            nbasis_f = self.iff_wavebounds[iff+1] - self.iff_wavebounds[iff]
+            Gt_np = np.zeros((time.size,nbasis_f))
+            ind_tmp = 0
+            for it in range(len(self.enst[iff])):
+                for _ in range(self.NP[iff]):
+                    for i,t in enumerate(time) :
+                        dt = t - self.enst[iff][it]
+                        if not (abs(dt)>self.tdec[iff] or np.isnan(self.enst[iff][it])):
+                            fact = self.window(dt / self.tdec[iff])
+                            fact /= self.norm_fact[iff]
+                            Gt_np[i,ind_tmp:ind_tmp+2*self.ntheta] = fact
+                    ind_tmp += 2*self.ntheta
+            Gt[iff] = sparse.csr_fromdense(jnp.array(Gt_np).T)
 
-        for t in time:
-
-            Gt[t] = [None,]*self.nf
-            Nt[t] = [0,]*self.nf
-
-            for iff in range(self.nf):
-                Gt[t][iff] = np.zeros((self.nbasis,)) 
-                ind_tmp = self.iff_wavebounds[iff]
-                for it in range(len(self.enst[iff])):
-                    dt = t - self.enst[iff][it]
-                    if abs(dt) < self.tdec[iff]:
-                        fact = self.window(dt / self.tdec[iff]) 
-                        fact /= self.norm_fact[iff]
-                        if fact!=0:   
-                            Nt[t][iff] += 1
-                            Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta*self.NP[iff]] = fact   
-                    ind_tmp += 2*self.ntheta*self.NP[iff]
-        return Gt, Nt    
+        return Gt, None
     
-    def get_Gt_value(self, t):
+    def _get_Gt_value(self, t):
         idx = jnp.where(self.Gt_keys == t, size=1)[0]  # Find index
         return self.Gt_values[idx][0], self.Nt_values[idx][0]  # Get corresponding value
     
-    def _operg(self, t, X):
+    def get_Gt_value(self, t, iff):
 
+        idt = jnp.where(self.time == t, size=1)[0]  # Find index
+
+        return self.Gt[iff] @ self.vect_time[idt[0]] # Get corresponding value
+    
+    def _operg(self, t, X):
         """
             Project to physicial space
         """
@@ -970,19 +973,18 @@ class Basis_bm_jax(Basis_bm):
         phi = jnp.zeros(self.shape_phys).ravel()
 
         for iff in range(self.nf):
-            # Get Gt value
-            Gt, Nt = self.get_Gt_value(t)
 
-            # Compute GtXf
-            GtXf = (Gt[iff] * X)[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
+            Gt = self.get_Gt_value(t,iff)
+            Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
+            GtXf = Gt * Xf
 
             # Replace NaNs with 0 (use jnp.nan_to_num for JAX compatibility)
             GtXf_no_nan = jnp.nan_to_num(GtXf)
 
-            # Use shape-safe slicing instead of boolean indexing
+            # # Use shape-safe slicing instead of boolean indexing
             Nx_val = self.Nx[iff]
 
-            # Dynamically reshape the sliced array
+            # # Dynamically reshape the sliced array
             reshaped_GtXf = GtXf_no_nan.reshape((-1, Nx_val))  # Ensure reshaping works dynamically
 
             # Update phi
@@ -1016,8 +1018,7 @@ class Basis_bm_jax(Basis_bm):
         X_reduced, = vjp_func(phi_2d)
 
         return X_reduced
-
-
+    
     def operg(self, t, X, State=None):
         
         """

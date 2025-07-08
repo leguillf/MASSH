@@ -26,11 +26,16 @@ from jax import jit
 from jax import jvp,vjp
 from jax.lax import scan, fori_loop
 
-import jaxparrow
+import warnings 
+
+try:
+    import jaxparrow
+except ImportError:
+    warnings.warn('jaxparrow not installed, some jax functions will not be available')
 
 from functools import partial
 
-import warnings 
+
 
 from . import  grid
 from . import switchvar
@@ -904,7 +909,8 @@ class Model_qg1l_jax(M):
                                    config.MOD.name_var_mdt,
                                    State.lon,
                                    State.lat)
-
+            self.mdt[np.isnan(self.mdt)] = 0
+        
             if config.EXP.flag_plot>0:
                 plt.figure()
                 plt.pcolormesh(self.mdt)

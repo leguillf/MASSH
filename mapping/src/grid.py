@@ -108,6 +108,8 @@ def laplacian(u, dx, dy):
     return Ml
 
 def interp2d(ds,name_vars,lon_out,lat_out):
+
+    ds = ds.squeeze()
     
     ds = ds.assign_coords(
                  {name_vars['lon']:(ds[name_vars['lon']]),
