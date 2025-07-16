@@ -75,7 +75,9 @@ class State:
 
             
 
-            self.nx,self.ny = self.lon.shape ### ATTENTION ### PAS self.ny,self.nx
+            # self.nx,self.ny = self.lon.shape ### ATTENTION ### PAS self.ny,self.nx
+
+            self.ny,self.nx = self.lon.shape
 
             self.lon_min = np.nanmin(self.lon)
             self.lon_max = np.nanmax(self.lon)
@@ -238,6 +240,40 @@ class State:
         self.lat = lat
         self.present_date = config.init_date
     
+    # def ini_car_grid(self,config):
+    #     """
+    #     NAME
+    #         ini_car_grid
+    
+    #     DESCRIPTION
+    #         Create state grid, regular in (x,y) 
+    #         Args:
+    #             config (module): configuration module
+    #     """
+
+    #     km2deg = 1./110
+
+    #     ENSLAT = np.arange(
+    #         config.lat_min,
+    #         config.lat_max + config.dx*km2deg,
+    #         config.dx*km2deg)
+
+    #     ENSLON = np.arange(
+    #                 config.lon_min,
+    #                 config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
+    #                 config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
+
+    #     lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
+    #     lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
+
+    #     for I in range(len(ENSLAT)):
+    #         for J in range(len(ENSLON)):
+    #             lat2d[I,J] = ENSLAT[I]
+    #             lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.)*km2deg
+        
+    #     self.lon = lon2d
+    #     self.lat = lat2d
+
     def ini_car_grid(self,config):
         """
         NAME
@@ -249,17 +285,29 @@ class State:
                 config (module): configuration module
         """
 
-        km2deg = 1./110
+        km2deg = 1./111.32
 
-        ENSLAT = np.arange(
-            config.lat_min,
-            config.lat_max + config.dx*km2deg,
-            config.dx*km2deg)
+        if not None in [config.ny,config.nx]:
+            
+            ENSLAT = np.linspace(
+                config.lat_min,
+                config.lat_max,
+                config.ny)
 
-        ENSLON = np.arange(
-                    config.lon_min,
-                    config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
-                    config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
+            ENSLON = np.linspace(
+                config.lon_min,
+                config.lon_max,
+                config.nx)
+        else:
+            ENSLAT = np.arange(
+                config.lat_min,
+                config.lat_max + config.dx*km2deg,
+                config.dx*km2deg)
+
+            ENSLON = np.arange(
+                        config.lon_min,
+                        config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
+                        config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
 
         lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
         lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
@@ -267,7 +315,7 @@ class State:
         for I in range(len(ENSLAT)):
             for J in range(len(ENSLON)):
                 lat2d[I,J] = ENSLAT[I]
-                lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.)*km2deg
+                lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.) * km2deg
         
         self.lon = lon2d
         self.lat = lat2d
@@ -654,8 +702,8 @@ class State:
         other.lon = self.lon
         other.lat = self.lat
         other.geo_grid = self.geo_grid
-        other.grad_bathymetry_x = self.grad_bathymetry_x
-        other.grad_bathymetry_y = self.grad_bathymetry_y
+        # other.grad_bathymetry_x = self.grad_bathymetry_x
+        # other.grad_bathymetry_y = self.grad_bathymetry_y
         
 
         # (deep)Copy model variables

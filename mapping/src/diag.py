@@ -1637,8 +1637,8 @@ class Diag_ose():
         elif np.sign(ref[self.name_ref_lon].data.min())==1 and State.lon_unit=='-180_180':
             ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, (ref[self.name_ref_lon].data + 180) % 360 - 180))})
         ref = ref.swap_dims({ref[self.name_ref_time].dims[0]:self.name_ref_time})
-        lon_ref = ref[self.name_ref_lon] 
-        lat_ref = ref[self.name_ref_lat]
+        lon_ref = ref[self.name_ref_lon].compute()
+        lat_ref = ref[self.name_ref_lat].compute()
         ref = ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max), drop=True)
         ref = ref.where((lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
         try:
@@ -1688,6 +1688,10 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
             bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var].load()
+            if np.sign(bas[self.name_bas_lon].data.min())==-1 and State.lon_unit=='0_360':
+                bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, bas[self.name_bas_lon].data % 360))})
+            elif np.sign(bas[self.name_bas_lon].data.min())==1 and State.lon_unit=='-180_180':
+                bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, (bas[self.name_bas_lon].data + 180) % 360 - 180))})
             bas = bas.assign_coords({self.name_bas_lon:bas[self.name_bas_lon]})
             bas = bas.sortby(bas[self.name_bas_lon])
             self.bas = bas.sel(
@@ -1719,8 +1723,7 @@ That could be due to non regular grid or bad written netcdf file')
                 self.exp[self.name_exp_time].values, 
                 self.exp,
                 )
-        
-        
+
         if self.compare_to_baseline:
             self.bas_regridded = self._regrid_geo(
                 self.bas[self.name_bas_lon].values,
@@ -1866,7 +1869,6 @@ That could be due to non regular grid or bad written netcdf file')
             var[:, :] = np.sqrt(binning.variable('mean')).T  
             rmse_xy_bas = np.sqrt(binning.variable('mean')).T
 
-        
         ncfile.close()
         
 

@@ -346,7 +346,8 @@ def Inv_forward(config,State,Model,Basis,X,Bc,Obsop,ssh_truth=None):
         # Propagation
         Model.step(State0,nstep,t=t)
 
-        State0.plot()
+        if t%(15*24*3600)==0: # plotting everyn 15 days 
+            State0.plot(present_date)
 
         #####################################################
         # Calculating rmse with truth ssh - TEST for BM dev #
@@ -1149,7 +1150,7 @@ def Inv_4Dvar_jax(config,State,Model,dict_obs=None,Obsop=None,Basis=None,Bc=None
     Run a 4Dvar analysis
     '''
     
-    # Compute checkpoints
+    # Compute scheckpoints
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
     checkpoints = [0]
     time_checkpoints = [np.datetime64(Model.timestamps[0])]

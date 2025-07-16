@@ -40,7 +40,6 @@ def Bc(config, State=None, verbose=1, *args, **kwargs):
     else:
         sys.exit(config.OBSOP.super + ' not implemented yet')
 
-
 class Bc_ext:
 
     def __init__(self,config, State=None):
@@ -67,32 +66,45 @@ class Bc_ext:
         # Read netcdf
         _ds = xr.open_mfdataset(config.BC.file)
 
-        # Convert longitude 
-        if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':
-            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, _ds[config.BC.name_lon].data % 360))})
-        elif np.sign(_ds[config.BC.name_lon].data.min())==1 and State.lon_unit=='-180_180':
-            _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180))})
-        _ds = _ds.sortby(_ds[config.BC.name_lon])    
-
         # Copy dataset
-        ds = _ds.copy()
+        ds = _ds.copy().load()
         _ds.close()
+
+        # Convert longitude 
+        try:
+            if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':
+                _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, _ds[config.BC.name_lon].data % 360))})
+            elif np.sign(_ds[config.BC.name_lon].data.min())>=0 and State.lon_unit=='-180_180':
+                _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180 ))})
+            _ds = _ds.sortby(_ds[config.BC.name_lon])    
+        except:
+            print("Warning: can't convert longitude coordinates in " + config.BC.file)
         
         # Select study domain
         time_bc = ds[config.BC.name_time].values
+        self.name_time_bc = config.BC.name_time
         lon_bc = ds[config.BC.name_lon].values
         lat_bc = ds[config.BC.name_lat].values
         dlon += np.nanmean(lon_bc[1:]-lon_bc[:-1])
         dlat += np.nanmean(lat_bc[1:]-lat_bc[:-1])
         dtime = time_bc[1]-time_bc[0]
-        ds = ds.sel({
-            config.BC.name_time:slice(np.datetime64(config.EXP.init_date)-dtime,np.datetime64(config.EXP.final_date)+dtime),
-            config.BC.name_lon:slice(lon_min-dlon,lon_max+2*dlon),
-            config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)
-            })
+        try:
+            ds = ds.sel({
+                config.BC.name_time:slice(np.datetime64(config.EXP.init_date)-dtime,np.datetime64(config.EXP.final_date)+dtime),
+                })
+        except:
+            ds = ds.where(
+                (ds[config.BC.name_time] >= np.datetime64(config.EXP.init_date)-dtime) & (ds[config.BC.name_time] <= np.datetime64(config.EXP.final_date)+dtime),
+                drop=True
+            )
+        if len(ds[config.BC.name_lon].shape)==1 and len(ds[config.BC.name_lat].shape)==1:
+            ds = ds.sel({
+                config.BC.name_lon:slice(lon_min-dlon,lon_max+dlon),
+                config.BC.name_lat:slice(lat_min-dlat,lat_max+dlat),
+                })
         
         # Get BC coordinates
-        self.lon_bc = ds[config.BC.name_lon].values 
+        self.lon_bc = ds[config.BC.name_lon].values
         self.lat_bc = ds[config.BC.name_lat].values
         if config.BC.name_time is not None:
             self.time_bc = ds[config.BC.name_time].values
@@ -104,18 +116,60 @@ class Bc_ext:
         for name in config.BC.name_var:
             self.var[name] = ds[config.BC.name_var[name]].load()
         ds.close()        
-            
-    def interp(self,time):
+    
+    def interp(self, time):
+        """
+        Interpolate boundary conditions on the model grid
+        """
+        
+        # Check time dimension
+        if self.time_bc is not None and self.time_bc.size>1:
+            if len(time.shape)==0:
+                time = np.array([time])
+            elif len(time.shape)==1:
+                time = np.ascontiguousarray(time)
+            else:
+                sys.exit('Time dimension must be 1D or 0D')
+        
+        # Interpolate
+        if len(self.lon_bc.shape)==1 and len(self.lat_bc.shape)==1:
+            var_interp = self._interp_3D(time)
+        elif len(self.lon_bc.shape)==2 and len(self.lat_bc.shape)==2 and np.all(self.lon_bc==self.lon) and np.all(self.lat_bc==self.lat):
+            var_interp = self._interp_1D(time)
+        else:
+            sys.exit('Boundary conditions coordinates must be 1D, 2D. If 2D, they must match the model grid coordinates')
 
+        return var_interp
+            
+    def _interp_3D(self,time):
+        """
+        Interpolate boundary conditions on the model grid. It works only if the boundary conditions grid is regular
+        """
+
+        # Ensure time is array
+        if len(time.shape) == 0:
+            time = np.array([time])
+        elif len(time.shape) == 1:
+            time = np.ascontiguousarray(time)
+        else:
+            sys.exit('Time dimension must be 1D or 0D')
+
+        # Select timestamps
+        if self.time_bc is not None and self.time_bc.size>1:
+            dtbc = self.time_bc[1] - self.time_bc[0]
+            time0 = time[0] - dtbc
+            time1 = time[-1] + dtbc
+            time_bc = self.time_bc[(self.time_bc>=time0) & (self.time_bc<=time1)]
+            
         # Define source grid
         x_source_axis = pyinterp.Axis(self.lon_bc, is_circle=True)
         y_source_axis = pyinterp.Axis(self.lat_bc)
         if self.time_bc is not None and self.time_bc.size>1:
-            z_source_axis = pyinterp.TemporalAxis(self.time_bc)
+            z_source_axis = pyinterp.TemporalAxis(time_bc)
 
         # Define target grid
         if self.time_bc is not None and self.time_bc.size>1:
-            time_target = z_source_axis.safe_cast(np.ascontiguousarray(time))
+            time_target = z_source_axis.safe_cast(time)
             z_target = np.tile(time_target,(self.lon.shape[1],self.lat.shape[0],1))
             nt = len(time_target)
         else:
@@ -127,7 +181,7 @@ class Bc_ext:
         var_interp = {}
         for name in self.var:
             if self.time_bc is not None and self.time_bc.size>1:
-                var = +self.var[name]
+                var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)}).squeeze()
                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
                 # Remove NaN
                 if np.isnan(var).any():
@@ -141,6 +195,9 @@ class Bc_ext:
                                             bounds_error=False).reshape(x_target.shape).T
                 for t in range(len(time)):
                     _var_interp[t][self.mask] = np.nan
+                    if time[t]>self.time_bc[-1]:
+                        ind_t = np.argmin(np.abs(time-self.time_bc[-1]))
+                        _var_interp[t] = _var_interp[ind_t]
             else:
                 grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, self.var[name].T)
                 _var_interp = pyinterp.bivariate(grid_source,
@@ -150,10 +207,170 @@ class Bc_ext:
 
                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
                 _var_interp[self.mask] = np.nan
-
+            #_var_interp[np.isnan(_var_interp)] = 0.
             var_interp[name] = _var_interp
         
         return var_interp
+    
+    def _interp_1D(self, time):
+        """
+        Interpolate boundary conditions in time only (spatial grid matches model grid)
+        """
+        var_interp = {}
+        # Ensure time is array
+        if len(time.shape) == 0:
+            time = np.array([time])
+        elif len(time.shape) == 1:
+            time = np.ascontiguousarray(time)
+        else:
+            sys.exit('Time dimension must be 1D or 0D')
+
+        for name in self.var:
+            var_data = self.var[name]
+            time_bc = self.time_bc
+
+            nt = len(time)
+            out_shape = (nt,) + var_data.shape[1:]
+
+            if time_bc is None or np.size(time_bc) <= 1:
+                # Repeat the same array for each requested time
+                interp_data = np.repeat(var_data.values[np.newaxis, ...], nt, axis=0)
+            else:
+                # Use xarray's interp method for time interpolation
+                interp_result = var_data.interp({self.name_time_bc: xr.DataArray(time, dims=[self.name_time_bc])}, method="linear")
+                interp_data = interp_result.values
+
+            # Mask if needed
+            if hasattr(self, 'mask'):
+                mask = self.mask
+                if mask.shape == interp_data.shape[1:]:
+                    interp_data[:, mask] = np.nan
+
+            var_interp[name] = interp_data
+
+        return var_interp
+
+
+
+####################
+### OLD BC CLASS ### 
+####################
+
+
+
+# class Bc_ext:
+
+#     def __init__(self,config, State=None):
+
+#         if State is None:
+#             from . import state
+#             State = state.State(config, verbose=False)
+
+#         # Get grid coordinates
+#         self.lon = State.lon
+#         self.lat = State.lat
+#         self.mask = State.mask
+
+#         # Study domain borders
+#         lon_min = np.nanmin(self.lon)
+#         lon_max = np.nanmax(self.lon)
+#         lat_min = np.nanmin(self.lat)
+#         lat_max = np.nanmax(self.lat)
+
+#         # Grid spacing
+#         dlon = np.nanmean(self.lon[:,1:]-self.lon[:,:-1])
+#         dlat = np.nanmean(self.lat[1:,:]-self.lat[:-1,:])
+
+#         # Read netcdf
+#         _ds = xr.open_mfdataset(config.BC.file)
+
+#         # Convert longitude 
+#         if np.sign(_ds[config.BC.name_lon].data.min())==-1 and State.lon_unit=='0_360':
+#             _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, _ds[config.BC.name_lon].data % 360))})
+#         elif np.sign(_ds[config.BC.name_lon].data.min())==1 and State.lon_unit=='-180_180':
+#             _ds = _ds.assign_coords({config.BC.name_lon:((config.BC.name_lon, (_ds[config.BC.name_lon].data + 180) % 360 - 180))})
+#         # _ds = _ds.sortby(_ds[config.BC.name_lon])    
+
+#         # Copy dataset
+#         ds = _ds.copy()
+#         _ds.close()
+        
+#         # Select study domain
+#         time_bc = ds[config.BC.name_time].values
+#         lon_bc = ds[config.BC.name_lon].values
+#         lat_bc = ds[config.BC.name_lat].values
+#         dlon += np.nanmean(lon_bc[1:]-lon_bc[:-1])
+#         dlat += np.nanmean(lat_bc[1:]-lat_bc[:-1])
+#         dtime = time_bc[1]-time_bc[0]
+#         ds = ds.sel({
+#             config.BC.name_time:slice(np.datetime64(config.EXP.init_date)-dtime,np.datetime64(config.EXP.final_date)+dtime),
+#             config.BC.name_lon:slice(lon_min-dlon,lon_max+2*dlon),
+#             config.BC.name_lat:slice(lat_min-dlat,lat_max+2*dlat)
+#             })
+        
+#         # Get BC coordinates
+#         self.lon_bc = ds[config.BC.name_lon].values 
+#         self.lat_bc = ds[config.BC.name_lat].values
+#         if config.BC.name_time is not None:
+#             self.time_bc = ds[config.BC.name_time].values
+#         else:
+#             self.time_bc = None
+
+#         # Get BC variables
+#         self.var = {}
+#         for name in config.BC.name_var:
+#             self.var[name] = ds[config.BC.name_var[name]].load()
+#         ds.close()        
+            
+#     def interp(self,time):
+
+#         # Define source grid
+#         x_source_axis = pyinterp.Axis(self.lon_bc, is_circle=True)
+#         y_source_axis = pyinterp.Axis(self.lat_bc)
+#         if self.time_bc is not None and self.time_bc.size>1:
+#             z_source_axis = pyinterp.TemporalAxis(self.time_bc)
+
+#         # Define target grid
+#         if self.time_bc is not None and self.time_bc.size>1:
+#             time_target = z_source_axis.safe_cast(np.ascontiguousarray(time))
+#             z_target = np.tile(time_target,(self.lon.shape[1],self.lat.shape[0],1))
+#             nt = len(time_target)
+#         else:
+#             nt = 1
+#         x_target = np.repeat(self.lon.transpose()[:,:,np.newaxis],nt,axis=2)
+#         y_target = np.repeat(self.lat.transpose()[:,:,np.newaxis],nt,axis=2)
+
+#         # Interpolation
+#         var_interp = {}
+#         for name in self.var:
+#             if self.time_bc is not None and self.time_bc.size>1:
+#                 var = +self.var[name]
+#                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
+#                 # Remove NaN
+#                 if np.isnan(var).any():
+#                     _, var = pyinterp.fill.gauss_seidel(grid_source)
+#                     grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
+#                 # Interpolate
+#                 _var_interp = pyinterp.trivariate(grid_source,
+#                                             x_target.flatten(),
+#                                             y_target.flatten(),
+#                                             z_target.flatten(),
+#                                             bounds_error=False).reshape(x_target.shape).T
+#                 for t in range(len(time)):
+#                     _var_interp[t][self.mask] = np.nan
+#             else:
+#                 grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, self.var[name].T)
+#                 _var_interp = pyinterp.bivariate(grid_source,
+#                                                 x_target[:,:,0].flatten(),
+#                                                 y_target[:,:,0].flatten(),
+#                                                 bounds_error=False).reshape(x_target[:,:,0].shape).T
+
+#                 _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
+#                 _var_interp[self.mask] = np.nan
+
+#             var_interp[name] = _var_interp
+        
+#         return var_interp
 
 class Bc_multi:
 

@@ -41,13 +41,13 @@ class Swm:
 
         # Bathymetry gradient # 
 
-        self.grad_bathymetry_x = State.grad_bathymetry_x
-        self.grad_bathymetry_y = State.grad_bathymetry_y
+        # self.grad_bathymetry_x = State.grad_bathymetry_x
+        # self.grad_bathymetry_y = State.grad_bathymetry_y
 
         # Tidal Velocity # 
 
-        self.tidal_U = Model.tidal_U
-        self.tidal_V = Model.tidal_V
+        # self.tidal_U = Model.tidal_U
+        # self.tidal_V = Model.tidal_V
 
         ##############
         # PARAMETERS #
@@ -1313,8 +1313,8 @@ class Swm:
 
         # - SSH Boundary Condition - # 
         if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
-            hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
-            hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
+            hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx']) # HBC control disabled 
+            hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy']) # HBC control disabled  
 
             if self.bc_kind=='1d':
                 tbc = t + self.dt

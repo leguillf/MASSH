@@ -146,6 +146,9 @@ class Variational:
             if self.prec :
                 X  = self.B.sqr(X0) + self.Xb
                 Jb = X0.dot(X0) # cost of background term
+                if self.basis is not None: 
+                    for i,_slice in enumerate(self.basis.slice_basis):
+                        print(f"Background cost for {self.basis.Basis[i]} : ",X0[_slice].dot(X0[_slice])) 
             else:
                 X  = X0 + self.Xb
                 Jb = np.dot(X0,self.B.inv(X0)) # cost of background term
@@ -193,7 +196,10 @@ class Variational:
 
             self.States[self.checkpoints[i]] = State.copy()
 
-            if i == int(len(self.checkpoints)-5):
+            if i == 5: 
+                State.plot(title=f'State variables at {i}')
+                
+            if i == int(len(self.checkpoints)/2):
                 State.plot(title=f'State variables at {i}')
             
             t0 = datetime.now()
@@ -208,6 +214,9 @@ class Variational:
         if self.H.is_obs(timestamp):
             misfit, self.misfits[timestamp] = self.H.misfit(timestamp,State) # d=Hx-xobsx
             Jo += misfit.dot(self.R.inv(misfit))
+
+        print("Observational cost : ",Jo)
+        print("Total cost : ",Jo+Jb)
         
         # Cost function 
         J = 1/2 * (Jo + Jb)
@@ -273,7 +282,6 @@ class Variational:
             # Measuring computation times
             t_model.append(datetime.now()-t0)
             
-
             # adState.plot(title=f'adjoint variables at i = {i}')
             
             # 2. Reduced basis
@@ -315,8 +323,9 @@ class Variational:
         
         # print(f"|proj g|=  {np.max(np.abs(g)):.5e}")
 
+        # return adX,gb,g
+
         return g
-    
 
 class Variational_jax:
     
@@ -509,7 +518,7 @@ def background(config,State):
             config.satellite = config.bkg_satellite
         
         # Perform 4Dvar-Identity
-        from src import state as state
+        from mapping.src import state as state
         State = state.State(config) 
         from src import mod as mod
         Model = mod.Model(config,State) 

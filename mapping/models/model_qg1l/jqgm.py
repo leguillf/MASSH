@@ -127,7 +127,6 @@ class Qgm:
         else:
             self.f = (f * np.ones((self.ny,self.nx))).astype('float64')
 
-
         # Rossby radius
         if hasattr(c, "__len__"):
             self.c = (np.nanmean(c) * np.ones((self.ny,self.nx))).astype('float64')

@@ -460,7 +460,7 @@ MOD_SW1L_JAX = dict(
 
     name_var = {'U':'u','V':'v','SSH':'ssh'},
 
-    name_init_var = [],
+    name_init_var = None,
 
     name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
 
@@ -518,6 +518,8 @@ MOD_SW1L_JAX_FLO = dict(
     g = 9.81
 
 )
+
+
 
 
 # Tracer advection
@@ -1353,6 +1355,39 @@ BASIS_IT = dict(
 
     sigma_B_He_offset = 0.2, # Background variance for He offset (if control_He_offset = True)
 
+)
+
+BASIS_IT_FLO = dict(
+
+    Nwaves = 1, # number of wave component 
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    sigma_B_He = 0.2, # Background variance for He
+
+    sigma_B_bc = 1e-2, # Background variance for bc
+
+    facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    D_He = 200, # Space scale of gaussian decomposition for He (in km)
+
+    T_He = 20, # Time scale of gaussian decomposition for He (in days)
+
+    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
+
+    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
+
+    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
+
+    scalemodes = None, # Only for SW1LM model, 
+
+    scalew_igws = None,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 )
 
 BASIS_HBC = dict(
