@@ -704,6 +704,8 @@ INV_4DVAR = dict(
     
     compute_test = False, # TLM, ADJ & GRAD tests
 
+    freq_it_plot = 10, # Frequency of iteration to plot the cost function and its gradient  
+
     JAX_mem_fraction = None,
 
     path_init_4Dvar = None, # To restart the minimization process from a specified control vector
@@ -805,76 +807,6 @@ INV_4DVAR_JAX = dict(
  
 )
 
-INV_4DVAR_PARALLEL = dict(
-
-    name_4Dvar = 'function',
-
-    nprocs = 1, # Number of parallelized processes
-    
-    JAX_mem_fraction = None, # GPU Memory fraction (bw [0,1]) used for one process
-
-    space_window_size_proc = 10, # Space window size of one process (in °). Set to None for no split in space.
-
-    nx_proc = 123,
-
-    ny_proc = 123,
-
-    space_overlap_frac = .5, # Overlap fraction of two succesive space windows 
-
-    time_window_size_proc = 30, # Time window size of one process (days). Set to None for no split in time.
-
-    time_overlap_frac = .5, # Overlap fraction of two succesive time windows 
-
-    compute_test = False, # TLM, ADJ & GRAD tests
-
-    path_init_4Dvar = None, # To restart the minimization process from a specified control vector
-
-    restart_4Dvar = False, # To restart the minimization process from the last control vector
-
-    ftol = None, # The iteration stops when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
-
-    gtol = None, # Gradient norm must be less than gtol*g0 (g0 being the gradient at first iteration) before successful termination.
-
-    maxiter = 10, # Maximal number of iterations for the minimization process
-
-    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
-
-    save_minimization = False, # save cost function and its gradient at each iteration 
-
-    path_save_control_vectors = None, # Path where to save the control vector at each 4Dvar iteration 
-
-    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
-
-    sigma_R = None, # Observational standard deviation
-
-    sigma_B = None,
-
-    prec = False, # preconditoning
-
-    merge_outputs_only = False,
-    
-    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
-
-    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
-
-    path_background = None, # Path to the precribed background on BM basis
-    
-    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
-
-    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
-
-    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
-
-    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
-
-    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
-
-    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
-
-    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
- 
-)
-
 #################################################################################################################################
 # REDUCED BASIS
 #################################################################################################################################
@@ -917,6 +849,8 @@ BASIS_BM = dict(
     Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
     slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    norm_time = True, # Whether to normalize the time component of the basis vectors (set True for dynamical forcings)
 
     file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
 
@@ -967,6 +901,8 @@ BASIS_BM_JAX = dict(
     Qmax = 1e-3, # Maximim Q, such as lambda>lmax => Q=Qmax where lamda is the wavelength
 
     slopQ = -5, # Slope such as Q = lambda^slope where lamda is the wavelength,
+
+    norm_time = True, # Whether to normalize the time component of the basis vectors (set True for dynamical forcings)
 
     file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
 
@@ -1415,6 +1351,49 @@ BASIS_IT_OLD = dict(
     var_background = None # name of the variable of the basis vector
 )
 
+BASIS_HBC_JAX = dict(
+
+    name_params = ['hbcx', 'hbcy'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+
+    ### COMMON PARAMETER ### 
+
+    # facgauss = 3.5,  # factor for gaussian spacing= both space/time
+
+    facns = 3.5, # factor for gaussian spacing in space
+
+    facnlt = 2.5, # factor for gaussian spacing in time 
+
+    time_dependant = True, # True if gaussian basis is time dependant
+
+    ### - HBC PARAMETER ### 
+
+    sigma_B_bc = 1e-2, # Background variance for bc
+
+    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
+
+    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    Nwaves = 1, # igw frequencies (in seconds)
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+)
+
+BASIS_OFFSET = dict(
+
+    name_mod_var = None,
+
+    sigma_B = None, 
+
+)
+
+BASIS_OFFSET_JAX = dict(
+
+    name_mod_var = None,
+
+    sigma_B = None, 
+
+)
 
 #################################################################################################################################
 # DIAGNOSTICS

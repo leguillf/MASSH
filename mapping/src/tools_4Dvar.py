@@ -50,7 +50,7 @@ class Cov :
 class Variational:
     
     def __init__(self, 
-                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None, nstep=None):
+                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None, nstep=None, freq_it_plot=1):
         
         # Objects
         self.M = M # model
@@ -86,6 +86,9 @@ class Variational:
         
         # For incremental 4Dvar only
         self.X0 = self.Xb*0
+
+        self.freq_it_plot = freq_it_plot
+        self.it_plot = 0
         
         # Grad test
         if config.INV.compute_test:
@@ -307,7 +310,9 @@ class Variational:
             cost_model.append(time.time()-time0)
 
             if i==int(len(self.checkpoints)/2):
-                State.plot(title='State variables at the middle of cost function evaluation')
+                if self.it_plot % self.freq_it_plot == 0:
+                    State.plot(title='State variables at the middle of cost function evaluation')
+                    State.plot(title='State params at the middle of cost function evaluation', params=True)
 
         t = self.M.T[-1]
         State_dict[t] = State.copy()
@@ -370,11 +375,13 @@ class Variational:
                 grad_misfit.append(time.time()-time0)
 
             if i==int(len(self.checkpoints)/2):
-                adState.plot(title='Adjoint State variables at the middle of cost function evaluation')
-        
+                if self.it_plot % self.freq_it_plot == 0:
+                    adState.plot(title='Adjoint State variables at the middle of cost function evaluation')
         
         #print("[cost] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(cost_misfit), np.mean(cost_basis), np.mean(cost_model)) )   
         #print("[grad] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(grad_misfit), np.mean(grad_basis), np.mean(grad_model)) )
+
+        self.it_plot += 1
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 

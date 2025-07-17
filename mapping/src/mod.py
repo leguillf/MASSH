@@ -1087,10 +1087,10 @@ class Model_qg1l_jax(M):
 
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
-            #tangent_test(self,State,nstep=100)
-            print('Adjoint test:')
-            #adjoint_test(self,State,nstep=100)
+            print('QG1L_JAX Tangent test:')
+            tangent_test(self,State,nstep=100)
+            print('QG1L_JAX Adjoint test:')
+            adjoint_test(self,State,nstep=100)
     
     def init(self, State, t0=0):
 
@@ -1990,10 +1990,13 @@ class Model_sw1l_jax(M):
                     dsin.close()
                     del dsin
                     State.var[self.name_var[name]] = var_init.values
+                else:
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float64')
+                    State.var[self.name_var[name]][State.mask] = np.nan
         # Iinitializing with zeros 
         else:
             for name in self.name_var:
-                State.var[self.name_var[name]] = np.zeros((State.nx,State.ny),dtype='float64')
+                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float64')
                 State.var[self.name_var[name]][State.mask] = np.nan
 
         ######################################################
@@ -2008,17 +2011,17 @@ class Model_sw1l_jax(M):
         # Setting coastal pixel indexes 
         if State.mask is not None : 
 
-            idxcoastN = np.where( np.invert(State.mask[:-1,:]) * State.mask[1:,:]  )
             idxcoastS = np.where( np.invert(State.mask[1:,:])  * State.mask[:-1,:] )
+            idxcoastN = np.where( np.invert(State.mask[:-1,:]) * State.mask[1:,:]  )
             idxcoastW = np.where( np.invert(State.mask[:,1:])  * State.mask[:,:-1] )
             idxcoastE = np.where( np.invert(State.mask[:,:-1]) * State.mask[:,1:]  )
 
-            # NORTH coastal indexes # 
-            self.idxcoast["vN"] = idxcoastN
-            self.idxcoast["hN"] = (idxcoastN[0]+1,idxcoastN[1])
             # SOUTH coast variables # 
             self.idxcoast["vS"] = idxcoastS
             self.idxcoast["hS"] = (idxcoastS[0],idxcoastS[1])
+            # NORTH coastal indexes # 
+            self.idxcoast["vN"] = idxcoastN
+            self.idxcoast["hN"] = (idxcoastN[0]+1,idxcoastN[1])
             # WEST coast variables #  
             self.idxcoast["uW"] = idxcoastW
             self.idxcoast["hW"] = (idxcoastW[0],idxcoastW[1])
@@ -2105,8 +2108,8 @@ class Model_sw1l_jax(M):
 
             # - Equivalent Height : He 
             elif param =='He' : 
-                self.shape_params['He'] = [State.nx,    # - Number of grid points along x axis.
-                                           State.ny]    # - Number of grid points along y axis.
+                self.shape_params['He'] = [State.ny,    # - Number of grid points along x axis.
+                                           State.nx]    # - Number of grid points along y axis.
             
             # - Height Boundary Conditions along x : hbcx 
             elif param =='hbcx' : 
@@ -2128,8 +2131,8 @@ class Model_sw1l_jax(M):
             elif param =='itg' :
                 self.shape_params['itg'] = [len(self.omegas),       # - Number of tidal frequency components 
                                             4,                      # - Number of estimated parameter (cos and sin for x and y axis)
-                                            State.nx,               # - Number of grid points along x axis.
-                                            State.ny]               # - Number of grid points along y axis.
+                                            State.ny,               # - Number of grid points along x axis.
+                                            State.nx]               # - Number of grid points along y axis.
         
 
         #####################################################
@@ -2238,7 +2241,6 @@ class Model_sw1l_jax(M):
         
         self.save_array(State, X1)
     
-
     def step_tgl(self,dState,State,nstep=1,t=0):
         
         ############################
@@ -2543,9 +2545,9 @@ class Model_sw1l_jax_old(M):
             self.swm_step_adj = self.swm.step_rk4_adj_jit
         
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
+            print('SW1L_JAX Tangent test:')
             tangent_test(self,State,nstep=10)
-            print('Adjoint test:')
+            print('SW1L_JAX Adjoint test:')
             adjoint_test(self,State,nstep=10)
     
     def step(self,State,nstep=1,t=0):
@@ -2753,7 +2755,7 @@ class Model_sw1l_jax_old(M):
         _, adf = vjp(self._jstep_jit, X0)
         
         return adf(adX0)[0]
-
+    
     def _compute_w1_IT(self,t,He,h_SN,h_WE):
         """
         Compute first characteristic variable w1 for internal tides from external 
@@ -3314,10 +3316,10 @@ class Model_multi:
                 #tangent_test(M,State,nstep=10)
                 #print('Adjoint test:')
                 #adjoint_test(M,State,nstep=10)
-            print('Tangent test:')
-            #tangent_test(self,State,nstep=10)
-            print('Adjoint test:')
-            #adjoint_test(self,State,nstep=10)
+            print('MultiModel Tangent test:')
+            tangent_test(self,State,nstep=10)
+            print('QG1L_JAX Adjoint test:')
+            adjoint_test(self,State,nstep=10)
 
     def init(self,State,t0=0):
 

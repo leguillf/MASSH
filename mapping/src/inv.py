@@ -854,7 +854,7 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         from .tools_4Dvar import Variational as Variational
 
     var = Variational(
-        config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints, nstep=nstep_check)
+        config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints, nstep=nstep_check, freq_it_plot=config.INV.freq_it_plot)
     
     # Initial Control vector 
     if config.INV.path_init_4Dvar is None:
@@ -1037,11 +1037,12 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         t = (date - config.EXP.init_date).total_seconds()
         
         # Reduced basis
-        Basis.operg(t/3600/24, Xa, State=State0.params)
+        if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
+            Basis.operg(t/3600/24, Xa, State=State0.params)
 
         # Forward propagation
         Model.step(t=t, State=State0, nstep=nstep)
-        date += timedelta(seconds=nstep_check*Model.dt)
+        date += timedelta(seconds=nstep*Model.dt)
 
         # Save output
         if (((date - config.EXP.init_date).total_seconds()
@@ -1054,7 +1055,6 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
     print()
 
 def Inv_4Dvar_JAX(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
-
     
     '''
     Run a 4Dvar analysis
