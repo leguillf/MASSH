@@ -992,11 +992,11 @@ class Model_qg1l_jax(M):
                         var_init = var_init[0,:,:]
                     if config.GRID.subsampling is not None:
                         var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
                     State.var[self.name_var[name]] = var_init.values
                 else:
                     State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+            dsin.close()
+            del dsin
         else:
             for name in self.name_var:  
                 State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))

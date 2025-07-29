@@ -99,21 +99,21 @@ class Swm:
         # -- Coastal auxiliary variables #
         interval = 0
         for slicevar,size in zip(["sliceu","slicev","sliceh",
-                        "slicevN","slicehN",
                         "slicevS","slicehS",
+                        "slicevN","slicehN",
                         "sliceuW","slicehW",
                         "sliceuE","slicehE"],
                         [self.nu,self.nv,self.nh,
-                        self.idxcoast["vN"][0].size,self.idxcoast["hN"][0].size,
                         self.idxcoast["vS"][0].size,self.idxcoast["hS"][0].size,
+                        self.idxcoast["vN"][0].size,self.idxcoast["hN"][0].size,
                         self.idxcoast["uW"][0].size,self.idxcoast["hW"][0].size,
                         self.idxcoast["uE"][0].size,self.idxcoast["hE"][0].size]):
             setattr(self,slicevar,slice(interval,interval+size))
             interval+=size
 
         self.nstates = self.nu + self.nv + self.nh + \
-                       self.idxcoast["vN"][0].size + self.idxcoast["hN"][0].size + \
                        self.idxcoast["vS"][0].size + self.idxcoast["hS"][0].size + \
+                       self.idxcoast["vN"][0].size + self.idxcoast["hN"][0].size + \
                        self.idxcoast["uW"][0].size + self.idxcoast["hW"][0].size + \
                        self.idxcoast["uE"][0].size + self.idxcoast["hE"][0].size
 
@@ -307,6 +307,47 @@ class Swm:
     #                      OPEN BOUNDARY CONDITIONS                           #
     ###########################################################################
 
+
+    #######################
+    #    - SOUTH OBC -    # 
+    #######################
+
+    # - Scan on omega    
+    def _compute_w1_IT_scan_w_S(self,w1,_i,t,He,f,h_SN):
+
+        w = dynamic_index_in_dim(operand = self.omegas, index = _i, axis = 0, keepdims=False)
+
+        # if orientation == 0 or orientation == 1:
+        h_SN = dynamic_index_in_dim(operand = h_SN, index = _i, axis = 3, keepdims=False)
+
+        k = jnp.sqrt((w**2-f**2)/(self.g*He))
+
+        w1_incr, _ = scan(partial(self._compute_w1_IT_scan_theta_S_jit,t=t,He=He,f=f,h_SN=h_SN,w=w,k=k),init=w1,xs=jnp.arange(len(self.bc_theta)))
+
+        return w1+w1_incr,w1_incr
+    
+    # - Scan on theta      
+    def _compute_w1_IT_scan_theta_S(self,w1,_j,t,He,f,h_SN,w,k):
+
+        h_SN = dynamic_index_in_dim(operand = h_SN, index = _j, axis = 0, keepdims=False)
+        theta = dynamic_index_in_dim(operand = self.bc_theta, index = _j, axis = 0, keepdims=False)
+
+        kx = jnp.sin(theta) * k
+        ky = -jnp.cos(theta) * k
+        kxy = kx*self.Xv[0,:] + ky*self.Yv[0,:]
+        h = h_SN[0,0]* jnp.cos(w*t-kxy)+\
+                h_SN[0,1]* jnp.sin(w*t-kxy) 
+        v = self.g/(w**2-f**2)*(\
+            h_SN[0,0]* (w*ky*jnp.cos(w*t-kxy) \
+                        - f*kx*jnp.sin(w*t-kxy)
+                            ) +\
+            h_SN[0,1]* (w*ky*jnp.sin(w*t-kxy) \
+                        + f*kx*jnp.cos(w*t-kxy)
+                            )
+                )
+        # w1 += v - jnp.sqrt(self.g/He) * h
+        return w1 + v + jnp.sqrt(self.g/He) * h, w1
+
     #######################
     #    - NORTH OBC -    # 
     #######################
@@ -395,52 +436,11 @@ class Swm:
 
         kx = jnp.sin(theta) * k
         ky = jnp.cos(theta) * k
-        kxy = kx*self.Xv[0,:] + ky*self.Yv[0,:]
-        
-        h = h_SN[0,0]* jnp.cos(w*t-kxy)  +\
-                h_SN[0,1]* jnp.sin(w*t-kxy) 
-        v = self.g/(w**2-f**2)*( \
-            h_SN[0,0]* (w*ky*jnp.cos(w*t-kxy) \
-                        - f*kx*jnp.sin(w*t-kxy)
-                            ) +\
-            h_SN[0,1]* (w*ky*jnp.sin(w*t-kxy) \
-                        + f*kx*jnp.cos(w*t-kxy)
-                            )
-                )
-        
-        # w1 += v + jnp.sqrt(self.g/He) * h
-        return w1 + v + jnp.sqrt(self.g/He) * h, w1
-    
-    #######################
-    #    - SOUTH OBC -    # 
-    #######################
-
-    # - Scan on omega    
-    def _compute_w1_IT_scan_w_S(self,w1,_i,t,He,f,h_SN):
-
-        w = dynamic_index_in_dim(operand = self.omegas, index = _i, axis = 0, keepdims=False)
-
-        # if orientation == 0 or orientation == 1:
-        h_SN = dynamic_index_in_dim(operand = h_SN, index = _i, axis = 3, keepdims=False)
-
-        k = jnp.sqrt((w**2-f**2)/(self.g*He))
-
-        w1_incr, _ = scan(partial(self._compute_w1_IT_scan_theta_S_jit,t=t,He=He,f=f,h_SN=h_SN,w=w,k=k),init=w1,xs=jnp.arange(len(self.bc_theta)))
-
-        return w1+w1_incr,w1_incr
-    
-    # - Scan on theta      
-    def _compute_w1_IT_scan_theta_S(self,w1,_j,t,He,f,h_SN,w,k):
-
-        h_SN = dynamic_index_in_dim(operand = h_SN, index = _j, axis = 0, keepdims=False)
-        theta = dynamic_index_in_dim(operand = self.bc_theta, index = _j, axis = 0, keepdims=False)
-
-        kx = jnp.sin(theta) * k
-        ky = -jnp.cos(theta) * k
         kxy = kx*self.Xv[-1,:] + ky*self.Yv[-1,:]
-        h = h_SN[1,0]* jnp.cos(w*t-kxy)+\
+        
+        h = h_SN[1,0]* jnp.cos(w*t-kxy)  +\
                 h_SN[1,1]* jnp.sin(w*t-kxy) 
-        v = self.g/(w**2-f**2)*(\
+        v = self.g/(w**2-f**2)*( \
             h_SN[1,0]* (w*ky*jnp.cos(w*t-kxy) \
                         - f*kx*jnp.sin(w*t-kxy)
                             ) +\
@@ -448,8 +448,10 @@ class Swm:
                         + f*kx*jnp.cos(w*t-kxy)
                             )
                 )
-        # w1 += v - jnp.sqrt(self.g/He) * h
+        
+        # w1 += v + jnp.sqrt(self.g/He) * h
         return w1 + v - jnp.sqrt(self.g/He) * h, w1
+    
     
     ######################
     #    - WEST OBC -    # 
@@ -530,10 +532,7 @@ class Swm:
                 )
         # w1 += u - jnp.sqrt(self.g/He) * h
         return w1 + u - jnp.sqrt(self.g/He) * h, w1
-    
-    ######################
-    #    - EAST OBC -    # 
-    ######################
+
 
     def _compute_w1_IT(self,t,He,h_SN,h_WE):
         """
@@ -1020,7 +1019,6 @@ class Swm:
 
         return rhs_itg+rhs_itg_x+rhs_itg_y,rhs_itg_x+rhs_itg_y
 
-    
     def one_step(self, X0):
         
         ########################## 
@@ -1297,11 +1295,6 @@ class Swm_old:
         self.step_euler_adj_jit = jit(self.step_euler_adj)
         self.step_rk4_tgl_jit = jit(self.step_rk4_tgl)
         self.step_rk4_adj_jit = jit(self.step_rk4_adj)
-        
-        
-        
-        
-        
         
         
     ###########################################################################
@@ -1600,10 +1593,7 @@ class Swm_old:
         v = v.at[-1,-1].set((vN[-1] + vE[-1])/2)
         h = h.at[-1,-1].set((hN[-1] + hE[-1])/2)
     
-        
         return u,v,h
-    
-    
     
     ###########################################################################
     #                            One time step                                #
@@ -1666,7 +1656,6 @@ class Swm_old:
         
         return X1
     
-
     def step_rk4(self,X0):
         
         
@@ -1697,7 +1686,6 @@ class Swm_old:
         v1 = +v0
         h1 = +h0
         
-                    
         #######################
         #  Right hand sides   #
         #######################
@@ -1717,7 +1705,6 @@ class Swm_old:
         ku4 = self.rhs_u_jit(self.v_on_u_jit(v1+kv3),h1+kh3)*self.dt
         kv4 = self.rhs_v_jit(self.u_on_v_jit(u1+ku3),h1+kh3)*self.dt
         kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,He)*self.dt
-        
         
         #######################
         #   Time propagation  #
