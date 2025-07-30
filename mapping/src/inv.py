@@ -76,13 +76,14 @@ def Inv_forward(config,State,Model,Bc=None):
     nstep = int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt)
 
     if Bc is not None:
-        time_bc = [np.datetime64(time) for time in Model.timestamps[::nstep]]
-        t_bc = [t for t in Model.T[::nstep]]
+        time_bc = np.array([np.datetime64(time) for time in Model.timestamps[::nstep]])
+        t_bc = np.array([t for t in Model.T[::nstep]])
         var_bc = Bc.interp(time_bc)
         Model.set_bc(t_bc,var_bc)
 
     t = 0
     Model.init(State,t)
+    Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
     State.plot(title='Start of forward integration')
 
     while present_date + timedelta(seconds=nstep*Model.dt) <= config.EXP.final_date :
