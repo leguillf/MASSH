@@ -126,6 +126,10 @@ GRID_CAR = dict(
 
     dx = 25.,                                              # grid spacing in km
 
+    nx = None,                                             # If not None, use nx to compute dx 
+
+    ny = None,                                             #
+
     name_init_mask = None,
 
     name_var_mask = {'lon':'','lat':'','var':''},
@@ -597,6 +601,8 @@ OBSOP_INTERP_L3 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
 
+    name_var = 'SSH',
+
     write_op = False, # Write operator data to *path_save*
 
     path_save = None, # Directory where to save observational operator
@@ -607,15 +613,13 @@ OBSOP_INTERP_L3 = dict(
 
     mask_borders = False,
 
-    normalize_misfit = False, # normalizing misfit by the number of observations 
-    
-    parallel_computing = False, # if True, observational operators are calculated with parallel computing. Needs to False if INV_4DVAR_PARALLEL is used 
-
 )
 
-OBSOP_INTERP_L3_GEOCUR = dict(
+OBSOP_INTERP_L3_JAX = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+    name_var = 'SSH',
 
     write_op = False, # Write operator data to *path_save*
 
@@ -632,7 +636,9 @@ OBSOP_INTERP_L3_GEOCUR = dict(
 OBSOP_INTERP_L4 = dict(
 
     name_obs = None, # List of observation class names. If None, all observation will be considered. 
-    
+
+    name_var = 'SSH',
+
     write_op = False, # Write operator data to *path_save*
 
     path_save = None, # Directory where to save observational operator
@@ -643,9 +649,82 @@ OBSOP_INTERP_L4 = dict(
 
     interp_method = 'linear', # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
 
-    parallel_computing = False, # if True, observational operators are calculated with parallel computing. Needs to False if INV_4DVAR_PARALLEL is used 
+    gradients = False
 
 )
+
+# OBSOP_INTERP_L3 = dict(
+
+#     name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+#     write_op = False, # Write operator data to *path_save*
+
+#     path_save = None, # Directory where to save observational operator
+
+#     compute_op = True, # Force computing H 
+
+#     Npix = 4, # Number of pixels to perform projection y=Hx
+
+#     mask_borders = False,
+
+#     normalize_misfit = False, # normalizing misfit by the number of observations 
+    
+#     # parallel_computing = False, # if True, observational operators are calculated with parallel computing. Needs to False if INV_4DVAR_PARALLEL is used 
+
+# )
+
+# OBSOP_INTERP_L3_JAX = dict(
+
+#     name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+#     name_var = 'SSH',
+
+#     write_op = False, # Write operator data to *path_save*
+
+#     path_save = None, # Directory where to save observational operator
+
+#     compute_op = True, # Force computing H 
+
+#     Npix = 4, # Number of pixels to perform projection y=Hx
+
+#     mask_borders = False,
+
+# )
+
+
+# OBSOP_INTERP_L3_GEOCUR = dict(
+
+#     name_obs = None, # List of observation class names. If None, all observation will be considered. 
+
+#     write_op = False, # Write operator data to *path_save*
+
+#     path_save = None, # Directory where to save observational operator
+
+#     compute_op = True, # Force computing H 
+
+#     Npix = 4, # Number of pixels to perform projection y=Hx
+
+#     mask_borders = False,
+
+# )
+
+# OBSOP_INTERP_L4 = dict(
+
+#     name_obs = None, # List of observation class names. If None, all observation will be considered. 
+    
+#     write_op = False, # Write operator data to *path_save*
+
+#     path_save = None, # Directory where to save observational operator
+
+#     compute_op = True, # Force computing H 
+
+#     mask_borders = False,
+
+#     interp_method = 'linear', # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
+
+#     parallel_computing = False, # if True, observational operators are calculated with parallel computing. Needs to False if INV_4DVAR_PARALLEL is used 
+
+# )
 
 #################################################################################################################################
 # INVERSION METHODS
@@ -1581,9 +1660,9 @@ DIAG_OSE = dict(
 
     name_var_mdt = None,
     
-    delta_t_ref = 0.9434, # s
+    delta_t_ref = None, # s
 
-    velocity_ref = 6.77, # km/s
+    velocity_ref = None, # km/s
 
     lenght_scale = 1000, # km
 
@@ -1604,7 +1683,3 @@ DIAG_OSE = dict(
     name_bas_var = None
 
 )
-
-
-
-
