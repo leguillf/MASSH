@@ -161,7 +161,7 @@ class M:
 ###############################################################################
 #                            Diffusion Models                                 #
 ###############################################################################
-        
+"""     
 class Model_diffusion(M):
     
     def __init__(self,config,State):
@@ -335,6 +335,211 @@ class Model_diffusion(M):
                 adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0
             advar1[np.isnan(advar1)] = 0
             adState.setvar(advar1,self.name_var[name])
+"""
+
+        
+class Model_diffusion(M):
+    
+    def __init__(self,config,State):
+
+        super().__init__(config,State)
+        
+        self.Kdiffus = config.MOD.Kdiffus
+        self.SIC_mod = config.MOD.SIC_mod
+        self.dx = State.DX
+        self.dy = State.DY
+
+        # Initialization 
+        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
+            dsin = xr.open_dataset(config.GRID.path_init_grid)
+            for name in self.name_var:
+                if name in config.MOD.name_init_var:
+                    var_init = dsin[config.MOD.name_init_var[name]]
+                    if len(var_init.shape)==3:
+                        var_init = var_init[0,:,:]
+                    if config.GRID.subsampling is not None:
+                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
+                    dsin.close()
+                    del dsin
+                    State.var[self.name_var[name]] = var_init.values
+                else:
+                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+        else:
+            for name in self.name_var:  
+                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
+        
+        # Model Parameters (Flux)
+        for name in self.name_var:
+            State.params[self.name_var[name]] = np.zeros((State.ny,State.nx))
+
+        # Initialize boundary condition dictionnary for each model variable
+        self.bc = {}
+        for _name_var_mod in self.name_var:
+            self.bc[_name_var_mod] = {}
+        self.init_from_bc = config.MOD.init_from_bc
+        
+        # Weight map to apply BC in a smoothed way
+        if config.MOD.dist_sponge_bc is not None:
+            Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
+        else:
+            Wbc = np.zeros((State.ny,State.nx)) 
+            if State.mask is not None:
+                for i,j in np.argwhere(State.mask):
+                    for p1 in [-1,0,1]:
+                        for p2 in [-1,0,1]:
+                            itest=i+p1
+                            jtest=j+p2
+                            if ((itest>=0) & (itest<=State.ny-1) & (jtest>=0) & (jtest<=State.nx-1)):
+                                if Wbc[itest,jtest]==0:
+                                    Wbc[itest,jtest] = 1
+        self.Wbc = Wbc
+        
+        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+            print('Tangent test:')
+            tangent_test(self,State)
+            print('Adjoint test:')
+            adjoint_test(self,State)
+
+    
+
+    def init(self, State, t0=0):
+
+        if type(self.init_from_bc)==dict:
+            for name in self.init_from_bc:
+                if self.init_from_bc[name] and name in self.bc and t0 in self.bc[name]:
+                    State.setvar(self.bc[name][t0], self.name_var[name])
+        elif self.init_from_bc:
+            for name in self.name_var: 
+                if t0 in self.bc[name]:
+                     State.setvar(self.bc[name][t0], self.name_var[name])
+
+    def set_bc(self,time_bc,var_bc):
+        
+        for _name_var_bc in var_bc:
+            for _name_var_mod in self.name_var:
+                if _name_var_bc==_name_var_mod:
+                    for i,t in enumerate(time_bc):
+                        self.bc[_name_var_mod][t] = var_bc[_name_var_bc][i]
+
+
+    def step(self,State,nstep=1,t=None):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Get state variable
+            var0 = State.getvar(self.name_var[name])
+            
+            # Init
+            var1 = +var0
+
+            # Time propagation
+            if self.Kdiffus>0:
+                for _ in range(nstep):
+                    var1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
+                        (var1[1:-1,2:]+var1[1:-1,:-2]-2*var1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                        (var1[2:,1:-1]+var1[:-2,1:-1]-2*var1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+            
+            # Update state
+            if self.name_var[name] in State.params:
+                # params = State.params[self.name_var[name]]
+                params = np.asarray(State.params[self.name_var[name]], dtype=np.float64)
+                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+
+            State.setvar(var1, self.name_var[name])
+        
+
+
+    def step_tgl(self,dState,State,nstep=1,t=None):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Get state variable
+            var0 = dState.getvar(self.name_var[name])
+            
+            # Init
+            var1 = +var0
+            
+            # Time propagation
+            if self.Kdiffus>0:
+                for _ in range(nstep):
+                    var1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
+                        (var1[1:-1,2:]+var1[1:-1,:-2]-2*var1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                        (var1[2:,1:-1]+var1[:-2,1:-1]-2*var1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+            
+
+            # Update state
+            if self.name_var[name] in dState.params:
+                params = dState.params[self.name_var[name]]
+                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+
+            dState.setvar(var1,self.name_var[name])
+        
+    def step_adj(self,adState,State,nstep=1,t=None):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Get state variable
+            advar0 = adState.getvar(self.name_var[name])
+
+            # Init
+            advar1 = +advar0
+            
+            # Time propagation
+            if self.Kdiffus>0:
+                for _ in range(nstep):
+                    
+                    advar1[1:-1,2:] += self.dt*self.Kdiffus/(self.dx[1:-1,1:-1]**2) * advar0[1:-1,1:-1]
+                    advar1[1:-1,:-2] += self.dt*self.Kdiffus/(self.dx[1:-1,1:-1]**2) * advar0[1:-1,1:-1]
+                    advar1[1:-1,1:-1] += -2*self.dt*self.Kdiffus/(self.dx[1:-1,1:-1]**2) * advar0[1:-1,1:-1]
+                    
+                    advar1[2:,1:-1] += self.dt*self.Kdiffus/(self.dy[1:-1,1:-1]**2) * advar0[1:-1,1:-1]
+                    advar1[:-2,1:-1] += self.dt*self.Kdiffus/(self.dy[1:-1,1:-1]**2) * advar0[1:-1,1:-1]
+                    advar1[1:-1,1:-1] += -2*self.dt*self.Kdiffus/(self.dy[1:-1,1:-1]**2) * advar0[1:-1,1:-1]
+                    
+                    advar0 = +advar1
+                
+
+            # Update state and parameters
+            if self.name_var[name] in State.params:
+                adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0 
+            
+            advar1[np.isnan(advar1)] = 0
+            adState.setvar(advar1,self.name_var[name])
+
+class Model_diffusion_jax(Model_diffusion):
+    def __init__(self,config,State):
+        super().__init__(config,State)
+
+    def step(self, t, State_var, State_params, nstep=1):
+
+        # Loop on model variables
+        for name in self.name_var:
+
+            # Get state variable
+            var0 = State_var[self.name_var[name]]
+            
+            # Init
+            var1 = +var0
+
+            # Time propagation
+            if self.Kdiffus>0:
+                for _ in range(nstep):
+                    var1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
+                        (var1[1:-1,2:]+var1[1:-1,:-2]-2*var1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
+                        (var1[2:,1:-1]+var1[:-2,1:-1]-2*var1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
+            
+            # Update state
+            if self.name_var[name] in State_params:
+                params = State_params[self.name_var[name]]
+                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+
+            State_var1 = State_var.copy()
+            State_var1[self.name_var[name]] = var1
+            
+            return State_var1
 
 ###############################################################################
 #                       Quasi-Geostrophic Models                              #

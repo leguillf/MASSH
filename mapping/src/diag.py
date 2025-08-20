@@ -16,6 +16,8 @@ import pandas as pd
 import subprocess
 from .tools import read_auxdata_mdt
 from . import grid
+import glob
+from scipy.interpolate import griddata
 
 
 def Diag(config,State):
@@ -1598,31 +1600,37 @@ class Diag_ose():
         else:
             self.time_step = config.DIAG.time_step
         # lon_min
-        if config.DIAG.lon_min is None:
+        if config.DIAG.lon_min is not None:
+            self.lon_min = config.DIAG.lon_min
+        elif config.GRID.lon_max is not None:
             self.lon_min = config.GRID.lon_min
         else:
-            self.lon_min = config.DIAG.lon_min
+            self.lon_min = State.lon_min
         # lon_max
-        if config.DIAG.lon_max is None:
+        if config.DIAG.lon_max is not None:
+            self.lon_max = config.DIAG.lon_max
+        elif config.GRID.lon_max is not None:
             self.lon_max = config.GRID.lon_max
         else:
-            self.lon_max = config.DIAG.lon_max
+            self.lon_max = State.lon_max
         # lat_min
-        if config.DIAG.lat_min is None:
+        if config.DIAG.lat_min is not None:
+            self.lat_min = config.DIAG.lat_min
+        elif config.GRID.lat_min is not None:
             self.lat_min = config.GRID.lat_min
         else:
-            self.lat_min = config.DIAG.lat_min
+            self.lat_min = State.lat_min
         # lat_max
-        if config.DIAG.lat_max is None:
+        if config.DIAG.lat_max is not None:
+            self.lat_max = config.DIAG.lat_max
+        elif config.GRID.lat_max is not None:
             self.lat_max = config.GRID.lat_max
         else:
-            self.lat_max = config.DIAG.lat_max
+            self.lat_max = State.lat_max
         # Stats parameters
         self.bin_lon_step = config.DIAG.bin_lon_step
         self.bin_lat_step = config.DIAG.bin_lat_step
         self.bin_time_step = config.DIAG.bin_time_step
-        self.delta_t = config.DIAG.delta_t_ref
-        self.delta_x = config.DIAG.velocity_ref * config.DIAG.delta_t_ref
         self.lenght_scale = config.DIAG.lenght_scale
         self.nb_min_obs = config.DIAG.nb_min_obs
 
@@ -1631,32 +1639,103 @@ class Diag_ose():
         self.name_ref_lon = config.DIAG.name_ref_lon
         self.name_ref_lat = config.DIAG.name_ref_lat
         self.name_ref_var = config.DIAG.name_ref_var
-        ref = xr.open_mfdataset(config.DIAG.name_ref,**config.DIAG.options_ref)[self.name_ref_var]
-        if np.sign(ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
-            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, ref[self.name_ref_lon].data % 360))})
-        elif np.sign(ref[self.name_ref_lon].data.min())==1 and State.lon_unit=='-180_180':
-            ref = ref.assign_coords({self.name_ref_lon:((self.name_ref_lon, (ref[self.name_ref_lon].data + 180) % 360 - 180))})
-        ref = ref.swap_dims({ref[self.name_ref_time].dims[0]:self.name_ref_time})
-        lon_ref = ref[self.name_ref_lon].compute()
-        lat_ref = ref[self.name_ref_lat].compute()
-        ref = ref.where((lat_ref >= self.lat_min) & (lat_ref <= self.lat_max), drop=True)
-        ref = ref.where((lon_ref >= self.lon_min) & (lon_ref <= self.lon_max), drop=True)
-        try:
-            ref = ref.sel(
-                {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
-                )
-        except:
-            ref = ref.where((ref[self.name_ref_time]<=np.datetime64(self.time_max)) &\
-                        (ref[self.name_ref_time]>=np.datetime64(self.time_min)),drop=True)
-        self.ref = ref.load()
-        ref.close()
 
-        # Add MDT to reference data
-        if config.DIAG.add_mdt_to_ref:
-            finterpmdt = read_auxdata_mdt(config.DIAG.path_mdt,config.DIAG.name_var_mdt)
-            mdt_on_ref = finterpmdt((self.ref[self.name_ref_lon], self.ref[self.name_ref_lat]))
-            self.ref.data += mdt_on_ref
-        self.ref[np.abs(self.ref)>10.] = np.nan
+        def preprocess(ds):
+            name_var = [self.name_ref_time, self.name_ref_lon, self.name_ref_lat, self.name_ref_var]
+            ds = ds[name_var]
+            return ds
+        
+        if type(config.DIAG.name_ref) is not list:
+            config.DIAG.name_ref = [config.DIAG.name_ref]
+        ref = []
+        delta_x = []
+        for name_ref in config.DIAG.name_ref:
+            try:
+                _ref = xr.open_mfdataset(name_ref,**config.DIAG.options_ref,preprocess=preprocess,compat='override',coords='minimal')
+            except:
+                files = sorted(glob.glob(name_ref))
+
+                # Get time dimension to concatenate
+                with nc.Dataset(files[0]) as ds0:
+                    name_time_dim = ds0.variables['time'].dimensions[0]
+
+                # List to store datasets
+                datasets = []
+
+                for file in files:
+                    with nc.Dataset(file) as ds:
+                        # Extract variables
+                        name_var = [config.DIAG.name_ref_time, config.DIAG.name_ref_lon, config.DIAG.name_ref_lat, config.DIAG.name_ref_var]
+                        data = {var: ds.variables[var][:] for var in name_var}
+                        
+                        # Convert time to numpy.datetime64
+                        time_var = config.DIAG.name_ref_time
+                        time_data = nc.num2date(data[time_var], ds.variables[time_var].units)
+                        data[time_var] = np.array(time_data, dtype='datetime64[ns]')
+                        
+                        # Convert to xarray Dataset
+                        ds_xr = xr.Dataset({
+                            var: (ds.variables[var].dimensions, data[var]) for var in name_var
+                        })
+                        
+                        datasets.append(ds_xr)
+
+                # Concatenate along the time dimension
+                _ref = xr.concat(datasets, dim=name_time_dim, **config.DIAG.options_ref)
+                _ref = _ref.assign_coords({config.DIAG.name_ref_lon:_ref[config.DIAG.name_ref_lon],
+                                           config.DIAG.name_ref_lat:_ref[config.DIAG.name_ref_lat]})
+
+                # Copy and load the dataset
+                _ref = _ref.copy(deep=True).load()
+
+
+            _ref = _ref.assign_coords({self.name_ref_time:_ref[self.name_ref_time]})
+            _ref = _ref.swap_dims({_ref[self.name_ref_time].dims[0]:self.name_ref_time})
+
+            if np.sign(_ref[self.name_ref_lon].data.min())==-1 and State.lon_unit=='0_360':
+                _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].data % 360))})
+                
+            elif np.sign(_ref[self.name_ref_lon].data.min())>=0 and State.lon_unit=='-180_180':
+                _ref = _ref.assign_coords({self.name_ref_lon:((_ref[self.name_ref_lon].dims, (_ref[self.name_ref_lon].data + 180) % 360 - 180))})
+            try:
+                _ref = _ref.sel(
+                    {self.name_ref_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))}, drop=True
+                    )
+            except:
+                _ref = _ref.where(((_ref[self.name_ref_time]<=np.datetime64(self.time_max)) &\
+                            (_ref[self.name_ref_time]>=np.datetime64(self.time_min))).compute(),drop=True)
+            
+            lon_ref = _ref[self.name_ref_lon] 
+            lat_ref = _ref[self.name_ref_lat]
+            _ref = _ref.where(((self.lon_min<=lon_ref) & (self.lon_max>=lon_ref) & 
+                  (self.lat_min<=lat_ref) & (self.lat_max>=lat_ref)).compute(), drop=True)
+            
+            # Mean spatial resolution of alongtrack data
+            if len(_ref[self.name_ref_lat].shape)==2:
+                _lon = _ref[self.name_ref_lon][:,0].values
+                _lat = _ref[self.name_ref_lat][:,0].values
+            else:
+                _lon = _ref[self.name_ref_lon][:].values
+                _lat = _ref[self.name_ref_lat][:].values
+            delta_x.append(0.001*np.median(pyinterp.geodetic.coordinate_distances(_lon[:-1],
+                                                                _lat[:-1],
+                                                                _lon[1:],
+                                                                _lat[1:])))
+            # Add MDT to reference data
+            if config.DIAG.add_mdt_to_ref:
+                finterpmdt = read_auxdata(config.DIAG.path_mdt,config.DIAG.name_var_mdt,State.lon_unit)
+                mdt_on_ref = finterpmdt((_ref[self.name_ref_lon] , _ref[self.name_ref_lat]))
+                _ref[self.name_ref_var].data += mdt_on_ref
+
+            # Append to list
+            ref.append(_ref[self.name_ref_var])
+
+            _ref.close()
+            del _ref
+
+        
+        self.ref = ref
+        self.delta_x = delta_x
 
         # Experimental data
         self.geo_grid = State.geo_grid
@@ -1664,12 +1743,30 @@ class Diag_ose():
         self.name_exp_lon = config.EXP.name_lon
         self.name_exp_lat = config.EXP.name_lat
         self.name_exp_var = config.DIAG.name_exp_var
-        exp = xr.open_mfdataset(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc')[self.name_exp_var].load()
-        exp = exp.assign_coords({self.name_exp_lon:exp[self.name_exp_lon]})
+        exp_files = sorted(glob.glob(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc'))
+        try:
+            exp = xr.open_mfdataset(exp_files)[self.name_exp_var]
+        except:
+            exp_datasets = []
+            for file in exp_files:
+                with nc.Dataset(file) as ds:
+                    exp_data = ds.variables[self.name_exp_var][:]
+                    time_exp = ds.variables['time'][:]
+                    time_exp = nc.num2date(time_exp, ds.variables['time'].units)
+                    time_exp = np.array(time_exp, dtype='datetime64[ns]')
+                    
+                    ds_xr = xr.Dataset({
+                        self.name_exp_var: (ds.variables[self.name_exp_var].dimensions, exp_data)
+                    }, coords={'time': time_exp,
+                            self.name_exp_lon: ds.variables[self.name_exp_lon][:], 
+                            self.name_exp_lat: ds.variables[self.name_exp_lat][:]})
+                    exp_datasets.append(ds_xr)
+            exp = xr.concat(exp_datasets, dim='time')[self.name_exp_var]
+            exp = exp.copy(deep=True).load()
         dt = (exp[self.name_exp_time][1]-exp[self.name_exp_time][0]).values
         self.exp = exp.sel(
             {self.name_exp_time:slice(np.datetime64(self.time_min)-dt,np.datetime64(self.time_max)+dt)},
-             )
+             ).load()
         try:
             self.exp = self.exp.sel(
                 {self.name_exp_lon:slice(self.lon_min,self.lon_max),
@@ -1678,7 +1775,13 @@ class Diag_ose():
         except:
             print('Warning: unable to select study region in the experiment fields.\
 That could be due to non regular grid or bad written netcdf file')
+            self.exp = self.exp.where(((self.exp.lon>=self.lon_min) & 
+                                      (self.exp.lon<=self.lon_max) & 
+                                      (self.exp.lat>=self.lat_min) & 
+                                      (self.exp.lat<=self.lat_max)).compute(),
+                                      drop=True)
         exp.close()
+        del exp
 
         # Baseline data
         self.compare_to_baseline = config.DIAG.compare_to_baseline 
@@ -1687,16 +1790,36 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lon = config.DIAG.name_bas_lon
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
-            bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var].load()
+            #bas = xr.open_mfdataset(config.DIAG.name_bas)[self.name_bas_var]
+            bas_files = sorted(glob.glob(config.DIAG.name_bas))
+            bas_datasets = []
+            for file in bas_files:
+                with nc.Dataset(file) as ds:
+                    bas_data = ds.variables[self.name_bas_var][:]
+                    time_bas = ds.variables['time'][:]
+                    time_bas = nc.num2date(time_bas, ds.variables['time'].units)
+                    time_bas = np.array(time_bas, dtype='datetime64[ns]')
+                    
+                    ds_xr = xr.Dataset({
+                        self.name_bas_var: (ds.variables[self.name_bas_var].dimensions, bas_data)
+                    }, coords={'time': time_bas,
+                               self.name_bas_lon: ds.variables[self.name_bas_lon][:], 
+                               self.name_bas_lat: ds.variables[self.name_bas_lat][:]
+                               })
+                    bas_datasets.append(ds_xr)
+            bas = xr.concat(bas_datasets, dim='time')[self.name_bas_var]
+            bas = bas.copy(deep=True).load()
+            
+            bas = bas.transpose(self.name_bas_time, self.name_bas_lat, self.name_bas_lon)
             if np.sign(bas[self.name_bas_lon].data.min())==-1 and State.lon_unit=='0_360':
-                bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, bas[self.name_bas_lon].data % 360))})
-            elif np.sign(bas[self.name_bas_lon].data.min())==1 and State.lon_unit=='-180_180':
-                bas = bas.assign_coords({self.name_bas_lon:((self.name_bas_lon, (bas[self.name_bas_lon].data + 180) % 360 - 180))})
-            bas = bas.assign_coords({self.name_bas_lon:bas[self.name_bas_lon]})
+                bas = bas.assign_coords({self.name_bas_lon:((bas[self.name_bas_lon].dims, bas[self.name_bas_lon].data % 360))})
+            elif np.sign(bas[self.name_bas_lon].data.min())>=0 and State.lon_unit=='-180_180':
+                bas = bas.assign_coords({self.name_bas_lon:((bas[self.name_bas_lon].dims, (bas[self.name_bas_lon].data + 180) % 360 - 180))})
             bas = bas.sortby(bas[self.name_bas_lon])
             self.bas = bas.sel(
                 {self.name_bas_time:slice(np.datetime64(self.time_min),np.datetime64(self.time_max))},
-                )
+                ).copy().load()
+            
             try:
                 self.bas = self.bas.sel(
                     {self.name_bas_lon:slice(self.lon_min,self.lon_max),
@@ -1705,88 +1828,113 @@ That could be due to non regular grid or bad written netcdf file')
             except:
                 print('Warning: unable to select study region in the baseline fields.')
             bas.close()
-
+            del bas
+            
+        # Ratio of pannel size for plotting functions
+        self.ratio_fig = (self.lat_max-self.lat_min)/(self.lon_max-self.lon_min)
 
     def regrid_exp(self):
         
         if self.geo_grid:
             self.exp_regridded =  self._regrid_geo(
-                self.exp[self.name_exp_lon].values,
-                self.exp[self.name_exp_lat].values, 
-                self.exp[self.name_exp_time].values, 
                 self.exp,
+                self.name_exp_time, self.name_exp_lat, self.name_exp_lon
                 )
         else:
             self.exp_regridded = self._regrid_unstructured(
-                self.exp[self.name_exp_lon].values,
-                self.exp[self.name_exp_lat].values, 
-                self.exp[self.name_exp_time].values, 
                 self.exp,
+                self.name_exp_time, self.name_exp_lat, self.name_exp_lon, 
                 )
-
+        
+        
         if self.compare_to_baseline:
             self.bas_regridded = self._regrid_geo(
-                self.bas[self.name_bas_lon].values,
-                self.bas[self.name_bas_lat].values, 
-                self.bas[self.name_bas_time].values, 
                 self.bas,
+                self.name_bas_time, self.name_bas_lat, self.name_bas_lon
                 )        
     
-    def _regrid_geo(self, lon, lat, time, var):
+    def _regrid_geo(self, data, name_time, name_lat, name_lon):
 
         # Define source grid
-        x_source_axis = pyinterp.Axis(lon, is_circle=False)
-        y_source_axis = pyinterp.Axis(lat)
-        z_source_axis = pyinterp.TemporalAxis(time)
-        var_source = var.transpose(var.dims[2], var.dims[1], var.dims[0])
+        x_source_axis = pyinterp.Axis(data[name_lon].values, is_circle=False)
+        y_source_axis = pyinterp.Axis(data[name_lat].values)
+        z_source_axis = pyinterp.TemporalAxis(data[name_time].values)
+        var_source = data.transpose(name_lon,name_lat,name_time) 
         grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var_source.data)
 
-        # Spatio-temporal Interpolation
-        var_interp = pyinterp.trivariate(grid_source,
-                                        self.ref[self.name_ref_lon].values, 
-                                        self.ref[self.name_ref_lat].values,
-                                        z_source_axis.safe_cast(self.ref[self.name_ref_time].values),
-                                        bounds_error=False).reshape(self.ref[self.name_ref_lon].shape)
-        
-        # Save to dataset
-        return xr.DataArray(
-            data=var_interp,
-            coords={self.name_ref_time: (self.name_ref_time, self.ref[self.name_ref_time].values),
-                    self.name_ref_lon: (self.name_ref_time, self.ref[self.name_ref_lon].values), 
-                    self.name_ref_lat: (self.name_ref_time, self.ref[self.name_ref_lat].values), 
-                    },
-            dims=[self.name_ref_time]
-            )
+        exp_regridded = []
+        for _ref in self.ref:
+            
+            # Spatio-temporal Interpolation
+            if len(_ref[self.name_ref_lon].shape)==2:
+                # Swath data
+                lon_ref = _ref[self.name_ref_lon].values.ravel()
+                lat_ref = _ref[self.name_ref_lat].values.ravel()
+                time_ref = np.repeat(_ref[self.name_ref_time].values,_ref[self.name_ref_lon].shape[1])
+            else:
+                # Nadir data
+                lon_ref = _ref[self.name_ref_lon].values
+                lat_ref = _ref[self.name_ref_lat].values
+                time_ref = _ref[self.name_ref_time].values
 
-    def _regrid_unstructured(self, lon, lat, time, var):
+            var_interp = pyinterp.trivariate(grid_source,
+                                            lon_ref, 
+                                            lat_ref,
+                                            z_source_axis.safe_cast(time_ref),
+                                            bounds_error=False).reshape(_ref[self.name_ref_lon].shape)
+
+            # Save to dataset
+            exp_regridded.append( xr.DataArray(
+                name=data.name,
+                data=var_interp,
+                coords={self.name_ref_time: (_ref[self.name_ref_time].dims, _ref[self.name_ref_time].values),
+                        self.name_ref_lon: (_ref[self.name_ref_lon].dims, _ref[self.name_ref_lon].values), 
+                        self.name_ref_lat: (_ref[self.name_ref_lat].dims, _ref[self.name_ref_lat].values), 
+                        },
+                dims=_ref.dims
+                )
+            )
+        return exp_regridded
+
+    def _regrid_unstructured(self, data, name_time, name_lat, name_lon):
 
         # Define regular grid 
+        lon = data[name_lon].values
+        lat = data[name_lat].values
+        time = data[name_time].values
         dlon = np.nanmean(lon[:,1:]-lon[:,:-1])
         dlat = np.nanmean(lat[1:,:]-lat[:-1,:])
         lon1d = np.arange(np.nanmin(lon),np.nanmax(lon)+dlon,dlon)
         lat1d = np.arange(np.nanmin(lat),np.nanmax(lat)+dlat,dlat)
         lon_target, lat_target = np.meshgrid(lon1d, lat1d)
-
+        
         # Spatial interpolation 
         mesh = pyinterp.RTree()
         lons = lon.ravel()
         lats = lat.ravel()
         var_regridded = np.zeros((time.size,lat_target.shape[0],lon_target.shape[1]))
         for i in range(time.size):
-            data = var[i].data.ravel()
-            mask = np.isnan(lons) + np.isnan(lats) + np.isnan(data)
-            data = data[~mask]
-            mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, data)
-            idw, _ = mesh.inverse_distance_weighting(
+            _data = data[i].data.ravel()
+            mask = np.isnan(lons) + np.isnan(lats) + np.isnan(_data)
+            _data = _data[~mask]
+            mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, _data)
+            idw, _ = mesh.window_function(
                 np.vstack((lon_target.ravel(), lat_target.ravel())).T,
                 within=False,  # Extrapolation is forbidden
-                k=11,  # We are looking for at most 11 neighbors
+                k=11,
                 radius=600000,
+                wf='parzen',
                 num_threads=0)
             var_regridded[i,:,:] = idw.reshape(lon_target.shape)
+        
+        # Mask
+        lon2d,lat2d = np.meshgrid(lon1d,lat1d)
+        mask_interp = griddata((lons,lats), data[0].data.ravel(), (lon2d.ravel(),lat2d.ravel()),method='nearest').reshape(lon2d.shape)
+        var_regridded[:,np.isnan(mask_interp)] = np.nan
 
         # Save to dataset
         var_regridded = xr.DataArray(
+            name=data.name,
             data=var_regridded,
             coords={self.name_exp_time: time,
                     self.name_exp_lon: lon1d, 
@@ -1794,41 +1942,49 @@ That could be due to non regular grid or bad written netcdf file')
                     },
             dims=[self.name_exp_time, self.name_exp_lat, self.name_exp_lon]
             )
+        
+        dsout = xr.Dataset({self.name_exp_var:var_regridded})
+        dsout = dsout.sel({self.name_exp_lon:slice(self.lon_min,self.lon_max),
+                           self.name_exp_lat:slice(self.lat_min,self.lat_max)})
+        dsout.to_netcdf(f'{self.dir_output}/exp_regridded.nc')
 
         # return regrid_geo output
         return self._regrid_geo(
-                    lon1d,
-                    lat1d, 
-                    time, 
                     var_regridded,
+                    name_time, name_lat, name_lon
                     )
           
     def rmse_based_scores(self,plot=False):
+
+        # Merging
+        _ref = xr.merge(self.ref)
+        _exp = xr.merge(self.exp_regridded)
+        if self.compare_to_baseline:
+            _bas = xr.merge(self.bas_regridded)
 
         ##########################
         # get data
         ##########################
 
-        time_alongtrack = self.ref[self.name_ref_time].values
-        lon_alongtrack = self.ref[self.name_ref_lon].values
-        lat_alongtrack = self.ref[self.name_ref_lat].values
-        var_alongtrack = self.ref.values
-        var_exp_interp = self.exp_regridded.values
+        time_alongtrack = _ref[self.name_ref_time].values
+        lon_alongtrack = _ref[self.name_ref_lon].values
+        lat_alongtrack = _ref[self.name_ref_lat].values
+        var_alongtrack = _ref[self.name_ref_var].values
+        var_exp_interp = _exp[self.name_exp_var].values
         if self.compare_to_baseline:
-            var_bas_interp = self.bas_regridded.values
-        
+            var_bas_interp = _bas[self.name_bas_var].values
+
 
         ##########################
         # write spatial statistics
         ##########################
+            
+        binning = pyinterp.Binning2D(
+        pyinterp.Axis(np.arange(self.lon_min, self.lon_max, self.bin_lon_step), is_circle=True),
+        pyinterp.Axis(np.arange(self.lat_min, self.lat_max + self.bin_lat_step, self.bin_lat_step)))
 
         output_filename_xy = f'{self.dir_output}/rmse_xy.nc'
-        
         ncfile = netCDF4.Dataset(output_filename_xy,'w')
-
-        binning = pyinterp.Binning2D(
-            pyinterp.Axis(np.arange(self.lon_min, self.lon_max, self.bin_lon_step), is_circle=True),
-            pyinterp.Axis(np.arange(self.lat_min, self.lat_max + self.bin_lat_step, self.bin_lat_step)))
 
         # binning alongtrack
         binning.push(lon_alongtrack, lat_alongtrack, var_alongtrack, simple=True)
@@ -1869,8 +2025,8 @@ That could be due to non regular grid or bad written netcdf file')
             var[:, :] = np.sqrt(binning.variable('mean')).T  
             rmse_xy_bas = np.sqrt(binning.variable('mean')).T
 
+
         ncfile.close()
-        
 
         ##############################
         # write time series statistics
@@ -1882,11 +2038,11 @@ That could be due to non regular grid or bad written netcdf file')
         ##############################
 
         # convert data vector and time vector into xarray.Dataarray
-        da = xr.DataArray(var_alongtrack, coords=[time_alongtrack], dims="time")
-        
+        da = xr.DataArray(var_alongtrack, coords=_ref.coords, dims=_ref.dims)
+
         # resample 
         da_resample = da.resample(time=self.bin_time_step)
-        
+
         # compute stats
         vmean = da_resample.mean()
         vminimum = da_resample.min()
@@ -1895,35 +2051,37 @@ That could be due to non regular grid or bad written netcdf file')
         vvariance = da_resample.var()
         vmedian = da_resample.median()
         vrms = np.sqrt(np.square(da).resample(time=self.bin_time_step).mean())
-        
+
         rms_alongtrack = np.copy(vrms)
-        
+
+        dims = vmean.dims
+        coords = vmean.coords
         # save stat to dataset
         ds = xr.Dataset(
             {
-                "mean": (("time"), vmean.values),
-                "min": (("time"), vminimum.values),
-                "max": (("time"), vmaximum.values),
-                "count": (("time"), vcount_alongtrack.values),
-                "variance": (("time"), vvariance.values),
-                "median": (("time"), vmedian.values),
-                "rms": (("time"), vrms.values),            
+                "mean": (dims, vmean.values),
+                "min": (dims, vminimum.values),
+                "max": (dims, vmaximum.values),
+                "count": (dims, vcount_alongtrack.values),
+                "variance": (dims, vvariance.values),
+                "median": (dims, vmedian.values),
+                "rms": (dims, vrms.values),            
             },
-            {"time": vmean['time']},
+            coords,
         )
-        
+
         ds.to_netcdf(output_filename_t, group='alongtrack')
-        
+
 
         # experiment
         ##############################
-        
+
         # convert data vector and time vector into xarray.Dataarray
-        da = xr.DataArray(var_exp_interp, coords=[time_alongtrack], dims="time")
-        
+        da = xr.DataArray(var_exp_interp, coords=_ref.coords, dims=_ref.dims)
+
         # resample 
         da_resample = da.resample(time=self.bin_time_step)
-        
+
         # compute stats
         vmean = da_resample.mean()
         vminimum = da_resample.min()
@@ -1932,32 +2090,32 @@ That could be due to non regular grid or bad written netcdf file')
         vvariance = da_resample.var()
         vmedian = da_resample.median()
         vrms = np.sqrt(np.square(da).resample(time=self.bin_time_step).mean())
-        
+
         # save stat to dataset
         ds = xr.Dataset(
             {
-                "mean": (("time"), vmean.values),
-                "min": (("time"), vminimum.values),
-                "max": (("time"), vmaximum.values),
-                "count": (("time"), vcount.values),
-                "variance": (("time"), vvariance.values),
-                "median": (("time"), vmedian.values),
-                "rms": (("time"), vrms.values),            
+                "mean": (dims, vmean.values),
+                "min": (dims, vminimum.values),
+                "max": (dims, vmaximum.values),
+                "count": (dims, vcount_alongtrack.values),
+                "variance": (dims, vvariance.values),
+                "median": (dims, vmedian.values),
+                "rms": (dims, vrms.values),            
             },
-            {"time": vmean['time']},
+            coords,
         )
-        
+
         ds.to_netcdf(output_filename_t, group='experiment', mode='a')
 
         # baseline
         ##############################
         if self.compare_to_baseline:
             # convert data vector and time vector into xarray.Dataarray
-            da = xr.DataArray(var_bas_interp, coords=[time_alongtrack], dims="time")
-            
+            da = xr.DataArray(var_bas_interp, coords=_ref.coords, dims=_ref.dims)
+
             # resample 
             da_resample = da.resample(time=self.bin_time_step)
-            
+
             # compute stats
             vmean = da_resample.mean()
             vminimum = da_resample.min()
@@ -1966,33 +2124,33 @@ That could be due to non regular grid or bad written netcdf file')
             vvariance = da_resample.var()
             vmedian = da_resample.median()
             vrms = np.sqrt(np.square(da).resample(time=self.bin_time_step).mean())
-            
+
             # save stat to dataset
             ds = xr.Dataset(
                 {
-                    "mean": (("time"), vmean.values),
-                    "min": (("time"), vminimum.values),
-                    "max": (("time"), vmaximum.values),
-                    "count": (("time"), vcount.values),
-                    "variance": (("time"), vvariance.values),
-                    "median": (("time"), vmedian.values),
-                    "rms": (("time"), vrms.values),            
-                },
-                {"time": vmean['time']},
+                    "mean": (dims, vmean.values),
+                "min": (dims, vminimum.values),
+                "max": (dims, vmaximum.values),
+                "count": (dims, vcount_alongtrack.values),
+                "variance": (dims, vvariance.values),
+                "median": (dims, vmedian.values),
+                "rms": (dims, vrms.values),            
+            },
+            coords,
             )
-            
+
             ds.to_netcdf(output_filename_t, group='baseline', mode='a')
 
-        
+
         # diff_exp
         ##############################
 
         # convert data vector and time vector into xarray.Dataarray
-        da = xr.DataArray(var_alongtrack - var_exp_interp, coords=[time_alongtrack], dims="time")
-        
+        da = xr.DataArray(var_alongtrack - var_exp_interp, coords=_ref.coords, dims=_ref.dims)
+
         # resample 
         da_resample = da.resample(time=self.bin_time_step)
-        
+
         # compute stats
         vmean = da_resample.mean()
         vminimum = da_resample.min()
@@ -2001,40 +2159,40 @@ That could be due to non regular grid or bad written netcdf file')
         vvariance = da_resample.var()
         vmedian = da_resample.median()
         vrms = np.sqrt(np.square(da).resample(time=self.bin_time_step).mean())
-        
+
         # rmse
         rmse_exp_t = np.copy(vrms)
-        
+
         # mask rmse if nb obs < nb_min_obs
         rmse_exp_t = np.ma.masked_where(vcount_alongtrack.values < self.nb_min_obs, rmse_exp_t)
-        
+
         # save stat to dataset
         ds = xr.Dataset(
             {
-                "mean": (("time"), vmean.values),
-                "min": (("time"), vminimum.values),
-                "max": (("time"), vmaximum.values),
-                "count": (("time"), vcount.values),
-                "variance": (("time"), vvariance.values),
-                "median": (("time"), vmedian.values),
-                "rms": (("time"), vrms.values),            
+                "mean": (dims, vmean.values),
+                "min": (dims, vminimum.values),
+                "max": (dims, vmaximum.values),
+                "count": (dims, vcount_alongtrack.values),
+                "variance": (dims, vvariance.values),
+                "median": (dims, vmedian.values),
+                "rms": (dims, vrms.values),            
             },
-            {"time": vmean['time']},
+            coords,
         )
-        
+
         ds.to_netcdf(output_filename_t, group='diff_exp', mode='a')
 
-        
+
         # diff_bas
         ##############################
 
         if self.compare_to_baseline:
             # convert data vector and time vector into xarray.Dataarray
-            da = xr.DataArray(var_alongtrack - var_bas_interp, coords=[time_alongtrack], dims="time")
-            
+            da = xr.DataArray(var_alongtrack - var_bas_interp, coords=_ref.coords, dims=_ref.dims)
+
             # resample 
             da_resample = da.resample(time=self.bin_time_step)
-            
+
             # compute stats
             vmean = da_resample.mean()
             vminimum = da_resample.min()
@@ -2043,55 +2201,61 @@ That could be due to non regular grid or bad written netcdf file')
             vvariance = da_resample.var()
             vmedian = da_resample.median()
             vrms = np.sqrt(np.square(da).resample(time=self.bin_time_step).mean())
-            
+
             # rmse
             rmse_bas_t = np.copy(vrms)
-            
+
             # mask rmse if nb obs < nb_min_obs
             rmse_bas_t = np.ma.masked_where(vcount_alongtrack.values < self.nb_min_obs, rmse_bas_t)
-            
+
             # save stat to dataset
             ds = xr.Dataset(
                 {
-                    "mean": (("time"), vmean.values),
-                    "min": (("time"), vminimum.values),
-                    "max": (("time"), vmaximum.values),
-                    "count": (("time"), vcount.values),
-                    "variance": (("time"), vvariance.values),
-                    "median": (("time"), vmedian.values),
-                    "rms": (("time"), vrms.values),            
-                },
-                {"time": vmean['time']},
+                    "mean": (dims, vmean.values),
+                "min": (dims, vminimum.values),
+                "max": (dims, vmaximum.values),
+                "count": (dims, vcount_alongtrack.values),
+                "variance": (dims, vvariance.values),
+                "median": (dims, vmedian.values),
+                "rms": (dims, vrms.values),            
+            },
+            coords,
             )
-            
+
             ds.to_netcdf(output_filename_t, group='diff_bas', mode='a')
 
         ds.close()
 
+
+
         ##############################
         # RMSE score
         ##############################
-        
+
         rmse_score_exp_t = 1. - rmse_exp_t/rms_alongtrack
+        if len(rmse_score_exp_t.shape)==2:
+            rmse_score_exp_t = rmse_score_exp_t.mean(axis=1)
         self.leaderboard_rmse_exp = np.ma.mean(np.ma.masked_invalid(rmse_score_exp_t))
         self.leaderboard_rmse_std_exp = np.ma.std(np.ma.masked_invalid(rmse_score_exp_t))
 
         if self.compare_to_baseline:
             rmse_score_bas_t = 1. - rmse_bas_t/rms_alongtrack
+            if len(rmse_score_bas_t.shape)==2:
+                rmse_score_bas_t = rmse_score_bas_t.mean(axis=1)
             self.leaderboard_rmse_bas = np.ma.mean(np.ma.masked_invalid(rmse_score_bas_t))
             self.leaderboard_rmse_std_bas = np.ma.std(np.ma.masked_invalid(rmse_score_bas_t))
-        
 
-        
+
+
         ##############################
         # plotting
         ##############################
 
         if plot:
             if not self.compare_to_baseline:
-                fig, (ax1, ax2) = plt.subplots(1,2,figsize=(10,4))
+                fig, (ax1, ax2) = plt.subplots(1,2,figsize=(2*(100/self.ratio_fig)**.5,1*(self.ratio_fig*100)**.5))
             else:
-                fig,(ax1,ax2,ax3) = plt.subplots(1,3,figsize=(15,4))
+                fig,(ax1,ax2,ax3,ax4) = plt.subplots(1,4,figsize=(4*(100/self.ratio_fig)**.5,1*(self.ratio_fig*100)**.5))
 
             ax1.plot(vmean['time'], rmse_score_exp_t, label='experiment', c='b')
             if self.compare_to_baseline:
@@ -2099,17 +2263,23 @@ That could be due to non regular grid or bad written netcdf file')
             ax1.legend()
             ax1.set_xticklabels(ax1.get_xticklabels(), rotation=45)
 
-            im2 = ax2.pcolormesh(binning.x, binning.y, rmse_xy_exp,cmap='Reds')
-            
+            im2 = ax2.pcolormesh(binning.x, binning.y, rmse_xy_exp,cmap='Reds',vmin=np.nanmin(rmse_xy_exp),vmax=np.nanmax(rmse_xy_exp))
+
             if self.compare_to_baseline:
                 ax3.pcolormesh(binning.x, binning.y, rmse_xy_bas,cmap='Reds',vmin=np.nanmin(rmse_xy_exp),vmax=np.nanmax(rmse_xy_exp))
                 plt.colorbar(im2,ax=[ax2,ax3])
                 ax3.set_title('baseline')
                 ax2.set_title('experiment')
+                
+                im = ax4.pcolormesh(binning.x, binning.y, 100*(rmse_xy_exp**2-rmse_xy_bas**2)/rmse_xy_bas**2,vmin=-50,vmax=50,cmap='RdBu_r')
+                ax4.set_title('Improvement experiment/baseline')
+                plt.colorbar(im,ax=ax4)
             else:
                 plt.colorbar(im2,ax=ax2)
-
-            fig.savefig(f'{self.dir_output}/rmse.png',dpi=100)
+            
+            plt.show()
+            fig.savefig(f'{self.dir_output}/rmse.png',dpi=200)
+            
 
     def _write_stat(self, nc, group_name, binning):
     
@@ -2130,109 +2300,156 @@ That could be due to non regular grid or bad written netcdf file')
         
     def psd_based_scores(self, threshold=0.5, plot=True):
 
-        ##########################
-        # get data
-        ##########################
-
-        time_alongtrack = self.ref[self.name_ref_time].values
-        lon_alongtrack = self.ref[self.name_ref_lon].values
-        lat_alongtrack = self.ref[self.name_ref_lat].values
-        var_alongtrack = self.ref.values
-        var_exp_interp = self.exp_regridded.values
+        wavenumber = []
+        psd_ref = []
+        psd_exp = []
+        psd_diff_exp = []
         if self.compare_to_baseline:
-            var_bas_interp = self.bas_regridded.values
+            psd_bas = []
+            psd_diff_bas = []
 
-        # Mask
-        msk1 = np.ma.masked_invalid(var_alongtrack).mask
-        msk2 = np.ma.masked_invalid(var_exp_interp).mask
-        msk = msk1 + msk2
-        if self.compare_to_baseline:
-            msk += np.ma.masked_invalid(var_bas_interp).mask
-        var_alongtrack = np.ma.masked_where(msk, var_alongtrack).compressed()
-        lon_alongtrack = np.ma.masked_where(msk, lon_alongtrack).compressed()
-        lat_alongtrack = np.ma.masked_where(msk, lat_alongtrack).compressed()
-        time_alongtrack = np.ma.masked_where(msk, time_alongtrack).compressed()
-        var_exp_interp = np.ma.masked_where(msk, var_exp_interp).compressed()
-        if self.compare_to_baseline:
-            var_bas_interp = np.ma.masked_where(msk, var_bas_interp).compressed()
- 
- 
+        for i,_ref in enumerate(self.ref):
 
-        
-        ##########################
-        # compute segments
-        ##########################
-        _, _, ref_segment, exp_segment, npt  = self._compute_segment_alongtrack(time_alongtrack, 
-                                                                                lat_alongtrack, 
-                                                                                lon_alongtrack, 
-                                                                                var_alongtrack, 
-                                                                                var_exp_interp, 
+            ##########################
+            # get data
+            ##########################
+            time_alongtrack = _ref[self.name_ref_time].values
+            lon_alongtrack = _ref[self.name_ref_lon].values
+            lat_alongtrack = _ref[self.name_ref_lat].values
+            var_alongtrack = _ref.values
+            var_exp_interp = self.exp_regridded[i].values
+            if self.compare_to_baseline:
+                var_bas_interp = self.bas_regridded[i].values
+            if len(var_alongtrack.shape)==1:
+                lon_alongtrack = lon_alongtrack[:,np.newaxis]
+                lat_alongtrack = lat_alongtrack[:,np.newaxis]
+                var_alongtrack = var_alongtrack[:,np.newaxis]
+                var_exp_interp = var_exp_interp[:,np.newaxis]
+                if self.compare_to_baseline:
+                    var_bas_interp = var_bas_interp[:,np.newaxis]
+
+
+                    
+            for ac in range(lon_alongtrack.shape[1]):
+
+                # Mask
+                msk1 = np.ma.masked_invalid(var_alongtrack[:,ac]).mask
+                msk2 = np.ma.masked_invalid(var_exp_interp[:,ac]).mask
+                msk = msk1 + msk2
+                if self.compare_to_baseline:
+                    msk += np.ma.masked_invalid(var_bas_interp[:,ac]).mask
+                _var_alongtrack = np.ma.masked_where(msk, var_alongtrack[:,ac]).compressed()
+                _lon_alongtrack = np.ma.masked_where(msk, lon_alongtrack[:,ac]).compressed()
+                _lat_alongtrack = np.ma.masked_where(msk, lat_alongtrack[:,ac]).compressed()
+                _time_alongtrack = np.ma.masked_where(msk, time_alongtrack).compressed()
+                _var_exp_interp = np.ma.masked_where(msk, var_exp_interp[:,ac]).compressed()
+                if self.compare_to_baseline:
+                    _var_bas_interp = np.ma.masked_where(msk, var_bas_interp[:,ac]).compressed()
+
+                if _time_alongtrack.size==0:
+                    continue
+
+                ##########################
+                # compute segments
+                ##########################
+                _, _, ref_segment, exp_segment, npt  = self._compute_segment_alongtrack(_time_alongtrack, 
+                                                                                        _lat_alongtrack, 
+                                                                                        _lon_alongtrack, 
+                                                                                        _var_alongtrack, 
+                                                                                        _var_exp_interp, 
+                                                                                        self.lenght_scale,
+                                                                                        self.delta_x[i])
+                if self.compare_to_baseline:
+                    _, _, _, bas_segment, _  = self._compute_segment_alongtrack(_time_alongtrack, 
+                                                                                _lat_alongtrack, 
+                                                                                _lon_alongtrack, 
+                                                                                _var_alongtrack, 
+                                                                                _var_bas_interp, 
                                                                                 self.lenght_scale,
-                                                                                self.delta_x,
-                                                                                self.delta_t)
-        if self.compare_to_baseline:
-            _, _, _, bas_segment, _  = self._compute_segment_alongtrack(time_alongtrack, 
-                                                                        lat_alongtrack, 
-                                                                        lon_alongtrack, 
-                                                                        var_alongtrack, 
-                                                                        var_bas_interp, 
-                                                                        self.lenght_scale,
-                                                                        self.delta_x,
-                                                                        self.delta_t)
-        
+                                                                                self.delta_x[i])
 
-        ##########################
-        # spectral analysis
-        ##########################
-        # Power spectrum density reference field
-        wavenumber, psd_ref = scipy.signal.welch(np.asarray(ref_segment).flatten(),
-                                                            fs=1.0 / self.delta_x,
-                                                            nperseg=npt,
-                                                            scaling='density',
-                                                            noverlap=0)
+                ##########################
+                # spectral analysis
+                ##########################
+                # Power spectrum density reference field
+                _wavenumber, _psd_ref = scipy.signal.welch(np.asarray(ref_segment).flatten(),
+                                                                    fs=1.0 / self.delta_x[i],
+                                                                    nperseg=npt,
+                                                                    scaling='density',
+                                                                    noverlap=0)
 
-        # Power spectrum density experimental field
-        _, psd_exp = scipy.signal.welch(np.asarray(exp_segment).flatten(),
-                                                fs=1.0 / self.delta_x,
-                                                nperseg=npt,
-                                                scaling='density',
-                                                noverlap=0)
-        if self.compare_to_baseline:
-            _, psd_bas = scipy.signal.welch(np.asarray(bas_segment).flatten(),
-                                                fs=1.0 / self.delta_x,
-                                                nperseg=npt,
-                                                scaling='density',
-                                                noverlap=0)
+                # Power spectrum density experimental field
+                _, _psd_exp = scipy.signal.welch(np.asarray(exp_segment).flatten(),
+                                                        fs=1.0 / self.delta_x[i],
+                                                        nperseg=npt,
+                                                        scaling='density',
+                                                        noverlap=0)
+                if self.compare_to_baseline:
+                    _, _psd_bas = scipy.signal.welch(np.asarray(bas_segment).flatten(),
+                                                        fs=1.0 / self.delta_x[i],
+                                                        nperseg=npt,
+                                                        scaling='density',
+                                                        noverlap=0)
 
-        # Power spectrum density difference 
-        _, psd_diff_exp = scipy.signal.welch(np.asarray(exp_segment).flatten()-np.asarray(ref_segment).flatten(),
-                                                fs=1.0 / self.delta_x,
-                                                nperseg=npt,
-                                                scaling='density',
-                                                noverlap=0)
+                # Power spectrum density difference 
+                _, _psd_diff_exp = scipy.signal.welch(np.asarray(exp_segment).flatten()-np.asarray(ref_segment).flatten(),
+                                                        fs=1.0 / self.delta_x[i],
+                                                        nperseg=npt,
+                                                        scaling='density',
+                                                        noverlap=0)
+                if self.compare_to_baseline:
+                    _, _psd_diff_bas = scipy.signal.welch(np.asarray(bas_segment).flatten()-np.asarray(ref_segment).flatten(),
+                                                        fs=1.0 / self.delta_x[i],
+                                                        nperseg=npt,
+                                                        scaling='density',
+                                                        noverlap=0)
+
+                # Append to lists
+                if _psd_ref.size>0:
+                    wavenumber.append(_wavenumber)
+                    psd_ref.append(_psd_ref)
+                    psd_exp.append(_psd_exp)
+                    psd_diff_exp.append(_psd_diff_exp)
+                    if self.compare_to_baseline:
+                        psd_bas.append(_psd_bas)
+                        psd_diff_bas.append(_psd_diff_bas)
+
+        # Interpolate to same wavenumbers
+        argmin = np.argmin([len(_wavenumber) for _wavenumber in wavenumber])
+        wavenumber0 = wavenumber[argmin]
+        psd_interp = []
+        for i in range(len(wavenumber)):
+            psd_ref[i] = np.interp(wavenumber0,wavenumber[i],psd_ref[i])
+            psd_exp[i] = np.interp(wavenumber0,wavenumber[i],psd_exp[i])
+            psd_diff_exp[i] = np.interp(wavenumber0,wavenumber[i],psd_diff_exp[i])
+            if self.compare_to_baseline:
+                psd_bas[i] = np.interp(wavenumber0,wavenumber[i],psd_bas[i])
+                psd_diff_bas[i] = np.interp(wavenumber0,wavenumber[i],psd_diff_bas[i])
+
+        # Average along across track direction
+        psd_ref = np.asarray(psd_ref).mean(axis=0)
+        psd_exp = np.asarray(psd_exp).mean(axis=0)
+        psd_diff_exp = np.asarray(psd_diff_exp).mean(axis=0)
         if self.compare_to_baseline:
-            _, psd_diff_bas = scipy.signal.welch(np.asarray(bas_segment).flatten()-np.asarray(ref_segment).flatten(),
-                                                fs=1.0 / self.delta_x,
-                                                nperseg=npt,
-                                                scaling='density',
-                                                noverlap=0)
-        
+            psd_bas = np.asarray(psd_bas).mean(axis=0)
+            psd_diff_bas = np.asarray(psd_diff_bas).mean(axis=0)
+
         # Save psd in netcdf file
         ds = xr.Dataset({"psd_ref": (["wavenumber"], psd_ref),
                         "psd_exp": (["wavenumber"], psd_exp),
                         "psd_diff_exp": (["wavenumber"], psd_diff_exp),
                         },
-                        coords={"wavenumber": (["wavenumber"], wavenumber)},
+                        coords={"wavenumber": (["wavenumber"], wavenumber0)},
                     )
         if self.compare_to_baseline:
             ds["psd_bas"] = (["wavenumber"], psd_bas)
             ds["psd_diff_bas"] = (["wavenumber"], psd_diff_bas)
-        
+
         output_filename = f'{self.dir_output}/psd.nc'
         ds.to_netcdf(output_filename)
 
         # Resolved scales
-        y = 1./wavenumber
+        y = 1./wavenumber0
         x = (1. - psd_diff_exp/psd_ref)
         f = scipy.interpolate.interp1d(x, y)
         res_exp = f(threshold)
@@ -2281,18 +2498,20 @@ That could be due to non regular grid or bad written netcdf file')
                             np.ma.max(np.ma.masked_invalid(1./ds.wavenumber)),
                             color='b',
                             alpha=0.3, 
-                            label=f'experiment: $\lambda$ > {int(res_exp)}km')
+                            label=f'experiment: λ > {int(res_exp)}km')
             if self.compare_to_baseline:
                 ax.fill_betweenx((1. - ds.psd_diff_bas/ds.psd_ref), 
                             res_bas, 
                             np.ma.max(np.ma.masked_invalid(1./ds.wavenumber)),
                             color='r',
                             alpha=0.3, 
-                            label=f'baseline: $\lambda$ > {int(res_bas)}km')
+                            label=f'baseline: λ > {int(res_bas)}km')
+            ax.set_ylim(0,1)
             plt.legend(loc='best', title="resolved scales")
             plt.grid(which='both')
-        
             plt.savefig(f'{self.dir_output}/psd.png', dpi=100)
+
+            plt.show()
 
 
     def _compute_segment_alongtrack(self,time_alongtrack, 
@@ -2302,7 +2521,7 @@ That could be due to non regular grid or bad written netcdf file')
                                 ssh_map_interp, 
                                 lenght_scale,
                                 delta_x,
-                                delta_t):
+                                ):
 
         segment_overlapping = 0.25
         max_delta_t_gap = 4 * np.timedelta64(1, 's')  # max delta t of 4 seconds to cut tracks
@@ -2313,12 +2532,14 @@ That could be due to non regular grid or bad written netcdf file')
         list_ssh_map_interp_segment = []
 
         # Get number of point to consider for resolution = lenghtscale in km
-        delta_t_jd = delta_t / (3600 * 24)
         npt = int(lenght_scale / delta_x)
 
         # cut track when diff time longer than 4*delta_t
-        indi = np.where((np.diff(time_alongtrack) > max_delta_t_gap))[0]
-        track_segment_lenght = np.insert(np.diff(indi), [0], indi[0])
+        indi = np.where(((np.diff(time_alongtrack) > max_delta_t_gap)))[0]
+        if len(indi)>0:
+            track_segment_lenght = np.insert(np.diff(indi), [0], indi[0])
+        else:
+            track_segment_lenght = time_alongtrack.size
 
         # Long track >= npt
         selected_track_segment = np.where(track_segment_lenght >= npt)[0]
@@ -2375,8 +2596,119 @@ That could be due to non regular grid or bad written netcdf file')
 
         return list_lon_segment, list_lat_segment, list_ssh_alongtrack_segment, list_ssh_map_interp_segment, npt 
         
-    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
-        # Not implemented yet"
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral',delete_frames=False):
+        
+        # For memory leak when saving multiple png files...
+        import matplotlib
+        matplotlib.use('Agg')
+        
+        # Experimental data
+        ssh_exp = self.exp.values
+        lon_exp = self.exp[self.name_exp_lon].values
+        lat_exp = self.exp[self.name_exp_lat].values
+        if len(lon_exp.shape)==1:
+            lon_exp,lat_exp = np.meshgrid(lon_exp,lat_exp)
+        u_exp,v_exp = switchvar.ssh2uv(ssh_exp,lon=lon_exp,lat=lat_exp)
+        U_exp = np.sqrt(u_exp**2+v_exp**2)
+        rv_exp = switchvar.ssh2rv(ssh_exp,lon=lon_exp,lat=lat_exp,norm=True)
+
+        # Ranges
+        ssh_min = np.nanmin(ssh_exp)
+        ssh_max = np.nanmax(ssh_exp)
+        U_min = 0
+        U_max = np.nanmax(U_exp)
+        rv_min = -.5
+        rv_max = .5
+
+        # Baseline data
+        if self.compare_to_baseline:
+            bas_interp = self.bas.interp({self.name_bas_time:self.exp[self.name_bas_time]})    # time interpolation of baseline
+            ssh_bas = bas_interp.values
+            lon_bas = self.bas[self.name_bas_lon].values
+            lat_bas = self.bas[self.name_bas_lat].values
+            if len(lon_bas.shape)==1:
+                lon_bas,lat_bas = np.meshgrid(lon_bas,lat_bas)
+            u_bas,v_bas = switchvar.ssh2uv(ssh_bas,lon=lon_bas,lat=lat_bas)
+            U_bas = np.sqrt(u_bas**2+v_bas**2)
+            rv_bas = switchvar.ssh2rv(ssh_bas,lon=lon_bas,lat=lat_bas,norm=True)
+
+        # Compute frames
+        for t in range(self.exp[self.name_exp_time].size):
+
+            if self.compare_to_baseline:
+                fig, axs = plt.subplots(2,3,figsize=(3*(100/self.ratio_fig)**.5,2*(self.ratio_fig*100)**.5))
+            else: 
+                fig, axs = plt.subplots(1,3,figsize=(3*(100/self.ratio_fig)**.5,1*(self.ratio_fig*100)**.5))
+                axs = axs[np.newaxis,:]
+
+            fig.suptitle(str(self.exp[self.name_exp_time][t].values)[:13])
+
+            im0 = axs[0,0].pcolormesh(lon_exp,lat_exp,ssh_exp[t],cmap=cmocean.cm.deep_r,vmin=ssh_min,vmax=ssh_max)
+            axs[0,0].set_xlim(self.lon_min,self.lon_max)
+            axs[0,0].set_ylim(self.lat_min,self.lat_max)
+            axs[0,0].set_title(r'SSH$_{exp}$ [m]')
+            plt.colorbar(im0,ax=axs[0,0])
+
+            im1 = axs[0,1].pcolormesh(lon_exp,lat_exp,U_exp[t],cmap=cmocean.cm.speed,vmin=U_min,vmax=U_max)
+            axs[0,1].set_xlim(self.lon_min,self.lon_max)
+            axs[0,1].set_ylim(self.lat_min,self.lat_max)
+            axs[0,1].set_title(r'U$_{exp}$ [m/s]')
+            plt.colorbar(im1,ax=axs[0,1])
+
+            im2 = axs[0,2].pcolormesh(lon_exp,lat_exp,rv_exp[t],cmap=cmocean.cm.diff,vmin=rv_min,vmax=rv_max)
+            axs[0,2].set_xlim(self.lon_min,self.lon_max)
+            axs[0,2].set_ylim(self.lat_min,self.lat_max)
+            axs[0,2].set_title(r'$\xi_{exp}/f$')
+            plt.colorbar(im2,ax=axs[0,2])
+
+            # Baseline variables 
+            if self.compare_to_baseline:
+                im0 = axs[1,0].pcolormesh(lon_bas,lat_bas,ssh_bas[t],cmap=cmocean.cm.deep_r,vmin=ssh_min,vmax=ssh_max)
+                plt.colorbar(im0,ax=axs[1,0])
+                axs[1,0].set_xlim(self.lon_min,self.lon_max)
+                axs[1,0].set_ylim(self.lat_min,self.lat_max)
+                axs[1,0].set_title(r'SSH$_{baseline}$ [m]')
+                im1 = axs[1,1].pcolormesh(lon_bas,lat_bas,U_bas[t],cmap=cmocean.cm.speed,vmin=U_min,vmax=U_max)
+                axs[1,1].set_xlim(self.lon_min,self.lon_max)
+                axs[1,1].set_ylim(self.lat_min,self.lat_max)
+                axs[1,1].set_title(r'U$_{baseline}$ [m/s]')
+                plt.colorbar(im1,ax=axs[1,1])
+                im2 = axs[1,2].pcolormesh(lon_bas,lat_bas,rv_bas[t],cmap=cmocean.cm.diff,vmin=rv_min,vmax=rv_max)
+                axs[1,2].set_xlim(self.lon_min,self.lon_max)
+                axs[1,2].set_ylim(self.lat_min,self.lat_max)
+                axs[1,2].set_title(r'$\xi_{baseline}/f$')
+                plt.colorbar(im2,ax=axs[1,2])
+
+            fig.savefig(f'{self.dir_output}/frame_{str(t).zfill(5)}.png',dpi=200)
+
+            plt.close(fig)
+            del fig
+            gc.collect(2)
+
+        # Create movie
+        sourcefolder = self.dir_output
+        moviename = 'movie.mp4'
+        frame_pattern = 'frame_*.png'
+        ffmpeg_options="-c:v libx264 -preset veryslow -crf 15 -pix_fmt yuv420p"
+
+        command = 'ffmpeg -f image2 -r %i -pattern_type glob -i %s -y %s -r %i %s' % (
+                framerate,
+                os.path.join(sourcefolder, frame_pattern),
+                ffmpeg_options,
+                framerate,
+                os.path.join(self.dir_output, moviename),
+            )
+        print(command)
+
+        _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
+
+        # Delete frames
+        if delete_frames:
+            os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+
+        # Display movie
+        if Display:
+            Video(os.path.join(self.dir_output, moviename),embed=True)
         return 
     
     def Leaderboard(self):

@@ -41,13 +41,13 @@ class Swm:
 
         # Bathymetry gradient # 
 
-        # self.grad_bathymetry_x = State.grad_bathymetry_x
-        # self.grad_bathymetry_y = State.grad_bathymetry_y
+        self.grad_bathymetry_x = State.grad_bathymetry_x
+        self.grad_bathymetry_y = State.grad_bathymetry_y
 
         # Tidal Velocity # 
 
-        # self.tidal_U = Model.tidal_U
-        # self.tidal_V = Model.tidal_V
+        self.tidal_U = Model.tidal_U
+        self.tidal_V = Model.tidal_V
 
         ##############
         # PARAMETERS #
