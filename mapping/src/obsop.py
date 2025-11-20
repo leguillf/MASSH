@@ -16,6 +16,7 @@ from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
 import pandas as pd
+import pyinterp
 from jax.experimental import sparse
 import jax.numpy as jnp 
 from jax.lax import dynamic_slice
@@ -1119,7 +1120,7 @@ class _Obsop_interp_l4(Obsop_interp):
                             _var_obs_interp_cubic = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
                             _err_obs_interp_cubic = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method='cubic')
                             _var_obs_interp[~np.isnan(_var_obs_interp_cubic)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_cubic)]
-                            _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)]
+                            _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)] 
                         else:
                             _var_obs_interp = griddata(_coords_obs, var_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
                             _err_obs_interp = griddata(_coords_obs, err_obs[name][iobs].flatten(), self.coords_geo, method=self.interp_method)
@@ -1434,10 +1435,15 @@ class Obsop_interp_l4(Obsop_interp):
                     err[np.isnan(var)] = np.nan
 
                     # Add error due to interpolation (resolutions ratio)
-                    dx, dy = grid.lonlat2dxdy(lon,lat)
-                    _err_res = np.nanmean(dx * dy) / np.nanmean(self.DX * self.DY)
+                    try:
+                        dx, dy = grid.lonlat2dxdy(lon,lat)
+                        _err_res = np.nanmean(dx * dy) / np.nanmean(self.DX * self.DY)
+                    except:
+                        _err_res = 1
                     if _err_res>1:
                         err *= _err_res
+                    
+
                                     
                     # Append to lists
                     var_obs.append(+var.flatten())
@@ -1475,11 +1481,66 @@ class Obsop_interp_l4(Obsop_interp):
                     _err_obs_interp_cubic = griddata(_coords_obs, err_obs, self.coords_geo, method='cubic')
                     _var_obs_interp[~np.isnan(_var_obs_interp_cubic)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_cubic)]
                     _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)]
+                    
+                elif self.interp_method=='rtree': 
+
+                    check_issue = False
+
+                    def _regrid_unstructured(lon_target, lat_target, lon, lat, var):
+                        
+                        # Spatial interpolation 
+                        mesh = pyinterp.RTree() 
+                        if len(lon_target.shape)==1:
+                            lon_target, lat_target = np.meshgrid(lon_target, lat_target)
+                        lons = lon.ravel()
+                        lats = lat.ravel()
+                        var_regridded = np.zeros((lat_target.shape[0],lon_target.shape[1])) 
+                        
+                        if False:
+                            print('np.shape(var)',np.shape(var)) 
+                            print('np.shape(lons)',np.shape(lons))
+                            print('np.shape(lats)',np.shape(lats))
+                            print('np.shape(lon_target)',np.shape(lon_target))
+                            print('np.shape(lat_target)',np.shape(lat_target))
+                        data = np.array(var) 
+                        mask = np.isnan(lons) | np.isnan(lats) | np.isnan(data) 
+                        data = data[~mask]
+                        mesh.packing(np.vstack((lons[~mask], lats[~mask])).T, data)
+                        idw, _ = mesh.window_function(
+                            np.vstack((lon_target.ravel(), lat_target.ravel())).T,
+                            within=True,  # Extrapolation is forbidden
+                            k=11,
+                            wf='parzen',
+                            num_threads=0)
+                        var_regridded[:,:] = idw.reshape(lon_target.shape) 
+
+                        return var_regridded
+                     
+                    lon_target,lat_target = self.coords_geo.T
+                    lon_target_grid,lat_target_grid = lon_target.reshape(self.shape_grid),lat_target.reshape(self.shape_grid)
+
+                    if check_issue:
+                        plt.figure()
+                        plt.scatter(lon_obs,lat_obs,c=var_obs)
+                        plt.colorbar()
+                        plt.savefig('/home/sammy/fig_test1.png') 
+                    _var_obs_interp = _regrid_unstructured(lon_target_grid,lat_target_grid,lon_obs,lat_obs,var_obs) 
+                    _err_obs_interp = _regrid_unstructured(lon_target_grid,lat_target_grid,lon_obs,lat_obs,err_obs) 
+
                 else:
                     _var_obs_interp = griddata(_coords_obs, var_obs, self.coords_geo, method=self.interp_method)
                     _err_obs_interp = griddata(_coords_obs, err_obs, self.coords_geo, method=self.interp_method)
                 var_obs_interp = _var_obs_interp.reshape(self.shape_grid)
                 err_obs_interp = _err_obs_interp.reshape(self.shape_grid)
+
+                if check_issue:
+                    plt.figure()
+                    plt.pcolormesh(lon_target_grid,lat_target_grid,_var_obs_interp)
+                    plt.colorbar()
+                    plt.savefig('/home/sammy/fig_test2.png')
+
+                    stopsam
+
                 
                 # Save operator if asked
                 if self.write_op:
