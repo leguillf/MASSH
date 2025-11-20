@@ -200,6 +200,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     
     # Error file
     if obs_attr.path_err is not None:
+        print('READ AUX DATA FOR OBS ERROR VARIANCES ================================',obs_name)
         finterperr = read_auxdata(obs_attr.path_err, obs_attr.name_var_err, lon_unit)
     else:
         finterperr = None
@@ -257,6 +258,10 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
                     err_on_obs = finterperr((lon,lat))
                     varobs[name + '_err'] = varobs[name].copy()
                     varobs[name + '_err'].data = err_on_obs
+
+                    if obs_attr.facR is not None: 
+                        print('FacR implemented', obs_attr.facR)
+                        varobs[name + '_err'].data *= obs_attr.facR 
 
             # Build netcdf
             coords = {}

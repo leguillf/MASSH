@@ -847,6 +847,13 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
     else:
         B = Cov(Q)
         R = Cov(config.INV.sigma_R)
+ 
+    # Read Background vector 
+    if config.INV.path_background is not None: 
+        # Read previous minimum 
+        print('Read background basis:',config.INV.path_background)
+        ds = xr.open_dataset(config.INV.path_background)
+        Xb[:len(ds.res.values)] = ds.res.values   
         
     # Variational object initialization
     if config.INV.flag_full_jax:
