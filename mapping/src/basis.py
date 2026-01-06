@@ -1199,6 +1199,8 @@ class Basis_gauss3d:
         self.flag_variable_Q = config.BASIS.flag_variable_Q
         self.path_sad = config.BASIS.path_sad
         self.name_var_sad = config.BASIS.name_var_sad
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
 
         # Grid params
         self.nphys= State.lon.size
@@ -1296,6 +1298,18 @@ class Basis_gauss3d:
             Q = np.tile(Q, len(self.ENST))
         else:
             Q = self.sigma_Q / ((self.facns*self.facnlt))**.5 * np.ones((self.nbasis))
+
+
+        
+        Xb = np.zeros_like(Q)
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print('gauss3d np.shape(Xb)',np.shape(Xb))
+                print('gauss3d np.shape(ds[self.var_background].values)',np.shape(ds[self.var_background].values))
+                print(f'Load background from file: {self.path_background}') 
+                Xb = ds[self.var_background].values[:len(Xb)] 
+
         
         print(f'lambda={self.sigma_D:.1E}',
             f'nlocs={ENSLAT.size:.1E}',
@@ -1572,6 +1586,9 @@ class Basis_bmaux:
         self.tdecmax = config.BASIS.tdecmax
         self.factdec = config.BASIS.factdec
         self.facQ = config.BASIS.facQ
+        self.facQ_aux_path = config.BASIS.facQ_aux_path
+        self.l_largescale = config.BASIS.l_largescale
+        self.facQ_largescale = config.BASIS.facQ_largescale
         self.name_mod_var = config.BASIS.name_mod_var
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
@@ -1654,24 +1671,55 @@ class Basis_bmaux:
     def set_basis(self,time,return_q=False,**kwargs):
 
         print('Setting Basis BMaux...')
-        
-        TIME_MIN = time.min()
-        TIME_MAX = time.max()
-        LON_MIN = self.lon_min
-        LON_MAX = self.lon_max
-        LAT_MIN = self.lat_min
-        LAT_MAX = self.lat_max
-        if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
 
-        # Ensemble of pseudo-frequencies for the wavelets (spatial)
-        logff = np.arange(
-            np.log(1./self.lmin),
-            np.log(1. / self.lmax) - np.log(1 + self.facpsp / self.npsp),
-            -np.log(1 + self.facpsp / self.npsp))[::-1]
+        Mutltiple_basis_exp = True
+        if Mutltiple_basis_exp:  
+            L_MIN = 30
+            L_MAX = 1000 
+
+            TIME_MIN = time.min()
+            TIME_MAX = time.max()
+            LON_MIN = self.lon_min
+            LON_MAX = self.lon_max
+            LAT_MIN = self.lat_min
+            LAT_MAX = self.lat_max
+            if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
+
+            # Ensemble of pseudo-frequencies for the wavelets (spatial)
+            logff_all = np.arange(
+                np.log(1./L_MIN),
+                np.log(1. / L_MAX) - np.log(1 + self.facpsp / self.npsp),
+                -np.log(1 + self.facpsp / self.npsp))[::-1]
+            #print('_',logff_all)
+            #print('A',self.lmax)
+            #print('B',(logff_all>1/self.lmax))
+            #print('C',self.lmin)
+            #print('D',(logff_all<1/self.lmin))
+            #print('E',(logff_all>1/self.lmax) & (logff_all<1/self.lmin))
+            logff = logff_all[(logff_all>=np.log(1/self.lmax)) & (logff_all<=np.log(1/self.lmin))] 
+            ff = np.exp(logff)
+            ff = ff[1/ff<=self.lmax]
+            dff = ff[1:] - ff[:-1]
+
+        else: 
         
-        ff = np.exp(logff)
-        ff = ff[1/ff<=self.lmax]
-        dff = ff[1:] - ff[:-1]
+            TIME_MIN = time.min()
+            TIME_MAX = time.max()
+            LON_MIN = self.lon_min
+            LON_MAX = self.lon_max
+            LAT_MIN = self.lat_min
+            LAT_MAX = self.lat_max
+            if (LON_MAX<LON_MIN): LON_MAX = LON_MAX+360.
+
+            # Ensemble of pseudo-frequencies for the wavelets (spatial)
+            logff = np.arange(
+                np.log(1./self.lmin),
+                np.log(1. / self.lmax) - np.log(1 + self.facpsp / self.npsp),
+                -np.log(1 + self.facpsp / self.npsp))[::-1]
+            
+            ff = np.exp(logff)
+            ff = ff[1/ff<=self.lmax]
+            dff = ff[1:] - ff[:-1]
         
         # Ensemble of directions for the wavelets (2D plane)
         theta = np.linspace(0, np.pi, int(np.pi * ff[0] / dff[0] * self.facpsp))[:-1]
@@ -1807,8 +1855,11 @@ class Basis_bmaux:
         self.iff_wavebounds = [None]*(nf+1)
         Q = np.array([])
         facQ = self.facQ  # Move outside the loop for efficiency
+        facQ_largescale = self.facQ_largescale 
+        l_largescale = self.l_largescale 
 
         std = []
+        facQaux = []
         facQaux = []
         for iff in range(nf):
             std.append([])
@@ -1827,8 +1878,8 @@ class Basis_bmaux:
                 elon2, elat2 = np.meshgrid(elon, elat)
 
                 std_tmp_values = daStd.interp(f=ff[iff], lon=elon2.ravel(), lat=elat2.ravel()).values
-                std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10
-                std[iff].append(std_tmp)
+                std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10 
+                std[iff].append(std_tmp) 
 
                 if self.file_facQaux is not None:
                     facQaux_tmp_values = daFacQ.interp({self.name_var_facQaux['wavenumber']:ff[iff], 
@@ -1878,13 +1929,16 @@ class Basis_bmaux:
 
         self.iff_wavebounds[-1] = iwave
 
+        Xb = np.zeros_like(Q)
         # Background
         if self.path_background is not None and os.path.exists(self.path_background):
             with xr.open_dataset(self.path_background) as ds:
-                print(f'Load background from file: {self.path_background}')
-                Xb = ds[self.var_background].values
-        else:
-            Xb = np.zeros_like(Q)
+                print('bmaux np.shape(Xb)',np.shape(Xb))
+                print('bmaux np.shape(ds[self.var_background].values)',np.shape(ds[self.var_background].values))
+                print(f'Load background from file: {self.path_background}') 
+                Xb = ds[self.var_background].values[-len(Xb):] 
+
+            
 
         self.DX=DX
         self.ENSLON=ENSLON

@@ -1200,6 +1200,10 @@ BASIS_GAUSS3D = dict(
 
     name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
 
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
 )
 
 BASIS_GAUSS3D_JAX = dict(
@@ -1229,6 +1233,10 @@ BASIS_GAUSS3D_JAX = dict(
     path_sad = None,
 
     name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 
 ) 
 
@@ -1297,6 +1305,10 @@ BASIS_BMaux = dict(
 
     facQ = 1, # factor to be multiplied to the estimated Q
 
+    l_largescale = 500, # factor to be multiplied to the estimated Q
+
+    facQ_largescale = 1, # factor to be multiplied to the estimated Q
+
     file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
 
     name_var_depth = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
@@ -1350,6 +1362,12 @@ BASIS_BMaux_JAX = dict(
     tdecmax = 40., # maximum time of decorrelation 
 
     facQ = 1, # factor to be multiplied to the estimated Q
+
+    facQ_aux_path = None,
+
+    l_largescale = 500, # factor to be multiplied to the estimated Q
+
+    facQ_largescale = 1, # factor to be multiplied to the estimated Q
 
     file_depth = None, # Name of netcdf file for ocean depth field. If prescribed, wavelet components will be attenuated for small depth considering arguments depth1 & depth2
 
