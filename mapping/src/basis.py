@@ -90,6 +90,9 @@ def Basis(config, State, verbose=True, multi_mode=False, *args, **kwargs):
         
         elif config.BASIS.super == 'BASIS_HBC_JAX':
             return Basis_hbc_jax(config,State)
+        
+        elif config.BASIS.super == 'BASIS_HBC_CST_JAX':
+            return Basis_hbc_cst_jax(config,State)
 
         else:
             sys.exit(config.BASIS.super + ' not implemented yet')
@@ -517,6 +520,24 @@ class Basis_bm:
         self.lon1d = State.lon.flatten()
         self.lat1d = State.lat.flatten()
 
+        # Compute geostrophic velocoties
+        self.compute_velocities = config.BASIS.compute_velocities
+        self.name_mod_u = config.BASIS.name_mod_u
+        self.name_mod_v = config.BASIS.name_mod_v
+        pad = ((1,0),(1,0))
+        _f = np.pad(State.f, pad_width=pad, mode='edge')
+        self.f_on_v = 0.5*(_f[:,1:] + _f[:,:-1])
+        self.f_on_u = 0.5*(_f[1:,:] + _f[:-1,:])
+        
+        # Gravity 
+        self.g = 9.81
+
+        # Grid spacing
+        self.dx = np.pad(State.DX, pad_width=pad, mode='edge')
+        self.dy = np.pad(State.DY, pad_width=pad, mode='edge')
+        self.dx_on_v = 0.5*(self.dx[:,1:] + self.dx[:,:-1])
+        self.dy_on_u = 0.5*(self.dy[1:,:] + self.dy[:-1,:])
+
         # Reference time to have fixed time coordinates
         self.delta_time_ref = (config.EXP.init_date - datetime.datetime(1950,1,1,0)).total_seconds() / 24/3600
 
@@ -629,7 +650,7 @@ class Basis_bm:
                     _ENSLAT1 = []
                     for (lon,lat) in zip(_ENSLON,_ENSLAT):
                         indphys = np.where(
-                            (np.abs((self.lon1d - lon) / self.km2deg * np.cos(lat * np.pi / 180.)) <= .5/ff[iff]) &
+                            (np.abs((self.lon1d - lon) / self.km2deg * np.cos(lat * np.pi / 180.)) <= 1./ff[iff]) &
                             (np.abs((self.lat1d - lat) / self.km2deg) <= 1./ff[iff])
                             )[0]
                         if not np.all(self.mask1d[indphys]):
@@ -640,7 +661,7 @@ class Basis_bm:
             
 
             NP[iff] = len(ENSLON[iff])
-            tdec[iff] = self.tmeso*self.lmeso**(self.sloptdec) * ff[iff]**self.sloptdec
+            tdec[iff] = self.tmeso*self.lmeso**self.sloptdec * ff[iff]**self.sloptdec
             tdec[iff] *= self.factdec
             if tdec[iff]<self.tdecmin:
                     tdec[iff] = self.tdecmin
@@ -669,10 +690,10 @@ class Basis_bm:
                 _nwavet = 2*len(enst[iff])*ntheta*NP[iff]
                 if 1/ff[iff]>self.lmeso:
                     # Constant
-                    Q = np.concatenate((Q,self.Qmax/(self.facns**2*self.facnlt)**.5*np.ones((_nwavet,))))
+                    Q = np.concatenate((Q,self.Qmax/self.facns * np.ones((_nwavet,))))
                 else:
                     # Slope
-                    Q = np.concatenate((Q,self.Qmax/(self.facns**2*self.facnlt)**.5 * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
+                    Q = np.concatenate((Q,self.Qmax/self.facns * self.lmeso**self.slopQ * ff[iff]**self.slopQ*np.ones((_nwavet,)))) 
                 iwave += _nwavet
                 if return_q:
                     print(f'lambda={1/ff[iff]:.1E}',
@@ -809,8 +830,49 @@ class Basis_bm:
                             Nt[t][iff] += 1
                             Gt[t][iff][ind_tmp:ind_tmp+2*self.ntheta*self.NP[iff]] = fact   
                     ind_tmp += 2*self.ntheta*self.NP[iff]
-        return Gt, Nt   
- 
+        return Gt, Nt
+
+    def _ssh2uv(self, ssh):
+
+        """
+            Compute geostrophic velocities from SSH
+        """
+
+        _ssh = np.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
+
+        _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        return _u, _v
+    
+    def _ssh2uv_adj(self, adu, adv):
+
+        """
+        Adjoint of geostrophic velocity computation.
+        """
+
+        # _adssh lives on padded grid: (ny+1, nx+1)
+        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+
+        _adssh[1:,:]  += -self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:-1,:] +=  self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:,1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
+        _adssh[:,:-1] += -self.g / self.f_on_v * adv / self.dx_on_v
+
+        # map padded grid back to physical ssh grid:
+        # physical ssh[i,j] == _ssh[i+1,j+1]
+        adssh = _adssh[1:,1:].copy()
+
+        # contributions from the padded first row/col (mode='edge' duplicates edge values)
+        # add the padded southern row (index 0) to physical southern row (adssh[0,:])
+        adssh[0,:] += _adssh[0,1:]
+        # add the padded western column (index 0) to physical western column (adssh[:,0])
+        adssh[:,0] += _adssh[1:,0]
+        # the padded corner (0,0) was duplicated as well — add it into adssh[0,0]
+        adssh[0,0] += _adssh[0,0]
+
+        return adssh
+    
     def operg(self, t, X, State=None):
         
         """
@@ -818,24 +880,38 @@ class Basis_bm:
         """
 
         # Projection
-        phi = np.zeros(self.shape_phys).ravel()
+        ssh = np.zeros(self.shape_phys).ravel()
         for iff in range(self.nf):
             Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
             GtXf = self.Gt[t][iff] * Xf
             ind0 = np.nonzero(self.Gt[t][iff])[0]
             if ind0.size>0:
                 GtXf = GtXf[ind0].reshape(self.Nt[t][iff],self.Nx[iff])
-                phi += self.Gx[iff].dot(GtXf.sum(axis=0))
-        phi = phi.reshape(self.shape_phys)
+                ssh += self.Gx[iff].dot(GtXf.sum(axis=0))
+        ssh = ssh.reshape(self.shape_phys)
+
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv(ssh)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
 
         # Update State
         if State is not None:
             if not self.multi_mode:
-                State[self.name_mod_var] = phi
+                State[self.name_mod_var] = ssh
             else:
-                State[self.name_mod_var] += phi
+                State[self.name_mod_var] += ssh
         else:
-            return phi
+            if self.compute_velocities:
+                return ssh, u, v
+            else:
+                return ssh
 
     def operg_transpose(self, t, adState):
         
@@ -845,20 +921,30 @@ class Basis_bm:
 
         if adState[self.name_mod_var] is None:
             adState[self.name_mod_var] = np.zeros((self.nphys,))
-
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros((self.nphys,))
+            adState[self.name_mod_v] = np.zeros((self.nphys,))
+            
         adX = np.zeros(self.nbasis)
-        adparams = adState[self.name_mod_var].ravel()
+
+        adssh = adState[self.name_mod_var]
+        if self.compute_velocities:
+            adssh += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+
         for iff in range(self.nf):
             Gt = +self.Gt[t][iff]
             ind0 = np.nonzero(Gt)[0]
             if ind0.size>0:
                 Gt = Gt[ind0].reshape(self.Nt[t][iff],self.Nx[iff])
-                adGtXf = self.Gx[iff].T.dot(adparams)
+                adGtXf = self.Gx[iff].T.dot(adssh.ravel())
                 adGtXf = np.repeat(adGtXf[np.newaxis,:],self.Nt[t][iff],axis=0)
                 adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][ind0] += (Gt*adGtXf).ravel()
         
         if not self.multi_mode:
             adState[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
         
         return adX
 
@@ -1044,16 +1130,30 @@ class Basis_bm_jax(Basis_bm):
         """
 
         # Projection
-        phi = self._operg_jit(t, X)
+        ssh = self._operg_jit(t, X)
+
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv(ssh)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
 
         # Update State
         if State is not None:
             if not self.multi_mode:
-                State[self.name_mod_var] = phi
+                State[self.name_mod_var] = ssh
             else:
-                State[self.name_mod_var] += phi
+                State[self.name_mod_var] += ssh
         else:
-            return phi
+            if self.compute_velocities:
+                return ssh, u, v
+            else:
+                return ssh
         
     def operg_transpose(self, t, adState):
         
@@ -1062,13 +1162,22 @@ class Basis_bm_jax(Basis_bm):
         """
 
         if adState[self.name_mod_var] is None:
-            adState[self.name_mod_var] = jnp.zeros((self.nphys,))
-        adparams = adState[self.name_mod_var]
-        adX = self._operg_reduced_jit(t, adparams)
-        
+            adState[self.name_mod_var] = np.zeros((self.nphys,))
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros((self.nphys,))
+            adState[self.name_mod_v] = np.zeros((self.nphys,))
+
+        adssh = adState[self.name_mod_var]
+        if self.compute_velocities:
+            adssh += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+        adX = self._operg_reduced_jit(t, adssh)
+
         if not self.multi_mode:
             adState[self.name_mod_var] *= 0.
-        
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
+    
         return adX
 
 class Basis_gauss3d:
@@ -1478,6 +1587,24 @@ class Basis_bmaux:
         self.lon1d = State.lon.flatten()
         self.lat1d = State.lat.flatten()
 
+        # Gravity 
+        self.g = 9.81
+
+        # Compute geostrophic velocoties
+        self.compute_velocities = config.BASIS.compute_velocities
+        self.name_mod_u = config.BASIS.name_mod_u
+        self.name_mod_v = config.BASIS.name_mod_v
+        pad = ((1,0),(1,0))
+        _f = np.pad(State.f, pad_width=pad, mode='edge')
+        self.f_on_v = 0.5*(_f[:,1:] + _f[:,:-1])
+        self.f_on_u = 0.5*(_f[1:,:] + _f[:-1,:])
+
+        # Grid spacing
+        self.dx = np.pad(State.DX, pad_width=pad, mode='edge')
+        self.dy = np.pad(State.DY, pad_width=pad, mode='edge')
+        self.dx_on_v = 0.5*(self.dx[:,1:] + self.dx[:,:-1])
+        self.dy_on_u = 0.5*(self.dy[1:,:] + self.dy[:-1,:])
+
         # Reference time to have fixed time coordinates
         self.delta_time_ref = (config.EXP.init_date - datetime.datetime(1950,1,1,0)).total_seconds() / 24/3600
 
@@ -1502,6 +1629,13 @@ class Basis_bmaux:
             self.depth2 = config.BASIS.depth2
         else:
             self.depth = None
+        
+        # FacQ_aux file (e.g. from background error)
+        if config.BASIS.file_facQaux is not None:
+            self.file_facQaux = config.BASIS.file_facQaux
+            self.name_var_facQaux = config.BASIS.name_var_facQaux
+        else:
+            self.file_facQaux = None
 
         # Longitude unit
         self.lon_unit = State.lon_unit
@@ -1549,8 +1683,8 @@ class Basis_bmaux:
         # Global time window
         deltat = TIME_MAX - TIME_MIN
 
+        # Auxiliary data
         aux = xr.open_dataset(self.file_aux,decode_times=False)
-        # Convert longitude 
         if np.sign(aux['lon'].data.min())==-1 and self.lon_unit=='0_360':
             aux = aux.assign_coords({'lon':(('lon', aux['lon'].data % 360))})
         elif (np.sign(aux['lon'].data.min())>=0 or aux['lon'].data.max()>180) and self.lon_unit=='-180_180':
@@ -1558,6 +1692,16 @@ class Basis_bmaux:
         aux = aux.sortby(aux['lon'])    
         daTdec = aux['Tdec']
         daStd = aux['Std']
+
+        # Auxiliary for Q
+        if self.file_facQaux is not None:
+            auxQ = xr.open_dataset(self.file_facQaux,decode_times=False)
+            if np.sign(auxQ['lon'].data.min())==-1 and self.lon_unit=='0_360':
+                auxQ = auxQ.assign_coords({'lon':(('lon', auxQ['lon'].data % 360))})
+            elif (np.sign(auxQ['lon'].data.min())>=0 or auxQ['lon'].data.max()>180) and self.lon_unit=='-180_180':
+                auxQ = auxQ.assign_coords({'lon':(('lon', (auxQ['lon'].data + 180) % 360 - 180 ))})
+            auxQ = auxQ.sortby(auxQ['lon'])    
+            daFacQ = auxQ[self.name_var_facQaux['var']]
 
         # Wavelet space-time coordinates
         ENSLON = [None]*nf # Ensemble of longitudes of the center of each wavelets
@@ -1665,9 +1809,13 @@ class Basis_bmaux:
         facQ = self.facQ  # Move outside the loop for efficiency
 
         std = []
+        facQaux = []
         for iff in range(nf):
             std.append([])
             std[iff] = []
+            if self.file_facQaux is not None:
+                facQaux.append([])
+                facQaux[iff] = []
             for P in range(NP[iff]):
                 
                 dlon = DX[iff] * self.km2deg / np.cos(ENSLAT[iff][P] * np.pi / 180.0)
@@ -1681,6 +1829,13 @@ class Basis_bmaux:
                 std_tmp_values = daStd.interp(f=ff[iff], lon=elon2.ravel(), lat=elat2.ravel()).values
                 std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10
                 std[iff].append(std_tmp)
+
+                if self.file_facQaux is not None:
+                    facQaux_tmp_values = daFacQ.interp({self.name_var_facQaux['wavenumber']:ff[iff], 
+                                                        self.name_var_facQaux['lon']:elon2.ravel(), 
+                                                        self.name_var_facQaux['lat']:elat2.ravel()}).values
+                    facQaux_tmp = np.nanmean(facQaux_tmp_values) if not np.all(np.isnan(facQaux_tmp_values)) else 1.0
+                    facQaux[iff].append(facQaux_tmp)
 
         for iff in range(nf):
 
@@ -1699,7 +1854,11 @@ class Basis_bmaux:
                     else:
                         Q_tmp = +std[iff][P]
 
-                    Q_tmp *= facQ  # Multiply after NaN check
+                    Q_tmp *= facQ   # Multiply after NaN check
+
+                    # Include facQaux if available
+                    if self.file_facQaux is not None:
+                        Q_tmp *= np.sqrt(facQaux[iff][P])
 
                     # Store Q_tmp values in list for later concatenation
                     Qf_list.append(Q_tmp * np.ones(2 * ntheta))
@@ -1850,6 +2009,47 @@ class Basis_bmaux:
                         ind_tmp += 2*self.ntheta
         return Gt, Nt       
 
+    def _ssh2uv(self, ssh):
+
+        """
+            Compute geostrophic velocities from SSH
+        """
+
+        _ssh = np.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
+
+        _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        return _u, _v
+    
+    def _ssh2uv_adj(self, adu, adv):
+
+        """
+        Adjoint of geostrophic velocity computation.
+        """
+
+        # _adssh lives on padded grid: (ny+1, nx+1)
+        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+
+        _adssh[1:,:]  += -self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:-1,:] +=  self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:,1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
+        _adssh[:,:-1] += -self.g / self.f_on_v * adv / self.dx_on_v
+
+        # map padded grid back to physical ssh grid:
+        # physical ssh[i,j] == _ssh[i+1,j+1]
+        adssh = _adssh[1:,1:].copy()
+
+        # contributions from the padded first row/col (mode='edge' duplicates edge values)
+        # add the padded southern row (index 0) to physical southern row (adssh[0,:])
+        adssh[0,:] += _adssh[0,1:]
+        # add the padded western column (index 0) to physical western column (adssh[:,0])
+        adssh[:,0] += _adssh[1:,0]
+        # the padded corner (0,0) was duplicated as well — add it into adssh[0,0]
+        adssh[0,0] += _adssh[0,0]
+
+        return adssh
+        
     def operg(self, t, X, State=None):
         
         """
@@ -1857,7 +2057,7 @@ class Basis_bmaux:
         """
 
         # Projection
-        phi = np.zeros(self.shape_phys).ravel()
+        ssh = np.zeros(self.shape_phys).ravel()
         for iff in range(self.nf):
             Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
             GtXf = self.Gt[t][iff] * Xf
@@ -1865,16 +2065,30 @@ class Basis_bmaux:
             if indNoNan.size>0:
                 GtXf = GtXf[indNoNan].reshape(self.Nt[t][iff],self.Nx[iff])
                 phi += self.Gx[iff].dot(GtXf.sum(axis=0))
-        phi = phi.reshape(self.shape_phys)
+        ssh = ssh.reshape(self.shape_phys)
+
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv(ssh)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
 
         # Update State
         if State is not None:
             if not self.multi_mode:
-                State[self.name_mod_var] = phi
+                State[self.name_mod_var] = ssh
             else:
-                State[self.name_mod_var] += phi
+                State[self.name_mod_var] += ssh
         else:
-            return phi
+            if self.compute_velocities:
+                return ssh, u, v
+            else:
+                return ssh
 
     def operg_transpose(self, t, adState):
         
@@ -1884,20 +2098,31 @@ class Basis_bmaux:
 
         if adState[self.name_mod_var] is None:
             adState[self.name_mod_var] = np.zeros((self.nphys,))
-
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros((self.nphys,))
+            adState[self.name_mod_v] = np.zeros((self.nphys,))
+            
         adX = np.zeros(self.nbasis)
-        adparams = adState[self.name_mod_var].ravel()
+
+        adssh = adState[self.name_mod_var]
+
+        if self.compute_velocities:
+            adssh += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+
         for iff in range(self.nf):
             Gt = +self.Gt[t][iff]
             indNoNan = ~np.isnan(self.Gt[t][iff])
             if indNoNan.size>0:
                 Gt = Gt[indNoNan].reshape(self.Nt[t][iff],self.Nx[iff])
-                adGtXf = self.Gx[iff].T.dot(adparams)
+                adGtXf = self.Gx[iff].T.dot(adssh.ravel())
                 adGtXf = np.repeat(adGtXf[np.newaxis,:],self.Nt[t][iff],axis=0)
                 adX[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]][indNoNan] += (Gt*adGtXf).ravel()
         
         if not self.multi_mode:
             adState[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
         
         return adX
 
@@ -2078,16 +2303,30 @@ class Basis_bmaux_jax(Basis_bmaux):
         """
 
         # Projection
-        phi = self._operg_jit(t, X)
+        ssh = self._operg_jit(t, X)
+
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv(ssh)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
 
         # Update State
         if State is not None:
             if not self.multi_mode:
-                State[self.name_mod_var] = phi
+                State[self.name_mod_var] = ssh
             else:
-                State[self.name_mod_var] += phi
+                State[self.name_mod_var] += ssh
         else:
-            return phi
+            if self.compute_velocities:
+                return ssh, u, v
+            else:
+                return ssh
         
     def operg_transpose(self, t, adState):
         
@@ -2096,13 +2335,22 @@ class Basis_bmaux_jax(Basis_bmaux):
         """
 
         if adState[self.name_mod_var] is None:
-            adState[self.name_mod_var] = jnp.zeros((self.nphys,))
-        adparams = adState[self.name_mod_var]
-        adX = self._operg_reduced_jit(t, adparams)
-        
+            adState[self.name_mod_var] = np.zeros((self.nphys,))
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros((self.nphys,))
+            adState[self.name_mod_v] = np.zeros((self.nphys,))
+
+        adssh = adState[self.name_mod_var]
+        if self.compute_velocities:
+            adssh += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+        adX = self._operg_reduced_jit(t, adssh)
+
         if not self.multi_mode:
             adState[self.name_mod_var] *= 0.
-        
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
+    
         return adX
 
 class Basis_miost:
@@ -3137,7 +3385,6 @@ class Basis_miost_2:
         adState[self.name_mod_var] *= 0.
         
         return adX
-
 
 ###############################################################################
 #                     Wavelet - multiple scale                                #
@@ -5584,7 +5831,7 @@ class Basis_hbc_jax:
 
         # Saving gaussian reduced basis elements 
         self.Gxy["hbcS"] = sparse.CSR.fromdense(jnp.array(bc_S_gauss.T)) # For South boundary 
-        self.Gxy["hbcN"] = sparse.CSR.fromdense(jnp.array(bc_N_gauss.T)) # For South boundary
+        self.Gxy["hbcN"] = sparse.CSR.fromdense(jnp.array(bc_N_gauss.T)) # For North boundary
 
         ####################################
         ###   - BASIS ELEMENT SHAPES -   ###
@@ -5917,6 +6164,196 @@ class Basis_hbc_jax:
         
         return adX
 
+class Basis_hbc_cst_jax: 
+
+    def __init__(self,config, State):
+
+
+        # Grid specs
+        self.ny = State.ny
+        self.nx = State.nx
+
+
+        # Tidal frequencies 
+        self.Nwaves = config.BASIS.Nwaves # Number of tidal components
+
+
+        # Number of angles (computed from the normal of the border) of incoming waves
+        if config.BASIS.Ntheta>0: 
+            self.Ntheta = 2*(config.BASIS.Ntheta-1)+3 # We add -pi/2,0,pi/2
+        else:
+            self.Ntheta = 1 # Only angle 0°
+
+        self.sigma_B_bc = config.BASIS.sigma_B_bc # Covariance sigma for hbc parameter
+
+        # JIT
+        self._operg_jit = jit(self._operg)
+        self._operg_reduced_jit = jit(self._operg_reduced)
+
+    def set_basis(self,time,return_q=False,**kwargs):
+
+        """
+        Set the basis for the controlled parameters of the model and calculate reduced basis functions.
+
+        Parameters:
+        -----------
+        time : np.ndarray
+            Array of time points.
+        return_q : bool, optional
+            If True, returns the covariance matrix Q and the background vector array Xb, by default False.
+
+        Returns:
+        --------
+        tuple of np.ndarray
+            If return_q is True, returns a tuple containing:
+                - Xb : np.ndarray
+                    Background vector array Xb.
+                - Q : np.ndarray or None
+                    Covariance matrix Q.
+        
+        """
+        # Shapes of the hbcx parameters in the reduced space.
+        self.shapehbcx = [
+            self.Nwaves,    # - Number of tidal frequency components 
+            2,              # - South/North 
+            2,              # - Number of controlled components (cos & sin)
+            self.Ntheta     # - Number of angles
+            ]
+        
+        # Shapes of the hbcy parameters in the reduced space.
+        self.shapehbcy = [
+            self.Nwaves,    # - Number of tidal frequency components 
+            2,              # - West/East
+            2,              # - Number of controlled components (cos & sin)
+            self.Ntheta     # - Number of angles
+            ]
+        
+        self.nbasis = np.prod(self.shapehbcx) + np.prod(self.shapehbcy)
+        self.slice_params_hbcx = slice(0, np.prod(self.shapehbcx))
+        self.slice_params_hbcy = slice(np.prod(self.shapehbcx), self.nbasis)
+        
+        
+        # - Shapes of the hbcy parameters in the physical space.
+        self.shapehbcx_phys = [
+            self.Nwaves,    # - Number of tidal frequency components 
+            2,              # South/North
+            2,              # - Number of controlled components (cos & sin)
+            self.Ntheta,    # - Number of angles
+            self.nx         # - Number of gridpoints along x axis
+            ]
+        
+        # Shapes of the hbcx parameters in the physical space.
+        self.shapehbcy_phys = [
+            self.Nwaves,    # - Number of tidal frequency components 
+            2,              # West/East
+            2,              # - Number of controlled components (cos & sin)
+            self.Ntheta,    # - Number of angles
+            self.ny         # - Number of gridpoints along x axis
+            ]
+        
+        self.nphys = np.prod(self.shapehbcx_phys) + np.prod(self.shapehbcy_phys)
+        self.slice_params_phys_hbcx = slice(0, np.prod(self.shapehbcx_phys))
+        self.slice_params_phys_hbcy = slice(np.prod(self.shapehbcx_phys), self.nphys)
+
+        self.ones_nx = jnp.ones((1,1,1,1,self.nx))
+        self.ones_ny = jnp.ones((1,1,1,1,self.ny))
+
+        print(f'reduced order: {self.nphys} --> {self.nbasis}\nreduced factor: {int(self.nphys/self.nbasis)}')
+
+        #########################################
+        ### COMPUTING THE COVARIANCE MATRIX Q ###
+        #########################################        
+
+        if return_q :
+            if self.sigma_B_bc is not None:
+                Q = self.sigma_B_bc * np.ones((self.nbasis,)) # Initializing
+            else:
+                Q = np.ones((self.nbasis,)) # Initializing
+                
+            Xb = np.zeros_like(Q)
+
+            return Xb, Q
+
+    def _operg(self,t,X):
+
+        """
+        Perform the basis projection operation for a given time and parameter vector.
+        """
+
+
+        # Variable to return  
+        phi = jnp.zeros((self.nphys,))
+
+        X_hbcx = X[self.slice_params_hbcx].reshape(self.shapehbcx)
+        X_hbcy = X[self.slice_params_hbcy].reshape(self.shapehbcy)
+
+        phi = phi.at[self.slice_params_phys_hbcx].set(
+            (X_hbcx[:,:, :, :, None] * self.ones_nx).reshape(-1)
+        )
+
+        phi = phi.at[self.slice_params_phys_hbcy].set(
+            (X_hbcy[:, :, :, :, None] * self.ones_ny).reshape(-1)
+        )
+
+        return phi
+
+    def _operg_reduced(self, t, phi_2d):
+        """
+        Project a 2D physical space field back to the reduced space.
+
+        Parameters:
+            t: Current time
+            phi_2d: 2D physical space field to project back.
+
+        Returns:
+            Reduced space representation (1D vector).
+        """
+
+        # Define a wrapper function for _operg that computes the forward projection
+        def operg_func(X):
+            return self._operg_jit(t, X)
+
+        # Compute the vector-Jacobian product (vjp) for the forward projection
+        _, vjp_func = jax.vjp(operg_func, jnp.zeros(self.nbasis))  # Provide a zero vector matching the reduced space shape
+
+        # Use the vjp_func to compute the reduced space projection
+        X_reduced, = vjp_func(phi_2d)
+
+        return X_reduced
+
+    def operg(self, t, X, State=None):
+        
+        """
+            Project to physicial space
+        """
+
+        # Projection
+        phi = self._operg_jit(t, X)
+
+        # Update State
+        if State is not None:
+            # - Height boundary conditions hbcx - #
+            State['hbcx'] = phi[self.slice_params_phys_hbcx].reshape(self.shapehbcx_phys)
+            # - Height boundary conditions hbcy - #
+            State['hbcy'] = phi[self.slice_params_phys_hbcy].reshape(self.shapehbcy_phys)
+        else:
+            return phi
+    
+    def operg_transpose(self, t, adState):
+        
+        """
+            Project to reduced space
+        """
+
+        adparams = jnp.concatenate([adState['hbcx'].reshape(-1), adState['hbcy'].reshape(-1)], axis=0) 
+        adX = self._operg_reduced_jit(t, adparams)
+    
+        adState['hbcx'] *= 0.
+        adState['hbcy'] *= 0.
+        
+        return adX
+
+
 class Basis_offset:
 
     def __init__(self,config, State, multi_mode=False):
@@ -6032,6 +6469,11 @@ class Basis_multi:
             self.Basis.append(Basis(_config,State,verbose=verbose, multi_mode=True))
             if 'name_mod_var' in _config.BASIS and _config.BASIS.name_mod_var is not None and _config.BASIS.name_mod_var not in self.name_mod_var:
                 self.name_mod_var.append(_config.BASIS.name_mod_var)
+                if 'compute_velocities' in _config.BASIS and _config.BASIS.compute_velocities:
+                    if 'name_mod_u' in _config.BASIS and _config.BASIS.name_mod_u is not None and _config.BASIS.name_mod_u not in self.name_mod_var:
+                        self.name_mod_var.append(_config.BASIS.name_mod_u)
+                    if 'name_mod_v' in _config.BASIS and _config.BASIS.name_mod_v is not None and _config.BASIS.name_mod_v not in self.name_mod_var:
+                        self.name_mod_var.append(_config.BASIS.name_mod_v)
 
             if '_JAX' not in _config.BASIS.super:
                 self.jax = False

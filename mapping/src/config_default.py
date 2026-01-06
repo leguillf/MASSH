@@ -84,7 +84,7 @@ GRID_FROM_FILE = dict(
 
     name_init_mask = None,
 
-    name_var_mask = {'lon':'','lat':'','var':''}
+    name_var_mask = {'lon':'','lat':'','var':''},
 
 )
 
@@ -182,7 +182,9 @@ OBS_L4 = dict(
 
     subsampling = None, # Subsampling in time (in number of model time step). Set to None for no subsampling
 
-    sigma_noise = None  # Value of (constant) measurement error (will be used if *name_err* is not provided)
+    sigma_noise = None,  # Value of (constant) measurement error (will be used if *name_err* is not provided)
+
+    offset = None, # Value to add to observations
 
 )
 
@@ -253,6 +255,10 @@ OBS_SSH_SWATH = dict(
     path_mdt = None, # path of MDT 
 
     name_var_mdt = None, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
+    
+    path_err = None, # path of error file 
+
+    name_var_err = None, # dictionary of error coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
     
     nudging_params_ssh = None, # dictionary of nudging parameters on SSH {'sigma':<float>,'K':<float>,'Tau':<datetime.timedelta>}. Note that *sigma* parameter is useless now, and will be removed soon
 
@@ -382,6 +388,8 @@ MOD_QG1L_JAX = dict(
     var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save
 
     save_diagnosed_variables = False, # Whether to save diagnosed variables (e.g. SSH, geostrophic velocies and cyclogeostrophic velocities) in the output netcdf files
+
+    save_params = False, # Whether to save control parameters (e.g. corrective fluxes) in the output netcdf files
 
     upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3) 
 
@@ -516,6 +524,8 @@ MOD_SW1L_JAX_OLD = dict(
 
     dtmodel = 300, # model timestep
 
+    cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/sqrt(gHe)
+
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
 
     bc_kind = '1d', # Either 1d or 2d
@@ -532,21 +542,156 @@ MOD_SW1L_JAX_OLD = dict(
 
 )
 
+MOD_CSW1L = dict(
+
+    name_var = {'U':'u','V':'v','SSH':'ssh'},
+
+    name_init_var = [],
+
+    dir_model = None,
+
+    var_to_save = None,
+
+    name_params = ['He_mean', 'He_ano', 'hbc'], # list of parameters to control (among 'He_mean', 'He_ano', 'hbc')
+
+    dtmodel = 300, # model timestep
+
+    force_constant_km_grid = False, # Whether to force constant km grid spacing (True) or use the grid spacing from the grid (False)
+
+    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
+
+    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
+
+    filec_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+
+    filef_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+
+    name_var_f = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+
+    c0 = 2.7, # If filec_aux is None, fixed value for phase velocity (m/s)
+
+    H = 4e3, # Mean depth (in m)
+
+    cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/sqrt(gHe)
+
+    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
+
+    bc_kind = '1d', # Either 1d or 2d
+
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    g = 9.81,
+
+    flag_coupling_from_bm = False, # Whether to compute He corrections from the balanced motion field
+
+    path_vertical_modes = None, # Path of the vertical modes netcdf file
+
+    path_bm = None, # Path of the balanced motion netcdf file
+
+    name_var_bm = {'time':'','lon':'','lat':'','ssh_bm':''},
+
+    obc_north = True,
+
+    obc_west = True,
+
+    obc_south = True,
+
+    obc_east = True,
+
+    periodic_x = False,
+
+    periodic_y = False,
+
+    flag_bc_sponge = False,
+
+    dist_sponge_bc = None,
+
+    sponge_coef = 0.,
+
+)
+
+
+MOD_SW1L_NL_JAX = dict(
+
+    name_var = {'U':'u','V':'v','SSH':'ssh'},
+
+    name_init_var = {}, # 
+
+    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
+
+    dir_model = None,
+
+    var_to_save = None,
+
+    dtmodel = 300, # model timestep
+
+    cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/c
+
+    g = 9.81, # Gravitational acceleration (in m/s^2)
+
+    flag_linear = False, # Whether to use linear SW equations or not
+ 
+    flag_use_weno = False, # Whether to use WENO scheme for advection terms
+
+    flag_baro_filter = False, # Whether to use barotropic filter or not
+
+    Tbar = 0, # Time scale of the barotropic filter (in seconds). Only used if *flag_baro_filter* is True
+
+    flag_obc = True, # Whether to use open boundary conditions or not
+
+    obc_kind = '1d', # Either 1d or 2d
+
+    flag_sponge = True, # Whether to use sponge layers close to the boundaries
+
+    sponge_width = 100., # Width of the sponge layer (in km)
+
+    sponge_coef = .9, # Sponge layer coefficient
+
+    flag_diffusion = False, # Whether to use diffusion or not
+
+    K_visc = 0., # Viscosity coefficient
+
+    He_init = 0.9, # Equivalent Height (in m)
+
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds) 
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves
+
+    name_params = None,#['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbc', 'hbcy', 'itg')
+
+)
+
 MOD_QGSW = dict(
 
     name_class = 'qg', # Name of the model class (either qg or sw)
 
     nl = 1, # number of layers in the model
 
-    name_var = {'U':'u', 'V':'v', 'H':'h', 'SSH':'ssh'},
+    name_var = {'U':'u', 'V':'v', 'SSH':'ssh'},
+
+    name_params = None,#['H', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'H', 'hbc', 'hbcy', 'itg')
 
     dtmodel = 1200, # model timestep
 
-    f0 = 1e-4, # Coriolis parameter (in s^-1). If None, f0 will be computed from the grid
+    f0 = None, # Coriolis parameter (in s^-1). If None, f0 will be computed from the grid
 
-    c0 = 2.7,
+    c0 = None,
 
-    H0 = 5000., # mean water depth in meters
+    filec_aux = None, # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+
+    cmin = None, # Minimum value of phase velocity to consider
+
+    cmax = None, # Maximum value of phase velocity to consider
+
+    H = None, # mean water depth in meters
+
+    g_prime = None, 
 
     init_from_bc = True,
 
@@ -563,6 +708,70 @@ MOD_QGSW = dict(
     path_mdt = None, # path of MDT
 
     name_var_mdt = {'lon':'','lat':'','var':''}, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
+
+    dist_sponge_bc = None,
+
+    sponge_coef = 0.,
+
+    visc_coef = 0., # viscosity coefficient
+
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds) 
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves
+
+)
+
+MOD_BMIT = dict(
+
+    # Common parameters for BM and IT components
+
+    name_var = {'U_IT':'u_it','V_IT':'v_it','SSH_IT':'ssh_it', 'SSH_BM':'ssh_bm', 'SSH':'ssh'},
+
+    name_init_var = [],
+
+    dir_model = None,
+
+    var_to_save = None,
+
+    dtmodel = 300, # model timestep
+
+    filec_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+
+    c0 = 2.7, # If filec_aux is None, fixed value for phase velocity (m/s)
+
+    cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/sqrt(gHe)
+
+    init_from_bc = False,
+
+    # BM parameters
+
+    time_scheme_bm = 'Euler', # Time scheme of the model (e.g. Euler,rk2,rk4)
+
+    Kdiffus = 0, # Coefficient of diffusion for the BM component
+
+    path_mdt = None, # path of MDT 
+
+    name_var_mdt = None, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
+
+    # IT parameters
+
+    time_scheme_it = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
+
+    name_params_it = ['He', 'hbc'], # list of parameters to control (among 'He', 'hbc')
+
+    H = 4e3, # Mean depth (in m)
+
+    bc_kind = '1d', # Either 1d or 2d
+
+    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+    g = 9.81,
+
+    compute_He_from_bm = False, # Whether to compute He corrections from the balanced motion field
 
 )
 
@@ -731,29 +940,12 @@ INV_4DVAR = dict(
     sigma_B = None,
 
     prec = False, # preconditoning
-    
-    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
 
-    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
-
-    path_background = None, # Path to the precribed background on BM basis
-    
-    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
-
-    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
-
-    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
-
-    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
-
-    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
-
-    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
+    path_background = None, # Path of a control vector from another experiment to use as the background 
 
     anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
  
 )
-
 
 INV_4DVAR_JAX = dict(
 
@@ -817,6 +1009,12 @@ NAME_BASIS = None
 BASIS_BM = dict(
 
     name_mod_var = None, # Name of the related model variable 
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
     
     flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
@@ -868,8 +1066,14 @@ BASIS_BM = dict(
  
 BASIS_BM_JAX = dict(
 
-    name_mod_var = None, # Name of the related model variable 
-    
+    name_mod_var = 'ssh', # Name of the related model variable 
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
     flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
     facns = 1., #factor for wavelet spacing in space
@@ -1062,6 +1266,12 @@ BASIS_WAVELET3D = dict(
 BASIS_BMaux = dict(
 
     name_mod_var = None, # Name of the related model variable 
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
     
     flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
@@ -1101,11 +1311,21 @@ BASIS_BMaux = dict(
 
     norm_time = True,
 
+    file_facQaux = None,
+
+    name_var_facQaux = {'lon':'', 'lat':'', 'var':''}
+
 )
 
 BASIS_BMaux_JAX = dict(
 
     name_mod_var = None, # Name of the related model variable 
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
     
     flux = False, # Whether making a component signature in space appear/disappear in time. For dynamical mapping, use flux=False
 
@@ -1143,7 +1363,11 @@ BASIS_BMaux_JAX = dict(
 
     var_background = None, # name of the variable of the basis vector
 
-    norm_time = True
+    norm_time = True,
+
+    file_facQaux = None,
+
+    name_var_facQaux = {'wavenumber':'', 'lon':'', 'lat':'', 'var':''}
 
 )
 
@@ -1372,6 +1596,16 @@ BASIS_HBC_JAX = dict(
     D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
 
     T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
+
+    Nwaves = 1, # igw frequencies (in seconds)
+
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+
+)
+
+BASIS_HBC_CST_JAX = dict(
+
+    sigma_B_bc = 1e-2, # Background variance for bc
 
     Nwaves = 1, # igw frequencies (in seconds)
 

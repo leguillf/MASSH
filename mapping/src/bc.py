@@ -132,6 +132,12 @@ class Bc_ext:
             else:
                 sys.exit('Time dimension must be 1D or 0D')
         
+        # Convert time to np.datetime64
+        if time.size>1 and type(time[0])!=np.datetime64:
+            time = np.array([np.datetime64(dt) for dt in time])
+        elif time.size==1 and type(time)!=np.datetime64:
+            time = np.array([np.datetime64(time)])
+        
         # Interpolate
         if len(self.lon_bc.shape)==1 and len(self.lat_bc.shape)==1:
             var_interp = self._interp_3D(time)
@@ -146,14 +152,6 @@ class Bc_ext:
         """
         Interpolate boundary conditions on the model grid. It works only if the boundary conditions grid is regular
         """
-
-        # Ensure time is array
-        if len(time.shape) == 0:
-            time = np.array([time])
-        elif len(time.shape) == 1:
-            time = np.ascontiguousarray(time)
-        else:
-            sys.exit('Time dimension must be 1D or 0D')
 
         # Select timestamps
         if self.time_bc is not None and self.time_bc.size>1:
@@ -196,6 +194,9 @@ class Bc_ext:
                                             bounds_error=False).reshape(x_target.shape).T
                 for t in range(len(time)):
                     _var_interp[t][self.mask] = np.nan
+                    if time[t]<self.time_bc[0]:
+                        ind_t = np.argmin(np.abs(time-self.time_bc[0]))
+                        _var_interp[t] = _var_interp[ind_t]
                     if time[t]>self.time_bc[-1]:
                         ind_t = np.argmin(np.abs(time-self.time_bc[-1]))
                         _var_interp[t] = _var_interp[ind_t]

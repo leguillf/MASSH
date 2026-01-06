@@ -150,7 +150,11 @@ def compute_capacitance_matrices(helmholtz_dstI, bound_xids, bound_yids):
         rhs = jnp.zeros_like(rhs)
         rhs = rhs.at[..., bound_xids[m], bound_yids[m]].set(1)
         sol = dstI2D(dstI2D(rhs) / helmholtz_dstI.astype(jnp.float64))
-        inv_cap_matrices = inv_cap_matrices.at[:,m].set(sol[...,bound_xids, bound_yids])
+        # Extract values at boundary points and ensure correct shape
+        boundary_values = sol[...,bound_xids, bound_yids]
+        if boundary_values.ndim > 2:
+            boundary_values = boundary_values.squeeze(axis=0)
+        inv_cap_matrices = inv_cap_matrices.at[:,m].set(boundary_values)
 
     # invert G matrices to get capacitance matrices
     cap_matrices = jnp.zeros_like(inv_cap_matrices)

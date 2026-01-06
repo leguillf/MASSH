@@ -44,6 +44,7 @@ class State:
         self.name_lat = config.EXP.name_lat
         self.name_exp_save = config.EXP.name_exp_save
         self.path_save = config.EXP.path_save
+        self.tmp_DA_path = config.EXP.tmp_DA_path
         if not os.path.exists(self.path_save):
             os.makedirs(self.path_save)
         self.flag_plot = config.EXP.flag_plot
@@ -94,6 +95,7 @@ class State:
             DX,DY = grid.lonlat2dxdy(self.lon,self.lat)
             dx = np.nanmean(DX)
             dy = np.nanmean(DY)
+
             DX[np.isnan(DX)] = dx # For cartesian grid
             DY[np.isnan(DY)] = dy # For cartesian grid
             X,Y = grid.dxdy2xy(DX,DY)
@@ -153,16 +155,18 @@ class State:
                 config.lon_min,
                 config.lon_max,
                 config.nx)
+            dx = np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)/km2deg*(ENSLON[1]-ENSLON[0]) # in km
         else:
             ENSLAT = np.arange(
                 config.lat_min,
                 config.lat_max + config.dx*km2deg,
                 config.dx*km2deg)
-
+        
             ENSLON = np.arange(
                         config.lon_min,
                         config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
                         config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
+            dx = config.dx
 
         lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
         lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
@@ -170,7 +174,7 @@ class State:
         for I in range(len(ENSLAT)):
             for J in range(len(ENSLON)):
                 lat2d[I,J] = ENSLAT[I]
-                lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.) * km2deg
+                lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*dx/np.cos(ENSLAT[I]*np.pi/180.) * km2deg
         
         self.lon = lon2d
         self.lat = lat2d
@@ -247,6 +251,9 @@ class State:
             
         self.lon = lon 
         self.lat = lat 
+
+        # TEST
+        f = 4*np.pi/86164*np.sin(self.lat*np.pi/180)
         
         self.present_date = config.init_date
 
@@ -492,6 +499,7 @@ class State:
             
     
     def random(self,ampl=1):
+        np.random.seed(0)
         other = self.copy(free=True) 
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
@@ -641,7 +649,7 @@ class State:
             for name in self.params.keys():
                 self.params[name] += State1.params[name]
             
-    def plot(self,title=None,cmap='RdBu_r',ind=None,params=False):
+    def plot(self, title=None, cmap='RdBu_r', ind=None, name_save=None, params=False):
         
         if self.flag_plot<1:
             return
@@ -693,7 +701,8 @@ class State:
                         plt.plot(self.params[name_var])
                     except:
                         print("Can't plot parameters")
-        
+        if name_save is not None:
+            plt.savefig(f'{self.tmp_DA_path}/{name_save}.png', bbox_inches='tight')
         plt.show()
         
 

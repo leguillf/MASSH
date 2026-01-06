@@ -123,20 +123,24 @@ def Obs(config, State, *args, **kwargs):
             try:
                 _ds = xr.open_mfdataset(path,preprocess=preprocess,compat='override',coords='minimal')
             except:
-                try:
-                    print('opening with combine==nested')
-                    files = glob.glob(path)
-                    # Get time dimension to concatenate
-                    if len(files)==0:
+                try: 
+                    print('opening without preprocess')
+                    _ds = xr.open_mfdataset(path,compat='override',coords='minimal')
+                except: 
+                    try:
+                        print('opening with combine==nested')
+                        files = glob.glob(path)
+                        # Get time dimension to concatenate
+                        if len(files)==0:
+                            continue
+                        _ds0 = xr.open_dataset(files[0])
+                        name_time_dim = _ds0[OBS.name_time].dims[0]
+                        _ds0.close()
+                        # Open nested files
+                        _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,preprocess=preprocess,compat='override',coords='minimal')
+                    except:
+                        print('Error: unable to open multiple netcdf files')
                         continue
-                    _ds0 = xr.open_dataset(files[0])
-                    name_time_dim = _ds0[OBS.name_time].dims[0]
-                    _ds0.close()
-                    # Open nested files
-                    _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,preprocess=preprocess,compat='override',coords='minimal')
-                except:
-                    print('Error: unable to open multiple netcdf files')
-                    continue
         
         # Copy and close dataset
         ds = _ds.copy()
@@ -307,7 +311,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         
     print(f'--> {count} tracks selected')
     
-def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, out_name, lon_unit='0_360', bbox=None ):
+def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, out_name, lon_unit='0_360', bbox=None):
     
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
     ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
@@ -315,7 +319,6 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
     # Subsampling
     if obs_attr.subsampling is not None:
         ds = ds.isel({obs_attr.name_time:slice(None,None,obs_attr.subsampling)})
-        print(ds[obs_attr.name_time].values) 
     
     # Convert longitude
     if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
@@ -367,6 +370,17 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
             # Coords
             varobs[obs_attr.name_lon] = (('y','x'), lon_obs)
             varobs[obs_attr.name_lat] = (('y','x'), lat_obs)
+
+            # Offset
+            if 'offset' in obs_attr and obs_attr.offset is not None:
+                for name in obs_attr.name_var:
+                    if isinstance(obs_attr.offset,dict) and name in obs_attr.offset:
+                        varobs[name] = (('y','x'), varobs[name][1] + obs_attr.offset[name])
+                    elif isinstance(obs_attr.offset,(int,float)):
+                        varobs[name] = (('y','x'), varobs[name][1] + obs_attr.offset)
+                    else:
+                        print('Warning: offset should be a number or a dictionary with variable names as keys')
+            
             # Save to netcdf
             dsout = xr.Dataset(varobs)
             

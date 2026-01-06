@@ -14,6 +14,7 @@ import matplotlib.pylab as plt
 import matplotlib.gridspec as gridspec
 from IPython.display import Video
 from matplotlib.ticker import ScalarFormatter
+from joblib import Parallel, delayed
 import gc
 import pandas as pd 
 import subprocess
@@ -702,16 +703,14 @@ That could be due to non regular grid or bad written netcdf file')
                 ids.rmse_score.plot.line(ax=ax,xlim=xlim,ylim=ylim)
             ax.set_title(date)
 
-            fig.savefig(f'{self.dir_output}/frame_{str(tt).zfill(5)}.png',dpi=100)
+            fig.savefig(f'{self.dir_output}/frame_{str(tt).zfill(5)}.png',dpi=200)
 
             plt.close(fig)
             del fig
             gc.collect(2)
 
-        
-        # Compute and save frames 
-        for tt in range(ds[self.name_ref_time].size):
-            _save_single_frame(ds, tt)
+        # Run in parallel using all available cores (or specify n_jobs=4, n_jobs=8, etc.)
+        results = Parallel(n_jobs=-1, verbose=10)(delayed(_save_single_frame)(ds.load(), tt) for tt in range(ds[self.name_ref_time].size))
 
         # Create movie
         sourcefolder = self.dir_output
@@ -731,7 +730,7 @@ That could be due to non regular grid or bad written netcdf file')
         _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
 
         # Delete frames
-        os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+        #os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
         
         # Display movie
         if Display:
@@ -1839,7 +1838,7 @@ That could be due to non regular grid or bad written netcdf file')
             rv_bas = switchvar.ssh2rv(ssh_bas,lon=lon_bas,lat=lat_bas,norm=True)
 
         # Compute frames
-        for t in range(self.exp[self.name_exp_time].size):
+        def _save_single_frame(t):
 
             if self.compare_to_baseline:
                 fig, axs = plt.subplots(2,3,figsize=(3*(100/self.ratio_fig)**.5,2*(self.ratio_fig*100)**.5))
@@ -1890,6 +1889,10 @@ That could be due to non regular grid or bad written netcdf file')
             plt.close(fig)
             del fig
             gc.collect(2)
+        
+
+        # Run in parallel using all available cores (or specify n_jobs=4, n_jobs=8, etc.)
+        results = Parallel(n_jobs=-1, verbose=10)(delayed(_save_single_frame)(tt) for tt in range(self.exp[self.name_exp_time].size))
 
         # Create movie
         sourcefolder = self.dir_output
@@ -1908,9 +1911,8 @@ That could be due to non regular grid or bad written netcdf file')
 
         _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
 
-        # Delete frames
-        if delete_frames:
-            os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+        ## Delete frames
+        #os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
 
         # Display movie
         if Display:

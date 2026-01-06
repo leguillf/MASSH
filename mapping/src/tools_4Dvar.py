@@ -89,10 +89,12 @@ class Variational:
 
         self.freq_it_plot = freq_it_plot
         self.it_plot = 0
+        self.print_time = False
         
         # Grad test
         if config.INV.compute_test:
             print('Gradient test:')
+            np.random.seed(0)
             if self.prec:
                 X = (np.random.random(self.basis.nbasis)-0.5)
             else:
@@ -182,9 +184,6 @@ class Variational:
         # Cost function 
         J = 1/2 * (Jo + Jb)
         
-        
-        #State.plot(title='Parameters at the end of cost function evaluation',params=True)
-        
         if self.save_minimization:
             self.J.append(J)
 
@@ -261,7 +260,6 @@ class Variational:
 
         # Initial state
         State = self.State.copy()
-        #self.M.init(State)
 
         # Background cost function
         if self.B is not None:
@@ -290,29 +288,35 @@ class Variational:
             
             # 1. Misfit
             if self.H.is_obs_time(t):
-                time0 = time.time()
+                if self.print_time:
+                    time0 = time.time()
                 misfit = self.H.misfit(t,State) # d=Hx-xobs   
                 misfit_dict[t] = misfit
                 Jo += misfit.dot(self.R.inv(misfit))
-                cost_misfit.append(time.time()-time0)
+                if self.print_time:
+                    cost_misfit.append(time.time()-time0)
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                time0 = time.time()
+                if self.print_time:
+                    time0 = time.time()
                 self.basis.operg(t/3600/24, X, State=State.params)
-                cost_basis.append(time.time()-time0)
+                if self.print_time:
+                    cost_basis.append(time.time()-time0)
             
             State_dict[t] = State.copy()
 
             # 3. Run forward model
-            time0 = time.time()
+            if self.print_time:
+                    time0 = time.time()
             self.M.step(t=t,State=State,nstep=nstep)
-            cost_model.append(time.time()-time0)
+            if self.print_time:
+                    cost_model.append(time.time()-time0)
 
             if i==int(len(self.checkpoints)/2):
                 if self.it_plot % self.freq_it_plot == 0:
-                    State.plot(title='State variables at the middle of cost function evaluation')
-                    State.plot(title='State params at the middle of cost function evaluation', params=True)
+                    State.plot(title='State variables at the middle of cost function evaluation', name_save=f'state_cost_it{self.it_plot}')
+                    State.plot(title='State params at the middle of cost function evaluation', params=True, name_save=f'state_params_cost_it{self.it_plot}')
 
         t = self.M.T[-1]
         State_dict[t] = State.copy()
@@ -358,28 +362,35 @@ class Variational:
             t = self.M.T[self.checkpoints[i]]
 
             # 3. Run adjoint model 
-            time0 = time.time()
+            if self.print_time:
+                time0 = time.time()
             self.M.step_adj(t=t, adState=adState, State=State_dict[t], nstep=nstep) # i+1 --> i
-            grad_model.append(time.time()-time0)
+            if self.print_time:
+                grad_model.append(time.time()-time0)
 
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
-                time0 = time.time()
+                if self.print_time:
+                    time0 = time.time()
                 adX += self.basis.operg_transpose(t=t/3600/24,adState=adState.params)
-                grad_basis.append(time.time()-time0)
+                if self.print_time:
+                    grad_basis.append(time.time()-time0)
             
             # 1. Misfit 
             if self.H.is_obs_time(t):
-                time0 = time.time()
+                if self.print_time:
+                    time0 = time.time()
                 self.H.adj(t,adState,State_dict[t],misfit_dict[t])
-                grad_misfit.append(time.time()-time0)
+                if self.print_time:
+                    grad_misfit.append(time.time()-time0)
 
             if i==int(len(self.checkpoints)/2):
                 if self.it_plot % self.freq_it_plot == 0:
-                    adState.plot(title='Adjoint State variables at the middle of cost function evaluation')
+                    adState.plot(title='Adjoint State variables at the middle of cost function evaluation', name_save=f'adjoint_state_grad_it{self.it_plot}')
         
-        #print("[cost] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(cost_misfit), np.mean(cost_basis), np.mean(cost_model)) )   
-        #print("[grad] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(grad_misfit), np.mean(grad_basis), np.mean(grad_model)) )
+        if self.print_time:
+            print("[cost] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(cost_misfit), np.mean(cost_basis), np.mean(cost_model)) )   
+            print("[grad] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(grad_misfit), np.mean(grad_basis), np.mean(grad_model)) )
 
         self.it_plot += 1
 
@@ -533,6 +544,7 @@ class Variational_jax:
         return jax.value_and_grad(self.cost)(X)
     
 def grad_test(J, G, X):
+    np.random.seed(0)
     h = np.random.random(X.size)
     h /= np.linalg.norm(h)
     JX = J(X)

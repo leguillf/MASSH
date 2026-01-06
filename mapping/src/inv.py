@@ -789,7 +789,10 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         # initialize Basis
         from . import basis
         Basis = basis.Basis(config, State, verbose=verbose)
-    
+
+    # Process observations
+    print('process observation operators')
+    Obsop.process_obs()
     
     # Compute checkpoints when the cost function will be evaluated 
     nstep_check = int(config.INV.timestep_checkpoint.total_seconds()//Model.dt)
@@ -823,8 +826,6 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         var_bc = Bc.interp(time_obs)
     else:
         var_bc = None
-    print('process observation operators')
-    Obsop.process_obs(var_bc)
     
     # Initial model state
     Model.init(State)
@@ -847,7 +848,15 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
     else:
         B = Cov(Q)
         R = Cov(config.INV.sigma_R)
-        
+    
+    # Read Background vector 
+    if config.INV.path_background is not None: 
+        # Read previous minimum 
+        print('Read background basis:',config.INV.path_background)
+        ds = xr.open_dataset(config.INV.path_background)
+        Xb[:len(ds.res.values)] = ds.res.values   
+        ds.close()
+
     # Variational object initialization
     if config.INV.flag_full_jax:
         from .tools_4Dvar import Variational_jax as Variational
@@ -899,8 +908,8 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
                 ds.close()
             except:
                 Xopt = +Xopt
-            
-    if not (config.INV.restart_4Dvar and maxiter==0):
+
+    if not ((config.INV.restart_4Dvar or config.INV.path_init_4Dvar is not None) and maxiter==0):
         print('\n*** Minimization ***\n')
         ###################
         # Minimization    #
@@ -984,7 +993,6 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
                 return self.cache['grad']
         
         wrapper = Wrapper()
-        print('Xopt:',Xopt.max(),Xopt.min(),Xopt.mean())
         res = opt.minimize(wrapper, Xopt,
                         method=config.INV.opt_method,
                         jac=wrapper.jac,
@@ -1139,6 +1147,13 @@ def Inv_4Dvar_JAX(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc
     else:
         B = Cov(Q)
         R = Cov(config.INV.sigma_R)
+    
+    # Read Background vector 
+    if config.INV.path_background is not None: 
+        # Read previous minimum 
+        print('Read background basis:',config.INV.path_background)
+        ds = xr.open_dataset(config.INV.path_background)
+        Xb[:len(ds.res.values)] = ds.res.values   
         
     # Variational object initialization
     from .tools_4Dvar import Variational_jax as Variational
