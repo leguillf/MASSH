@@ -5,7 +5,7 @@ Created on Wed Jan  6 16:59:11 2021
 
 @author: leguillou
 """
-
+from .config import USE_FLOAT64
 import sys, os 
 import numpy as np 
 import os
@@ -14,9 +14,13 @@ from datetime import datetime,timedelta
 import scipy.optimize as opt
 import gc
 import xarray as xr
-import jax.numpy as jnp 
+
 import glob
 from importlib.machinery import SourceFileLoader 
+
+import jax 
+import jax.numpy as jnp 
+jax.config.update("jax_enable_x64", USE_FLOAT64)
 
 from . import grid
 
@@ -1063,12 +1067,18 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
     gc.collect()
     print()
 
-def Inv_4Dvar_JAX(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True) :
+def Inv_4Dvar_JAX(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,gpu_device=None) :
     
     '''
     Run a 4Dvar analysis
     '''
-    
+
+    import time 
+
+    os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+    if gpu_device is not None:
+        os.environ['CUDA_VISIBLE_DEVICES'] = gpu_device
+
     # Module initializations
     if Model is None:
         # initialize Model operator 
@@ -1231,31 +1241,41 @@ def Inv_4Dvar_JAX(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc
             g0 = var.grad(Xopt*0)
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
-        
-        J = var.cost(Xopt)
-        x = np.array(Xopt)
-        Jb = float(x.dot(x))
-        Jo = float(2*J-Jb)
+
         from decimal import Decimal
-        print('x=%.2E' % Decimal(float(x.mean())), 'Jo=%.2E' % Decimal(Jo), 'Jb=%.2E' % Decimal(Jb), 'Jb/Jo=%.2E' % Decimal(Jb/Jo))
+
 
         # Run minimization 
         from jax import jit, value_and_grad
         fun = jit(value_and_grad(var.cost))
         class Wrapper:
             def __init__(self):
-                self.cache = {}
+                J0, G0 = fun(Xopt)
+                self.cache = {
+                    'cost':J0,
+                    'grad':G0
+                }
+                self.time = time.time()
+                self.it = 1
 
             def __call__(self, x, *args):
                 cost, grad = fun(x)
-                Jb = float(x.dot(x))
-                Jo = float(2*J-Jb)
-                print('x=%.2E' % Decimal(float(x.mean())), 'Jo=%.2E' % Decimal(Jo), 'Jb=%.2E' % Decimal(Jb), 'Jb/Jo=%.2E' % Decimal(Jb/Jo))
+                ftol = (cost - self.cache['cost']) / max(cost, self.cache['cost'], 1)
+                mean_grad = np.mean(np.abs(grad))
+                mean_grad_previous = np.mean(np.abs(self.cache['grad']))
+                gtol = (mean_grad - mean_grad_previous) / max(mean_grad, mean_grad_previous, 1)
+                self.cache['cost'] = cost
                 self.cache['grad'] = grad
+                time0 = time.time()
+                text = "computed in %.2E second:" % (time0 - self.time) + ', x=%.2E' % Decimal(float(x.mean()))  + ', J=%.2E' % Decimal(float(cost)) + ', G=%.2E' % Decimal(float(mean_grad))  + ', ftol=%.2E' % Decimal(abs(float(ftol)))  + ', gtol=%.2E' % Decimal(abs(float(gtol))) 
+                print(f"* iteration {self.it}", text)
+                self.time = time0
+                self.it += 1
+
                 return cost
 
             def jac(self, x, *args):
-                return self.cache.pop('grad')
+                return self.cache['grad']
         
         wrapper = Wrapper()
         res = opt.minimize(wrapper, Xopt,
@@ -1305,7 +1325,7 @@ def Inv_4Dvar_JAX(config,State,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc
         Basis.operg(t/3600/24,Xa,State_params)
 
         # Forward propagation
-        State_var = Model.step(t, State_var, State_params, nstep=nstep)
+        State_var = Model.step_jax_jit(t, State_var, State_params, nstep=nstep)
         date += timedelta(seconds=nstep_check*Model.dt)
 
         # Save output

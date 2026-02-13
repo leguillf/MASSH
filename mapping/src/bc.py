@@ -100,9 +100,11 @@ class Bc_ext:
             )
         if len(ds[config.BC.name_lon].shape)==1 and len(ds[config.BC.name_lat].shape)==1:
             ds = ds.sel({
-                config.BC.name_lon:slice(lon_min-dlon,lon_max+dlon),
-                config.BC.name_lat:slice(lat_min-dlat,lat_max+dlat),
+                config.BC.name_lon:slice(lon_min-2*dlon,lon_max+2*dlon),
+                config.BC.name_lat:slice(lat_min-2*dlat,lat_max+2*dlat),
                 })
+        
+        self.c_grid = config.BC.c_grid if 'c_grid' in config.BC else False
         
         # Get BC coordinates
         self.lon_bc = ds[config.BC.name_lon].values
@@ -169,16 +171,45 @@ class Bc_ext:
         # Define target grid
         if self.time_bc is not None and self.time_bc.size>1:
             time_target = z_source_axis.safe_cast(time)
-            z_target = np.tile(time_target,(self.lon.shape[1],self.lat.shape[0],1))
             nt = len(time_target)
         else:
             nt = 1
-        x_target = np.repeat(self.lon.transpose()[:,:,np.newaxis],nt,axis=2)
-        y_target = np.repeat(self.lat.transpose()[:,:,np.newaxis],nt,axis=2)
 
         # Interpolation
         var_interp = {}
         for name in self.var:
+            if not self.c_grid or (name!='U' and name!='V'):
+                x_target = np.repeat(self.lon.transpose()[:,:,np.newaxis],nt,axis=2)
+                y_target = np.repeat(self.lat.transpose()[:,:,np.newaxis],nt,axis=2)
+                if self.time_bc is not None and self.time_bc.size>1:
+                    z_target = np.tile(time_target,(self.lon.shape[1],self.lat.shape[0],1))
+            elif self.c_grid and name=='U':
+                lon_u = np.zeros((self.lon.shape[0], self.lon.shape[1]+1))
+                lat_u = np.zeros((self.lat.shape[0], self.lat.shape[1]+1))
+                lon_u[:,1:-1] = (self.lon[:,1:] + self.lon[:,:-1])/2. 
+                lon_u[:,0] = self.lon[:,0] - (self.lon[:,1]-self.lon[:,0])/2.
+                lon_u[:,-1] = self.lon[:,-1] + (self.lon[:,-1]-self.lon[:,-2])/2.
+                lat_u[:,1:-1] = (self.lat[:,1:] + self.lat[:,:-1])/2. 
+                lat_u[:,0] = self.lat[:,0] - (self.lat[:,1]-self.lat[:,0])/2.
+                lat_u[:,-1] = self.lat[:,-1] + (self.lat[:,-1]-self.lat[:,-2])/2.
+                x_target = np.repeat(lon_u.transpose()[:,:,np.newaxis],nt,axis=2)
+                y_target = np.repeat(lat_u.transpose()[:,:,np.newaxis],nt,axis=2)
+                if self.time_bc is not None and self.time_bc.size>1:
+                    z_target = np.tile(time_target,(lon_u.shape[1],lat_u.shape[0],1))
+            elif self.c_grid and name=='V':
+                lon_v = np.zeros((self.lat.shape[0]+1, self.lat.shape[1]))
+                lat_v = np.zeros((self.lat.shape[0]+1, self.lat.shape[1]))
+                lon_v[1:-1,:] = (self.lon[1:,:] + self.lon[:-1,:])/2. 
+                lon_v[0,:] = self.lon[0,:] - (self.lon[1,:]-self.lon[0,:])/2.
+                lon_v[-1,:] = self.lon[-1,:] + (self.lon[-1,:]-self.lon[-2,:])/2.
+                lat_v[1:-1,:] = (self.lat[1:,:] + self.lat[:-1,:])/2. 
+                lat_v[0,:] = self.lat[0,:] - (self.lat[1,:]-self.lat[0,:])/2.
+                lat_v[-1,:] = self.lat[-1,:] + (self.lat[-1,:]-self.lat[-2,:])/2.
+                x_target = np.repeat(lon_v.transpose()[:,:,np.newaxis],nt,axis=2)
+                y_target = np.repeat(lat_v.transpose()[:,:,np.newaxis],nt,axis=2)
+                if self.time_bc is not None and self.time_bc.size>1:
+                    z_target = np.tile(time_target,(lon_v.shape[1],lat_v.shape[0],1))
+
             if self.time_bc is not None and self.time_bc.size>1:
                 var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)}).squeeze()
                 grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
@@ -192,8 +223,10 @@ class Bc_ext:
                                             y_target.flatten(),
                                             z_target.flatten(),
                                             bounds_error=False).reshape(x_target.shape).T
+                
                 for t in range(len(time)):
-                    _var_interp[t][self.mask] = np.nan
+                    if name not in ['U', 'V']:
+                        _var_interp[t][self.mask] = np.nan
                     if time[t]<self.time_bc[0]:
                         ind_t = np.argmin(np.abs(time-self.time_bc[0]))
                         _var_interp[t] = _var_interp[ind_t]

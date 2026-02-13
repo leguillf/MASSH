@@ -5,6 +5,7 @@ Created on Mon Nov 15 16:24:24 2021
 
 @author: leguillou
 """
+from .config import USE_FLOAT64
 import os, sys
 import numpy as np
 import logging
@@ -21,10 +22,9 @@ import jax
 import pyinterp
 import matplotlib.pylab as plt 
 
-
-jax.config.update("jax_enable_x64", True)
-
 from .tools import gaspari_cohn
+
+jax.config.update("jax_enable_x64", USE_FLOAT64)
 
 
 def Basis(config, State, verbose=True, multi_mode=False, *args, **kwargs):
@@ -2112,6 +2112,7 @@ class Basis_bmaux:
 
         # Projection
         ssh = np.zeros(self.shape_phys).ravel()
+        phi = np.zeros(self.shape_phys).ravel()
         for iff in range(self.nf):
             Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
             GtXf = self.Gt[t][iff] * Xf
@@ -2189,10 +2190,14 @@ class Basis_bmaux_jax(Basis_bmaux):
         self._operg_jit = jit(self._operg)
         self._operg_reduced_jit = jit(self._operg_reduced)
 
+
     def set_basis(self,time,return_q=False,**kwargs):
         res = super().set_basis(time,return_q=return_q,**kwargs)
         self.time = time
         self.vect_time = jnp.eye(time.size)
+
+        self.zero_basis = jnp.zeros((self.nbasis,))
+        self.zero_phys = jnp.zeros((self.nphys,))
 
         return res
 
@@ -2301,7 +2306,7 @@ class Basis_bmaux_jax(Basis_bmaux):
         """
 
         # Initialize phi
-        phi = jnp.zeros(self.shape_phys).ravel()
+        phi = self.zero_phys.ravel()
 
         for iff in range(self.nf):
 
@@ -2343,7 +2348,7 @@ class Basis_bmaux_jax(Basis_bmaux):
             return self._operg_jit(t, X)
 
         # Compute the vector-Jacobian product (vjp) for the forward projection
-        _, vjp_func = jax.vjp(operg_func, jnp.zeros(self.nbasis))  # Provide a zero vector matching the reduced space shape
+        _, vjp_func = jax.vjp(operg_func, self.zero_basis)  # Provide a zero vector matching the reduced space shape
 
         # Use the vjp_func to compute the reduced space projection
         X_reduced, = vjp_func(phi_2d)
@@ -2369,7 +2374,7 @@ class Basis_bmaux_jax(Basis_bmaux):
                 else:
                     State[self.name_mod_u] += u
                     State[self.name_mod_v] += v
-
+        
         # Update State
         if State is not None:
             if not self.multi_mode:
@@ -2389,10 +2394,10 @@ class Basis_bmaux_jax(Basis_bmaux):
         """
 
         if adState[self.name_mod_var] is None:
-            adState[self.name_mod_var] = np.zeros((self.nphys,))
+            adState[self.name_mod_var] = self.zero_phys
         if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
-            adState[self.name_mod_u] = np.zeros((self.nphys,))
-            adState[self.name_mod_v] = np.zeros((self.nphys,))
+            adState[self.name_mod_u] = self.zero_phys
+            adState[self.name_mod_v] = self.zero_phys
 
         adssh = adState[self.name_mod_var]
         if self.compute_velocities:

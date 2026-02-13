@@ -5,7 +5,7 @@ Created on Wed Jan  6 19:35:02 2021
 
 @author: leguillou
 """
-
+from . import  config  # must be imported BEFORE any JAX code
 import numpy as np
 import xarray as xr
 import sys,os
@@ -497,24 +497,22 @@ class State:
             for name in self.params.keys():
                 self.params[name] = ds[name].values
             
-    
     def random(self,ampl=1):
         np.random.seed(0)
         other = self.copy(free=True) 
         for name in self.var.keys():
-            other.var[name] = ampl * np.random.random(self.var[name].shape).astype('float64')
+            other.var[name] = ampl * np.random.random(self.var[name].shape)
             try:
                 other.var[name][self.mask] = np.nan
             except:
                 print(f"Warning: can't mask to variable '{name}'")
         for name in self.params.keys():
-            other.params[name] = ampl * np.random.random(self.params[name].shape).astype('float64')
+            other.params[name] = ampl * np.random.random(self.params[name].shape)
             try:
                 other.params[name][self.mask] = np.nan
             except:
                 print(f"Warning: can't mask to parameter '{name}'")
         return other
-    
     
     def copy(self, free=False):
 
@@ -539,14 +537,14 @@ class State:
         # (deep)Copy model variables
         for name in self.var.keys():
             if free:
-                other.var[name] = np.zeros_like(self.var[name])
+                other.var[name] = self.var[name]*0
             else:
                 other.var[name] = deepcopy(self.var[name])
         
         # (deep)Copy model parameters
         for name in self.params.keys():
             if free:
-                other.params[name] = np.zeros_like(self.params[name])
+                other.params[name] = self.params[name]*0
             else:
                 other.params[name] = deepcopy(self.params[name])
 

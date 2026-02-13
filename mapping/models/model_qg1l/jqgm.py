@@ -1,5 +1,7 @@
 
-import jax.numpy as jnp
+import sys 
+sys.path.insert(0, '../../src') # add src to path to import modules
+from src.config import USE_FLOAT64
 import numpy as np
 from jax import jit
 from jax import jvp, vjp
@@ -11,7 +13,9 @@ from jax.scipy.sparse.linalg import cg as jcg
 from functools import partial
 
 import jax
-jax.config.update("jax_enable_x64", True)
+import jax.numpy as jnp
+
+jax.config.update("jax_enable_x64", USE_FLOAT64)
 
 
 
@@ -80,7 +84,11 @@ def dstI2D(x, norm='ortho'):
 def inverse_elliptic_dst(f, operator_dst):
     """Inverse elliptic operator (e.g. Laplace, Helmoltz)
     using float32 discrete sine transform."""
-    return dstI2D(dstI2D(f.astype(jnp.float64)) / operator_dst)
+    if USE_FLOAT64:
+        _f = f.astype('float64')
+    else:
+        _f = f.astype('float32')
+    return dstI2D(dstI2D(_f) / operator_dst)
 @jit
 def inverse_elliptic_dst_tgl(dh0, h0):
     _, dh1 = jvp(inverse_elliptic_dst, (h0,), (dh0,))
@@ -104,6 +112,11 @@ class Qgm:
     ###########################################################################
     def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, Kdiffus=None, upwind=3, g=9.81, f=1e-4, time_scheme='Euler', compile=True, mdt=None, bathymetry_PV_term=None, ** kwargs):
 
+        if USE_FLOAT64:
+            self.dtype = 'float64'
+        else:
+            self.dtype = 'float32'
+
         # Grid shape
         ny, nx, = np.shape(dx)
         self.nx = nx
@@ -111,8 +124,8 @@ class Qgm:
 
         # Grid spacing
         if hasattr(dx, "__len__"):
-            self.dx = dx[int(ny/2),int(nx/2)].astype('float64')
-            self.dy = dy[int(ny/2),int(nx/2)].astype('float64') 
+            self.dx = dx[int(ny/2),int(nx/2)].astype(self.dtype)
+            self.dy = dy[int(ny/2),int(nx/2)].astype(self.dtype) 
         else:
             self.dx = dx
             self.dy = dy
@@ -125,19 +138,19 @@ class Qgm:
 
         # Coriolis
         if hasattr(f, "__len__"):
-            self.f = np.nanmean(f).astype('float64')
+            self.f = np.nanmean(f).astype(self.dtype)
             # Beta plane
             self.beta = (f[2:,:] - f[:-2,:]) / (2*self.dy)
         else:
-            self.f = f.astype('float64')
+            self.f = f.astype(self.dtype)
             self.beta = None
 
 
         # Rossby radius
         if hasattr(c, "__len__"):
-            self.c = np.nanmean(c).astype('float64')
+            self.c = np.nanmean(c).astype(self.dtype)
         else:
-            self.c = c.astype('float64')
+            self.c = c.astype(self.dtype)
 
         # MDT
         self.mdt = mdt
@@ -152,8 +165,8 @@ class Qgm:
         self.time_scheme = time_scheme
 
         # Elliptical inversion operator
-        x, y = np.meshgrid(np.arange(1, nx - 1, dtype='float64'),
-                           np.arange(1, ny - 1, dtype='float64'))
+        x, y = np.meshgrid(np.arange(1, nx - 1, dtype=self.dtype),
+                           np.arange(1, ny - 1, dtype=self.dtype))
         laplace_dst = 2 * (np.cos(np.pi / (nx - 1) * x) - 1) / self.dx ** 2 + \
                       2 * (np.cos(np.pi / (ny - 1) * y) - 1) / self.dy ** 2
         self.helmoltz_dst = self.g / self.f * laplace_dst - self.g * self.f / self.c ** 2
@@ -262,7 +275,7 @@ class Qgm:
         if c is None:
             c = self.c
 
-        q = jnp.zeros((self.ny, self.nx),dtype='float64')
+        q = jnp.zeros((self.ny, self.nx),dtype=self.dtype)
 
         q = q.at[1:-1, 1:-1].set(
             self.g / self.f * \
@@ -296,7 +309,7 @@ class Qgm:
         qin = q[1:-1,1:-1] - qb[1:-1,1:-1]
         
         # Inverse sine tranfrom to get reconstructed SSH
-        h = jnp.zeros_like(q,dtype='float64')
+        h = jnp.zeros_like(q,dtype=self.dtype)
         inv = inverse_elliptic_dst(qin, self.helmoltz_dst)
         h = h.at[1:-1, 1:-1].set(inv)
 
@@ -367,7 +380,7 @@ class Qgm:
             3rd-order upwind scheme
         """
 
-        ugradq = jnp.zeros_like(q0,dtype='float64')
+        ugradq = jnp.zeros_like(q0,dtype=self.dtype)
 
         ugradq = ugradq.at[2:-2,2:-2].set(
             - up[1:-1,1:-1] * 1 / (6 * self.dx) * \

@@ -5,10 +5,8 @@ Created on Tue Jul 28 14:49:01 2020
 
 @author: leguillou
 """
-
+from .config import USE_FLOAT64
 import time
-
-
 import os
 import xarray as xr 
 import numpy as np 
@@ -24,8 +22,7 @@ from jax.lax import scan
 import time 
 import matplotlib.pylab as plt 
 
-
-jax.config.update("jax_enable_x64", True)
+from .config import USE_FLOAT64
 
 
 class Cov :

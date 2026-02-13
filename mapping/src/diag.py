@@ -155,6 +155,17 @@ That could be due to non regular grid or bad written netcdf file')
         exp.close()
         self.exp = self.exp.load()
 
+        # Check if longitude coordinates are consistent between reference and experimental data
+        lon_exp = self.exp[self.name_exp_lon].values
+        lat_exp = self.exp[self.name_exp_lat].values
+        lon_ref = self.ref[self.name_ref_lon].values
+        lat_ref = self.ref[self.name_ref_lat].values
+        if lon_ref.size==lon_exp.size and np.all(lon_ref==lon_exp) and lat_ref.size==lat_exp.size and np.all(lat_ref==lat_exp):
+            self.same_grid_exp = True
+        else:
+            self.same_grid_exp = False
+        
+
         # Baseline data
         self.compare_to_baseline = config.DIAG.compare_to_baseline 
         if self.compare_to_baseline:
@@ -163,7 +174,7 @@ That could be due to non regular grid or bad written netcdf file')
             self.name_bas_lat = config.DIAG.name_bas_lat
             self.name_bas_var = config.DIAG.name_bas_var
             try:
-                bas = xr.open_mfdataset(config.DIAG.name_bas,preprocess=lambda ds: ds[[self.name_bas_var]])
+                bas = xr.open_mfdataset(config.DIAG.name_bas,preprocess=lambda ds: ds[[self.name_bas_time, self.name_bas_lon, self.name_bas_lat, self.name_bas_var]])
             except:
                 bas = xr.open_mfdataset(config.DIAG.name_bas)
             if np.sign(bas[self.name_bas_lon].data.min())==-1 and State.lon_unit=='0_360':
@@ -193,6 +204,16 @@ That could be due to non regular grid or bad written netcdf file')
                 self.geo_grid_bas = True
             else:
                 self.geo_grid_bas = False
+            
+            # Check if longitude coordinates are consistent between reference and baseline data
+            lon_bas = self.bas[self.name_bas_lon].values
+            lat_bas = self.bas[self.name_bas_lat].values
+            lon_ref = self.ref[self.name_ref_lon].values
+            lat_ref = self.ref[self.name_ref_lat].values
+            if lon_ref.size==lon_bas.size and np.all(lon_ref==lon_bas) and lat_ref.size==lat_bas.size and np.all(lat_ref==lat_bas):
+                self.same_grid_bas = True
+            else:
+                self.same_grid_bas = False
         
         # Mask
         if config.DIAG.name_mask is not None:
@@ -220,10 +241,18 @@ That could be due to non regular grid or bad written netcdf file')
                 self.mask = mask_interp.copy()       
         else:
             self.mask = None
-    
+
+        # For movie, bash script from climporn repository (https://github.com/brodeau/climporn/blob/master/ffmpeg/images2mp4.sh)
+        self.path_images2mp4 = config.DIAG.path_images2mp4
+
     def regrid_exp(self):
+
+        if self.same_grid_exp:
+            self.exp_regridded = self.exp[self.name_exp_var]
+            # Match dimensions with ref
+            self.exp_regridded = self.exp_regridded.rename(dict(zip(self.exp_regridded.dims, self.ref[self.name_ref_var].dims)))
         
-        if self.geo_grid:
+        elif self.geo_grid:
             self.exp_regridded =  self._regrid_geo(
                 self.exp[self.name_exp_lon].values,
                 self.exp[self.name_exp_lat].values, 
@@ -241,7 +270,11 @@ That could be due to non regular grid or bad written netcdf file')
             self.exp_regridded.data[np.isnan(self.ref[self.name_ref_var].data)] = np.nan
         
         if self.compare_to_baseline:
-            if self.geo_grid_bas:
+            if self.same_grid_bas:
+                self.bas_regridded = self.bas[self.name_bas_var]
+                # Match dimensions with ref
+                self.bas_regridded = self.bas_regridded.rename(dict(zip(self.bas_regridded.dims, self.ref[self.name_ref_var].dims)))
+            elif self.geo_grid_bas:
                 self.bas_regridded = self._regrid_geo(
                     self.bas[self.name_bas_lon].values,
                     self.bas[self.name_bas_lat].values, 
@@ -353,16 +386,16 @@ That could be due to non regular grid or bad written netcdf file')
         # Save to dataset
         if len(self.ref[self.name_ref_lon].shape)==1:
             coords = {self.name_ref_time: time,
-                    self.name_ref_lon: self.ref[self.name_ref_lon].values, 
-                    self.name_ref_lat: self.ref[self.name_ref_lat].values, 
-                    }
+                      self.name_ref_lat: self.ref[self.name_ref_lat].values, 
+                      self.name_ref_lon: self.ref[self.name_ref_lon].values, 
+                     }
         else:
             coords = {self.name_ref_time: time,
                     }
         var_regridded = xr.DataArray(
             data=var_regridded,
             coords=coords,
-            dims=self.ref.dims
+            dims=self.ref[self.name_ref_var].dims
             )
 
         # Time interpolation
@@ -375,7 +408,7 @@ That could be due to non regular grid or bad written netcdf file')
         logging.info('     Compute RMSE-based scores...')
 
         # RMSE(t) based score
-        rmse_t = 1.0 - (((self.exp_regridded - self.ref[self.name_ref_var])**2).mean(
+        rmse_t = 1.0 - (((self.exp_regridded.data - self.ref[self.name_ref_var])**2).mean(
             dim=self.ref_dims[1:]))**0.5/(((self.ref[self.name_ref_var])**2).mean(dim=self.ref_dims[1:]))**0.5
         if self.compare_to_baseline:
             rmse_t_bas = 1.0 - (((self.bas_regridded - self.ref[self.name_ref_var])**2).mean(
@@ -484,23 +517,35 @@ That could be due to non regular grid or bad written netcdf file')
 
         if self.compare_to_baseline:
             # Experiment
-            cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='experiment'), level)
-            x05, y05 = cs.collections[0].get_paths()[0].vertices.T
-            plt.close()
-            self.leaderboard_psds_score = np.min(x05)
-            self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
+            try:
+                cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='experiment'), level)
+                x05, y05 = cs.allsegs[0][0].T
+                plt.close()
+                self.leaderboard_psds_score = np.min(x05)
+                self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
+            except:
+                self.leaderboard_psds_score = np.nan
+                self.leaderboard_psdt_score = np.nan
             # Baseline
-            cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='baseline'), level)
-            x05, y05 = cs.collections[0].get_paths()[0].vertices.T
-            plt.close()
-            self.leaderboard_psds_score_bas = np.min(x05)
-            self.leaderboard_psdt_score_bas = np.min(y05)/3600/24 # in days
+            try:
+                cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score.sel(run='baseline'), level)
+                x05, y05 = cs.allsegs[0][0].T
+                plt.close()
+                self.leaderboard_psds_score_bas = np.min(x05)
+                self.leaderboard_psdt_score_bas = np.min(y05)/3600/24 # in days
+            except:
+                self.leaderboard_psds_score_bas = np.nan
+                self.leaderboard_psdt_score_bas = np.nan
         else:
-            cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score, level)
-            x05, y05 = cs.collections[0].get_paths()[0].vertices.T
-            plt.close()
-            self.leaderboard_psds_score = np.min(x05)
-            self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
+            try:
+                cs = plt.contour(1./psd_based_score[f'freq_r'].values,1./psd_based_score[f'freq_{self.name_ref_time}'].values, psd_based_score, level)
+                x05, y05 = cs.allsegs[0][0].T
+                plt.close()
+                self.leaderboard_psds_score = np.min(x05)
+                self.leaderboard_psdt_score = np.min(y05)/3600/24 # in days
+            except:
+                self.leaderboard_psds_score = np.nan
+                self.leaderboard_psdt_score = np.nan
 
     def _plot_psd_score_v0(self, ds_psd):
             
@@ -525,7 +570,7 @@ That could be due to non regular grid or bad written netcdf file')
                 data = (ds_psd.isel(run=run).values)
             else:
                 data = (ds_psd.values)
-            #ax.invert_yaxis()
+            ax.invert_yaxis()
             ax.invert_xaxis()
             c1 = ax.contourf(1./(ds_psd.freq_r), 1./ds_psd.freq_time, data,
                             levels=np.arange(0,1.1, 0.1), cmap='RdYlGn', extend='both')
@@ -713,28 +758,21 @@ That could be due to non regular grid or bad written netcdf file')
         results = Parallel(n_jobs=-1, verbose=10)(delayed(_save_single_frame)(ds.load(), tt) for tt in range(ds[self.name_ref_time].size))
 
         # Create movie
-        sourcefolder = self.dir_output
-        moviename = 'movie.mp4'
-        frame_pattern = 'frame_*.png'
-        ffmpeg_options="-c:v libx264 -preset veryslow -crf 15 -pix_fmt yuv420p"
-
-        command = 'ffmpeg -f image2 -r %i -pattern_type glob -i %s -y %s -r %i %s' % (
-                framerate,
-                os.path.join(sourcefolder, frame_pattern),
-                ffmpeg_options,
-                framerate,
-                os.path.join(self.dir_output, moviename),
-            )
-        print(command)
-
-        _ = subprocess.run(command.split(' '),stdout=subprocess.PIPE)
+        if self.path_images2mp4  is not None and os.path.exists(self.path_images2mp4):
+            command = f'{self.path_images2mp4} -i {self.dir_output}/frame -f {framerate} -D {self.dir_output}'
+            print(command)
+            os.system(command)
 
         # Delete frames
-        #os.system(f'rm {os.path.join(sourcefolder, frame_pattern)}')
+        os.system(f'rm {os.path.join(self.dir_output, "frame_*.png")}')
         
         # Display movie
         if Display:
-            Video(os.path.join(self.dir_output, moviename),embed=True)
+            file_movie = glob.glob(os.path.join(self.dir_output, '*.mp4'))
+            if len(file_movie)>0:
+                Video(file_movie[0],embed=True)
+            else:
+                print('Movie file not found.')
 
     def Leaderboard(self):
 

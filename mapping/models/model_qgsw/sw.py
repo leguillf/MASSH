@@ -2,11 +2,15 @@
 Shallow-water implementation.
 Louis Thiry, Nov 2023 for IFREMER.
 """
+import sys 
+sys.path.insert(0, '../../src') # add src to path to import modules
+from src.config import USE_FLOAT64
 import numpy as np
 import jax.numpy as jnp 
 import jax
+from jax import lax
+from jax import checkpoint  # same as jax.remat
 from jax import jit
-jax.config.update("jax_enable_x64", True)
 
 from finite_diff import interp_TP, interp_TP_inv, comp_ke, div_nofluxbc
 from flux import flux
@@ -16,7 +20,8 @@ from masks import Masks
 from reconstruction import linear2_centered, wenoz4_left, wenoz6_left
 from tools import avg_pool2d
 
-from jax import lax
+jax.config.update("jax_enable_x64", USE_FLOAT64)
+
 
 from functools import partial
 
@@ -111,6 +116,7 @@ class SW:
 
         print(f'Creating {self.__class__.__name__} model...')
         self.dtype = param['dtype'] if 'dtype' in param.keys() else jnp.float64
+        print(self.dtype)
         self.arr_kwargs = {
             'dtype': self.dtype,
         }
@@ -246,10 +252,10 @@ class SW:
                 print('  - Using barotropic filter ', end="")
                 self.barotropic_filter = param['barotropic_filter']
                 self.tau = 2*self.dt
-                if param['barotropic_filter_spectral']:
+                if 'barotropic_filter_spectral' in param.keys() and param['barotropic_filter_spectral']:
                     print('spectral approximation')
                     self.barotropic_filter_spectral = True
-                    self.H_tot = self.H.sum(dim=-3, keepdim=True)
+                    self.H_tot = self.H.sum(axis=-3, keepdims=True)
                     self.lambd = 1. / (self.g * self.dt * self.tau * self.H_tot)
                     self.helm_solver = HelmholtzNeumannSolver(
                             self.nx, self.ny, self.dx, self.dy, self.lambd,
@@ -304,6 +310,14 @@ class SW:
             self.masks.u = self.masks.u.at[:,:,-1,:].set(1)
 
             print(f'  - Using {self.obc_kind} open boundary condition')
+        
+        # Sponge BC
+        self.sponge_coef = param['sponge_coef'] if 'sponge_coef' in param.keys() else 0.
+        self.sponge_u = jnp.zeros((1,1,self.nx+1, self.ny))
+        self.sponge_v = jnp.zeros((1,1,self.nx, self.ny+1))
+        self.sponge_h = jnp.zeros((1,1,self.nx, self.ny))
+
+        
 
     def set_ref_values(self, H):
         self.h_ref = H * self.area
@@ -329,7 +343,7 @@ class SW:
         assert type(taux) == float or taux.shape == (nx-1, ny), \
                f'taux must be a float or a {(nx-1, ny)} Tensor'
         assert type(tauy) == float or tauy.shape == (nx, ny-1), \
-               f'taux must be a float or a {(nx-1, ny)} Tensor'
+               f'tauy must be a float or a {(nx, ny-1)} Tensor'
         self.taux = taux
         self.tauy = tauy
 
@@ -387,6 +401,7 @@ class SW:
             h_tot = self.h_ref * jnp.ones_like(h)
         else:
             h_tot = self.h_ref + h
+        #h_tot = jnp.where(h_tot > 1e-2, h_tot, 1e-2)
         h_tot_flux_y = self.h_flux_y(h_tot, V[...,1:-1])
         h_tot_flux_x = self.h_flux_x(h_tot, U[...,1:-1,:])
         return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
@@ -422,7 +437,7 @@ class SW:
         Add diffusion to the derivatives du, dv.
         """
         # Laplacian diffusion
-        if self.visc_coef > 0:
+        if self.visc_coef is not None and self.visc_coef > 0:
             lap_u = jnp.zeros_like(du)
             lap_v = jnp.zeros_like(dv)
 
@@ -507,9 +522,9 @@ class SW:
         u_star = (u + self.dt*dt_u) / self.dx
         v_star = (v + self.dt*dt_v) / self.dy
         u_bar_star = (u_star * h_tot_ugrid).sum(axis=-3, keepdims=True) \
-                     / h_tot_ugrid.sum(axis=-3, keepdim=True)
-        v_bar_star = (v_star * h_tot_vgrid).sum(dim=-3, keepdims=True) \
-                     / self.h_tot_vgrid.sum(axis=-3, keepdims=True)
+                     / h_tot_ugrid.sum(axis=-3, keepdims=True)
+        v_bar_star = (v_star * h_tot_vgrid).sum(axis=-3, keepdims=True) \
+                     / h_tot_vgrid.sum(axis=-3, keepdims=True)
         if self.barotropic_filter_spectral:
             rhs = 1. / (self.g * self.dt * self.tau) * (
                     jnp.diff(u_bar_star, axis=-2) / self.dx \
@@ -544,47 +559,109 @@ class SW:
 
         return dt_u, dt_v, dt_h
 
-    def step(self, u0, v0, h0, H=None , nstep=1):
+    def step(
+        self,
+        u0,
+        v0,
+        h0,
+        H=None,
+        nstep=1,
+        u_b=None,
+        v_b=None,
+        h_b=None,
+        Fu=None,
+        Fv=None,
+        Fh=None,
+    ):
         """
-        Performs one step time-integration with RK3-SSP scheme.
+        Performs nstep time-integration with RK3-SSP scheme.
+        Memory-efficient for reverse-mode differentiation.
         """
 
+        import jax
+        import jax.numpy as jnp
+        from jax import lax
+
+        # ----------------------------
+        # Prepare inputs
+        # ----------------------------
         u, v, h = self.set_input_uvh(u0, v0, h0)
+
+        _u_b, _v_b, _h_b = self.set_input_uvh(
+            u_b if u_b is not None else u0,
+            v_b if v_b is not None else v0,
+            h_b if h_b is not None else h0,
+        )
+
+        _Fu, _Fv, _Fh = self.set_input_uvh(
+            Fu if Fu is not None else jnp.zeros_like(u0),
+            Fv if Fv is not None else jnp.zeros_like(v0),
+            Fh if Fh is not None else jnp.zeros_like(h0),
+        )
 
         if H is not None:
             self.set_ref_values(self.H + H)
-            
-        def single_step(i, carry):
 
+        # ----------------------------
+        # Single RK3 step
+        # ----------------------------
+        def single_step(carry, _):
             u, v, h = carry
 
-            # Compute time derivatives
-            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v , h)
-            u += self.dt * dt0_u
-            v += self.dt * dt0_v
-            h += self.dt * dt0_h
+            u_prev = u
+            v_prev = v
+            h_prev = h
 
-            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v , h)
-            u += (self.dt/4) * (dt1_u - 3*dt0_u)
-            v += (self.dt/4) * (dt1_v - 3*dt0_v)
-            h += (self.dt/4) * (dt1_h - 3*dt0_h)
+            # ---- RK3-SSP ----
+            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h)
+            u = u + self.dt * dt0_u
+            v = v + self.dt * dt0_v
+            h = h + self.dt * dt0_h
 
-            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v , h)
-            u += (self.dt/12) * (8*dt2_u - dt1_u - dt0_u)
-            v += (self.dt/12) * (8*dt2_v - dt1_v - dt0_v)
-            h += (self.dt/12) * (8*dt2_h - dt1_h - dt0_h)
+            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h)
+            u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
+            v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
+            h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
 
-            return (u, v, h)
-        
-        # Perform nstep iterations
-        if nstep>1:
-            u, v, h = lax.fori_loop(0, nstep, single_step, (u, v, h))
-        else:
-            u, v, h = single_step(0, (u, v, h))
+            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h)
+            u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
+            v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
+            h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)
 
-        # Back to physics
-        u_phys, v_phys, h_phys = self.get_physical_uvh(u, v, h, numpy=False)
+            # ---- Sponge BC ----
+            u = u + self.sponge_coef * self.sponge_u * (_u_b - u_prev)
+            v = v + self.sponge_coef * self.sponge_v * (_v_b - v_prev)
+            h = h + self.sponge_coef * self.sponge_h * (_h_b - h_prev)
 
+            # ---- External forcing ----
+            u = u + self.dt * _Fu
+            v = v + self.dt * _Fv
+            h = h + self.dt * _Fh
+
+            return (u, v, h), None
+
+        # --------------------------------------
+        # 🔥 CRITICAL: checkpoint the step
+        # --------------------------------------
+        single_step = jax.checkpoint(single_step)
+
+        # --------------------------------------
+        # Use scan instead of fori_loop
+        # --------------------------------------
+        if nstep > 0:
+            (u, v, h), _ = lax.scan(
+                single_step,
+                (u, v, h),
+                None,
+                length=nstep,
+            )
+
+        # ----------------------------
+        # Back to physical space
+        # ----------------------------
+        u_phys, v_phys, h_phys = self.get_physical_uvh(
+            u, v, h, numpy=False
+        )
 
         return u_phys, v_phys, h_phys
 

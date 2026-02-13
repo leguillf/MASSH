@@ -1911,7 +1911,7 @@ class CSWm:
     #                          Right hand sides                               #
     ###########################################################################
 
-    def rhs_u(self,u,v,h, u11=None, v11=None):
+    def rhs_u(self,u,v,h, u11u=None, v11u=None, u11z=None, v11z=None):
         
         rhs_u = jnp.zeros_like(u)
         
@@ -1922,17 +1922,17 @@ class CSWm:
             )
 
         # -----------------------------------------
-        # Mean-flow advection (u11, v11)
+        # Mean-flow advection (u11u, v11u)
         # -----------------------------------------
-        if u11 is not None and v11 is not None:
+        if u11u is not None and v11u is not None:
             # Shape u = (ny, nx-1)
             u_on_T = self.u_on_rho(u) # (ny, nx)
             
             # --- split velocities into positive and negative parts ---
-            up = jnp.where(u11 < 0, 0, u11) # (ny, nx)
-            um = jnp.where(u11 > 0, 0, u11)
-            vp = jnp.where(v11 < 0, 0, v11)
-            vm = jnp.where(v11 > 0, 0, v11)
+            up = jnp.where(u11u < 0, 0, u11u) # (ny, nx)
+            um = jnp.where(u11u > 0, 0, u11u)
+            vp = jnp.where(v11u < 0, 0, v11u)
+            vm = jnp.where(v11u > 0, 0, v11u)
 
             # --- advection term on T points ---
             adv_term_on_T = self.adv(up, vp, um, vm, u_on_T) # shape (ny-4, nx-4)
@@ -1942,10 +1942,20 @@ class CSWm:
 
             # --- add advection term ---
             rhs_u = rhs_u.at[2:-2,2:-2].set(rhs_u[2:-2,2:-2] - adv_term_on_u) 
+        
+        # -----------------------------------------
+        # Mean-flow vertical shear (u11z, v11z)
+        # -----------------------------------------
+        if u11z is not None and v11z is not None:
+            div = (u[1:-1,1:] - u[1:-1,:-1]) / self.DXu[1:-1,:] + \
+                  (v[1:,1:-1] - v[:-1,1:-1]) / self.DYv[:,1:-1]
+            shear_term_on_rho = u11z[1:-1,1:-1] * div # shape (ny-2, nx-2)
+            shear_term_on_u = self.rho_on_u(shear_term_on_rho) # shape (ny-2, nx-3)
+            rhs_u = rhs_u.at[1:-1,1:-1].set(rhs_u[1:-1,1:-1] + shear_term_on_u)
             
         return rhs_u
 
-    def rhs_v(self,u,v,h, u11=None, v11=None):
+    def rhs_v(self,u,v,h, u11u=None, v11u=None, u11z=None, v11z=None):
         
         rhs_v = jnp.zeros_like(v)
         
@@ -1956,18 +1966,18 @@ class CSWm:
             )
 
         # -----------------------------------------
-        # Mean-flow advection (u11, v11)
+        # Mean-flow advection (u11u, v11u)
         # -----------------------------------------
-        if u11 is not None and v11 is not None:
+        if u11u is not None and v11u is not None:
 
             # Shape v = (ny-1, nx)
             v_on_T = self.v_on_rho(v) # (ny, nx)
             
             # --- split velocities into positive and negative parts ---
-            up = jnp.where(u11 < 0, 0, u11) # (ny, nx) 
-            um = jnp.where(u11 > 0, 0, u11)
-            vp = jnp.where(v11 < 0, 0, v11)
-            vm = jnp.where(v11 > 0, 0, v11)
+            up = jnp.where(u11u < 0, 0, u11u) # (ny, nx) 
+            um = jnp.where(u11u > 0, 0, u11u)
+            vp = jnp.where(v11u < 0, 0, v11u)
+            vm = jnp.where(v11u > 0, 0, v11u)
 
             # --- advection term on T points ---
             adv_term_on_T = self.adv(up, vp, um, vm, v_on_T) # shape (ny-4, nx-4)
@@ -1977,6 +1987,16 @@ class CSWm:
 
             # --- add advection term ---
             rhs_v = rhs_v.at[2:-2,2:-2].set(rhs_v[2:-2,2:-2] - adv_term_on_v) 
+        
+        # -----------------------------------------
+        # Mean-flow vertical shear (u11z, v11z)
+        # -----------------------------------------
+        if u11z is not None and v11z is not None:
+            div = (u[1:-1,1:] - u[1:-1,:-1]) / self.DXu[1:-1,:] + \
+                (v[1:,1:-1] - v[:-1,1:-1]) / self.DYv[:,1:-1]
+            shear_term_on_T = v11z[1:-1,1:-1] * div # shape (ny-2, nx-2)
+            shear_term_on_v = self.rho_on_v(shear_term_on_T) # shape (ny-3, nx-2)
+            rhs_v = rhs_v.at[1:-1,1:-1].set(rhs_v[1:-1,1:-1] + shear_term_on_v) 
             
         return rhs_v
     
@@ -2278,24 +2298,47 @@ class CSWm:
         if w1ext is not None:
             u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,self.Heb,w1ext)
         
-        if self.periodic_x:
-            u = u.at[:,0].set(u[:, -2])
-            u = u.at[:, -1].set(u[:, 1])
-            v = v.at[:,0].set(v[:, -2])
-            v = v.at[:, -1].set(v[:, 1])
-            h = h.at[:,0].set(h[:, -2])
-            h = h.at[:, -1].set(h[:, 1])
-        if self.periodic_y:
-            u = u.at[0,:].set(u[-2, :])
-            u = u.at[-1,:].set(u[1, :])
-            v = v.at[0,:].set(v[-2, :])
-            v = v.at[-1,:].set(v[1, :])
-            h = h.at[0,:].set(h[-2, :])
-            h = h.at[-1,:].set(h[1, :])
-        
         return u,v,h
-
     
+    def periodic_boundary_conditions(self, u, v, h):
+        """
+        Periodic boundary conditions for staggered C-grid with ghost cells.
+
+        h : (ny+2, nx+2)  cell centers (ghosts in x and y)
+        u : (ny+2, nx+1)  x-faces     (ghosts in y only)
+        v : (ny+1, nx+2)  y-faces     (ghosts in x only)
+        """
+
+        # --------------------
+        # Periodic in x
+        # --------------------
+        if self.periodic_x:
+            # h (cell centers)
+            h = h.at[:, 0].set(h[:, -2])
+            h = h.at[:, -1].set(h[:, 1])
+
+            # v (y-faces) — has x-ghosts
+            v = v.at[:, 0].set(v[:, -2])
+            v = v.at[:, -1].set(v[:, 1])
+
+            # u has NO x-ghosts → nothing to do
+
+        # --------------------
+        # Periodic in y
+        # --------------------
+        if self.periodic_y:
+            # h (cell centers)
+            h = h.at[0, :].set(h[-2, :])
+            h = h.at[-1, :].set(h[1, :])
+
+            # u (x-faces) — has y-ghosts
+            u = u.at[0, :].set(u[-2, :])
+            u = u.at[-1, :].set(u[1, :])
+
+            # v has NO y-ghosts → nothing to do
+
+        return u, v, h
+        
     ###########################################################################
     #                            One time step                                #
     ###########################################################################
@@ -2306,7 +2349,7 @@ class CSWm:
         """
         return q_n + nu * (q_nm1 - 2.0*q_n + q_np1)
             
-    def step_euler(self,u0, v0, h0, He=None, w1ext=None, u11=None, v11=None, u11p=None, v11p=None, dc2=None):
+    def step_euler(self,u0, v0, h0, He=None, w1ext=None, u11u=None, v11u=None, u11p=None, v11p=None, dc2=None):
         
         #######################
         #   Init local state  #
@@ -2315,6 +2358,11 @@ class CSWm:
         v1 = +v0
         h1 = +h0
         He = self.Heb if He is None else He + self.Heb
+
+        #######################
+        # Boundary conditions #
+        #######################
+        u1,v1,h1 = self.periodic_boundary_conditions(u1,v1,h1)
         
         #######################
         #  Right hand sides   #
@@ -2337,7 +2385,7 @@ class CSWm:
         
         return u, v, h
     
-    def step_rk4(self, u0, v0, h0, He=None, w1ext=None, u11=None, v11=None, u11p=None, v11p=None):
+    def step_rk4(self, u0, v0, h0, He=None, w1ext=None, u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None):
         
         #######################
         #   Init local state  #
@@ -2346,25 +2394,30 @@ class CSWm:
         v1 = +v0
         h1 = +h0
         He = self.Heb if He is None else He + self.Heb
+
+        #######################
+        # Boundary conditions #
+        #######################
+        u1,v1,h1 = self.periodic_boundary_conditions(u1,v1,h1)
         
         #######################
         #  Right hand sides   #
         #######################
         # k1
-        ku1 = self.rhs_u_jit(u1,v1,h1, u11, v11)*self.dt
-        kv1 = self.rhs_v_jit(u1,v1,h1, u11, v11)*self.dt
+        ku1 = self.rhs_u_jit(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
+        kv1 = self.rhs_v_jit(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
         kh1 = self.rhs_h_jit(u1,v1,h1,He, u11p, v11p)*self.dt
         # k2
-        ku2 = self.rhs_u_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11, v11)*self.dt
-        kv2 = self.rhs_v_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11, v11)*self.dt
+        ku2 = self.rhs_u_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
+        kv2 = self.rhs_v_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
         kh2 = self.rhs_h_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1,He, u11p, v11p)*self.dt
         # k3
-        ku3 = self.rhs_u_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11, v11)*self.dt
-        kv3 = self.rhs_v_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11, v11)*self.dt
+        ku3 = self.rhs_u_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
+        kv3 = self.rhs_v_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
         kh3 = self.rhs_h_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2,He, u11p, v11p)*self.dt
         # k4
-        ku4 = self.rhs_u_jit(u1+ku3,v1+kv3,h1+kh3, u11, v11)*self.dt
-        kv4 = self.rhs_v_jit(u1+ku3,v1+kv3,h1+kh3, u11, v11)*self.dt
+        ku4 = self.rhs_u_jit(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
+        kv4 = self.rhs_v_jit(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
         kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,h1+kh3,He, u11p, v11p)*self.dt
         
         #######################
@@ -2394,6 +2447,11 @@ class CSWm:
         He = self.Heb if He is None else He + self.Heb
 
         #######################
+        # Boundary conditions #
+        #######################
+        u1,v1,h1 = self.periodic_boundary_conditions(u1,v1,h1)
+
+        #######################
         #  Right hand sides   #
         #######################
         ku = self.rhs_u(u1, v1, h1)
@@ -2421,13 +2479,13 @@ class CSWm:
     def step_euler_tgl(self,
                        du0, dv0, dh0, u0, v0, h0, 
                        dHe=None, dw1ext=None, du11=None, dv11=None, du11p=None, dv11p=None, ddc2=None,
-                       He=None, w1ext=None, u11=None, v11=None, u11p=None, v11p=None, dc2=None):
+                       He=None, w1ext=None, u11u=None, v11u=None, u11p=None, v11p=None, dc2=None):
         
         def wrapped_step(x):
-            u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2 = x
-            return self.step_euler(u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2)
+            u0, v0, h0, He, w1ext, u11u, v11u, u11p, v11p, dc2 = x
+            return self.step_euler(u0, v0, h0, He, w1ext, u11u, v11u, u11p, v11p, dc2)
 
-        primals = ((u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2),)
+        primals = ((u0, v0, h0, He, w1ext, u11u, v11u, u11p, v11p, dc2),)
         tangents = ((du0, dv0, dh0, dHe, dw1ext, du11, dv11, du11p, dv11p, ddc2),)
 
         _, dy = jax.jvp(wrapped_step, primals, tangents)
@@ -2436,29 +2494,28 @@ class CSWm:
      
     def step_rk4_tgl(self,
                      du0, dv0, dh0, u0, v0, h0, 
-                     dHe=None, dw1ext=None, du11=None, dv11=None, du11p=None, dv11p=None, ddc2=None,
-                     He=None, w1ext=None, u11=None, v11=None, u11p=None, v11p=None, dc2=None):
+                     dHe=None, dw1ext=None, du11u=None, dv11u=None, du11z=None, dv11z=None, du11p=None, dv11p=None, ddc2=None,
+                     He=None, w1ext=None, u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None, dc2=None):
         
         def wrapped_step(x):
-            u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2 = x
-            return self.step_rk4(u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2)
+            u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2 = x
+            return self.step_rk4(u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2)
 
-        primals = ((u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2),)
-        tangents = ((du0, dv0, dh0, dHe, dw1ext, du11, dv11, du11p, dv11p, ddc2),)
-
+        primals = ((u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2),)
+        tangents = ((du0, dv0, dh0, dHe, dw1ext, du11u, dv11u, du11z, dv11z, du11p, dv11p, ddc2),)
         _, dy = jax.jvp(wrapped_step, primals, tangents)
 
         return dy  # returns (du, dv, dh)
       
     def step_euler_adj(self,
                        adu0, adv0, adh0, u0, v0, h0,
-                       He=None, w1ext=None, u11=None, v11=None, u11p=None, v11p=None, dc2=None):
+                       He=None, w1ext=None, u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None, dc2=None):
         
         def wrapped_step(x):
-            u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2 = x
-            return self.step_euler(u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2)
+            u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2 = x
+            return self.step_euler(u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2)
         
-        primals = ((u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2),)
+        primals = ((u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2),)
         cotangents = (adu0, adv0, adh0)  
 
         _, vjp_fn = jax.vjp(wrapped_step, *primals)
@@ -2468,19 +2525,19 @@ class CSWm:
 
     def step_rk4_adj(self,
                      adu0, adv0, adh0, u0, v0, h0,
-                    He=None, w1ext=None, u11=None, v11=None, u11p=None, v11p=None, dc2=None):
+                    He=None, w1ext=None, u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None, dc2=None):
         
         def wrapped_step(x):
-            u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2 = x
-            return self.step_rk4(u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2)
+            u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2 = x
+            return self.step_rk4(u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2)
         
-        primals = ((u0, v0, h0, He, w1ext, u11, v11, u11p, v11p, dc2),)
+        primals = ((u0, v0, h0, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, dc2),)
         cotangents = (adu0, adv0, adh0)  
 
         _, vjp_fn = jax.vjp(wrapped_step, *primals)
         adjoints = vjp_fn(cotangents)
 
-        return adjoints  # returns (adj_u0, adj_v0, adj_h0, adj_He, adj_w1ext, adj_u11, adj_v11, adj_u11p, adj_v11p, adj_dc2)
+        return adjoints  # returns (adj_u0, adj_v0, adj_h0, adj_He, adj_w1ext, adj_u11, adj_v11, adj_u11z, adj_v11z, adj_u11p, adj_v11p, adj_dc2)
    
 
 if __name__ == "__main__":

@@ -558,6 +558,10 @@ MOD_CSW1L = dict(
 
     force_constant_km_grid = False, # Whether to force constant km grid spacing (True) or use the grid spacing from the grid (False)
 
+    dx_km = None, # If force_constant_km_grid is True, zonal grid spacing (in km)
+
+    dy_km = None, # If force_constant_km_grid is True, meridional grid spacing (in km)
+
     path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
 
     name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
@@ -610,7 +614,7 @@ MOD_CSW1L = dict(
 
     dist_sponge_bc = None,
 
-    sponge_coef = 0.,
+    sponge_coef = 0.05,
 
 )
 
@@ -679,7 +683,7 @@ MOD_QGSW = dict(
 
     f0 = None, # Coriolis parameter (in s^-1). If None, f0 will be computed from the grid
 
-    c0 = None,
+    c0 = 2.7,
 
     filec_aux = None, # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
 
@@ -714,10 +718,6 @@ MOD_QGSW = dict(
     sponge_coef = 0.,
 
     visc_coef = 0., # viscosity coefficient
-
-    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds) 
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves
 
 )
 
@@ -771,7 +771,27 @@ MOD_BMIT = dict(
 
     g = 9.81,
 
-    compute_He_from_bm = False, # Whether to compute He corrections from the balanced motion field
+    flag_coupling_from_bm = False, # Whether to compute He corrections from the balanced motion field
+
+    path_vertical_modes = None, # Path of the vertical modes netcdf file
+
+    obc_north = True,
+
+    obc_west = True,
+
+    obc_south = True,
+
+    obc_east = True,
+
+    periodic_x = False,
+
+    periodic_y = False,
+
+    flag_bc_sponge = False,
+
+    dist_sponge_bc = None,
+
+    sponge_coef = 0.05,
 
 )
 
@@ -792,6 +812,8 @@ BC_EXT = dict(
     name_time = None,
 
     name_var = {},
+
+    c_grid = False, # whether the grid is a C-grid (True) or A-grid (False)
 
 )
 
@@ -1670,6 +1692,8 @@ DIAG_OSSE = dict(
     lat_min = None,
 
     lat_max = None,
+    
+    path_images2mp4 = None,
 
     name_ref = '',
 

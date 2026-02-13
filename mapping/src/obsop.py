@@ -5,6 +5,7 @@ Created on Tue Jul 28 14:49:01 2020
 
 @author: leguillou
 """
+from .config import USE_FLOAT64
 import os,sys
 import xarray as xr 
 import numpy as np 
@@ -21,7 +22,8 @@ import jax.numpy as jnp
 from jax.lax import dynamic_slice
 from jax import jit
 import jax
-jax.config.update("jax_enable_x64", True)
+
+jax.config.update("jax_enable_x64", USE_FLOAT64)
 
 
 
@@ -143,6 +145,10 @@ class Obsop_interp:
     def is_obs(self,t):
 
         return t in self.date_obs
+    
+    def is_obs_time(self,t):
+
+        return self.is_obs(t)
                 
     def misfit(self,t,State):
 
@@ -430,7 +436,12 @@ class Obsop_interp_l3_jax(Obsop_interp):
 
                 # Normalize
                 sum_weights = np.sum(weights, axis=1, keepdims=True)
-                weights = np.where(sum_weights>0, weights/sum_weights, 0.) 
+                weights = np.divide(
+                                weights,
+                                sum_weights,
+                                out=np.zeros_like(weights),
+                                where=sum_weights > 0
+                            )
             else:
                 weights = np.ones_like(D) 
 
@@ -706,6 +717,9 @@ class Obsop_interp_l4(Obsop_interp):
 
         self.DX = State.DX
         self.DY = State.DY
+        
+        # Mask
+        self.mask = State.mask
 
         # Misfit on gradients
         self.gradients = config.OBSOP.gradients
@@ -893,7 +907,7 @@ class Obsop_interp_l4(Obsop_interp):
                 # Mask values outside obs range
                 var_obs_interp = _var_obs_interp.reshape(self.shape_grid)
                 err_obs_interp = _err_obs_interp.reshape(self.shape_grid)
-                mask = (var_obs_interp<np.nanmin(var_obs)) | (var_obs_interp>np.nanmax(var_obs))
+                mask = (var_obs_interp<np.nanmin(var_obs)) | (var_obs_interp>np.nanmax(var_obs)) | (self.mask)
                 var_obs_interp[mask] = np.nan
                 err_obs_interp[mask] = np.nan
                 
@@ -937,9 +951,9 @@ class Obsop_interp_l4(Obsop_interp):
         self.varobs_arr = jnp.array(self.varobs)
         self.errobs_arr = jnp.array(self.errobs)
 
-        mask = jnp.isnan(self.varobs_arr) | jnp.isnan(self.errobs_arr) | (self.errobs_arr<1e-7) | (self.varobs_arr>1e7)
+        mask = jnp.isnan(self.varobs_arr) | jnp.isnan(self.errobs_arr) | (self.errobs_arr<1e-7) | (self.varobs_arr>1e7) 
         self.varobs_arr = jnp.where(mask, 0., self.varobs_arr)
-        self.errobs_arr = jnp.where(mask, 1e7, self.errobs_arr)
+        self.errobs_arr = jnp.where(mask, 1e15, self.errobs_arr)
 
     
     def is_obs_time(self,t):
