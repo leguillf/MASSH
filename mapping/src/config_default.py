@@ -1242,7 +1242,7 @@ BASIS_GAUSS3D_JAX = dict(
 
     compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
 
-    name_mo d_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
 
     name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
 
