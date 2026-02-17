@@ -677,6 +677,8 @@ MOD_QGSW = dict(
 
     name_var = {'U':'u', 'V':'v', 'SSH':'ssh'},
 
+    var_to_save = None,
+
     name_params = None,#['H', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'H', 'hbc', 'hbcy', 'itg')
 
     dtmodel = 1200, # model timestep
@@ -1198,6 +1200,12 @@ BASIS_GAUSS3D = dict(
 
     name_mod_var = '', # Name of the related model variable 
 
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
     flux = False,
 
     facns = 2., # Factor for gaussian spacing in space
@@ -1231,6 +1239,12 @@ BASIS_GAUSS3D = dict(
 BASIS_GAUSS3D_JAX = dict(
 
     name_mod_var = '', # Name of the related model variable 
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mo d_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
 
     flux = False,
 

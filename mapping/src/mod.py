@@ -369,6 +369,11 @@ class Model_diffusion(M):
                 if t0 in self.bc[name]:
                      State.setvar(self.bc[name][t0], self.name_var[name])
 
+    def save_output(self,State,present_date,name_var=None,t=None):
+
+        State0 = State.copy()
+        State0.save_output(present_date, name_var=self.name_var.values())
+
     def set_bc(self,time_bc,var_bc):
         
         for _name_var_bc in var_bc:
@@ -1114,6 +1119,8 @@ class Model_qg1l_jax(M):
     def save_output(self,State,present_date,name_var=None,t=None):
 
         State0 = State.copy()
+
+        name_var = [self.name_var['SSH']]
         
         # Save SSH and geostrophic velocities
         name_var_diag = []
@@ -5092,7 +5099,6 @@ class Model_qgsw(M):
                 H = np.expand_dims(self.c.T**2/g_prime[0,0,0], axis=0) 
                 H0 = np.array([[[np.nanmean(self.c)**2/g_prime[0,0,0]]]])
                 H[np.isnan(H)] = 0.
-                H[H<.88] = .88
                 if config.EXP.flag_plot>0:
                     plt.figure()
                     plt.pcolormesh(H[0,:,:].T)
@@ -5117,8 +5123,8 @@ class Model_qgsw(M):
         
         # CFL
         if config.MOD.cfl is not None:
-            grid_spacing = min(np.nanmean(State.DX), np.nanmean(State.DY)) 
-            dt = config.MOD.cfl * grid_spacing / np.nanmean(self.c)
+            grid_spacing = min(np.nanmin(State.DX), np.nanmin(State.DY)) 
+            dt = config.MOD.cfl * grid_spacing / np.nanmax(self.c)
             divisors = [i for i in range(1, 3600 + 1) if 3600 % i == 0]  # Find all divisors of one hour in seconds
             lower_divisors = [d for d in divisors if d <= dt]
             self.dt = max(lower_divisors)  # Get closest
@@ -5285,6 +5291,7 @@ class Model_qgsw(M):
             "compile": True,
             "slip_coef": config.MOD.slip_coef,
             "visc_coef": config.MOD.visc_coef,
+            "diff_coef": config.MOD.visc_coef,
             "dt": self.dt,
             "barotropic_filter": False,
             'barotropic_filter_spectral': False,
@@ -5318,7 +5325,14 @@ class Model_qgsw(M):
         # Control parameters
         self.name_params = config.MOD.name_params if config.MOD.name_params is not None else []
         if 'H' in self.name_params:
-            State.params['H'] = np.zeros((State.ny,State.nx))
+            if (config.GRID.super == 'GRID_FROM_FILE'):
+                dsin = xr.open_dataset(config.GRID.path_init_grid)
+                if 'H' in dsin:
+                    State.params['H'] = dsin['H'].values
+                else:
+                    State.params['H'] = np.zeros((State.ny,State.nx))
+            else:
+                State.params['H'] = np.zeros((State.ny,State.nx))
         for name in self.name_var:
             State.params[self.name_var[name]] = np.zeros_like(State.var[self.name_var[name]])
 
@@ -5350,7 +5364,14 @@ class Model_qgsw(M):
     def save_output(self,State,present_date,name_var=None,t=None):
 
         State0 = State.copy()
-        State0.save_output(present_date, name_var=[self.name_var['SSH']])
+
+        _name_var = [self.name_var['U'], self.name_var['V'], self.name_var['SSH']] if name_var is None else name_var
+
+        if 'H' in self.name_params:
+            State0.var['H'] = +State.params['H']
+            _name_var += ['H']
+    
+        State0.save_output(present_date, name_var=_name_var)
 
         
         
@@ -7174,7 +7195,9 @@ class Model_multi:
     def save_output(self,State,present_date,name_var=None,t=None):
 
         for M in self.Models:
-            M.save_output(State,present_date,name_var,t)
+            M.save_output(State,present_date)
+        
+        State.save_output(present_date,name_var=self.var_to_save)
 
     def step(self,State,nstep=1,t=None):
 

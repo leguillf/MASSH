@@ -1214,6 +1214,30 @@ class Basis_gauss3d:
         self.lon1d = State.lon.flatten()
         self.lat1d = State.lat.flatten()
 
+        # Gravity 
+        self.g = 9.81
+
+        # Compute geostrophic velocoties
+        self.compute_velocities = config.BASIS.compute_velocities
+        self.name_mod_u = config.BASIS.name_mod_u
+        self.name_mod_v = config.BASIS.name_mod_v
+        pad = ((1,0),(1,0))
+        _f = np.pad(State.f, pad_width=pad, mode='edge')
+        self.f_on_v = 0.5*(_f[:,1:] + _f[:,:-1])
+        self.f_on_u = 0.5*(_f[1:,:] + _f[:-1,:])
+
+        # Grid spacing
+        self.dx = np.pad(State.DX, pad_width=pad, mode='edge')
+        self.dy = np.pad(State.DY, pad_width=pad, mode='edge')
+        self.dx_on_v = 0.5*(self.dx[:,1:] + self.dx[:,:-1])
+        self.dy_on_u = 0.5*(self.dy[1:,:] + self.dy[:-1,:])
+
+        # Mask
+        if State.mask is not None and np.any(State.mask):
+            self.mask1d = State.mask.ravel()
+        else:
+            self.mask1d = None
+
         # Time window
         if self.flux:
             self.window = mywindow_flux
@@ -1347,7 +1371,11 @@ class Basis_gauss3d:
                     )[0]
             xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
             yy = (self.lat1d[indphys] - lat0) / self.km2deg
-
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
             sizes[i] = indphys.size
             indices[ind_tmp:ind_tmp+indphys.size] = indphys
             data[ind_tmp:ind_tmp+indphys.size] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
@@ -1382,6 +1410,47 @@ class Basis_gauss3d:
 
         return Gauss_t, Nt
 
+    def _ssh2uv(self, ssh):
+
+        """
+            Compute geostrophic velocities from SSH
+        """
+
+        _ssh = np.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
+
+        _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        return _u, _v
+    
+    def _ssh2uv_adj(self, adu, adv):
+
+        """
+        Adjoint of geostrophic velocity computation.
+        """
+
+        # _adssh lives on padded grid: (ny+1, nx+1)
+        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+
+        _adssh[1:,:]  += -self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:-1,:] +=  self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:,1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
+        _adssh[:,:-1] += -self.g / self.f_on_v * adv / self.dx_on_v
+
+        # map padded grid back to physical ssh grid:
+        # physical ssh[i,j] == _ssh[i+1,j+1]
+        adssh = _adssh[1:,1:].copy()
+
+        # contributions from the padded first row/col (mode='edge' duplicates edge values)
+        # add the padded southern row (index 0) to physical southern row (adssh[0,:])
+        adssh[0,:] += _adssh[0,1:]
+        # add the padded western column (index 0) to physical western column (adssh[:,0])
+        adssh[:,0] += _adssh[1:,0]
+        # the padded corner (0,0) was duplicated as well — add it into adssh[0,0]
+        adssh[0,0] += _adssh[0,0]
+
+        return adssh
+    
     def operg(self, t, X, State=None):
 
         """
@@ -1395,6 +1464,17 @@ class Basis_gauss3d:
             GtX = GtX[ind0].reshape(self.Nt[t],self.Nx)
             phi += self.Gauss_xy.dot(GtX.sum(axis=0))
         phi = phi.reshape(self.shape_phys)
+
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
     
         # Update State
         if State is not None:
@@ -1403,7 +1483,10 @@ class Basis_gauss3d:
             else:
                 State[self.name_mod_var] += phi
         else:
-            return phi
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
 
     def operg_transpose(self, t, adState):
         """
@@ -1412,9 +1495,17 @@ class Basis_gauss3d:
 
         if adState[self.name_mod_var] is None:
             adState[self.name_mod_var] = np.zeros((self.nphys,))
+        
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros((self.nphys,))
+            adState[self.name_mod_v] = np.zeros((self.nphys,))
 
         adX = np.zeros(self.nbasis)
         adparams = adState[self.name_mod_var].ravel()
+
+        if self.compute_velocities:
+            adparams += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+
         Gt = self.Gauss_t[t]
         ind0 = np.nonzero(Gt)[0]
         if ind0.size>0:
@@ -1442,6 +1533,9 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         self.time = time
         self.vect_time = jnp.eye(time.size)
 
+        self.zero_basis = jnp.zeros((self.nbasis,))
+        self.zero_phys = jnp.zeros((self.nphys,))
+
         return res
     
     def _compute_component_space(self):
@@ -1457,6 +1551,11 @@ class Basis_gauss3d_jax(Basis_gauss3d):
                     )[0]
             xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
             yy = (self.lat1d[indphys] - lat0) / self.km2deg
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
             Gauss_2d[i,indphys] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
         Gauss_2d = jnp.array(Gauss_2d)
         return sparse.CSR.fromdense(Gauss_2d.T)  
@@ -1482,6 +1581,19 @@ class Basis_gauss3d_jax(Basis_gauss3d):
 
         return Gt, None
     
+    def _ssh2uv(self, ssh):
+
+        """
+            Compute geostrophic velocities from SSH
+        """
+
+        _ssh = jnp.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
+
+        _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        return _u, _v
+    
     def get_Gt_value(self, t):
 
         idt = jnp.where(self.time == t, size=1)[0]  # Find index
@@ -1495,7 +1607,7 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         """
 
         # Initialize phi
-        phi = jnp.zeros(self.nphys)
+        phi = self.zero_phys.ravel()
 
         # Get Gt value
         Gt = self.get_Gt_value(t)
@@ -1526,7 +1638,7 @@ class Basis_gauss3d_jax(Basis_gauss3d):
             return self._operg_jit(t, X)
 
         # Compute the vector-Jacobian product (vjp) for the forward projection
-        _, vjp_func = jax.vjp(operg_func, jnp.zeros(self.nbasis))  # Provide a zero vector matching the reduced space shape
+        _, vjp_func = jax.vjp(operg_func, self.zero_basis)  # Provide a zero vector matching the reduced space shape
 
         # Use the vjp_func to compute the reduced space projection
         X_reduced, = vjp_func(phi_2d)
@@ -1542,6 +1654,17 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         # Projection
         phi = self._operg_jit(t, X)
 
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
+
         # Update State
         if State is not None:
             if not self.multi_mode:
@@ -1549,7 +1672,10 @@ class Basis_gauss3d_jax(Basis_gauss3d):
             else:
                 State[self.name_mod_var] += phi
         else:
-            return phi
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
         
     def operg_transpose(self, t, adState):
         
@@ -1558,12 +1684,22 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         """
 
         if adState[self.name_mod_var] is None:
-            adState[self.name_mod_var] = np.zeros((self.nphys,))
+            adState[self.name_mod_var] = self.zero_phys
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = self.zero_phys
+            adState[self.name_mod_v] = self.zero_phys
+
         adparams = adState[self.name_mod_var]
+        adX = self._operg_reduced_jit(t, adparams)
+        if self.compute_velocities:
+            adparams += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
         adX = self._operg_reduced_jit(t, adparams)
         
         if not self.multi_mode:
             adState[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
         
         return adX
     
@@ -2294,6 +2430,19 @@ class Basis_bmaux_jax(Basis_bmaux):
 
         return Gt, None
 
+    def _ssh2uv(self, ssh):
+
+        """
+            Compute geostrophic velocities from SSH
+        """
+
+        _ssh = jnp.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
+
+        _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        return _u, _v
+
     def get_Gt_value(self, t, iff):
 
         idt = jnp.where(self.time == t, size=1)[0]  # Find index
@@ -2314,14 +2463,11 @@ class Basis_bmaux_jax(Basis_bmaux):
             Xf = X[self.iff_wavebounds[iff]:self.iff_wavebounds[iff+1]]
             GtXf = Gt * Xf
 
-            # Replace NaNs with 0 (use jnp.nan_to_num for JAX compatibility)
-            GtXf_no_nan = jnp.nan_to_num(GtXf)
-
             # # Use shape-safe slicing instead of boolean indexing
             Nx_val = self.Nx[iff]
 
             # # Dynamically reshape the sliced array
-            reshaped_GtXf = GtXf_no_nan.reshape((-1, Nx_val))  # Ensure reshaping works dynamically
+            reshaped_GtXf = GtXf.reshape((-1, Nx_val))  # Ensure reshaping works dynamically
 
             # Update phi
             phi += self.Gx[iff] @ reshaped_GtXf.sum(axis=0)

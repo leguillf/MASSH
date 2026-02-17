@@ -25,6 +25,15 @@ jax.config.update("jax_enable_x64", USE_FLOAT64)
 
 from functools import partial
 
+def smooth_clamp(x, x_min, sharpness=10.):
+    """Smooth approximation of jnp.maximum(x, x_min) using softplus.
+    Unlike jnp.maximum, the gradient is non-zero everywhere,
+    which is critical for adjoint / backward differentiation stability.
+    sharpness controls the transition steepness (higher = closer to hard clamp).
+    """
+    return x_min + jax.nn.softplus((x - x_min) * sharpness) / sharpness
+
+
 def replicate_pad(f, mask):
     f_ = jnp.pad(f, ((0, 0), (0,0), (1,1), (1,1)), mode='edge')
     mask_ = jnp.pad(mask, ((0, 0), (0,0), (1,1), (1,1)), mode='edge')
@@ -185,8 +194,15 @@ class SW:
         self.set_wind_forcing(taux, tauy)
         self.bottom_drag_coef = param['bottom_drag_coef']
 
-        # Diffusion
+        # Minimum layer thickness to prevent negative h_tot
+        self.h_min = param['h_min'] if 'h_min' in param.keys() else 0.1
+        self.h_min_sharpness = param['h_min_sharpness'] if 'h_min_sharpness' in param.keys() else 10.
+
+        # Diffusion (Laplacian, in m²/s)
+        # visc_coef: velocity diffusion, diff_coef: thickness diffusion
+        # Both are critical for adjoint stability with WENO advection.
         self.visc_coef = param['visc_coef'] if 'visc_coef' in param.keys() else 0.
+        self.diff_coef = param['diff_coef'] if 'diff_coef' in param.keys() else 0.
 
         # time
         self.dt = param['dt']
@@ -319,24 +335,33 @@ class SW:
 
         
 
-    def set_ref_values(self, H):
-        self.h_ref = H * self.area
-        self.eta_ref = -H.sum(axis=-3) + reverse_cumsum(self.H, dim=-3)
-        self.p_ref = jnp.cumsum(self.g_prime * self.eta_ref, axis=-3)
-        if self.h_ref.shape[-2] != 1 and self.h_ref.shape[-1] != 1:
-            #h_ref_ugrid = F.pad(self.h_ref, (0,0,1,1), mode='replicate')
-            h_ref_ugrid = jnp.pad(self.h_ref, ((0, 0), (1, 1), (0, 0)), mode='edge')
-            self.h_ref_ugrid = 0.5 * (h_ref_ugrid[...,1:,:] + h_ref_ugrid[...,:-1,:])
-            #h_ref_vgrid = F.pad(self.h_ref, (1,1), mode='replicate')
-            h_ref_vgrid = jnp.pad(self.h_ref, ((0, 0), (0, 0), (1, 1)), mode='edge')
-            self.h_ref_vgrid = 0.5 * (h_ref_vgrid[...,1:] + h_ref_vgrid[...,:-1])
-            self.dx_p_ref = jnp.diff(self.p_ref, axis=-2)
-            self.dy_p_ref = jnp.diff(self.p_ref, axis=-1)
+    def _compute_ref_values(self, H):
+        """Pure functional computation of reference values.
+        Returns (h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref).
+        No mutation — safe for JAX AD.
+        """
+        h_ref = H * self.area
+        eta_ref = -H.sum(axis=-3) + reverse_cumsum(H, dim=-3)
+        p_ref = jnp.cumsum(self.g_prime * eta_ref, axis=-3)
+        if h_ref.shape[-2] != 1 and h_ref.shape[-1] != 1:
+            _h_ref_u = jnp.pad(h_ref, ((0, 0), (1, 1), (0, 0)), mode='edge')
+            h_ref_ugrid = 0.5 * (_h_ref_u[...,1:,:] + _h_ref_u[...,:-1,:])
+            _h_ref_v = jnp.pad(h_ref, ((0, 0), (0, 0), (1, 1)), mode='edge')
+            h_ref_vgrid = 0.5 * (_h_ref_v[...,1:] + _h_ref_v[...,:-1])
+            dx_p_ref = jnp.diff(p_ref, axis=-2)
+            dy_p_ref = jnp.diff(p_ref, axis=-1)
         else:
-            self.h_ref_ugrid = self.h_ref
-            self.h_ref_vgrid = self.h_ref
-            self.dx_p_ref = 0.
-            self.dy_p_ref = 0.
+            h_ref_ugrid = h_ref
+            h_ref_vgrid = h_ref
+            dx_p_ref = 0.
+            dy_p_ref = 0.
+        return h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref
+
+    def set_ref_values(self, H):
+        self.h_ref, self.h_ref_ugrid, self.h_ref_vgrid, \
+            self.dx_p_ref, self.dy_p_ref = self._compute_ref_values(H)
+        self.eta_ref = -H.sum(axis=-3) + reverse_cumsum(H, dim=-3)
+        self.p_ref = jnp.cumsum(self.g_prime * self.eta_ref, axis=-3)
 
     def set_wind_forcing(self, taux, tauy):
         nx, ny = self.nx, self.ny
@@ -392,24 +417,29 @@ class SW:
                 f'eta_sur min: {eta[:,0].min():+.5f}, ' \
                 f'max: {eta[:,0].max():.5f}'
 
-    def advection_h(self, U, V, h):
+    def advection_h(self, U, V, h, h_ref=None):
         """
         Advection RHS for thickness perturbation h
         dt_h = - div(h_tot [u v]),  h_tot = h_ref + h
         """
+        _h_ref = h_ref if h_ref is not None else self.h_ref
         if self.flag_linear:
-            h_tot = self.h_ref * jnp.ones_like(h)
+            h_tot = _h_ref * jnp.ones_like(h)
         else:
-            h_tot = self.h_ref + h
-        #h_tot = jnp.where(h_tot > 1e-2, h_tot, 1e-2)
+            h_tot = _h_ref + h
+            h_tot = smooth_clamp(h_tot, self.h_min * self.area, self.h_min_sharpness)
         h_tot_flux_y = self.h_flux_y(h_tot, V[...,1:-1])
         h_tot_flux_x = self.h_flux_x(h_tot, U[...,1:-1,:])
         return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
 
-    def advection_momentum(self, u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid):
+    def advection_momentum(self, u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid,
+                           dx_p_ref=None, dy_p_ref=None):
         """
         Advection RHS for momentum (u, v)
         """
+        _dx_p_ref = dx_p_ref if dx_p_ref is not None else self.dx_p_ref
+        _dy_p_ref = dy_p_ref if dy_p_ref is not None else self.dy_p_ref
+
         # Vortex-force + Coriolis
         omega_Vm = self.w_flux_y(omega[...,1:-1,:], V_m)
         omega_Um = self.w_flux_x(omega[...,1:-1], U_m)
@@ -419,8 +449,8 @@ class SW:
 
         # grad pressure + k_energy
         ke_pressure = k_energy + p
-        dt_u -= jnp.diff(ke_pressure, axis=-2) + self.dx_p_ref
-        dt_v -= jnp.diff(ke_pressure, axis=-1) + self.dy_p_ref
+        dt_u -= jnp.diff(ke_pressure, axis=-2) + _dx_p_ref
+        dt_v -= jnp.diff(ke_pressure, axis=-1) + _dy_p_ref
 
         # wind forcing and bottom drag
         dt_u, dt_v = self.add_wind_forcing(dt_u, dt_v, h_tot_ugrid, h_tot_vgrid)
@@ -432,30 +462,46 @@ class SW:
     
     def add_diffusion(self, du, dv, u, v):
         """
-        NOT WORKING
-        
-        Add diffusion to the derivatives du, dv.
+        Add Laplacian diffusion ν∇²(u_phys) to velocity derivatives.
+        Uses Neumann (zero-flux) BCs via edge-padding.
+        Applies to all layers.
         """
-        # Laplacian diffusion
         if self.visc_coef is not None and self.visc_coef > 0:
-            lap_u = jnp.zeros_like(du)
-            lap_v = jnp.zeros_like(dv)
+            # Pad u in y, v in x for Neumann-like boundary treatment
+            u_pad = jnp.pad(u, ((0,0), (0,0), (0,0), (1,1)), mode='edge')
+            v_pad = jnp.pad(v, ((0,0), (0,0), (1,1), (0,0)), mode='edge')
 
-            _u = u/self.dx
-            _v = v/self.dy
+            # u_phys = u / dx on padded grid
+            u_phys = u_pad / self.dx
+            v_phys = v_pad / self.dy
 
-            lap_u = lap_u.at[..., 0, :,1:-1].set(
-                    (_u[...,0,2:,1:-1] - 2*_u[...,0,1:-1,1:-1] + _u[...,0,:-2,1:-1]) / self.dx**2 +
-                    (_u[...,0,1:-1,2:] - 2*_u[...,0,1:-1,1:-1] + _u[...,0,1:-1,:-2]) / self.dy**2
-                )
-            lap_v = lap_v.at[..., 0,1:-1,:].set(
-                    (_v[...,0,2:,1:-1] - 2*_v[...,0,1:-1,1:-1] + _v[...,0,:-2,1:-1]) / self.dx**2 +
-                    (_v[...,0,1:-1,2:] - 2*_v[...,0,1:-1,1:-1] + _v[...,0,1:-1,:-2]) / self.dy**2
-                )
-            du = du + self.visc_coef * lap_u
-            dv = dv + self.visc_coef * lap_v
+            # Laplacian at interior u-points (x: 1:-1, y: all via padding)
+            lap_u = (u_phys[..., 2:, 1:-1] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., :-2, 1:-1]) / self.dx**2 \
+                  + (u_phys[..., 1:-1, 2:] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., 1:-1, :-2]) / self.dy**2
+
+            # Laplacian at interior v-points (y: 1:-1, x: all via padding)
+            lap_v = (v_phys[..., 2:, 1:-1] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., :-2, 1:-1]) / self.dx**2 \
+                  + (v_phys[..., 1:-1, 2:] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., 1:-1, :-2]) / self.dy**2
+
+            # Convert back to scaled variables
+            du = du + self.visc_coef * lap_u * self.dx
+            dv = dv + self.visc_coef * lap_v * self.dy
 
         return du, dv
+
+    def add_h_diffusion(self, h):
+        """
+        Laplacian diffusion κ∇²(h_phys) for layer thickness.
+        Returns diffusion tendency in scaled form (h = h_phys * area).
+        Critical for adjoint stability: counteracts anti-diffusivity of
+        the adjoint WENO scheme.
+        """
+        if self.diff_coef is not None and self.diff_coef > 0:
+            h_pad = jnp.pad(h, ((0,0), (0,0), (1,1), (1,1)), mode='edge')
+            lap_h = (h_pad[..., 2:, 1:-1] - 2*h_pad[..., 1:-1, 1:-1] + h_pad[..., :-2, 1:-1]) / self.dx**2 \
+                  + (h_pad[..., 1:-1, 2:] - 2*h_pad[..., 1:-1, 1:-1] + h_pad[..., 1:-1, :-2]) / self.dy**2
+            return self.diff_coef * lap_h * self.masks.h
+        return jnp.zeros_like(h)
 
     def add_wind_forcing(self, du, dv, h_tot_ugrid, h_tot_vgrid):
         """
@@ -493,11 +539,14 @@ class SW:
 
         return omega
 
-    def compute_diagnostic_variables(self, u, v , h):
+    def compute_diagnostic_variables(self, u, v, h, h_ref_ugrid=None, h_ref_vgrid=None):
         """
         Compute the model's diagnostic variables given the prognostic
         variables self.u, self.v, self.h .
         """
+        _h_ref_ugrid = h_ref_ugrid if h_ref_ugrid is not None else self.h_ref_ugrid
+        _h_ref_vgrid = h_ref_vgrid if h_ref_vgrid is not None else self.h_ref_vgrid
+
         omega = self.compute_omega(u, v)
         eta = reverse_cumsum(h / self.area, dim=-3)
         p = jnp.cumsum(self.g_prime * eta, axis=-3)
@@ -509,8 +558,8 @@ class SW:
         h_ = replicate_pad(h, self.masks.h)
         h_ugrid = 0.5 * (h_[...,1:,1:-1] + h_[...,:-1,1:-1])
         h_vgrid = 0.5 * (h_[...,1:-1,1:] + h_[...,1:-1,:-1])
-        h_tot_ugrid = self.h_ref_ugrid + h_ugrid
-        h_tot_vgrid = self.h_ref_vgrid + h_vgrid
+        h_tot_ugrid = smooth_clamp(_h_ref_ugrid + h_ugrid, self.h_min * self.area, self.h_min_sharpness)
+        h_tot_vgrid = smooth_clamp(_h_ref_vgrid + h_vgrid, self.h_min * self.area, self.h_min_sharpness)
 
         return omega, eta, p, U, V, U_m, V_m, k_energy, h_tot_ugrid, h_tot_vgrid
 
@@ -546,14 +595,23 @@ class SW:
                dt_v + filt_v, \
                dt_h
 
-    def compute_time_derivatives(self, u, v , h):
+    def compute_time_derivatives(self, u, v, h, ref_vals=None):
         """
-        Computes the state variables derivatives dt_u, dt_v, dt_h
+        Computes the state variables derivatives dt_u, dt_v, dt_h.
+        ref_vals: optional tuple (h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref)
+                  for pure-functional usage (needed for correct JAX AD through H).
         """
+        if ref_vals is not None:
+            h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref = ref_vals
+        else:
+            h_ref = h_ref_ugrid = h_ref_vgrid = dx_p_ref = dy_p_ref = None
+
         omega, eta, p, U, V, U_m, V_m, k_energy, h_tot_ugrid, h_tot_vgrid = \
-            self.compute_diagnostic_variables(u, v , h)
-        dt_h = self.advection_h(U, V, h)
-        dt_u, dt_v = self.advection_momentum(u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid)
+            self.compute_diagnostic_variables(u, v, h, h_ref_ugrid, h_ref_vgrid)
+        dt_h = self.advection_h(U, V, h, h_ref) + self.add_h_diffusion(h)
+        dt_u, dt_v = self.advection_momentum(
+            u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid,
+            dx_p_ref, dy_p_ref)
         if self.barotropic_filter:
             dt_u, dt_v, dt_h = self.filter_barotropic_waves(dt_u, dt_v, dt_h, u, v, h_tot_ugrid, h_tot_vgrid)
 
@@ -599,8 +657,13 @@ class SW:
             Fh if Fh is not None else jnp.zeros_like(h0),
         )
 
-        if H is not None:
-            self.set_ref_values(self.H + H)
+        # ---------------------------------------------------
+        # Compute ref values FUNCTIONALLY (no self mutation)
+        # so JAX AD can differentiate through H correctly.
+        # ---------------------------------------------------
+        H_total = self.H + H if H is not None else self.H
+        ref_vals = self._compute_ref_values(H_total)
+        _h_ref = ref_vals[0]  # h_ref for h_floor
 
         # ----------------------------
         # Single RK3 step
@@ -613,17 +676,17 @@ class SW:
             h_prev = h
 
             # ---- RK3-SSP ----
-            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h)
+            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h, ref_vals)
             u = u + self.dt * dt0_u
             v = v + self.dt * dt0_v
             h = h + self.dt * dt0_h
 
-            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h)
+            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h, ref_vals)
             u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
             v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
             h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
 
-            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h)
+            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h, ref_vals)
             u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
             v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
             h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)

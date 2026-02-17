@@ -384,7 +384,8 @@ class Variational:
             if i==int(len(self.checkpoints)/2):
                 if self.it_plot % self.freq_it_plot == 0:
                     adState.plot(title='Adjoint State variables at the middle of cost function evaluation', name_save=f'adjoint_state_grad_it{self.it_plot}')
-        
+            
+    
         if self.print_time:
             print("[cost] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(cost_misfit), np.mean(cost_basis), np.mean(cost_model)) )   
             print("[grad] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(grad_misfit), np.mean(grad_basis), np.mean(grad_model)) )

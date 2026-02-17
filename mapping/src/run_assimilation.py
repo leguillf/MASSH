@@ -438,7 +438,6 @@ def parallel_merge(dates, State, list_State, name_var_save, kernel, weights_spac
     
     if num_workers<=1:
         for date in dates:
-            print(date)
             merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum)    
     else:
         with mp.Pool(processes=num_workers) as pool:

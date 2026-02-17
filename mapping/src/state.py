@@ -5,7 +5,7 @@ Created on Wed Jan  6 19:35:02 2021
 
 @author: leguillou
 """
-from . import  config  # must be imported BEFORE any JAX code
+from .config import USE_FLOAT64
 import numpy as np
 import xarray as xr
 import sys,os
@@ -382,7 +382,6 @@ class State:
         else:
             coords[self.name_lon] = (('y','x',), self.lon)
             coords[self.name_lat] = (('y','x',), self.lat)
-            dims = ('time','y','x')
 
         if name_var is None:
             name_var = self.var.keys()
@@ -393,20 +392,38 @@ class State:
             var_to_save = +np.array(self.var[name])
 
             # Apply Mask
-            if self.mask is not None:
-                var_to_save[self.mask] = np.nan
+            try:
+                if self.mask is not None:
+                    var_to_save[self.mask] = np.nan
+            except:
+                var_to_save = var_to_save
         
             if len(var_to_save.shape)==2:
                 var_to_save = var_to_save[np.newaxis,:,:]
             
-            var[name] = (dims, var_to_save)
+            _dims = ['time','y','x']
+            if var_to_save.shape[1]!=self.lon.shape[0]:     
+                _dims[1] += name
+            if var_to_save.shape[2]!=self.lon.shape[1]:
+                _dims[2] += name      
+            var[name] = (_dims, var_to_save)
+
+        if os.path.exists(filename):
+            ds = xr.open_dataset(filename)
+            dsout = ds.copy().load()
+            ds.close()
+            del ds 
+            for name in var.keys():
+                dsout[name] = (var[name][0], var[name][1])
+            dsout.to_netcdf(filename,
+                         unlimited_dims={'time':True})
             
-        ds = xr.Dataset(var, coords=coords)
-        ds.to_netcdf(filename,
-                     #encoding={'time': {'units': 'days since 1950-01-01 00:00:00'}},
-                     unlimited_dims={'time':True})
-        ds.close()
-        del ds
+        else:
+            ds = xr.Dataset(var, coords=coords)
+            ds.to_netcdf(filename,
+                        unlimited_dims={'time':True})
+            ds.close()
+            del ds
         
         return 
 

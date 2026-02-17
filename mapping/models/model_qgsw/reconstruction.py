@@ -4,6 +4,18 @@ Louis Thiry, 2023
 """
 import jax.numpy as jnp 
 
+# Epsilon for WENO smoothness indicators.
+# Standard value 1e-14 prevents division by zero in the forward model,
+# but causes adjoint blow-up since d/d(beta)[tau/(beta+eps)] ~ 1/(beta+eps)^2.
+# A larger value stabilizes the adjoint with negligible impact on forward accuracy.
+# Use 1e-4 for float32 (safe: 1/eps^2 = 1e8, within f32 range).
+# Use 1e-6 for float64.
+WENO_EPS = 1e-4
+
+def smooth_abs(x):
+    """Smooth approximation of |x|, differentiable everywhere including x=0."""
+    return jnp.sqrt(x**2 + WENO_EPS**2)
+
 
 def linear2_centered(qm, qp):
     """
@@ -62,8 +74,6 @@ def wenojs4_left(qmm, qm, qp, qpp):
     qmm-----qm--x--qp-----qpp
     ^       ^      ^      X
     """
-    eps = 1e-8
-
     qi1 = -1./2.*qmm + 3./2.*qm
     qi2 = 1./2.*(qm + qp)
 
@@ -71,8 +81,8 @@ def wenojs4_left(qmm, qm, qp, qpp):
     beta2 = (qp-qm)**2
 
     g1, g2 = 1./3., 2./3.
-    w1 = g1 / (beta1+eps)**2
-    w2 = g2 / (beta2+eps)**2
+    w1 = g1 / (beta1+WENO_EPS)**2
+    w2 = g2 / (beta2+WENO_EPS)**2
 
     qi_weno = (w1*qi1 + w2*qi2) / (w1 + w2)
 
@@ -86,18 +96,16 @@ def wenoz4_left(qmm, qm, qp, qpp):
     qmm-----qm--x--qp-----qpp
     ^       ^      ^      X
     """
-    eps = 1e-14
-
     qi1 = -1./2.*qmm + 3./2.*qm
     qi2 = 1./2.*(qm + qp)
 
     beta1 = (qm-qmm)**2
     beta2 = (qp-qm)**2
-    tau = jnp.abs(beta2-beta1)
+    tau = smooth_abs(beta2-beta1)
 
     g1, g2 = 1./3., 2./3.
-    w1 = g1 * (1. + tau / (beta1 + eps))
-    w2 = g2 * (1. + tau / (beta2 + eps))
+    w1 = g1 * (1. + tau / (beta1 + WENO_EPS))
+    w2 = g2 * (1. + tau / (beta2 + WENO_EPS))
 
     qi_weno = (w1*qi1 + w2*qi2) / (w1 + w2)
 
@@ -112,7 +120,6 @@ def wenojs6_left(qmmm, qmm, qm, qp, qpp, qppp):
     qmmm----qmm-----qm--x--qp----qpp----qppp
     ^       ^       ^      ^     ^      X
     """
-    eps = 1e-8
     qi1 = 1./3.*qmmm - 7./6.*qmm + 11./6.*qm
     qi2 = -1./6.*qmm + 5./6.*qm + 1./3.*qp
     qi3 = 1./3.*qm + 5./6.*qp - 1./6.*qpp
@@ -123,9 +130,9 @@ def wenojs6_left(qmmm, qmm, qm, qp, qpp, qppp):
     beta3 = k1 * (qm-2*qp+qpp)**2 + k2 * (3*qm-4*qp+qpp)**2
 
     g1, g2, g3 = 0.1, 0.6, 0.3
-    w1 = g1 / (beta1+eps)**2
-    w2 = g2 / (beta2+eps)**2
-    w3 = g3 / (beta3+eps)**2
+    w1 = g1 / (beta1+WENO_EPS)**2
+    w2 = g2 / (beta2+WENO_EPS)**2
+    w3 = g3 / (beta3+WENO_EPS)**2
 
     qi_weno = (w1*qi1 + w2*qi2 + w3*qi3) / (w1 + w2 + w3)
 
@@ -140,7 +147,6 @@ def wenoz6_left(qmmm, qmm, qm, qp, qpp, qppp):
     qmmm----qmm-----qm--x--qp----qpp----qppp
     ^       ^       ^      ^     ^      X
     """
-    eps = 1e-14
     qi1 = 1./3.*qmmm - 7./6.*qmm + 11./6.*qm
     qi2 = -1./6.*qmm + 5./6.*qm + 1./3.*qp
     qi3 = 1./3.*qm + 5./6.*qp - 1./6.*qpp
@@ -150,12 +156,12 @@ def wenoz6_left(qmmm, qmm, qm, qp, qpp, qppp):
     beta2 = k1 * (qmm-2*qm+qp)**2  + k2 * (qmm-qp)**2
     beta3 = k1 * (qm-2*qp+qpp)**2 + k2 * (3*qm-4*qp+qpp)**2
 
-    tau5 = jnp.abs(beta1 - beta3)
+    tau5 = smooth_abs(beta1 - beta3)
 
     g1, g2, g3 = 0.1, 0.6, 0.3
-    w1 = g1 * (1 + tau5 / (beta1 + eps))
-    w2 = g2 * (1 + tau5 / (beta2 + eps))
-    w3 = g3 * (1 + tau5 / (beta3 + eps))
+    w1 = g1 * (1 + tau5 / (beta1 + WENO_EPS))
+    w2 = g2 * (1 + tau5 / (beta2 + WENO_EPS))
+    w3 = g3 * (1 + tau5 / (beta3 + WENO_EPS))
 
 
     qi_weno = (w1*qi1 + w2*qi2 + w3*qi3) / (w1 + w2 + w3)
