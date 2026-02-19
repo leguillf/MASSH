@@ -1099,9 +1099,9 @@ class Model_qg1l_jax(M):
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('QG1L_JAX Tangent test:')
-            #tangent_test(self,State,nstep=100)
+            tangent_test(self,State,nstep=10)
             print('QG1L_JAX Adjoint test:')
-            #adjoint_test(self,State,nstep=100)
+            adjoint_test(self,State,nstep=10)
     
     def init(self, State, t0=0):
 
@@ -5145,17 +5145,20 @@ class Model_qgsw(M):
             self.T = np.arange(self.nt) * self.dt
     
         # Initialize model state
-        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
+        if (config.GRID.super == 'GRID_FROM_FILE'):
             dsin = xr.open_dataset(config.GRID.path_init_grid)
             for name in self.name_var:
-                if name in config.MOD.name_init_var:
-                    var_init = dsin[config.MOD.name_init_var[name]]
+                if config.MOD.name_init_var is not None and name in config.MOD.name_init_var:
+                    name_init_var = config.MOD.name_init_var[name]
+                else:
+                    name_init_var = config.MOD.name_var[name]
+                if name_init_var in dsin:
+                    var_init = dsin[name_init_var]
                     if len(var_init.shape)==3:
                         var_init = var_init[0,:,:]
                     if config.GRID.subsampling is not None:
                         var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
+                    var_init.data[np.isnan(var_init)] = 0.
                     State.var[self.name_var[name]] = var_init.values
                 else:
                     if name=='U':
@@ -5164,7 +5167,8 @@ class Model_qgsw(M):
                         State.var[self.name_var[name]] = jnp.zeros((State.ny+1,State.nx), dtype=self.dtype)
                     elif name=='SSH':
                         State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
-               
+            dsin.close()
+            del dsin   
         else:
             for name in self.name_var:  
                 if name=='U':
@@ -5328,9 +5332,12 @@ class Model_qgsw(M):
             if (config.GRID.super == 'GRID_FROM_FILE'):
                 dsin = xr.open_dataset(config.GRID.path_init_grid)
                 if 'H' in dsin:
-                    State.params['H'] = dsin['H'].values
+                    State.params['H'] = dsin['H'].values.squeeze()
+                    State.params['H'][np.isnan(State.params['H'])] = 0.
                 else:
                     State.params['H'] = np.zeros((State.ny,State.nx))
+                dsin.close()
+                del dsin
             else:
                 State.params['H'] = np.zeros((State.ny,State.nx))
         for name in self.name_var:
@@ -5339,9 +5346,9 @@ class Model_qgsw(M):
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            tangent_test(self,State,nstep=10)
+            tangent_test(self,State,nstep=10)#, ampl=1e-3)
             print('Adjoint test:')
-            adjoint_test(self,State,nstep=10)
+            adjoint_test(self,State,nstep=10)#, ampl=1e-3)
     
     def init(self, State, t0=0):
 
@@ -5389,12 +5396,7 @@ class Model_qgsw(M):
                 u = +var_bc['U'][i]
                 v = +var_bc['V'][i]
 
-
             # Fill bc dictionnary
-            # Remove nan
-            #u[np.isnan(u)] = 0.
-            #v[np.isnan(v)] = 0.
-            #ssh_bc_t[np.isnan(ssh_bc_t)] = 0.
             self.bc['U'][t] = u
             self.bc['V'][t] = v
             self.bc['SSH'][t] = ssh_bc_t
@@ -7266,19 +7268,19 @@ class Model_multi:
 ###############################################################################
 #                       Tangent and Adjoint tests                             #
 ###############################################################################     
-    
-def tangent_test(M,State,t0=0,nstep=1):
+
+def tangent_test(M,State,t0=0,nstep=1, ampl=1):
 
     # Boundary conditions
     var_bc = {}
 
     for name in M.name_var:
-        var_bc[name] = {0:np.random.random(State.var[M.name_var[name]].shape).astype('float64'),
-                        1:np.random.random(State.var[M.name_var[name]].shape).astype('float64')}
+        var_bc[name] = {0:ampl*np.random.random(State.var[M.name_var[name]].shape).astype('float64'),
+                        1:ampl*np.random.random(State.var[M.name_var[name]].shape).astype('float64')}
     M.set_bc([t0,t0+nstep*M.dt],var_bc)
 
-    State0 = State.random()
-    dState = State.random()
+    State0 = State.random(ampl=ampl)
+    dState = State.random(ampl=ampl)
     State0_tmp = State0.copy()
     
     M.step(t=t0,State=State0_tmp,nstep=nstep)
@@ -7307,40 +7309,61 @@ def tangent_test(M,State,t0=0,nstep=1):
     
         print('%.E' % lambd,'%.E' % ps)
         
-def adjoint_test(M,State,t0=0,nstep=1):
+def adjoint_test(M, State, t0=0, nstep=1, ampl=1):
+
+    model_dtype = getattr(M, 'dtype', np.float64)
+    np_dtype = np.float32 if model_dtype == jnp.float32 else np.float64
+
+ 
+    # ------------------------------------------------------------------
+    # Use DIFFERENT seeds for trajectory / perturbation / adjoint vector.
+    # State.random() always resets np.random.seed(0), so calling it three
+    # times produces three IDENTICAL states.  With identical dState and
+    # adState the inner-product test degenerates and f32 rounding errors
+    # no longer cancel, giving a spurious ~0.1 % deviation from 1.0.
+    # ------------------------------------------------------------------
+    def make_rand_state(seed):
+        np.random.seed(seed)
+        s = State.copy(free=True)
+        for name in s.var:
+            s.var[name] = (ampl * np.random.random(s.var[name].shape)).astype(np_dtype)
+        for name in s.params:
+            s.params[name] = (ampl * np.random.random(s.params[name].shape)).astype(np_dtype)
+        return s
 
     # Boundary conditions
+    np.random.seed(99)
     var_bc = {}
     for name in M.name_var:
-        var_bc[name] = {0:np.random.random(State.var[M.name_var[name]].shape).astype('float64'),
-                        1:np.random.random(State.var[M.name_var[name]].shape).astype('float64')}
-    M.set_bc([t0,t0+nstep*M.dt],var_bc)
-    
-    # Current trajectory
-    State0 = State.random()
-    
-    # Perturbation
-    dState = State.random()
-    dX0 = np.concatenate((dState.getvar(vect=True),dState.getparams(vect=True)))
-    
-    # Adjoint
-    adState = State.random()
-    adX0 = np.concatenate((adState.getvar(vect=True),adState.getparams(vect=True)))
-    
+        var_bc[name] = {
+            0: ampl * np.random.random(State.var[M.name_var[name]].shape).astype(np_dtype),
+            1: ampl * np.random.random(State.var[M.name_var[name]].shape).astype(np_dtype),
+        }
+    M.set_bc([t0, t0 + nstep * M.dt], var_bc)
+
+    State0  = make_rand_state(seed=10)   # trajectory
+    dState  = make_rand_state(seed=20)   # TLM perturbation
+    adState = make_rand_state(seed=30)   # ADJ input
+
+    # Snapshot before TLM / ADJ
+    dX0  = np.concatenate((dState.getvar(vect=True), dState.getparams(vect=True)))
+    adX0 = np.concatenate((adState.getvar(vect=True), adState.getparams(vect=True)))
+
     # Run TLM
-    M.step_tgl(t=t0,dState=dState,State=State0,nstep=nstep)
-    dX1 = np.concatenate((dState.getvar(vect=True),dState.getparams(vect=True)))
-    
+    M.step_tgl(t=t0, dState=dState, State=State0, nstep=nstep)
+    dX1  = np.concatenate((dState.getvar(vect=True), dState.getparams(vect=True)))
+
     # Run ADJ
-    M.step_adj(t=t0,adState=adState,State=State0,nstep=nstep)
-    adX1 = np.concatenate((adState.getvar(vect=True),adState.getparams(vect=True)))
-    
-    mask = np.isnan(adX0+dX0)
-    
-    ps1 = np.inner(dX1[~mask],adX0[~mask])
-    ps2 = np.inner(dX0[~mask],adX1[~mask]) 
-    
-    print(ps1/ps2)
+    M.step_adj(t=t0, adState=adState, State=State0, nstep=nstep)
+    adX1 = np.concatenate((adState.getvar(vect=True), adState.getparams(vect=True)))
+
+    mask = np.isnan(adX0 + dX0 + adX1 + dX1)
+
+    # Compute inner products in f64 for accurate accumulation
+    ps1 = np.inner(dX1[~mask].astype(np.float64), adX0[~mask].astype(np.float64))
+    ps2 = np.inner(dX0[~mask].astype(np.float64), adX1[~mask].astype(np.float64))
+
+    print(f'  adjoint_test ({np_dtype.__name__}):  <Mdx,y>/<dx,M*y> = {ps1/ps2}')
 
     
     

@@ -834,6 +834,7 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
     # Initial model state
     Model.init(State)
     State.plot(title='Init State')
+    State.plot(title='Init params', params=True)
 
     # Set Reduced Basis
     if Basis is not None:

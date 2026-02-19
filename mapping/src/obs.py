@@ -108,7 +108,11 @@ def Obs(config, State, *args, **kwargs):
         def preprocess(ds):
             name_var = [OBS.name_time, OBS.name_lon, OBS.name_lat]
             for key in OBS.name_var:
-                name_var.append(OBS.name_var[key])
+                if isinstance(OBS.name_var[key], list):
+                    for name in OBS.name_var[key]:
+                        name_var.append(name)
+                else:
+                    name_var.append(OBS.name_var[key])
             ds = ds[name_var]
             return ds
         
@@ -189,7 +193,6 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         ds[obs_attr.name_lon].data = ds[obs_attr.name_lon].data % 360
     elif (np.sign(ds[obs_attr.name_lon].data.min())>=0 or ds[obs_attr.name_lon].data.max()>180) and lon_unit=='-180_180':
         ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
-        #ds = ds.assign_coords({obs_attr.name_lon:((ds[obs_attr.name_lon].dims, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
     
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
@@ -236,7 +239,17 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
             # Save the selected dataset in a new nc file
             varobs = {}
             for name in obs_attr.name_var:
-                varobs[name] = _ds[obs_attr.name_var[name]]
+                
+                if isinstance(obs_attr.name_var[name], list):
+                    _var = 0
+                    for i,name_var in enumerate(obs_attr.name_var[name]):
+                        if obs_attr.combine_var is not None and name in obs_attr.combine_var:
+                            sign = obs_attr.combine_var[name][i]
+                        _var += sign * _ds[name_var]
+                    varobs[name] = _var
+                else:
+                    varobs[name] = _ds[obs_attr.name_var[name]]
+
                 # Add/Remove MDT
                 if finterpmdt is not None:
                     mdt_on_obs = finterpmdt((lon,lat))

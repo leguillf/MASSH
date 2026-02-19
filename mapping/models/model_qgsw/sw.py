@@ -758,4 +758,93 @@ class SW:
         return adjoints  # returns (adj_u0, adj_v0, adj_h0, adj_H)
 
 
+def adjoint_test_sw(model, nstep=1, seed=42):
+    """
+    Low-level adjoint test for the SW model.
 
+    Checks the identity:  <M dx, y> == <dx, M* y>
+    where M = step_tgl (tangent-linear) and M* = step_adj (adjoint).
+
+    All random vectors are generated directly in the model's working dtype
+    so there is no precision mismatch between what the operators see and
+    what the inner products use.
+
+    Uses a state at rest (zeros) as the base trajectory to avoid nonlinear
+    blowup with random fields.  Perturbation and cotangent vectors are
+    small-amplitude, masked to ocean points.
+
+    Parameters
+    ----------
+    model : SW instance (already initialised)
+    nstep : number of time steps
+    seed  : random seed for reproducibility
+    """
+    key = jax.random.PRNGKey(seed)
+    dtype = model.dtype
+    n_ens = model.n_ens
+    nl = model.nl
+    nx = model.nx
+    ny = model.ny
+
+    def rand(key, shape):
+        key, subkey = jax.random.split(key)
+        return key, jax.random.normal(subkey, shape=shape, dtype=dtype) * 1e-4
+
+    # Shapes (physical space): u(n_ens, nl, nx+1, ny), v(n_ens, nl, nx, ny+1), h(n_ens, nl, nx, ny)
+    u_shape = (n_ens, nl, nx + 1, ny)
+    v_shape = (n_ens, nl, nx, ny + 1)
+    h_shape = (n_ens, nl, nx, ny)
+
+    # Base trajectory: state at rest (zero physical perturbation)
+    u0 = jnp.zeros(u_shape, dtype=dtype)
+    v0 = jnp.zeros(v_shape, dtype=dtype)
+    h0 = jnp.zeros(h_shape, dtype=dtype)
+
+    # TLM perturbation (small, masked to ocean)
+    key, du0 = rand(key, u_shape)
+    key, dv0 = rand(key, v_shape)
+    key, dh0 = rand(key, h_shape)
+    du0 = du0 * model.masks.u
+    dv0 = dv0 * model.masks.v
+    dh0 = dh0 * model.masks.h
+
+    # ADJ cotangent (small, masked to ocean)
+    key, wu = rand(key, u_shape)
+    key, wv = rand(key, v_shape)
+    key, wh = rand(key, h_shape)
+    wu = wu * model.masks.u
+    wv = wv * model.masks.v
+    wh = wh * model.masks.h
+
+    # Run TLM:  (du1, dv1, dh1) = M (du0, dv0, dh0)
+    du1, dv1, dh1 = model.step_tgl(u0, v0, h0, du0, dv0, dh0, nstep=nstep)
+
+    # Run ADJ:  ((au0, av0, ah0, aH),) = M* (wu, wv, wh)
+    adjoints = model.step_adj(u0, v0, h0, wu, wv, wh, nstep=nstep)
+    au0, av0, ah0, _aH = adjoints[0]
+
+    # Check for NaN
+    has_nan = (jnp.any(jnp.isnan(du1)) or jnp.any(jnp.isnan(dv1)) or
+               jnp.any(jnp.isnan(dh1)) or jnp.any(jnp.isnan(au0)) or
+               jnp.any(jnp.isnan(av0)) or jnp.any(jnp.isnan(ah0)))
+    if has_nan:
+        print(f'  SW adjoint test (dtype={dtype}, {nstep=}): NaN detected!')
+        print(f'    TLM NaN: du1={jnp.any(jnp.isnan(du1))}, '
+              f'dv1={jnp.any(jnp.isnan(dv1))}, dh1={jnp.any(jnp.isnan(dh1))}')
+        print(f'    ADJ NaN: au0={jnp.any(jnp.isnan(au0))}, '
+              f'av0={jnp.any(jnp.isnan(av0))}, ah0={jnp.any(jnp.isnan(ah0))}')
+        return float('nan')
+
+    # Inner products (computed in f64 for accurate accumulation)
+    ps1 = (jnp.sum(du1.astype(jnp.float64) * wu.astype(jnp.float64))
+         + jnp.sum(dv1.astype(jnp.float64) * wv.astype(jnp.float64))
+         + jnp.sum(dh1.astype(jnp.float64) * wh.astype(jnp.float64)))
+
+    ps2 = (jnp.sum(du0.astype(jnp.float64) * au0.astype(jnp.float64))
+         + jnp.sum(dv0.astype(jnp.float64) * av0.astype(jnp.float64))
+         + jnp.sum(dh0.astype(jnp.float64) * ah0.astype(jnp.float64)))
+
+    ratio = float(ps1 / ps2)
+    print(f'  SW adjoint test (dtype={dtype}, {nstep=}): '
+          f'<Mdx,y>/<dx,M*y> = {ratio}')
+    return ratio

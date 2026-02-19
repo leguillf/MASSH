@@ -427,65 +427,72 @@ class State:
         
         return 
 
-    def save(self,filename=None):
-        """
-        NAME
-            save
-    
-        DESCRIPTION
-            Save State in a netcdf file
-            Args:
-                filename (str): path (dir+name) of the netcdf file.
-                date (datetime): present date
-                """
+    def save_output(self,date,name_var=None):
         
+        filename = os.path.join(self.path_save,f'{self.name_exp_save}'\
+            f'_y{date.year}'\
+            f'm{str(date.month).zfill(2)}'\
+            f'd{str(date.day).zfill(2)}'\
+            f'h{str(date.hour).zfill(2)}'\
+            f'm{str(date.minute).zfill(2)}.nc')
         
-        # Variables
-        _namey = {}
-        _namex = {}
-        outvars = {}
-        cy,cx = 1,1
-        for name,var in self.var.items():
-            y1,x1 = var.shape
-            if y1 not in _namey:
-                _namey[y1] = 'y'+str(cy)
-                cy += 1
-            if x1 not in _namex:
-                _namex[x1] = 'x'+str(cx)
-                cx += 1
-            outvars[name] = ((_namey[y1],_namex[x1],), var[:,:])
-        ds = xr.Dataset(outvars)
-        ds.to_netcdf(filename,group='var')
-        ds.close()
-        
-        # Parameters
-        _namey = {}
-        _namex = {}
-        _namez = {}
-        outparams = {}
-        cy,cx,cz = 1,1,1
-        for name,var in self.params.items():
-            if len(var.shape)==2:
-                y1,x1 = var.shape
-                if y1 not in _namey:
-                    _namey[y1] = 'y'+str(cy)
-                    cy += 1
-                if x1 not in _namex:
-                    _namex[x1] = 'x'+str(cx)
-                    cx += 1
-                outparams[name] = ((_namey[y1],_namex[x1],), var[:,:])
-            else:
-                z1 = var.size
-                if z1 not in _namez:
-                    _namez[z1] = 'z'+str(cz)
-                    cz += 1
-                outparams[name] = ((_namez[z1],), var.flatten())
+        coords = {}
+        coords[self.name_time] = ((self.name_time), [pd.to_datetime(date)],)
 
-        ds = xr.Dataset(outparams)
-        ds.to_netcdf(filename,group='params',mode='a')
-        ds.close()
+        if self.geo_grid:
+                coords[self.name_lon] = ((self.name_lon,), self.lon[0,:])
+                coords[self.name_lat] = ((self.name_lat,), self.lat[:,0])
+                dims = (self.name_time,self.name_lat,self.name_lon)
+        else:
+            coords[self.name_lon] = (('y','x',), self.lon)
+            coords[self.name_lat] = (('y','x',), self.lat)
+
+        if name_var is None:
+            name_var = self.var.keys()
+         
+        var = {}              
+        for name in name_var:
+
+            var_to_save = +np.array(self.var[name])
+
+            # Apply Mask
+            try:
+                if self.mask is not None:
+                    var_to_save[self.mask] = np.nan
+            except:
+                var_to_save = var_to_save
         
-        return
+            if len(var_to_save.shape)==2:
+                var_to_save = var_to_save[np.newaxis,:,:]
+            
+            if self.geo_grid:
+                _dims = ['time','lat','lon']
+            else:
+                _dims = ['time','y','x']
+            if var_to_save.shape[1]!=self.lon.shape[0]:     
+                _dims[1] += name
+            if var_to_save.shape[2]!=self.lon.shape[1]:
+                _dims[2] += name      
+            var[name] = (_dims, var_to_save)
+
+        if os.path.exists(filename):
+            ds = xr.open_dataset(filename)
+            dsout = ds.copy().load()
+            ds.close()
+            del ds 
+            for name in var.keys():
+                dsout[name] = (var[name][0], var[name][1])
+            dsout.to_netcdf(filename,
+                         unlimited_dims={'time':True})
+            
+        else:
+            ds = xr.Dataset(var, coords=coords)
+            ds.to_netcdf(filename,
+                        unlimited_dims={'time':True})
+            ds.close()
+            del ds
+        
+        return 
 
     def load_output(self, date, name_var=None):
         
@@ -519,16 +526,16 @@ class State:
         other = self.copy(free=True) 
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape)
-            try:
-                other.var[name][self.mask] = np.nan
-            except:
-                print(f"Warning: can't mask to variable '{name}'")
+            #try:
+            #    other.var[name][self.mask] = np.nan
+            #except:
+            #    print(f"Warning: can't mask to variable '{name}'")
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape)
-            try:
-                other.params[name][self.mask] = np.nan
-            except:
-                print(f"Warning: can't mask to parameter '{name}'")
+            #try:
+            #    other.params[name][self.mask] = np.nan
+            #except:
+            #    print(f"Warning: can't mask to parameter '{name}'")
         return other
     
     def copy(self, free=False):

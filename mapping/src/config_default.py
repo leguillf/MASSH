@@ -199,7 +199,9 @@ OBS_SSH_NADIR = dict(
 
     name_lat = '', # name of latitude coordinate
     
-    name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH)
+    name_var = {'SSH':''}, # dictionnary of observed variables (keys: only SSH because altimetry; values: name of observed SSH, can be a lost of variables to combine, see *combine_var* parameter below)
+
+    combine_var = None, # If not None, dictionnary of variable to combine to get the observed variable (keys: same as name_var; values: list of -1 or +1 to indicate how to combine variables in name_var, e.g. {'SSH':[-1,1]} to compute SSH as the difference between the second and the first variable in name_var['SSH'] list)
     
     synthetic_noise = None, # Std of synthetic noise (std in meters) to artificially add to the data
 
