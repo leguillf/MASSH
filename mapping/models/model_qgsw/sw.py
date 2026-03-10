@@ -139,11 +139,30 @@ class SW:
         self.nx = param['nx']
         self.ny = param['ny']
         self.nl = param['nl']
-        self.dx = param['dx']
-        self.dy = param['dy']
+        self.dx = jnp.asarray(param['dx'], dtype=self.dtype)
+        self.dy = jnp.asarray(param['dy'], dtype=self.dtype)
         self.H = param['H']
         print(f'  - nx, ny, nl =  {self.nx, self.ny, self.nl}')
         self.area = self.dx*self.dy
+
+        # Metrics interpolated to u-grid (nx+1, ny) and v-grid (nx, ny+1)
+        if self.dx.ndim >= 2:
+            _dx_xpad = jnp.pad(self.dx, ((1, 1), (0, 0)), mode='edge')
+            _dy_xpad = jnp.pad(self.dy, ((1, 1), (0, 0)), mode='edge')
+            self.dx_ugrid = 0.5 * (_dx_xpad[1:, :] + _dx_xpad[:-1, :])
+            self.dy_ugrid = 0.5 * (_dy_xpad[1:, :] + _dy_xpad[:-1, :])
+            _dx_ypad = jnp.pad(self.dx, ((0, 0), (1, 1)), mode='edge')
+            _dy_ypad = jnp.pad(self.dy, ((0, 0), (1, 1)), mode='edge')
+            self.dx_vgrid = 0.5 * (_dx_ypad[:, 1:] + _dx_ypad[:, :-1])
+            self.dy_vgrid = 0.5 * (_dy_ypad[:, 1:] + _dy_ypad[:, :-1])
+        else:
+            self.dx_ugrid = self.dx
+            self.dy_ugrid = self.dy
+            self.dx_vgrid = self.dx
+            self.dy_vgrid = self.dy
+        self.area_ugrid = self.dx_ugrid * self.dy_ugrid
+        self.area_vgrid = self.dx_vgrid * self.dy_vgrid
+
         self.slip_coef = param['slip_coef'] if 'slip_coef' in param.keys() else 1.
 
         # optional mask
@@ -178,9 +197,9 @@ class SW:
         self.f_ugrid = 0.5 * (self.f[:,:,1:] + self.f[:,:,:-1])
         self.f_vgrid = 0.5 * (self.f[:,1:,:] + self.f[:,:-1,:])
         self.f_hgrid = interp_TP(self.f)
-        self.fstar_ugrid = self.f_ugrid * self.area
-        self.fstar_vgrid = self.f_vgrid * self.area
-        self.fstar_vgrid = self.f_vgrid * self.area
+        self.fstar_ugrid = self.f_ugrid * self.area_ugrid
+        self.fstar_vgrid = self.f_vgrid * self.area_vgrid
+        self.fstar_vgrid = self.f_vgrid * self.area_vgrid
         self.fstar_hgrid = self.f_hgrid * self.area
 
         # gravity - reshape for broadcasting
@@ -372,7 +391,7 @@ class SW:
         h_ref = H * self.area
         eta_ref = -H.sum(axis=-3) + reverse_cumsum(H, dim=-3)
         p_ref = jnp.cumsum(self.g_prime * eta_ref, axis=-3)
-        if h_ref.shape[-2] != 1 and h_ref.shape[-1] != 1:
+        if H.shape[-2] != 1 and H.shape[-1] != 1:
             _h_ref_u = jnp.pad(h_ref, ((0, 0), (1, 1), (0, 0)), mode='edge')
             h_ref_ugrid = 0.5 * (_h_ref_u[...,1:,:] + _h_ref_u[...,:-1,:])
             _h_ref_v = jnp.pad(h_ref, ((0, 0), (0, 0), (1, 1)), mode='edge')
@@ -380,8 +399,10 @@ class SW:
             dx_p_ref = jnp.diff(p_ref, axis=-2)
             dy_p_ref = jnp.diff(p_ref, axis=-1)
         else:
-            h_ref_ugrid = h_ref
-            h_ref_vgrid = h_ref
+            _h_ref_u = jnp.pad(h_ref, ((0, 0), (1, 1), (0, 0)), mode='edge')
+            h_ref_ugrid = 0.5 * (_h_ref_u[...,1:,:] + _h_ref_u[...,:-1,:])
+            _h_ref_v = jnp.pad(h_ref, ((0, 0), (0, 0), (1, 1)), mode='edge')
+            h_ref_vgrid = 0.5 * (_h_ref_v[...,1:] + _h_ref_v[...,:-1])
             dx_p_ref = 0.
             dy_p_ref = 0.
         return h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref
@@ -403,8 +424,8 @@ class SW:
 
     def get_physical_uvh(self, u, v, h, numpy=False):
         """Get physical variables u_phys, v_phys, h_phys from state variables."""
-        u_phys = (u / self.dx)
-        v_phys = (v / self.dy)
+        u_phys = (u / self.dx_ugrid)
+        v_phys = (v / self.dy_vgrid)
         h_phys = (h / self.area)
 
         return (np.array(u_phys), np.array(v_phys), np.array(h_phys)) if numpy \
@@ -422,8 +443,8 @@ class SW:
         v_ = v_ * self.masks.v
         h_ = h_ * self.masks.h 
 
-        u = u_.astype(self.dtype) * self.dx
-        v = v_.astype(self.dtype) * self.dy
+        u = u_.astype(self.dtype) * self.dx_ugrid
+        v = v_.astype(self.dtype) * self.dy_vgrid
         h = h_.astype(self.dtype) * self.area
 
         return u, v, h
@@ -500,21 +521,29 @@ class SW:
             u_pad = jnp.pad(u, ((0,0), (0,0), (0,0), (1,1)), mode='edge')
             v_pad = jnp.pad(v, ((0,0), (0,0), (1,1), (0,0)), mode='edge')
 
+            # Padded metrics matching u_pad (nx+1, ny+2) and v_pad (nx+2, ny+1)
+            dx_u_ypad = jnp.pad(self.dx_ugrid, ((0,0), (1,1)), mode='edge')
+            dy_v_xpad = jnp.pad(self.dy_vgrid, ((1,1), (0,0)), mode='edge')
+
             # u_phys = u / dx on padded grid
-            u_phys = u_pad / self.dx
-            v_phys = v_pad / self.dy
+            u_phys = u_pad / dx_u_ypad
+            v_phys = v_pad / dy_v_xpad
 
             # Laplacian at interior u-points (x: 1:-1, y: all via padding)
-            lap_u = (u_phys[..., 2:, 1:-1] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., :-2, 1:-1]) / self.dx**2 \
-                  + (u_phys[..., 1:-1, 2:] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., 1:-1, :-2]) / self.dy**2
+            dx_u_int = self.dx_ugrid[1:-1, :]
+            dy_u_int = self.dy_ugrid[1:-1, :]
+            lap_u = (u_phys[..., 2:, 1:-1] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., :-2, 1:-1]) / dx_u_int**2 \
+                  + (u_phys[..., 1:-1, 2:] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., 1:-1, :-2]) / dy_u_int**2
 
             # Laplacian at interior v-points (y: 1:-1, x: all via padding)
-            lap_v = (v_phys[..., 2:, 1:-1] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., :-2, 1:-1]) / self.dx**2 \
-                  + (v_phys[..., 1:-1, 2:] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., 1:-1, :-2]) / self.dy**2
+            dx_v_int = self.dx_vgrid[:, 1:-1]
+            dy_v_int = self.dy_vgrid[:, 1:-1]
+            lap_v = (v_phys[..., 2:, 1:-1] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., :-2, 1:-1]) / dx_v_int**2 \
+                  + (v_phys[..., 1:-1, 2:] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., 1:-1, :-2]) / dy_v_int**2
 
             # Convert back to scaled variables
-            du = du + self.visc_coef * lap_u * self.dx
-            dv = dv + self.visc_coef * lap_v * self.dy
+            du = du + self.visc_coef * lap_u * dx_u_int
+            dv = dv + self.visc_coef * lap_v * dy_v_int
 
         return du, dv
 
@@ -581,17 +610,17 @@ class SW:
                 H0_u = H0_u[1:-1, :]     # (nx-1, ny)
             if H0_v.shape[1] > 1:
                 H0_v = H0_v[:, 1:-1]     # (nx, ny-1)
-            H_ref_u = jnp.maximum(H0_u / self.area, self.h_min)
-            H_ref_v = jnp.maximum(H0_v / self.area, self.h_min)
+            H_ref_u = jnp.maximum(H0_u / self.area_ugrid[1:-1, :], self.h_min)
+            H_ref_v = jnp.maximum(H0_v / self.area_vgrid[:, 1:-1], self.h_min)
 
         # Wind tendency: jnp.where so land points never compute tau/H (avoids inf*0=NaN)
         wind_u = jnp.where(
             mask_u[..., 0, :, :] > 0.5,
-            _taux / (self.rho_water * H_ref_u) * self.dx,
+            _taux / (self.rho_water * H_ref_u) * self.dx_ugrid[1:-1, :],
             jnp.zeros_like(du[..., 0, :, :]))
         wind_v = jnp.where(
             mask_v[..., 0, :, :] > 0.5,
-            _tauy / (self.rho_water * H_ref_v) * self.dy,
+            _tauy / (self.rho_water * H_ref_v) * self.dy_vgrid[:, 1:-1],
             jnp.zeros_like(dv[..., 0, :, :]))
 
         du = du.at[..., 0, :, :].set(du[..., 0, :, :] + wind_u)
@@ -635,16 +664,16 @@ class SW:
         omega = self.compute_omega(u, v)
         eta = reverse_cumsum(h / self.area, dim=-3)
         p = jnp.cumsum(self.g_prime * eta, axis=-3)
-        U = u / self.dx**2
-        V = v / self.dy**2
+        U = u / self.dx_ugrid**2
+        V = v / self.dy_vgrid**2
         U_m = self.interp_TP(U)
         V_m = self.interp_TP(V)
         k_energy = self.comp_ke(u, U, v, V) * self.masks.h
         h_ = replicate_pad(h, self.masks.h)
         h_ugrid = 0.5 * (h_[...,1:,1:-1] + h_[...,:-1,1:-1])
         h_vgrid = 0.5 * (h_[...,1:-1,1:] + h_[...,1:-1,:-1])
-        h_tot_ugrid = smooth_clamp(_h_ref_ugrid + h_ugrid, self.h_min * self.area, self.h_min_sharpness)
-        h_tot_vgrid = smooth_clamp(_h_ref_vgrid + h_vgrid, self.h_min * self.area, self.h_min_sharpness)
+        h_tot_ugrid = smooth_clamp(_h_ref_ugrid + h_ugrid, self.h_min * self.area_ugrid, self.h_min_sharpness)
+        h_tot_vgrid = smooth_clamp(_h_ref_vgrid + h_vgrid, self.h_min * self.area_vgrid, self.h_min_sharpness)
 
         return omega, eta, p, U, V, U_m, V_m, k_energy, h_tot_ugrid, h_tot_vgrid
 
@@ -653,8 +682,8 @@ class SW:
         Inspired from https://doi.org/10.1029/2000JC900089.
         """
         # compute RHS
-        u_star = (u + self.dt*dt_u) / self.dx
-        v_star = (v + self.dt*dt_v) / self.dy
+        u_star = (u + self.dt*dt_u) / self.dx_ugrid
+        v_star = (v + self.dt*dt_v) / self.dy_vgrid
         u_bar_star = (u_star * h_tot_ugrid).sum(axis=-3, keepdims=True) \
                      / h_tot_ugrid.sum(axis=-3, keepdims=True)
         v_bar_star = (v_star * h_tot_vgrid).sum(axis=-3, keepdims=True) \
@@ -805,10 +834,10 @@ class SW:
                 h_ugrid = 0.5 * (h_[..., 1:, 1:-1] + h_[..., :-1, 1:-1])
                 h_vgrid = 0.5 * (h_[..., 1:-1, 1:] + h_[..., 1:-1, :-1])
                 h_tot_u = smooth_clamp(ref_vals[1] + h_ugrid,
-                                       self.h_min * self.area,
+                                       self.h_min * self.area_ugrid,
                                        self.h_min_sharpness)
                 h_tot_v = smooth_clamp(ref_vals[2] + h_vgrid,
-                                       self.h_min * self.area,
+                                       self.h_min * self.area_vgrid,
                                        self.h_min_sharpness)
                 Fh_ = replicate_pad(_Fh, self.masks.h)
                 Fh_u = 0.5 * (Fh_[..., 1:, 1:-1] + Fh_[..., :-1, 1:-1])

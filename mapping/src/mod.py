@@ -2690,35 +2690,6 @@ class Model_qgsw(M):
         self.sponge_coef = config.MOD.sponge_coef
 
         if self.sponge_width is not None and self.sponge_width>0:
-            sponge_h = np.maximum.reduce([
-                gaspari_cohn(self.Xh.T-self.Xh[:,0].T, self.sponge_width*1e3).T, 
-                gaspari_cohn(self.Xh[:,-1].T-self.Xh.T, self.sponge_width*1e3).T, 
-                gaspari_cohn(self.Yh-self.Yh[0,:], self.sponge_width*1e3), 
-                gaspari_cohn(self.Yh[-1,:]-self.Yh, self.sponge_width*1e3)
-                ])
-            sponge_u = np.maximum.reduce([
-                gaspari_cohn(self.Xu.T-self.Xu[:,0].T, self.sponge_width*1e3).T, 
-                gaspari_cohn(self.Xu[:,-1].T-self.Xu.T, self.sponge_width*1e3).T, 
-                gaspari_cohn(self.Yu-self.Yu[0,:], self.sponge_width*1e3), 
-                gaspari_cohn(self.Yu[-1,:]-self.Yu, self.sponge_width*1e3)
-                ])
-            sponge_v = np.maximum.reduce([
-                gaspari_cohn(self.Xv.T-self.Xv[:,0].T, self.sponge_width*1e3).T, 
-                gaspari_cohn(self.Xv[:,-1].T-self.Xv.T, self.sponge_width*1e3).T, 
-                gaspari_cohn(self.Yv-self.Yv[0,:], self.sponge_width*1e3), 
-                gaspari_cohn(self.Yv[-1,:]-self.Yv, self.sponge_width*1e3)
-                ]) 
-        else:
-            sponge_h = np.zeros((State.ny,State.nx))
-            sponge_u = np.zeros((State.ny,State.nx+1))
-            sponge_v = np.zeros((State.ny+1,State.nx))
-
-        def _normalize_sponge(sponge):
-            sponge_min = jnp.min(sponge)
-            sponge_max = jnp.max(sponge)
-            return (sponge - sponge_min) / (sponge_max - sponge_min)
-
-        if True:
             mask_h = State.mask.copy()
             lon_h = State.lon
             lat_h = State.lat
@@ -2751,8 +2722,7 @@ class Model_qgsw(M):
             sponge_u = grid.compute_weight_map(lon_u, lat_u, mask_u, config.MOD.dist_sponge_bc)
             sponge_v = grid.compute_weight_map(lon_v, lat_v, mask_v, config.MOD.dist_sponge_bc)
 
-            
-            fig, (ax1,ax2,ax3) = plt.subplots(1, 3, figsize=(15, 5))
+            _, (ax1,ax2,ax3) = plt.subplots(1, 3, figsize=(15, 5))
             im1 = ax1.pcolormesh(sponge_h)
             plt.colorbar(im1, ax=ax1)
             ax1.set_title('Sponge SSH')
@@ -2763,25 +2733,24 @@ class Model_qgsw(M):
             plt.colorbar(im3, ax=ax3)
             ax3.set_title('Sponge V')
             plt.show()
+        
+        else:
+            sponge_u = np.zeros((State.ny, State.nx+1))
+            sponge_v = np.zeros((State.ny+1, State.nx))
+            sponge_h = np.zeros((State.ny, State.nx))
 
         self.sponge_u = sponge_u
         self.sponge_v = sponge_v
         self.sponge_h = sponge_h    
 
 
-        self.sponge_h = _normalize_sponge(sponge_h)
-        self.sponge_u = _normalize_sponge(sponge_u)
-        self.sponge_v = _normalize_sponge(sponge_v)
-
-
-    
         # Model initialization
         params = {
             "nx": State.nx,
             "ny": State.ny,
             "nl": config.MOD.nl,
-            "dx": State.dx,
-            "dy": State.dy,
+            "dx": State.DX.T,
+            "dy": State.DY.T,
             "H": H,
             "g_prime": g_prime,
             "f": np.pad(self.f.T, ((0, 1), (0, 1)), mode='edge'),

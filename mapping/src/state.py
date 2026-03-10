@@ -526,16 +526,18 @@ class State:
         other = self.copy(free=True) 
         for name in self.var.keys():
             other.var[name] = ampl * np.random.random(self.var[name].shape)
-            #try:
-            #    other.var[name][self.mask] = np.nan
-            #except:
-            #    print(f"Warning: can't mask to variable '{name}'")
+            if self.mask is not None:
+                try:
+                    other.var[name][self.mask] = 0.
+                except:
+                    pass
         for name in self.params.keys():
             other.params[name] = ampl * np.random.random(self.params[name].shape)
-            #try:
-            #    other.params[name][self.mask] = np.nan
-            #except:
-            #    print(f"Warning: can't mask to parameter '{name}'")
+            if self.mask is not None:
+                try:
+                    other.params[name][self.mask] = 0.
+                except:
+                    pass
         return other
     
     def copy(self, free=False):

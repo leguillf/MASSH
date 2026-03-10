@@ -140,8 +140,9 @@ def prepare_process(config, config_eq, State,
                 _config.GRID.lat_max = lat1
                 _config.GRID.nx = _nx
                 _config.GRID.ny = _ny
-                _config.GRID.dx = dx #*  np.cos(np.radians((lat0+lat1)/2)) 
-                _config.GRID.dy = dy #*  np.cos(np.radians((lat0+lat1)/2)) 
+                _config.GRID.dx = dx 
+                _config.GRID.dy = dy 
+                 
                 name_subwindow = f'subwindow_{str(list_date_middle[-1])[:10]}/subwindow_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
                 _config.EXP.tmp_DA_path += f'/{name_subwindow}'
                 _config.EXP.path_save += f'/{name_subwindow}'
