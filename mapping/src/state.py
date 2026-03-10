@@ -680,8 +680,11 @@ class State:
             indvar = ind
         else:
             if not params:
-                indvar = np.arange(0,len(self.var.keys()))
+                # Only plot 2D variables (skip per-layer 3D arrays)
+                plot_keys = [k for k in self.var if np.ndim(self.var[k]) == 2]
+                indvar = np.arange(0, len(plot_keys))
             else:
+                plot_keys = list(self.params.keys())
                 indvar = np.arange(0,len(self.params.keys()))
         nvar = len(indvar)
  
@@ -694,7 +697,7 @@ class State:
             axs = [axs]
         
         if not params:
-            for ax,name_var in zip(axs,self.var):
+            for ax,name_var in zip(axs,plot_keys):
                 ax.set_title(name_var)
                 _min = np.nanmin(self.var[name_var])
                 _max = np.nanmax(self.var[name_var])
@@ -706,7 +709,7 @@ class State:
                     im = ax.pcolormesh(self.var[name_var], shading='auto')
                 plt.colorbar(im,ax=ax)
         else:
-            for ax,name_var in zip(axs,self.params):
+            for ax,name_var in zip(axs,plot_keys):
                 ax.set_title(name_var)
 
                 try:

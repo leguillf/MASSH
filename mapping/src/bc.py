@@ -225,8 +225,20 @@ class Bc_ext:
                                             bounds_error=False).reshape(x_target.shape).T
                 
                 for t in range(len(time)):
-                    if name not in ['U', 'V']:
+                    if not self.c_grid or name not in ['U', 'V']:
                         _var_interp[t][self.mask] = np.nan
+                    elif name == 'U':
+                        mask_u = np.zeros((self.mask.shape[0], self.mask.shape[1]+1), dtype=bool)
+                        mask_u[:, 1:-1] = self.mask[:, :-1] | self.mask[:, 1:]
+                        mask_u[:, 0] = self.mask[:, 0]
+                        mask_u[:, -1] = self.mask[:, -1]
+                        _var_interp[t][mask_u] = np.nan
+                    elif name == 'V':
+                        mask_v = np.zeros((self.mask.shape[0]+1, self.mask.shape[1]), dtype=bool)
+                        mask_v[1:-1, :] = self.mask[:-1, :] | self.mask[1:, :]
+                        mask_v[0, :] = self.mask[0, :]
+                        mask_v[-1, :] = self.mask[-1, :]
+                        _var_interp[t][mask_v] = np.nan
                     if time[t]<self.time_bc[0]:
                         ind_t = np.argmin(np.abs(time-self.time_bc[0]))
                         _var_interp[t] = _var_interp[ind_t]

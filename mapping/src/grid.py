@@ -426,12 +426,15 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True,slope=10):
     # Compute weights map
     #####################
     coords = np.column_stack((lon2d.ravel(), lat2d.ravel()))
+    coords_cart = geo2cart(coords)
     # construct KD-tree
-    ground_pixel_tree = spatial.cKDTree(geo2cart(coords))
-    subdomain = geo2cart(coords)[:100]
-    eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
-    dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
-    # Add boundary pixels to mask
+    ground_pixel_tree = spatial.cKDTree(coords_cart)
+    # Compute dist_threshold (≈ half a grid spacing) via nearest-neighbor query
+    n_probe = min(100, len(coords_cart))
+    dd, _ = ground_pixel_tree.query(coords_cart[:n_probe], k=2)
+    dist_threshold = dd[:, 1].min()
+    # Add boundary pixels to mask (work on a copy to avoid mutating caller's array)
+    mask = mask.copy()
     if bc:
         mask[0,:] = True
         mask[-1,:] = True
@@ -444,42 +447,23 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True,slope=10):
     coords_bc = np.column_stack((lon_bc, lat_bc))
     bc_tree = spatial.cKDTree(geo2cart(coords_bc))
     
-    # Compute distance between model pixels and boundary pixels
-    dist_mx = ground_pixel_tree.sparse_distance_matrix(bc_tree,2*dist_scale)
-    
-    # Initialize weight map
-    bc_weight = np.zeros(lon2d.size)
-    keys = np.array(list(dist_mx.keys()))
-    if len(keys.shape)>1:
-        ind_mod = keys[:, 0]
-        dist = np.array(list(dist_mx.values()))
-        dist = np.maximum(dist-0.5*dist_threshold, 0)
-        # Dataframe initialized without nan values in var
-        df = pd.DataFrame({'ind_mod': ind_mod,
-                           'dist': dist,
-                           'weight':np.ones_like(dist)})
-        # Remove external values in the boundary pixels
-        ind_dist = (df.dist == 0)
-        df = df[np.logical_or(ind_dist,
-                              np.isin(df.ind_mod,
-                                      df[ind_dist].ind_mod,
-                                      invert=True))]
-        # Remove external values in the boundary pixels
-        ind_dist = (df.dist == 0)
-        df = df[np.logical_or(ind_dist,
-                            np.isin(df.ind_mod,
-                                    df[ind_dist].ind_mod,
-                                    invert=True))]
-        # Compute tapering
-        df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*dist_scale)**2)))
-        # Nudge values out of pixels
-        df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
-        # Compute weight average and save it
-        df['tapering'] = df['tapering']**slope
-        wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
-        dfg = df.groupby('ind_mod')
-        weights = dfg['weight'].apply(wa)
-        bc_weight[weights.index] = np.array(weights)
+    # For each pixel find its distance to the NEAREST boundary pixel.
+    # Shifting by half a grid-spacing ensures the first row/column of interior 
+    # pixels (immediately adjacent to the boundary) is treated as distance 0,
+    # i.e. they receive weight = 1 — no discontinuous jump from land/boundary.
+    dist_to_bc, _ = bc_tree.query(coords_cart, k=1)
+    dist_to_bc = np.maximum(dist_to_bc - 0.5 * dist_threshold, 0.0)
+
+    # Quintic smoothstep (C² at both ends):
+    #   weight = 1  at the boundary  (dist = 0)
+    #   weight = 0  at dist_scale    (interior)
+    # Zero first AND second derivatives at both endpoints, giving a more
+    # progressive transition than a cosine taper — the gradient is smallest
+    # at the inner edge where interior waves first encounter the sponge,
+    # reducing spurious reflections.
+    x = np.clip(dist_to_bc / dist_scale, 0.0, 1.0)
+    bc_weight = 1.0 - x**3 * (10.0 - 15.0 * x + 6.0 * x**2)
+
     bc_weight = bc_weight.reshape(lon2d.shape)
     
     return bc_weight

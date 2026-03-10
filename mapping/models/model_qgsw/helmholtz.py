@@ -6,12 +6,17 @@ Spectral 2D Helmholtz equation solver on rectangular and non-rectangular domain.
   - Capacitance matrix method for non-rectangular domains
 Louis Thiry, 2023.
 """
+import sys 
+sys.path.insert(0, '../../src') # add src to path to import modules
+from src.config import USE_FLOAT64
 import numpy as np
 import jax
 jax.config.update("jax_enable_x64", True)
 from jax import numpy as jnp 
 import matplotlib.pyplot as plt
 from tools import avg_pool2d
+
+jax.config.update("jax_enable_x64", USE_FLOAT64)
 
 
 def compute_laplace_dctII(nx, ny, dx, dy, arr_kwargs):
@@ -50,17 +55,17 @@ def idctII(x, iexp_vec):
 
 
 def dctII2D(x, exp_vec_x, exp_vec_y):
-    """2D forward DCT-II."""
+    """2D forward DCT-II. Works for any number of leading batch dimensions."""
     return dctII(
-            dctII(x, exp_vec_y).transpose(0,2,1),
-            exp_vec_x).transpose(0,2,1)
+            dctII(x, exp_vec_y).swapaxes(-1, -2),
+            exp_vec_x).swapaxes(-1, -2)
 
 
 def idctII2D(x, iexp_vec_x, iexp_vec_y):
-    """2D inverse DCT-II."""
+    """2D inverse DCT-II. Works for any number of leading batch dimensions."""
     return idctII(
-            idctII(x, iexp_vec_y).transpose(0,2,1),
-            iexp_vec_x).transpose(0,2,1)
+            idctII(x, iexp_vec_y).swapaxes(-1, -2),
+            iexp_vec_x).swapaxes(-1, -2)
 
 
 def compute_dctII_exp_vecs(N, dtype):
@@ -231,7 +236,8 @@ class HelmholtzNeumannSolver:
 
 
     def helmholtz_reg_domain(self, f):
-        f_ = jnp.pad(f, pad_width=[(0, 0), (1, 1), (1, 1)], mode='edge')
+        pad_width = [(0, 0)] * (f.ndim - 2) + [(1, 1), (1, 1)]
+        f_ = jnp.pad(f, pad_width=pad_width, mode='edge')
         dxx_f = (f_[...,2:,1:-1] + f_[...,:-2,1:-1] - 2*f_[...,1:-1,1:-1]) \
                 / self.dx**2
         dyy_f = (f_[...,1:-1,2:] + f_[...,1:-1,:-2] - 2*f_[...,1:-1,1:-1]) \
@@ -243,7 +249,8 @@ class HelmholtzNeumannSolver:
         if len(self.irrbound_xids) == 0:
             return self.helmholtz_reg_domain(f)
 
-        f_ = jnp.pad(f, pad_width=[(0, 0), (1, 1), (1, 1)], mode='edge')
+        pad_width = [(0, 0)] * (f.ndim - 2) + [(1, 1), (1, 1)]
+        f_ = jnp.pad(f, pad_width=pad_width, mode='edge')
         dx_f = jnp.diff(f_[...,1:-1], axis=-2) / self.dx
         dy_f = jnp.diff(f_[...,1:-1,:], axis=-1) / self.dy
         dxx_f = jnp.diff(dx_f*self.mask_u, axis=-2) / self.dx

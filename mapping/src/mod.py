@@ -60,20 +60,8 @@ def Model(config, State, verbose=True):
             return Model_Id(config,State)
         if config.MOD.super=='MOD_DIFF':
             return Model_diffusion(config,State)
-        elif config.MOD.super=='MOD_DIFF_JAX':
-            return Model_diffusion_jax(config,State)
-        elif config.MOD.super=='MOD_QG1L_NP':
-            return Model_qg1l_np(config,State)
         elif config.MOD.super=='MOD_QG1L_JAX':
             return Model_qg1l_jax(config,State)
-        elif config.MOD.super=='MOD_SW1L_NP':
-            return Model_sw1l_np(config,State)
-        elif config.MOD.super=='MOD_SW1L_JAX':
-            return Model_sw1l_jax(config,State)
-        elif config.MOD.super=='MOD_SW1L_JAX_OLD':
-            return Model_sw1l_jax_old(config,State)
-        elif config.MOD.super=='MOD_SW1L_NL_JAX':
-            return Model_sw1l_nl_jax(config,State)
         elif config.MOD.super=='MOD_CSW1L':
             return Model_csw1l(config,State)
         elif config.MOD.super=='MOD_QGSW':
@@ -85,6 +73,11 @@ def Model(config, State, verbose=True):
     else:
         sys.exit('super class if not defined')
     
+
+###############################################################################
+#                            Mother Model                                     #
+###############################################################################
+
 class M:
 
     def __init__(self,config,State):
@@ -289,7 +282,6 @@ class Model_Id(M):
             adState.setvar(advar1, self.name_var[name])
 
 
-
 ###############################################################################
 #                            Diffusion Models                                 #
 ###############################################################################
@@ -317,6 +309,7 @@ class Model_diffusion(M):
                         var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
                     dsin.close()
                     del dsin
+                    var_init.data[np.isnan(var_init)] = 0.
                     State.var[self.name_var[name]] = var_init.values
                 else:
                     State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
@@ -469,376 +462,11 @@ class Model_diffusion(M):
             advar1[np.isnan(advar1)] = 0
             adState.setvar(advar1,self.name_var[name])
 
-class Model_diffusion_jax(Model_diffusion):
-    def __init__(self,config,State):
-        super().__init__(config,State)
-
-    def step(self, t, State_var, State_params, nstep=1):
-
-        # Loop on model variables
-        for name in self.name_var:
-
-            # Get state variable
-            var0 = State_var[self.name_var[name]]
-            
-            # Init
-            var1 = +var0
-
-            # Time propagation
-            if self.Kdiffus>0:
-                for _ in range(nstep):
-                    var1[1:-1,1:-1] += self.dt*self.Kdiffus*(\
-                        (var1[1:-1,2:]+var1[1:-1,:-2]-2*var1[1:-1,1:-1])/(self.dx[1:-1,1:-1]**2) +\
-                        (var1[2:,1:-1]+var1[:-2,1:-1]-2*var1[1:-1,1:-1])/(self.dy[1:-1,1:-1]**2))
-            
-            # Update state
-            if self.name_var[name] in State_params:
-                params = State_params[self.name_var[name]]
-                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
-
-            State_var1 = State_var.copy()
-            State_var1[self.name_var[name]] = var1
-            
-            return State_var1
 
 ###############################################################################
 #                       Quasi-Geostrophic Models                              #
 ###############################################################################
     
-class Model_qg1l_np(M):
-
-    def __init__(self,config,State):
-
-        super().__init__(config,State)
-
-        # Model specific libraries
-        if config.MOD.dir_model is None:
-            dir_model = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             '..','models','model_qg1l'))
-        else:
-            dir_model = config.MOD.dir_model  
-        if config.MOD.use_jax:
-            qgm = SourceFileLoader("qgm",dir_model + "/jqgm.py").load_module() 
-            model = qgm.Qgm
-        else:
-            SourceFileLoader("qgm",dir_model + "/qgm.py").load_module() 
-            SourceFileLoader("qgm_tgl", 
-                                    dir_model + "/qgm_tgl.py").load_module() 
-            
-            qgm = SourceFileLoader("qgm_adj", 
-                                        dir_model + "/qgm_adj.py").load_module() 
-            model = qgm.Qgm_adj
-
-        # Coriolis
-        self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
-
-        # Gravity
-        self.g = State.g
-        
-        # Open MDT map if provided
-        self.hbc = self.mdt = self.mdu = self.mdv = None
-        if (config.MOD.Reynolds or config.MOD.use_mdt_on_borders) and config.MOD.path_mdt is not None and os.path.exists(config.MOD.path_mdt):
-                      
-            ds = xr.open_dataset(config.MOD.path_mdt).squeeze()
-            ds.load()
-            
-            name_var_mdt = {}
-            name_var_mdt['lon'] = config.MOD.name_var_mdt['lon']
-            name_var_mdt['lat'] = config.MOD.name_var_mdt['lat']
-            
-            
-            
-            if 'mdt' in config.MOD.name_var_mdt and config.MOD.name_var_mdt['mdt'] in ds:
-                name_var_mdt['var'] = config.MOD.name_var_mdt['mdt']
-                mdt = grid.interp2d(ds,
-                                         name_var_mdt,
-                                         State.lon,
-                                         State.lat)
-                
-                #self.mdt[np.isnan(self.mdt)] = 0
-                if config.EXP.flag_plot>0:
-                    plt.figure()
-                    plt.pcolormesh(mdt)
-                    plt.show()
-            else:
-                sys.exit('Warning: wrong variable name for mdt')
-            if 'mdu' in config.MOD.name_var_mdt and config.MOD.name_var_mdt['mdu'] in ds \
-                and 'mdv' in config.MOD.name_var_mdt and config.MOD.name_var_mdt['mdv'] in ds:
-                name_var_mdt['var'] = config.MOD.name_var_mdt['mdu']
-                mdu = grid.interp2d(ds,
-                                         name_var_mdt,
-                                         State.lon,
-                                         State.lat)
-                name_var_mdt['var'] = config.MOD.name_var_mdt['mdv']
-                mdv = grid.interp2d(ds,
-                                         name_var_mdt,
-                                         State.lon,
-                                         State.lat)
-            else:
-                mdu = mdv = None
-             
-            if config.MOD.Reynolds:
-                print('MDT is prescribed, thus the QGPV will be expressed thanks \
-                to Reynolds decomposition. However, be sure that observed and boundary \
-                variable are SLAs!')
-                self.hbc = None
-                self.mdt = mdt
-                self.mdu = mdu
-                self.mdv = mdv
-            elif config.MOD.use_mdt_on_borders: 
-                self.hbc = mdt
-         
-        # Open Rossby Radius if provided
-        if self.mdt is not None and config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
-
-            ds = xr.open_dataset(config.MOD.filec_aux)
-            
-            self.c = grid.interp2d(ds,
-                                   config.MOD.name_var_c,
-                                   State.lon,
-                                   State.lat)
-            
-            if config.cmin is not None:
-                self.c[self.c<config.cmin] = config.cmin
-            
-            if config.cmax is not None:
-                self.c[self.c>config.cmax] = config.cmax
-            
-            if config.EXP.flag_plot>1:
-                plt.figure()
-                plt.pcolormesh(self.c)
-                plt.colorbar()
-                plt.show()
-                
-        else:
-            self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
-        
-        # Open Bathymetry if provided
-        if config.MOD.file_bathy_aux is not None and os.path.exists(config.MOD.file_bathy_aux):
-
-            ds = xr.open_dataset(config.MOD.file_bathy_aux)
-            
-            self.name_var_bathy = grid.interp2d(ds,
-                                   config.MOD.name_var_bathy,
-                                   State.lon,
-                                   State.lat)
-            
-            
-            if config.EXP.flag_plot>1:
-                plt.figure()
-                plt.pcolormesh(self.name_var_bathy)
-                plt.colorbar()
-                plt.show()
-                
-        else:
-            self.name_var_bathy = config.MOD.c0 * np.ones((State.ny,State.nx))
-            
-        # Initialize model state
-        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
-            dsin = xr.open_dataset(config.GRID.path_init_grid)
-            for name in self.name_var:
-                if name in config.MOD.name_init_var:
-                    var_init = dsin[config.MOD.name_init_var[name]]
-                    if len(var_init.shape)==3:
-                        var_init = var_init[0,:,:]
-                    if config.GRID.subsampling is not None:
-                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
-                    State.var[self.name_var[name]] = var_init.values
-                else:
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-        else:
-            for name in self.name_var:  
-                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-                if State.mask is not None:
-                    State.var[self.name_var[name]][State.mask] = np.nan
-
-        # Observed variable
-        self.name_obs_var = self.name_var['SSH'] # SSH
-
-        # Initialize model Parameters (Flux)
-        self.nparams = State.ny*State.nx
-        self.sliceparams = slice(0,self.nparams)
-
-        # Boundary conditions
-        self.init_from_bc = config.MOD.init_from_bc
-        self.SSHb = {}
-        self.Wbc = np.zeros((State.ny,State.nx))
-        if config.MOD.dist_sponge_bc is not None:
-            self.Wbc = grid.compute_weight_map(State.lon, State.lat, +State.mask, config.MOD.dist_sponge_bc)
-        
-        # Model initialization
-        self.qgm = model(dx=State.DX,
-                         dy=State.DY,
-                         dt=self.dt,
-                         SSH=State.getvar(name_var=self.name_var['SSH']),
-                         c=self.c,
-                         upwind=config.MOD.upwind,
-                         upwind_adj=config.MOD.upwind_adj,
-                         time_scheme=config.MOD.time_scheme,
-                         g=config.MOD.g,
-                         f=State.f,
-                         hbc=self.hbc,
-                         qgiter=config.MOD.qgiter,
-                         qgiter_adj=config.MOD.qgiter_adj,
-                         diff=config.MOD.only_diffusion,
-                         Kdiffus=config.MOD.Kdiffus,
-                         mdt=self.mdt,
-                         mdv=self.mdv,
-                         mdu=self.mdu)
-                         
-        # Tests tgl & adj
-        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
-            tangent_test(self,State)
-            print('Adjoint test:')
-            adjoint_test(self,State)
-    
-    def init(self, State, t0=0):
-
-        if self.init_from_bc:
-            State.setvar(self.SSHb[t0], self.name_var['SSH'])
-            if 'PV' in self.name_var:
-                pv_b = self.qgm.h2pv(self.SSHb[t0])
-                State.setvar(pv_b, self.name_var['PV'])
-
-    def set_bc(self,time_bc,var_bc):
-        
-        for var in var_bc:
-            if var=='SSH':
-                for i,t in enumerate(time_bc):
-                    self.SSHb[t] = var_bc[var][i]
-
-    def step(self,State,nstep=1,t=None):
-        
-        # Get state variable
-        SSH0 = State.getvar(name_var=self.name_var['SSH'])
-        
-        # init
-        SSH1 = +SSH0
-
-        # Time propagation
-        for i in range(nstep):
-            SSH1 = self.qgm.step(SSH1)
-        
-        # Update state
-        if self.name_var['SSH'] in State.params:
-            params = State.params[self.name_var['SSH']]
-            SSH1 += nstep*self.dt/(3600*24) * params
-        State.setvar(SSH1, name_var=self.name_var['SSH'])
-
-    def step_nudging(self,State,tint,Nudging_term=None,t=None):
-    
-        # Read state variable
-        ssh_0 = State.getvar(name_var=self.name_var['SSH'])
-        
-        if 'PV' in self.name_var:
-            flag_pv = True
-            pv_0 = State.getvar(name_var=self.name_var['PV'])
-        else:
-            flag_pv = False
-            pv_0 = self.qgm.h2pv(ssh_0)
-
-        # Boundary condition
-        if t in self.SSHb:
-            Qbc = self.qgm.h2pv(self.SSHb[t])
-            ssh_0 = self.Wbc*self.SSHb[t] + (1-self.Wbc)*ssh_0
-            pv_0 = self.Wbc*Qbc + (1-self.Wbc)*pv_0
-        
-        # Model propagation
-        deltat = np.abs(tint)
-        way = np.sign(tint)
-        t = 0
-        ssh_1 = +ssh_0
-        pv_1 = +pv_0
-        while t<deltat:
-            ssh_1, pv_1 = self.qgm.step(h0=ssh_1, q0=pv_1, way=way)
-            t += self.dt
-            
-        # Nudging
-        if Nudging_term is not None:
-            # Nudging towards relative vorticity
-            if np.any(np.isfinite(Nudging_term['rv'])):
-                indNoNan = (~np.isnan(Nudging_term['rv'])) & (self.qgm.mask>1) 
-                pv_1[indNoNan] += (1-self.Wbc[indNoNan]) *\
-                    Nudging_term['rv'][indNoNan]
-            # Nudging towards ssh
-            if np.any(np.isfinite(Nudging_term['ssh'])):
-                indNoNan = (~np.isnan(Nudging_term['ssh'])) & (self.qgm.mask>1) 
-                pv_1[indNoNan] -= (1-self.Wbc[indNoNan]) *\
-                    (self.g*self.f[indNoNan])/self.c[indNoNan]**2 * \
-                        Nudging_term['ssh'][indNoNan]
-                # Inversion pv -> ssh
-                ssh_b = +ssh_1
-                ssh_1[indNoNan] = self.qgm.pv2h(pv_1,ssh_b)[indNoNan]
-        
-        if np.any(np.isnan(ssh_1[self.qgm.mask>1])):
-            if t in self.SSHb:
-                ind = (np.isnan(ssh_1)) & (self.qgm.mask>1)
-                ssh_1[ind] = self.SSHb[t][ind] 
-                print('Warning: Invalid value encountered in mod_qg1l, we replace by boundary values')
-            else: sys.exit('Invalid value encountered in mod_qg1l')
-            
-        # Update state 
-        State.setvar(ssh_1,name_var=self.name_var['SSH'])
-        if flag_pv:
-            State.setvar(pv_1,name_var=self.name_var['PV']) 
-
-    def step_tgl(self,dState,State,nstep=1,t=None):
-        
-        # Get state variable
-        dSSH0 = dState.getvar(name_var=self.name_var['SSH'])
-        SSH0 = State.getvar(name_var=self.name_var['SSH'])
-        
-        # init
-        dSSH1 = +dSSH0
-        SSH1 = +SSH0
-        
-        # Time propagation
-        for i in range(nstep):
-            dSSH1 = self.qgm.step_tgl(dh0=dSSH1,h0=SSH1)
-            SSH1 = self.qgm.step(h0=SSH1)
-        
-        # Update state
-        if dState.params is not None:
-            dparams = dState.params[self.sliceparams].reshape((State.ny,State.nx))
-            dSSH1 += nstep*self.dt/(3600*24) * dparams
-        dState.setvar(dSSH1,name_var=self.name_var['SSH'])
-        
-    def step_adj(self,adState,State,nstep=1,t=None):
-        
-        # Get state variable
-        adSSH0 = adState.getvar(self.name_var['SSH'])
-        SSH0 = State.getvar(self.name_var['SSH'])
-        
-        # Init
-        adSSH1 = +adSSH0
-        SSH1 = +SSH0
-
-        # Current trajectory
-        traj = [SSH1]
-        if nstep>1:
-            for i in range(nstep):
-                SSH1 = self.qgm.step(SSH1)
-                traj.append(SSH1)
-        
-        # Time propagation
-        for i in reversed(range(nstep)):
-            SSH1 = traj[i]
-            adSSH1 = self.qgm.step_adj(adSSH1,SSH1)
-
-        # Convert to numpy
-        if self.jax:
-            adSSH1 = np.array(adSSH1)
-
-        # Update state  and parameters
-        if adState.params is not None:
-            adState.params[self.sliceparams] += nstep*self.dt/(3600*24) * adSSH0.flatten()
-        adSSH1[np.isnan(adSSH1)] = 0
-        adState.setvar(adSSH1,self.name_var['SSH'])
-
 class Model_qg1l_jax(M):
 
     def __init__(self,config,State):
@@ -1121,6 +749,11 @@ class Model_qg1l_jax(M):
         State0 = State.copy()
 
         name_var = [self.name_var['SSH']]
+
+        if self.advect_tracer:
+            for name in self.name_var:
+                if name!='SSH':
+                    name_var += [self.name_var[name]]
         
         # Save SSH and geostrophic velocities
         name_var_diag = []
@@ -1442,2176 +1075,10 @@ class Model_qg1l_jax(M):
         else:
             adState.setvar(adX1,self.name_var['SSH'])
 
+
 ###############################################################################
 #                         Shallow Water Models                                #
 ###############################################################################
-
-class Model_sw1l_np(M):
-    def __init__(self,config,State):
-
-        super().__init__(config,State)
-
-        self.config = config
-        # Model specific libraries
-        if config.MOD.dir_model is None:
-            dir_model = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             '..','models','model_sw1l'))
-        else:
-            dir_model = config.MOD.dir_model
-        
-        SourceFileLoader("obcs", 
-                                dir_model+"/obcs.py").load_module() 
-        SourceFileLoader("obcs_tgl", 
-                                dir_model + "/obcs_tgl.py").load_module() 
-        SourceFileLoader("obcs_adj", 
-                                dir_model + "/obcs_adj.py").load_module() 
-        SourceFileLoader("swm", 
-                                dir_model + "/swm.py").load_module() 
-        SourceFileLoader("swm_tgl", 
-                                dir_model + "/swm_tgl.py").load_module() 
-        
-        swm = SourceFileLoader("swm_adj", 
-                                dir_model + "/swm_adj.py").load_module() 
-        model = swm.Swm_adj
-        
-        self.time_scheme = config.MOD.time_scheme
-
-        # grid
-        self.ny = State.ny
-        self.nx = State.nx
-        
-        # Coriolis
-        self.f = 4*np.pi/86164*np.sin(State.lat*np.pi/180)
-
-        # Gravity
-        self.g = State.g
-             
-        # Equivalent depth
-        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-            ds = xr.open_dataset(config.MOD.He_data['path'])
-            self.Heb = ds[config.MOD.He_data['var']].values
-        else:
-            self.Heb = config.MOD.He_init
-            
-            
-        if config.MOD.Ntheta>0:
-            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-        else:
-            self.bc_theta = np.array([0])
-            
-        self.omegas = np.asarray(config.MOD.w_waves)
-        self.bc_kind = config.MOD.bc_kind
-
-        
-        # Initialize model state
-        self.name_var = config.MOD.name_var
-        self.var_to_save = [self.name_var['SSH']] # ssh
-
-        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
-            dsin = xr.open_dataset(config.GRID.path_init_grid)
-            for name in self.name_var:
-                if name in config.MOD.name_init_var:
-                    var_init = dsin[config.MOD.name_init_var[name]]
-                    if len(var_init.shape)==3:
-                        var_init = var_init[0,:,:]
-                    if config.GRID.subsampling is not None:
-                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
-                    State.var[self.name_var[name]] = var_init.values
-                else:
-                    if name=='U':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                    elif name=='V':
-                        State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                    elif name=='SSH':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-        else:
-            for name in self.name_var:  
-                if name=='U':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                elif name=='V':
-                    State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                elif name=='SSH':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-
-        
-        # Model Parameters (OBC & He)
-        self.shapeHe = [State.ny,State.nx]
-        self.shapehbcx = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.nx # NX
-                          ]
-        self.shapehbcy = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.ny # NY
-                          ]
-        self.sliceHe = slice(0,np.prod(self.shapeHe))
-        self.slicehbcx = slice(np.prod(self.shapeHe),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx))
-        self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
-        self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
-        State.params['He'] = np.zeros((self.shapeHe))
-        State.params['hbcx'] = np.zeros((self.shapehbcx))
-        State.params['hbcy'] = np.zeros((self.shapehbcy))
-        
-        # Model initialization
-        self.swm = model(X=State.X,
-                        Y=State.Y,
-                        dt=self.dt,
-                        bc=self.bc_kind,
-                        omegas=self.omegas,
-                        bc_theta=self.bc_theta,
-                        f=self.f)
-        
-        # Functions related to time_scheme
-        if self.time_scheme=='Euler':
-            self.swm_step = self.swm.step_euler
-            self.swm_step_tgl = self.swm.step_euler_tgl
-            self.swm_step_adj = self.swm.step_euler_adj
-        elif self.time_scheme=='rk4':
-            self.swm_step = self.swm.step_rk4
-            self.swm_step_tgl = self.swm.step_rk4_tgl
-            self.swm_step_adj = self.swm.step_rk4_adj
-
-        
-        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
-            tangent_test(self,State,nstep=10)
-            print('Adjoint test:')
-            adjoint_test(self,State,nstep=10)
-
-        
-    def step(self,State,nstep=1,t0=0,t=0):
-
-        # Init
-        u0 = State.getvar(self.name_var['U'])
-        v0 = State.getvar(self.name_var['V'])
-        h0 = State.getvar(self.name_var['SSH'])
-        u = +u0
-        v = +v0
-        h = +h0
-        
-        # Get params in physical space
-        if State.params is not None:
-            He = State.params['He'].reshape(self.shapeHe) + self.Heb
-            hbcx = State.params['hbcx'].reshape(self.shapehbcx)
-            hbcy = State.params['hbcy'].reshape(self.shapehbcy)
-        else:
-            He = hbcx = hbcy = None
-        
-        # Time propagation
-        for i in range(nstep):
-            if t+i*self.dt==t0:
-                    first = True
-            else: first = False
-            u,v,h = self.swm_step(
-                t+i*self.dt,
-                u,v,h,He=He,hbcx=hbcx,hbcy=hbcy,first=first)
-            
-        State.setvar(u,self.name_var['U'])
-        State.setvar(v,self.name_var['V'])
-        State.setvar(h,self.name_var['SSH'])
-        
-    def step_tgl(self,dState,State,nstep=1,t0=0,t=0):
-        
-        # Get state variables and model parameters
-        du0 = dState.getvar(self.name_var['U'])
-        dv0 = dState.getvar(self.name_var['V'])
-        dh0 = dState.getvar(self.name_var['SSH'])
-        u0 = State.getvar(self.name_var['U'])
-        v0 = State.getvar(self.name_var['V'])
-        h0 = State.getvar(self.name_var['SSH'])
-        
-        if State.params is not None:
-            He = State.params['He'].reshape(self.shapeHe) + self.Heb
-            hbcx = State.params['hbcx'].reshape(self.shapehbcx)
-            hbcy = State.params['hbcy'].reshape(self.shapehbcy)
-        else:
-            He = hbcx = hbcy = None
-            
-        if dState.params is not None:
-            dHe = dState.params['He'].reshape(self.shapeHe) 
-            dhbcx = dState.params['hbcx'].reshape(self.shapehbcx)
-            dhbcy = dState.params['hbcy'].reshape(self.shapehbcy)
-        else:
-            dHe = dhbcx = dhbcy = None
-    
-        du = +du0
-        dv = +dv0
-        dh = +dh0
-        u = +u0
-        v = +v0
-        h = +h0
-        
-        # Time propagation
-        # Current trajectory
-        traj = [(u,v,h)]
-        if nstep>1:
-            for i in range(nstep):
-                if t+i*self.dt==t0:
-                        first = True
-                else: first = False
-                u,v,h = self.swm_step(
-                        t+i*self.dt,
-                        u,v,h,He=He,hbcx=hbcx,hbcy=hbcy,first=first)
-                traj.append((u,v,h))
-            
-        for i in range(nstep):
-            if t+i*self.dt==t0:
-                    first = True
-            else: first = False
-            u,v,h = traj[i]
-            
-            du,dv,dh = self.swm_step_tgl(
-                t+i*self.dt,du,dv,dh,u,v,h,
-                dHe=dHe,He=He,
-                dhbcx=dhbcx,dhbcy=dhbcy,hbcx=hbcx,hbcy=hbcy,first=first)
-            
-        dState.setvar(du,self.name_var['U'])
-        dState.setvar(dv,self.name_var['V'])
-        dState.setvar(dh,self.name_var['SSH'])
-        
-    def step_adj(self,adState, State, nstep=1, t0=0,t=0):
-        
-        # Get variables
-        adu0 = adState.getvar(self.name_var['U'])
-        adv0 = adState.getvar(self.name_var['V'])
-        adh0 = adState.getvar(self.name_var['SSH'])
-        u0 = State.getvar(self.name_var['U'])
-        v0 = State.getvar(self.name_var['V'])
-        h0 = State.getvar(self.name_var['SSH'])
-        
-        if State.params is not None:
-            He = State.params['He'].reshape(self.shapeHe) + self.Heb
-            hbcx = State.params['hbcx'].reshape(self.shapehbcx)
-            hbcy = State.params['hbcy'].reshape(self.shapehbcy)
-        else:
-            He = hbcx = hbcy = None
-        
-        # Init
-        adu = +adu0
-        adv = +adv0
-        adh = +adh0
-        u = +u0
-        v = +v0
-        h = +h0
-        adHe = He*0
-        adhbcx = hbcx*0
-        adhbcy = hbcy*0
-        
-        # Time propagation
-        # Current trajectory
-        traj = [(u,v,h)]
-        if nstep>1:
-            for i in range(nstep):
-                if t+i*self.dt==t0:
-                        first = True
-                else: first = False
-                u,v,h = self.swm_step(
-                        t+i*self.dt,
-                        u,v,h,He=He,hbcx=hbcx,hbcy=hbcy,first=first)
-                traj.append((u,v,h))
-            
-        for i in reversed(range(nstep)):
-            if t+i*self.dt==t0:
-                    first = True
-            else: first = False
-            u,v,h = traj[i]
-        
-            adu,adv,adh,adHe_tmp,adhbcx_tmp,adhbcy_tmp =\
-                self.swm_step_adj(t+i*self.dt,adu,adv,adh,u,v,h,
-                                      He,hbcx,hbcy,first=first)
-            adHe += adHe_tmp
-            adhbcx += adhbcx_tmp
-            adhbcy += adhbcy_tmp
-            
-        # Update state
-        adState.setvar(adu,self.name_var['U'])
-        adState.setvar(adv,self.name_var['V'])
-        adState.setvar(adh,self.name_var['SSH'])
-        
-        # Update parameters
-        adState.params['He'] += adHe
-        adState.params['hbcx'] += adhbcx
-        adState.params['hbcy'] += adhbcy
-
-class Model_sw1l_jax(M):
-    def __init__(self,config,State):
-
-        super().__init__(config,State)
-
-        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-
-        self.config = config
-
-        ############################
-        ### MODEL SPECIFICATIONS ###
-        ############################
-
-        # Time integration scheme 
-        self.time_scheme = config.MOD.time_scheme
-
-        # Boundary condition types
-        self.bc_kind = config.MOD.bc_kind # For the domain boundaries
-        self.bc_island = config.MOD.bc_island # For the islands and continents 
-
-        # Grid specifications
-        self.ny = State.ny
-        self.nx = State.nx
-
-        # Coriolis
-        self.f = State.f
-        f0 = np.nanmean(self.f)
-        self.f[np.isnan(self.f)] = f0
-
-        # Gravity
-        self.g = State.g
-
-        # Tidal frequency components 
-        self.omegas = np.asarray(config.MOD.w_waves)
-        self.omega_names = config.MOD.w_names
-
-        # Tidal velocities 
-        self.init_tidal_velocity(config,State)
-
-        ####################################
-        ### INITIALIZING MODEL VARIABLES ###
-        ####################################
-
-        # List of variable names
-        self.name_var = config.MOD.name_var
-
-        # Setting Model mask # 
-        self.mask = {}
-        self.set_mask(State.mask,config)
-
-        self.init_variables(config,State)
-
-        #############################################
-        ### INITIALIZING MODEL CONTROL PARAMETERS ###
-        #############################################
-
-        # List of parameter names
-        self.name_params = config.MOD.name_params
-                
-        # Initializing model params
-        self.init_params(config,State)
-
-        #################################
-        ### LOADING MODEL PYTHON FILE ### 
-        #################################
-
-        if config.MOD.dir_model is None:
-            dir_model = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             '..','models','model_sw1l'))
-        else:
-            dir_model = config.MOD.dir_model
-        
-        swm = SourceFileLoader("swm", 
-                                dir_model + "/jswm.py").load_module()
-
-        # Model initialization
-        self.swm = swm.Swm(Model = self,
-                           State = State) 
-
-        # Model functions initialization
-        if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
-            self.swm_step = self.swm.step_jit
-            self.swm_step_tgl = self.swm.step_tgl_jit
-            self.swm_step_adj = self.swm.step_adj_jit
-        else:
-            self.swm_step = self.swm.step_jit
-
-        # Tests tgl & adj
-        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
-            tangent_test(self,State,nstep=100)
-            print('Adjoint test:')
-            adjoint_test(self,State,nstep=100)
-
-    def init (self,State,t0=0):
-        return
-
-
-    def init_tidal_velocity(self,config,State):
-        """
-        NAME
-            init_tidal_velocity
-
-        DESCRIPTION
-            Reads tidal velocity file, interpolate it to the grid
-        """
-
-        # Read tidal velocities
-        if config.EXP.path_tidal_velocity is not None and os.path.exists(config.EXP.path_tidal_velocity): 
-            
-            # Variables
-            
-            self.tidal_U = np.zeros((len(self.omega_names), # Number of tidal components
-                                     State.lon[0,:].size, # Number of longitude grid points 
-                                     State.lat[:,0].size, # Number of latitude grid points 
-                                     ))
-            
-            self.tidal_V = np.zeros((len(self.omega_names), # Number of tidal components
-                                     State.lon[0,:].size, # Number of longitude grid points 
-                                     State.lat[:,0].size, # Number of latitude grid points 
-                                     ))
-            
-            for (i,name) in enumerate(self.omega_names):
-                self.tidal_U[i,:,:] = self.open_interpolate(config,name,"U",State)
-                self.tidal_V[i,:,:] = self.open_interpolate(config,name,"V",State)
-        
-        else: # No tidal velocity file prescripted
-            warnings.warn("No tidal velocity field prescribed. This is not suitable if Internal Tide generation ('itg') is being controlled.")
-            return None 
-        
-    def open_interpolate(self,config,name,direction,State):
-        """
-        NAME
-            open_interpolate
-
-        DESCRIPTION
-            Opens and interpolates the tidal velocity files 
-
-        ARGUMENT 
-            - config : config python file 
-            - name (str) : name of the tidal component 
-            - direction (str) :  velocity direction, either "U" or "V"
-        """
-
-        if direction == "U":
-            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"eastward_velocity",name+".nc")).squeeze()
-        elif direction == "V":
-            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"northward_velocity",name+".nc")).squeeze()
-        
-        # Convert longitudes
-        if np.sign(ds["lon"].data.min())==-1 and State.lon_unit=='0_360':
-            ds = ds.assign_coords({"lon":(("lon", ds["lon"].data % 360))})
-        elif np.sign(ds["lon"].data.min())==1 and State.lon_unit=='-180_180':
-            ds = ds.assign_coords({"lon":(("lon", (ds["lon"].data + 180) % 360 - 180))})
-        ds = ds.sortby(ds["lon"])   
-
-
-        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
-        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
-        dlon +=  np.nanmax(ds["lon"].data[1:] - ds["lon"].data[:-1])
-        dlat +=  np.nanmax(ds["lat"].data[1:] - ds["lat"].data[:-1])
-
-        ds = ds.sel(
-            {"lon":slice(State.lon_min-dlon,State.lon_max+dlon),
-                "lat":slice(State.lat_min-dlat,State.lat_max+dlat)})
-
-        ds = ds.interp(coords={"lon":State.lon[0,:],"lat":State.lat[:,0]},method='cubic')
-
-        if direction == "U":
-            return ds["Ua"].values*1E-2 # Converting into m/s
-        elif direction == "V":
-            return ds["Va"].values*1E-2 # Converting into m/s
-
-    def init_variables(self,config,State) : 
-
-        """
-        Initialize model state and auxiliary variables based on the configuration file.
-        This method initializes the model state variables in the State object, and the auxiliary variables in the Model object.
-
-        Args:
-        -----
-            config (Config): The configuration file.
-            State (State): A State object which will be modified to include the model state variables.
-
-        Notes:
-            - Coastal pixel indexes and auxiliary variables are set up only if `State.mask` is not None.
-        """
-
-        ##################################################
-        ### - INITIALIZING THE MODEL STATE VARIABLES - ###
-        ##################################################
-
-        # Iinitializing from a specified grid file 
-        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
-            dsin = xr.open_dataset(config.GRID.path_init_grid)
-            for name in self.name_var:
-                if name in config.MOD.name_init_var:
-                    var_init = dsin[config.MOD.name_init_var[name]]
-                    if len(var_init.shape)==3:
-                        var_init = var_init[0,:,:]
-                    if config.GRID.subsampling is not None:
-                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
-                    State.var[self.name_var[name]] = var_init.values
-                else:
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float64')
-                    State.var[self.name_var[name]][State.mask] = np.nan
-        # Iinitializing with zeros 
-        else:
-            for name in self.name_var:
-                State.var[self.name_var[name]] = np.zeros((State.ny,State.nx),dtype='float64')
-                State.var[self.name_var[name]][State.mask] = np.nan
-
-        ######################################################
-        ### - INITIALIZING THE MODEL AUXILIARY VARIABLES - ###
-        ######################################################
-
-        # Coastal pixel indexes 
-        self.idxcoast = {}
-        # Coastal pixel values 
-        self.auxvar = {}
-
-        # Setting coastal pixel indexes 
-        if State.mask is not None : 
-
-            idxcoastS = np.where( np.invert(State.mask[1:,:])  * State.mask[:-1,:] )
-            idxcoastN = np.where( np.invert(State.mask[:-1,:]) * State.mask[1:,:]  )
-            idxcoastW = np.where( np.invert(State.mask[:,1:])  * State.mask[:,:-1] )
-            idxcoastE = np.where( np.invert(State.mask[:,:-1]) * State.mask[:,1:]  )
-
-            # SOUTH coast variables # 
-            self.idxcoast["vS"] = idxcoastS
-            self.idxcoast["hS"] = (idxcoastS[0],idxcoastS[1])
-            # NORTH coastal indexes # 
-            self.idxcoast["vN"] = idxcoastN
-            self.idxcoast["hN"] = (idxcoastN[0]+1,idxcoastN[1])
-            # WEST coast variables #  
-            self.idxcoast["uW"] = idxcoastW
-            self.idxcoast["hW"] = (idxcoastW[0],idxcoastW[1])
-            # EAST coast variables # 
-            self.idxcoast["uE"] = idxcoastE
-            self.idxcoast["hE"] = (idxcoastE[0],idxcoastE[1]+1)
-
-            if self.bc_island == "radiative" : 
-            # Auxiliary variables to store ghost pixels (ssh at the coast and orthogonal values) 
-                # NORTH coastal indexes # 
-                self.auxvar["vN"] = np.zeros(idxcoastN[0].shape,dtype='float64')
-                self.auxvar["hN"] = np.zeros(idxcoastN[0].shape,dtype='float64')
-                # SOUTH coastal indexes # 
-                self.auxvar["vS"] = np.zeros(idxcoastS[0].shape,dtype='float64')
-                self.auxvar["hS"] = np.zeros(idxcoastS[0].shape,dtype='float64')
-                # WEST coastal indexes # 
-                self.auxvar["uW"] = np.zeros(idxcoastW[0].shape,dtype='float64')
-                self.auxvar["hW"] = np.zeros(idxcoastW[0].shape,dtype='float64')
-                # EAST coastal indexes # 
-                self.auxvar["uE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
-                self.auxvar["hE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
-
-    def init_params(self,config,State) :
-
-        """
-        Initializes the model controlled parameters information based on the configuration file. 
-        This method also initializes the parameters in the State object. 
-
-        Args:
-        -----
-            config (Config): The configuration file.
-            State (State): A State object which will be modified to include the initialized parameters.
-
-        Notes:
-        ------
-            Parameters in `self.name_params` should be one of :
-                - 'He' : Equivalent Height
-                - 'hbcx' : Height Boundary Conditions along x axis
-                - 'hbcy' : Height Boundary Conditions along y axis
-                - 'itg' : Internal Tide Generation
-
-        """
-
-        # Dictionary containing the shape of the parameters
-        self.shape_params = {} 
-        # Dictionary containing the slices of the parameters
-        self.slice_params = {}
-
-        #######################################
-        ### - INITIALIZING SPECIFICATIONS - ###
-        #######################################
-
-        # - Equivalent Height He background 
-        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-            ds = xr.open_dataset(config.MOD.He_data['path'])
-            self.Heb = ds[config.MOD.He_data['var']].values
-        else:
-            self.Heb = config.MOD.He_init
-        
-        # Height boundary condition hbc structure  
-        if 'hbcx' in self.name_params and 'hbcy' in self.name_params :
-            if config.MOD.Ntheta>0:
-                theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-                self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-            else:
-                self.bc_theta = np.array([0])
-        elif 'hbcx' in self.name_params or 'hbcy' in self.name_params :
-            warnings.warn("Only partly controlling boundary conditions (either just x or y)", Warning)
-            if config.MOD.Ntheta>0:
-                theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-                self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-            else:
-                self.bc_theta = np.array([0])
-
-        ###############################
-        ### - INITIALIZING SHAPES - ###
-        ###############################               
-
-        for param in self.name_params : 
-
-            # If the parameter is not implemented 
-            if param not in ['He', 'hbcx', 'hbcy', 'itg'] : 
-                sys.exit(param+" not implemented. Please choose parameters among ['He', 'hbcx', 'hbcy', 'itg'].")
-
-            # - Equivalent Height : He 
-            elif param =='He' : 
-                self.shape_params['He'] = [State.ny,    # - Number of grid points along x axis.
-                                           State.nx]    # - Number of grid points along y axis.
-            
-            # - Height Boundary Conditions along x : hbcx 
-            elif param =='hbcx' : 
-                self.shape_params['hbcx'] = [len(self.omegas),      # - Number of tidal frequency components 
-                                            2,                      # - Number of boundaries (North & South)
-                                            2,                      # - Number of controlled components (cos & sin)
-                                            len(self.bc_theta),     # - Number of angles
-                                            State.nx]               # - Number of gridpoints along x axis
-                
-            # - Height Boundary Conditions along y : hbcy
-            elif param =='hbcy' :
-                self.shape_params['hbcy'] = [len(self.omegas),      # - Number of tidal frequency components 
-                                            2,                      # - Number of boundaries (East & West)
-                                            2,                      # - Number of controlled components (cos & sin)
-                                            len(self.bc_theta),     # - Number of angles
-                                            State.ny]               # - Number of gridpoints along y axis
-            
-            # - Internal Tide Generation itg 
-            elif param =='itg' :
-                self.shape_params['itg'] = [len(self.omegas),       # - Number of tidal frequency components 
-                                            4,                      # - Number of estimated parameter (cos and sin for x and y axis)
-                                            State.ny,               # - Number of grid points along x axis.
-                                            State.nx]               # - Number of grid points along y axis.
-        
-
-        #####################################################
-        ### - INITIALIZING SLICE AND NUMBER INFORMATION - ###
-        #####################################################
-
-        # Number of parameters 
-        self.nparams = sum(list(map(np.prod,list(self.shape_params.values()))))
-
-        # Slices of parameters
-        idx = 0 
-        for param in self.name_params : 
-            self.slice_params[param] = slice(idx, idx + np.prod(self.shape_params[param]))
-            idx += np.prod(self.shape_params[param])
-
-        #######################################################
-        ### - INITIALIZING PARAMETERS IN THE STATE OBJECT - ###
-        #######################################################      
-
-        for param in self.name_params :     
-            State.params[param] = np.zeros((self.shape_params[param]),dtype='float64')
-
-    def _detect_coast(self,mask,axis):
-        """
-        NAME
-            _detect_coast
-
-        ARGUMENT 
-            mask : mask of continents (N,n) shaped array
-            axis : either "x" or "y"
-    
-        DESCRIPTION
-            Detects coast between pixels. 
-
-        RETURNS 
-            (N-1,n) or (N,n-1) array with True if it is a coast (transisition continent - ocean) False otherwise. 
-        """
-        if axis == "x": 
-            a1 = mask[:,1:]
-            a2 = mask[:,:-1]
-        elif axis == "y": 
-            a1 = mask[1:,:]
-            a2 = mask[:-1,:]
-        p1 = np.logical_and(a1,np.invert(a2))
-        p2 = np.logical_and(a2,np.invert(a1))
-        return np.logical_or(p1,p2)
-    
-    def set_mask(self,mask,config) : 
-        """
-        NAME
-            set_mask
-
-        ARGUMENT 
-            mask : mask to set 
-    
-        DESCRIPTION
-            Sets the mask attribute of the Model object. The mask is a dictionnary containing the masks of variables, represented by an int (0,1 or NaN). 
-            For "SSH" the mask is : 
-                - 1 if ocean 
-                - 999 if continent (NaN value)
-            For "U" and "V" the mask is : 
-                - 1 if ocean 
-                - 999 if continent (NaN value)
-                - 0 if normal to the coast    
-        """
-
-        for varname in config.MOD.name_var:
-
-            if varname == "SSH" : 
-                mask_ssh = np.ones(mask.shape,dtype='float')
-                mask_ssh[mask==True]=np.nan
-                self.mask[config.MOD.name_var[varname]] = mask_ssh
-
-            elif varname == "U" :
-                mask_u = np.ones(mask[:,1:].shape,dtype='float')
-                mask_u[np.logical_and(mask[:,1:],mask[:,:-1])]=np.nan
-                mask_u[self._detect_coast(mask,"x")]=0
-                self.mask[config.MOD.name_var[varname]] = mask_u
-
-            elif varname == "V" : 
-                mask_v = np.ones(mask[1:,:].shape,dtype='float')
-                mask_v[np.logical_and(mask[1:,:],mask[:-1,:])]=np.nan
-                mask_v[self._detect_coast(mask,"y")]=0
-                self.mask[config.MOD.name_var[varname]] = mask_v
-
-    def step(self,State,nstep=1,t=0):
-
-        ############################
-        ###   INITIALIZATION    ####
-        ############################
-
-        X0 = self.init_array(State,t)
-
-        #############################
-        ###   TIME PROPAGATION   ####
-        #############################
-
-        X1 = self.swm_step(X0,nstep=nstep)
-        
-        # Remove time in output array
-        X1 = X1[1:]
-
-        ##################
-        ###   SAVING   ###
-        ##################
-        
-        self.save_array(State, X1)
-    
-    def step_tgl(self,dState,State,nstep=1,t=0):
-        
-        ############################
-        ###   INITIALIZATION    ####
-        ############################
-
-        X0 = self.init_array(State,t)
-        dX0 = self.init_array(dState,t)
-
-        #############################
-        ###   TIME PROPAGATION   ####
-        #############################
-
-        dX1 = self.swm_step_tgl(dX0,X0,nstep=nstep)
-
-        # Convert to numpy and reshape
-        dX1 = np.array(dX1).astype('float64')
-
-        # Remove time in control vector
-        dX1 = dX1[1:]
-
-        ##################
-        ###   SAVING   ###
-        ##################
-
-        self.save_array(dState,dX1)
-
-        return 
-
-    def step_adj(self,adState,State,nstep=1,t=0): 
-
-        ############################
-        ###   INITIALIZATION    ####
-        ############################
-
-        X0 = self.init_array(State,t)
-        adX0 = self.init_array(adState,t)
-
-        #print("X0 : ",X0)
-        #print("adX0 : ",adX0)
-
-        #plt.plot(adState.params["itg"].reshape((13122,)))
-        #plt.title("Params before swm_step_adj")
-        #plt.show()
-
-        #############################
-        ###   TIME PROPAGATION   ####
-        #############################
-
-        adX1 = self.swm_step_adj(adX0,X0,nstep=nstep)
-
-        #print("adX1 : ",adX1)
-
-        # Convert to numpy and reshape
-        adX1 = np.array(adX1).astype('float64')
-
-        # Remove time in control vector
-        adX1 = adX1[1:]
-
-        #plt.plot(adX1[self.swm.nstates:][self.slice_params['itg']])
-        #plt.title("Params after swm_step_adj")
-        #plt.show()
-        
-        ##################
-        ###   SAVING   ###
-        ##################
-
-        self.save_array(adState,adX1)
-
-    def init_array(self,State,t=0):
-        """
-        NAME
-            init_array
-
-        ARGUMENT 
-            State : State object 
-            t : time step 
-    
-        DESCRIPTION
-            Initializes the array X0, which is composed by the State variable and State parameters at time step t. 
-
-        RETURNS
-            X0 : array 
-        """
-
-        # - Get state variable
-        u0 = State.getvar(self.name_var['U'])[:,:-1].flatten()
-        v0 = State.getvar(self.name_var['V'])[:-1,:].flatten()
-        h0 = State.getvar(self.name_var['SSH'],vect = True)
-
-        # - test - # 
-        u0[np.isnan(u0)]=0
-        v0[np.isnan(v0)]=0
-        h0[np.isnan(h0)]=0
-
-        # - Get auxiliary variables - coastal values
-        # if dirichlet condition : all auxiliary variables set to zero
-        len_varcoast = self.idxcoast["vN"][0].size + self.idxcoast["hN"][0].size +\
-                       self.idxcoast["vS"][0].size + self.idxcoast["hS"][0].size +\
-                       self.idxcoast["uW"][0].size + self.idxcoast["hW"][0].size +\
-                       self.idxcoast["uE"][0].size + self.idxcoast["hE"][0].size 
-        varcoast = np.zeros((len_varcoast,),dtype='float64')
-        # if radiative conditions : auxiliary variables are stored in self.auxvar
-        if self.bc_island == "radiative": 
-            varcoast = np.concatenate(list(self.auxvar.values()))
-        
-        # - Create state vector X0 
-        X0 = np.concatenate((u0,v0,h0,varcoast))
-
-        # - Get parameters variable 
-        if State.params is not None:
-            for param in self.name_params : 
-                params = +State.getparams(param,vect=True)
-                X0 = np.concatenate((X0,params))
-
-        # - Add time in input array
-        X0 = np.append(t,X0)
-
-        return X0
-
-    def save_array(self,State, X1):
-        """
-        NAME
-            save_array
-
-        ARGUMENT 
-            State : State object 
-            X1 : array
-    
-        DESCRIPTION
-            Saves the variables of the array X1 (control parameters and state variable) onto the State object.  
-        """
-
-        # - u, v, and h   
-        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
-        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
-
-        # Adding a blank row and column to fit the State grid 
-        u1 = np.concatenate((u1,np.zeros((State.ny,1))),axis=1)
-        v1 = np.concatenate((v1,np.zeros((1,State.nx))),axis=0)
-
-        # Masking the variables 
-        u1[State.mask] = np.nan
-        v1[State.mask] = np.nan
-        h1[State.mask] = np.nan
-
-        # setting u, v, and h in State 
-        State.setvar([u1,v1,h1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-
-        # setting coastal variables 
-        self.auxvar["vN"] = np.array(X1[self.swm.slicevN])
-        self.auxvar["hN"] = np.array(X1[self.swm.slicehN])
-
-        self.auxvar["vS"] = np.array(X1[self.swm.slicevS])
-        self.auxvar["hS"] = np.array(X1[self.swm.slicehS])
-
-        self.auxvar["uW"] = np.array(X1[self.swm.sliceuW])
-        self.auxvar["hW"] = np.array(X1[self.swm.slicehW])
-
-        self.auxvar["uE"] = np.array(X1[self.swm.sliceuE])
-        self.auxvar["hE"] = np.array(X1[self.swm.slicehE])
-
-        #setting params 
-        params = X1[self.swm.nstates:]
-        for param in self.name_params :    
-            State.params[param] = params[self.slice_params[param]].reshape(self.shape_params[param])
-
-class Model_sw1l_jax_old(M):
-    def __init__(self,config,State):
-
-        super().__init__(config,State)
-
-        self.config = config
-        # Model specific libraries
-        if config.MOD.dir_model is None:
-            dir_model = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             '..','models','model_sw1l'))
-        else:
-            dir_model = config.MOD.dir_model
-        
-        swm = SourceFileLoader("swm", 
-                                dir_model + "/jswm.py").load_module()
-        model = swm.Swm_old
-        
-        self.time_scheme = config.MOD.time_scheme
-
-        # grid
-        self.ny = State.ny
-        self.nx = State.nx
-
-        # Coriolis
-        self.f = State.f
-        f0 = np.nanmean(self.f)
-        self.f[np.isnan(self.f)] = f0
-
-        # Gravity
-        self.g = State.g
-             
-        # Equivalent depth
-        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-            ds = xr.open_dataset(config.MOD.He_data['path'])
-            self.Heb = ds[config.MOD.He_data['var']].values
-        else:
-            self.Heb = config.MOD.He_init
-            
-            
-        if config.MOD.Ntheta>0:
-            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-        else:
-            self.bc_theta = np.array([0])
-            
-        self.omegas = np.asarray(config.MOD.w_waves)
-        self.bc_kind = config.MOD.bc_kind
-
-        # CFL
-        if config.MOD.cfl is not None:
-            grid_spacing = min(np.nanmean(State.DX), np.nanmean(State.DY)) 
-            dt = config.MOD.cfl * grid_spacing / np.nanmean(self.Heb*self.g)
-            divisors = [i for i in range(1, 3600 + 1) if 3600 % i == 0]  # Find all divisors of one hour in seconds
-            lower_divisors = [d for d in divisors if d <= dt]
-            self.dt = max(lower_divisors)  # Get closest
-            print('CFL condition for He=', self.Heb)
-            print('Model time-step', self.dt)
-            # Time parameters
-            if self.dt>0:
-                self.nt = 1 + int((config.EXP.final_date - config.EXP.init_date).total_seconds()//self.dt)
-                self.timestamps = [] 
-                t = config.EXP.init_date
-                while t<=config.EXP.final_date:
-                    self.timestamps.append(t)
-                    t += timedelta(seconds=self.dt)
-                self.timestamps = np.asarray(self.timestamps)
-            else:
-                self.nt = 1
-                self.timestamps = np.array([config.EXP.init_date])
-            self.T = np.arange(self.nt) * self.dt
-
-        
-        # Initialize model state
-        self.name_var = config.MOD.name_var
-        self.var_to_save = [self.name_var['SSH']] # ssh
-
-        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
-            dsin = xr.open_dataset(config.GRID.path_init_grid)
-            for name in self.name_var:
-                if name in config.MOD.name_init_var:
-                    var_init = dsin[config.MOD.name_init_var[name]]
-                    if len(var_init.shape)==3:
-                        var_init = var_init[0,:,:]
-                    if config.GRID.subsampling is not None:
-                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
-                    State.var[self.name_var[name]] = var_init.values
-                else:
-                    if name=='U':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                    elif name=='V':
-                        State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                    elif name=='SSH':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-        else:
-            for name in self.name_var:  
-                if name=='U':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                elif name=='V':
-                    State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                elif name=='SSH':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-
-        
-        # Model Parameters (OBC & He)
-        self.shapeHe = [State.ny,State.nx]
-        self.shapehbcx = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.nx # NX
-                          ]
-        self.shapehbcy = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.ny # NY
-                          ]
-        self.sliceHe = slice(0,np.prod(self.shapeHe))
-        self.slicehbcx = slice(np.prod(self.shapeHe),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx))
-        self.slicehbcy = slice(np.prod(self.shapeHe)+np.prod(self.shapehbcx),
-                               np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy))
-        self.nparams = np.prod(self.shapeHe)+np.prod(self.shapehbcx)+np.prod(self.shapehbcy)
-        State.params['He'] = np.zeros((self.shapeHe))
-        State.params['hbcx'] = np.zeros((self.shapehbcx))
-        State.params['hbcy'] = np.zeros((self.shapehbcy))
-        
-        # Model initialization
-        self.swm = model(X=State.X,
-                        Y=State.Y,
-                        dt=self.dt,
-                        bc=self.bc_kind,
-                        omegas=self.omegas,
-                        bc_theta=self.bc_theta,
-                        f=self.f)
-        
-        
-        # Compile jax-related functions
-        self._jstep_jit = jit(self._jstep)
-        self._jstep_tgl_jit = jit(self._jstep_tgl)
-        self._jstep_adj_jit = jit(self._jstep_adj)
-        self._compute_w1_IT_jit = jit(self._compute_w1_IT)
-        # Functions related to time_scheme
-        if self.time_scheme=='Euler':
-            self.swm_step = self.swm.step_euler_jit
-            self.swm_step_tgl = self.swm.step_euler_tgl_jit
-            self.swm_step_adj = self.swm.step_euler_adj_jit
-        elif self.time_scheme=='rk4':
-            self.swm_step = self.swm.step_rk4_jit
-            self.swm_step_tgl = self.swm.step_rk4_tgl_jit
-            self.swm_step_adj = self.swm.step_rk4_adj_jit
-        
-        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('SW1L_JAX Tangent test:')
-            #tangent_test(self,State,nstep=10)
-            print('SW1L_JAX Adjoint test:')
-            #adjoint_test(self,State,nstep=10)
-    
-    def step(self,State,nstep=1,t=0):
-
-        # Get state variable
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
-
-        # Get params in physical space
-        if State.params is not None:
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))
-
-        # Init
-        X1 = +X0
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        # Time stepping
-        for _ in range(nstep):
-            # One time step
-            X1 = self._jstep_jit(X1)
-        
-        # Remove time in control vector
-        X1 = X1[1:]
-        
-        # Convert to numpy and reshape
-        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
-        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        State.setvar([u1,v1,h1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def _jstep(self,X0):
-        
-        t,X1 = X0[0],jnp.asarray(+X0[1:])
-        
-        # Get He,obcs parameters
-        params = None
-        if X1.size==self.swm.nstates+self.nparams:
-            params = X1[self.swm.nstates:]
-            He = +params[self.sliceHe].reshape(self.shapeHe) + self.Heb
-            hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = +params[self.slicehbcy].reshape(self.shapehbcy)        
-        
-        # Time propagation
-        _X1 = +X1[:self.swm.nstates]
-        if params is not None:
-            # First characteristic variables w1 from external data
-            if self.bc_kind=='1d':
-                tbc = t + self.dt
-            else:
-                tbc = t
-            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
-            w1ext = jnp.concatenate((w1S,w1N,w1W,w1E))
-            _X1 = jnp.concatenate((_X1, # State variables
-                                   He.flatten(), w1ext)) # Model parameters 
-        # One forward step
-        _X1 = self.swm_step(_X1)
-        
-        # Retrieve inital form
-        X1 = X1.at[:self.swm.nstates].set(_X1[:self.swm.nstates])
-        
-        if params is not None:
-            X1 = X1.at[self.swm.nstates:].set(params)
-
-        X1 = jnp.append(jnp.array(t+self.dt),X1)
-
-        
-    
-        return X1
-        
-    def step_tgl(self,dState,State,nstep=1,t=0):
-        
-        # Get state variable
-        dX0 = +dState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Get params in physical space
-        if State.params is not None:
-            dparams = +dState.getparams(['He','hbcx','hbcy'],vect=True)
-            dX0 = np.concatenate((dX0,dparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))         
-
-        # Init
-        dX1 = +dX0
-        X1 = +X0
-        # Add time in control vector (for JAX)
-        dX1 = np.append(t,dX1)
-        X1 = np.append(t,X1)
-        # Time stepping
-        for i in range(nstep):
-            # One timestep
-            dX1 = self._jstep_tgl_jit(dX1,X1)
-            if i<nstep-1:
-                X1 = self._jstep_jit(X1)
-                
-        # Remove time in control vector
-        dX1 = dX1[1:]
-        
-        # Reshaping
-        du1 = np.array(dX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        dv1 = np.array(dX1[self.swm.slicev]).reshape(self.swm.shapev)
-        dh1 = np.array(dX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        dState.setvar([du1,dv1,dh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def _jstep_tgl(self,dX0,X0):
-        
-        _,dX1 = jvp(self._jstep_jit, (X0,), (dX0,))
-        
-        return dX1
-    
-    def step_adj(self,adState, State, nstep=1,t=0):
-        
-        # Get state variable
-        adX0 = +adState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
-        adX0[np.isnan(adX0)] = np.nan
-        
-        # Get params in physical space
-        if State.params is not None:
-            adparams = +adState.getparams(['He','hbcx','hbcy'],vect=True)
-            adX0 = np.concatenate((adX0,adparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))         
-        
-        # Init
-        adX1 = +adX0
-        X1 = +X0
-        
-        # Current trajectory
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        traj = [X1]
-        if nstep>1:
-            for i in range(nstep):
-                # One timestep
-                X1 = self._jstep_jit(X1)
-                if i<nstep-1:
-                    traj.append(+X1)
-            
-        # Reversed time propagation
-        # Add time in control vector (for JAX)
-        adX1 = np.append(traj[-1][0],adX1)
-        for i in reversed(range(nstep)):
-            X1 = traj[i]
-            # One timestep
-            adX1 = self._jstep_adj_jit(adX1,X1)
-        
-        # Remove time in control vector
-        adX1 = adX1[1:]
-        
-        # Reshaping
-        adu1 = np.array(adX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        adv1 = np.array(adX1[self.swm.slicev]).reshape(self.swm.shapev)
-        adh1 = np.array(adX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        adparams = np.array(adX1[self.swm.nstates:])
-        adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
-        adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
-        adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
-        
-        # Update state
-        adu1[np.isnan(adu1)] = 0
-        adv1[np.isnan(adv1)] = 0
-        adh1[np.isnan(adh1)] = 0
-        adState.setvar([adu1,adv1,adh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-        # Update parameters
-        adState.params['He'] = adHe
-        adState.params['hbcx'] = adhbcx
-        adState.params['hbcy'] = adhbcy
-    
-    def _jstep_adj(self,adX0,X0):
-        
-        _, adf = vjp(self._jstep_jit, X0)
-        
-        return adf(adX0)[0]
-    
-    def _compute_w1_IT(self,t,He,h_SN,h_WE):
-        """
-        Compute first characteristic variable w1 for internal tides from external 
-        data
-
-        Parameters
-        ----------
-        t : float 
-            time in seconds
-        He : 2D array
-        h_SN : ND array
-            amplitude of SSH for southern/northern borders
-        h_WE : ND array
-            amplitude of SSH for western/eastern borders
-
-        Returns
-        -------
-        w1ext: 1D array
-            flattened  first characteristic variable (South/North/West/East)
-        """
-        
-        # South
-        HeS = (He[0,:]+He[1,:])/2
-        fS = (self.f[0,:]+self.f[1,:])/2
-        w1S = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[0,:] + ky*self.swm.Yv[0,:]
-                
-                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
-                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fS**2)*( \
-                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fS*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fS*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                
-                w1S += v + jnp.sqrt(self.g/HeS) * h
-         
-        # North
-        fN = (self.f[-1,:]+self.f[-2,:])/2
-        HeN = (He[-1,:]+He[-2,:])/2
-        w1N = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = -jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[-1,:] + ky*self.swm.Yv[-1,:]
-                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
-                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fN**2)*(\
-                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fN*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fN*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                w1N += v - jnp.sqrt(self.g/HeN) * h
-
-        # West
-        fW = (self.f[:,0]+self.f[:,1])/2
-        HeW = (He[:,0]+He[:,1])/2
-        w1W = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,0] + ky*self.swm.Yu[:,0]
-                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fW**2)*(\
-                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
-                              + fW*ky*jnp.sin(w*t-kxy)
-                                  ) +\
-                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fW*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1W += u + jnp.sqrt(self.g/HeW) * h
-
-        
-        # East
-        HeE = (He[:,-1]+He[:,-2])/2
-        fE = (self.f[:,-1]+self.f[:,-2])/2
-        w1E = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
-            for i,theta in enumerate(self.bc_theta):
-                kx = -jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,-1] + ky*self.swm.Yu[:,-1]
-                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fE**2)*(\
-                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
-                                + fE*ky*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fE*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1E += u - jnp.sqrt(self.g/HeE) * h
-        
-        return w1S,w1N,w1W,w1E     
-
-class Model_sw1l_nl_jax(M):
-
-    def __init__(self,config,State):
-
-        super().__init__(config,State)
-
-        self.config = config
-        # Model specific libraries
-        if config.MOD.dir_model is None:
-            dir_model = os.path.realpath(
-                os.path.join(os.path.dirname(os.path.realpath(__file__)),
-                             '..','models','model_sw1l'))
-        else:
-            dir_model = config.MOD.dir_model
-        
-        swm = SourceFileLoader("swm", 
-                                dir_model + "/jswm.py").load_module()
-        model = swm.Swm_nl
-
-        # grid
-        self.ny = State.ny
-        self.nx = State.nx
-        self.DX = State.DX
-        self.DY = State.DY
-
-        # Coriolis
-        self.f = State.f
-        f0 = np.nanmean(self.f)
-        self.f[np.isnan(self.f)] = f0
-
-        # Gravity
-        self.g = State.g
-             
-        # Equivalent depth
-        self.Heb = config.MOD.He_init * np.ones((State.ny,State.nx))
-
-            
-            
-        if config.MOD.Ntheta>0:
-            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
-        else:
-            self.bc_theta = np.array([0])
-            
-        self.omegas = np.asarray(config.MOD.w_waves)
-        self.bc_kind = config.MOD.bc_kind
-
-        # Initialize model state
-        self.name_var = config.MOD.name_var
-        self.var_to_save = [self.name_var['SSH']] # ssh
-
-        if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
-            dsin = xr.open_dataset(config.GRID.path_init_grid)
-            for name in self.name_var:
-                if name in config.MOD.name_init_var:
-                    var_init = dsin[config.MOD.name_init_var[name]]
-                    if len(var_init.shape)==3:
-                        var_init = var_init[0,:,:]
-                    if config.GRID.subsampling is not None:
-                        var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    dsin.close()
-                    del dsin
-                    State.var[self.name_var[name]] = var_init.values
-                else:
-                    if name=='U':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                    elif name=='V':
-                        State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                    elif name=='SSH':
-                        State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-        else:
-            for name in self.name_var:  
-                if name=='U':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx-1))
-                elif name=='V':
-                    State.var[self.name_var[name]] = np.zeros((State.ny-1,State.nx))
-                elif name=='SSH':
-                    State.var[self.name_var[name]] = np.zeros((State.ny,State.nx))
-
-        
-        # Model Parameters (He & bc)
-        self.shapeHe = [State.ny, State.nx]
-        self.shapehbcx = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.nx # NX
-                          ]
-        self.shapehbcy = [len(self.omegas), # tide frequencies
-                          2, # North/South
-                          2, # cos/sin
-                          len(self.bc_theta), # Angles
-                          State.ny # NY
-                          ]
-        
-        State.params[self.name_var['SSH']] = np.zeros((State.ny,State.nx))
-        #State.params['hbcx'] = np.zeros(self.shapehbcx).ravel()
-        #State.params['hbcy'] = np.zeros(self.shapehbcy).ravel()
-        State.params['He'] = np.zeros((State.ny,State.nx))
-
-        # External Boundary conditions
-        self.init_from_bc = config.MOD.init_from_bc
-        self.bc = {'U':{}, 'V':{}, 'SSH':{}}
-
-        # CFL
-        if config.MOD.cfl is not None:
-            grid_spacing = min(np.nanmean(State.DX), np.nanmean(State.DY)) 
-            dt = np.nanmean(config.MOD.cfl * grid_spacing / np.sqrt(self.g * self.Heb))
-            divisors = [i for i in range(1, 3600 + 1) if 3600 % i == 0]  # Find all divisors of one hour in seconds
-            lower_divisors = [d for d in divisors if d <= dt]
-            self.dt = max(lower_divisors)  # Get closest
-            print('Model time-step', self.dt)
-            # Time parameters
-            if self.dt>0:
-                self.nt = 1 + int((config.EXP.final_date - config.EXP.init_date).total_seconds()//self.dt)
-                self.timestamps = [] 
-                t = config.EXP.init_date
-                while t<=config.EXP.final_date:
-                    self.timestamps.append(t)
-                    t += timedelta(seconds=self.dt)
-                self.timestamps = np.asarray(self.timestamps)
-            else:
-                self.nt = 1
-                self.timestamps = np.array([config.EXP.init_date])
-            self.T = np.arange(self.nt) * self.dt
-        
-        # Model initialization
-        self.swm = model(
-                        X=State.X,
-                        Y=State.Y,
-                        dt=self.dt,
-                        f=self.f,
-                        g=config.MOD.g,
-                        Heb=self.Heb,
-                        flag_linear=config.MOD.flag_linear,
-                        flag_use_weno=config.MOD.flag_use_weno, 
-                        flag_baro_filter=config.MOD.flag_baro_filter, 
-                        Tbar=config.MOD.Tbar, 
-                        flag_obc=config.MOD.flag_obc, 
-                        obc_kind=config.MOD.obc_kind, 
-                        flag_sponge=config.MOD.flag_sponge, 
-                        sponge_width=config.MOD.sponge_width, 
-                        sponge_coef=config.MOD.sponge_coef, 
-                        flag_diffusion=config.MOD.flag_diffusion, 
-                        K_visc=config.MOD.K_visc,
-                        )
-        
-        
-        # Compile jax-related functions
-        #self._jstep_jit = jit(self._jstep)
-        #self._jstep_tgl_jit = jit(self._jstep_tgl)
-        #self._jstep_adj_jit = jit(self._jstep_adj)
-        self._compute_w1_IT_jit = jit(self._compute_w1_IT)
-        self.swm_step = self.swm.step_jit
-        self.swm_step_tgl = self.swm.step_tgl_jit
-        self.swm_step_adj = self.swm.step_adj_jit
-
-        if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('SW1L_NL_JAX Tangent test:')
-            tangent_test(self,State,nstep=10)
-            print('SW1L_NL_JAX Adjoint test:')
-            adjoint_test(self,State,nstep=10)
-
-    def init(self, State, t0=0):
-
-        if type(self.init_from_bc)==dict:
-            if 'SSH' in self.init_from_bc:
-                u0 = self.bc['U'][t0]
-                v0 = self.bc['V'][t0]
-                ssh0 = self.bc['SSH'][t0]
-                State.setvar(u0, self.name_var['U'])
-                State.setvar(v0, self.name_var['V'])
-                State.setvar(ssh0, self.name_var['SSH'])
-            for name in self.init_from_bc:
-                if self.init_from_bc[name] and t0 in self.bc[name]:
-                    State.setvar(self.bc[name][t0], self.name_var[name])
-        elif self.init_from_bc:
-            for name in self.name_var: 
-                if t0 in self.bc[name]:
-                     State.setvar(self.bc[name][t0], self.name_var[name])
-
-    def save_output(self,State,present_date,name_var=None,t=None):
-
-        State0 = State.copy()
-        State0.save_output(present_date, name_var)   
-
-    def ssh2uv(self, ssh):
-        """Nonlinear SSH → (u, v) model."""
-        ug = jnp.zeros((self.ny, self.nx - 1))
-        vg = jnp.zeros((self.ny - 1, self.nx))
-
-        ug = ug.at[1:-1, :].set(
-            -self.g / ((self.f[1:-1, 1:] + self.f[1:-1, :-1]) / 2)
-            * (ssh[2:, :-1] + ssh[2:, 1:] - ssh[:-2, 1:] - ssh[:-2, :-1])
-            / (2 * (self.DY[1:-1, 1:] + self.DY[1:-1, :-1]))
-        )
-
-        vg = vg.at[:, 1:-1].set(
-            self.g / ((self.f[1:, 1:-1] + self.f[:-1, 1:-1]) / 2)
-            * (ssh[1:, 2:] + ssh[:-1, 2:] - ssh[:-1, :-2] - ssh[1:, :-2])
-            / (2 * (self.DX[1:, 1:-1] + self.DX[:-1, 1:-1]))
-        )
-
-        return ug, vg
-    
-    def ssh2uv_tgl(self, ssh, dssh):
-        """Tangent-linear model using JAX forward-mode differentiation."""
-        _, (dug, dvg) = jax.jvp(
-            lambda s: self.ssh2uv(s),
-            (ssh,),
-            (dssh,)
-        )
-        return dug, dvg
-
-    def ssh2uv_adj(self, ssh, adug, advg):
-        """Adjoint model using JAX reverse-mode differentiation."""
-        _, vjp_fun = jax.vjp(lambda s: self.ssh2uv(s), ssh)
-        (adssh,) = vjp_fun((adug, advg))
-        return adssh
-
-    def set_bc(self,time_bc,var_bc):
-
-        for i,t in enumerate(time_bc):
-            ssh_bc_t = +var_bc['SSH'][i]
-            # Remove nan
-            ssh_bc_t[np.isnan(ssh_bc_t)] = 0.
-
-            # Compute u,v 
-            ug, vg = self.ssh2uv(ssh_bc_t)
-
-            # Fill bc dictionnary
-            self.bc['U'][t] = ug
-            self.bc['V'][t] = vg
-            self.bc['SSH'][t] = ssh_bc_t
-
-        self.bc_time = np.asarray(time_bc)
-            
-    def _apply_bc(self,t0):
-        
-        Xb = jnp.zeros((self.ny,self.nx,))
-        
-        if 'SSH' not in self.bc:
-            return Xb
-        elif len(self.bc['SSH'].keys())==0:
-             return Xb
-        elif t0 not in self.bc_time:
-            # Find closest time
-            idx_closest = np.argmin(np.abs(self.bc_time-t0))
-            t0 = self.bc_time[idx_closest]
-
-        u_b = self.bc['U'][t0]
-        v_b = self.bc['V'][t0]
-        ssh_b = self.bc['SSH'][t0]
-
-        return u_b, v_b, ssh_b
-
-    def _jstep(self, X0):
-        
-        t, X1 = X0[0], jnp.asarray(+X0[1:])
-        
-        
-        
-        # Time propagation
-        _X1 = +X1[:self.swm.nstates]
-        if params is not None:
-            # First characteristic variables w1 from external data
-            if self.bc_kind=='1d':
-                tbc = t + self.dt
-            else:
-                tbc = t
-
-            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
-            
-            w1ext = jnp.concatenate((w1S,w1N,w1W,w1E))
-            _X1 = jnp.concatenate((_X1, # State variables
-                                   He.flatten(), w1ext)) # Model parameters 
-        # One forward step
-        _X1 = self.swm_step(_X1)
-        
-        # Retrieve inital form
-        X1 = X1.at[:self.swm.nstates].set(_X1[:self.swm.nstates])
-        
-        if params is not None:
-            X1 = X1.at[self.swm.nstates:].set(params)
-        
-        X1 = jnp.append(jnp.array(t+self.dt),X1)
-    
-        return X1
-    
-    def step(self,State,nstep=1,t=0):
-
-        # Get state variable
-        ssh = State.getvar(name_var=self.name_var['SSH'])
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-
-        # Boundary condition
-        u_b, v_b, ssh_b = self._apply_bc(t)
-
-        # Initialize control vector
-        X0 = np.zeros(self.swm.nstates + self.swm.nparams)
-        X0[self.swm.sliceu] = u.flatten()
-        X0[self.swm.slicev] = v.flatten()
-        X0[self.swm.sliceh] = ssh.flatten()
-        X0[self.swm.sliceHe] = (self.Heb + State.params['He']).flatten()
-        X0[self.swm.sliceUext] = u_b.flatten()
-        X0[self.swm.sliceVext] = v_b.flatten()
-        X0[self.swm.sliceHext] = ssh_b.flatten()
-
-        # Time propagation
-        X1 = self.swm_step(X0, nstep=nstep)
-
-        # Get state variable
-        u = X1[self.swm.sliceu].reshape(self.swm.shapeu)
-        v = X1[self.swm.slicev].reshape(self.swm.shapev)
-        ssh = X1[self.swm.sliceh].reshape(self.swm.shapeh)
-
-        # Forcing flux
-        if self.name_var['SSH'] in State.params:
-            Fssh = State.params[self.name_var['SSH']]
-            Fu, Fv = self.ssh2uv(Fssh)
-            u += nstep*self.dt/(3600*24) * Fu
-            v += nstep*self.dt/(3600*24) * Fv
-            ssh += nstep*self.dt/(3600*24) * Fssh 
-        
-        # Update state
-        State.setvar(u, name_var=self.name_var['U'])
-        State.setvar(v, name_var=self.name_var['V'])
-        State.setvar(ssh, name_var=self.name_var['SSH'])
-
-    def step_tgl(self,dState,State,nstep=1,t=0):
-
-        # Get state variable
-        dssh = dState.getvar(name_var=self.name_var['SSH'])
-        du = dState.getvar(name_var=self.name_var['U'])
-        dv = dState.getvar(name_var=self.name_var['V'])
-        ssh = State.getvar(name_var=self.name_var['SSH'])
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-
-        # Boundary condition
-        u_b, v_b, ssh_b = self._apply_bc(t)
-
-        # Initialize control vector
-        X0 = np.zeros(self.swm.nstates + self.swm.nparams)
-        X0[self.swm.sliceu] = u.flatten()
-        X0[self.swm.slicev] = v.flatten()
-        X0[self.swm.sliceh] = ssh.flatten()
-        X0[self.swm.sliceHe] = (self.Heb + State.params['He']).flatten()
-        X0[self.swm.sliceUext] = u_b.flatten()
-        X0[self.swm.sliceVext] = v_b.flatten()
-        X0[self.swm.sliceHext] = ssh_b.flatten()
-        dX0 = np.zeros(self.swm.nstates + self.swm.nparams)
-        dX0[self.swm.sliceu] = du.flatten()
-        dX0[self.swm.slicev] = dv.flatten()
-        dX0[self.swm.sliceh] = dssh.flatten()
-        dX0[self.swm.sliceHe] = dState.params['He'].flatten()
-
-        # Time propagation
-        dX1 = self.swm_step_tgl(dX0, X0, nstep=nstep)
-        
-        # Get state variable
-        du = dX1[self.swm.sliceu].reshape(self.swm.shapeu)
-        dv = dX1[self.swm.slicev].reshape(self.swm.shapev)
-        dssh = dX1[self.swm.sliceh].reshape(self.swm.shapeh)
-
-        # Forcing flux
-        if self.name_var['SSH'] in dState.params:
-            Fssh = State.params[self.name_var['SSH']]
-            dFssh = dState.params[self.name_var['SSH']]
-            dFu, dFv = self.ssh2uv_tgl(Fssh, dFssh)
-            du += nstep*self.dt/(3600*24) * dFu
-            dv += nstep*self.dt/(3600*24) * dFv
-            dssh += nstep*self.dt/(3600*24) * dFssh 
-
-        # Update state
-        dState.setvar(du, name_var=self.name_var['U'])
-        dState.setvar(dv, name_var=self.name_var['V'])
-        dState.setvar(dssh, name_var=self.name_var['SSH'])
-
-    def step_adj(self,adState,State,nstep=1,t=0):
-
-        # Get state variable
-        adssh0 = adState.getvar(name_var=self.name_var['SSH'])
-        adu0 = adState.getvar(name_var=self.name_var['U'])
-        adv0 = adState.getvar(name_var=self.name_var['V'])
-        ssh = State.getvar(name_var=self.name_var['SSH'])
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-
-        # Get params
-        adHe = adState.params['He']
-        #adhbcx = adState.params['hbcx']
-        #adhbcy = adState.params['hbcy']
-
-        # Boundary field
-        u_b, v_b, ssh_b = self._apply_bc(t)
-
-        # Initialize control vector
-        X0 = np.zeros(self.swm.nstates + self.swm.nparams)
-        X0[self.swm.sliceu] = u.flatten()
-        X0[self.swm.slicev] = v.flatten()
-        X0[self.swm.sliceh] = ssh.flatten()
-        X0[self.swm.sliceHe] = (self.Heb + State.params['He']).flatten()
-        X0[self.swm.sliceUext] = u_b.flatten()
-        X0[self.swm.sliceVext] = v_b.flatten()
-        X0[self.swm.sliceHext] = ssh_b.flatten()
-        adX0 = np.zeros(self.swm.nstates + self.swm.nparams)
-        adX0[self.swm.sliceu] = adu0.flatten()
-        adX0[self.swm.slicev] = adv0.flatten()
-        adX0[self.swm.sliceh] = adssh0.flatten()
-        adX0[self.swm.sliceHe] = adHe.flatten()
-
-        # Time propagation
-        adX1 = self.swm_step_adj(adX0, X0, nstep=nstep)
-        
-        # Get state variable
-        adu = adX1[self.swm.sliceu].reshape(self.swm.shapeu)
-        adv = adX1[self.swm.slicev].reshape(self.swm.shapev)
-        adssh = adX1[self.swm.sliceh].reshape(self.swm.shapeh)
-        adHe = adX1[self.swm.sliceHe].reshape(self.shapeHe)
-
-        # Update state and parameters
-        if self.name_var['SSH'] in adState.params:
-            Fssh = State.params[self.name_var['SSH']]
-            adFssh = nstep*self.dt/(3600*24) * adssh0
-            adFu = nstep*self.dt/(3600*24) * adu0
-            adFv = nstep*self.dt/(3600*24) * adv0
-            adFssh += self.ssh2uv_adj(Fssh, adFu, adFv)
-            adState.params[self.name_var['SSH']] += adFssh 
-
-        adState.setvar(adu, self.name_var['U'])
-        adState.setvar(adv, self.name_var['V'])
-        adState.setvar(adssh, self.name_var['SSH'])
-
-        # Update parameters
-        adState.params['He'] = adHe
-        #adState.params['hbcx'] = adhbcx
-        #adState.params['hbcy'] = adhbcy
-
-    
-    def _step(self,State,nstep=1,t=0):
-
-        # Get state variable
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
-
-        # Get params in physical space
-        if State.params is not None:
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))
-
-        # Init
-        X1 = +X0
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        # Time stepping
-        for _ in range(nstep):
-            # One time step
-            X1 = self._jstep_jit(X1)
-        
-        # Remove time in control vector
-        X1 = X1[1:]
-        
-        # Convert to numpy and reshape
-        u1 = np.array(X1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        v1 = np.array(X1[self.swm.slicev]).reshape(self.swm.shapev)
-        h1 = np.array(X1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        State.setvar([u1,v1,h1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def __jstep(self,X0):
-        
-        t,X1 = X0[0], jnp.asarray(+X0[1:])
-        
-        # Get He,obcs parameters
-        params = None
-        if X1.size==self.swm.nstates+self.nparams:
-            params = X1[self.swm.nstates:]
-            He = +params[self.sliceHe].reshape(self.shapeHe) + self.Heb
-            hbcx = +params[self.slicehbcx].reshape(self.shapehbcx)
-            hbcy = +params[self.slicehbcy].reshape(self.shapehbcy)        
-        
-        # Time propagation
-        _X1 = +X1[:self.swm.nstates]
-        if params is not None:
-            # First characteristic variables w1 from external data
-            if self.bc_kind=='1d':
-                tbc = t + self.dt
-            else:
-                tbc = t
-
-            w1S,w1N,w1W,w1E = self._compute_w1_IT_jit(tbc,He,hbcx,hbcy)
-            
-            w1ext = jnp.concatenate((w1S,w1N,w1W,w1E))
-            _X1 = jnp.concatenate((_X1, # State variables
-                                   He.flatten(), w1ext)) # Model parameters 
-        # One forward step
-        _X1 = self.swm_step(_X1)
-        
-        # Retrieve inital form
-        X1 = X1.at[:self.swm.nstates].set(_X1[:self.swm.nstates])
-        
-        if params is not None:
-            X1 = X1.at[self.swm.nstates:].set(params)
-        
-        X1 = jnp.append(jnp.array(t+self.dt),X1)
-    
-        return X1
-        
-    def _step_tgl(self,dState,State,nstep=1,t=0):
-        
-        # Get state variable
-        dX0 = +dState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Get params in physical space
-        if State.params is not None:
-            dparams = +dState.getparams(['He','hbcx','hbcy'],vect=True)
-            dX0 = np.concatenate((dX0,dparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))         
-
-        # Init
-        dX1 = +dX0
-        X1 = +X0
-        # Add time in control vector (for JAX)
-        dX1 = np.append(t,dX1)
-        X1 = np.append(t,X1)
-        # Time stepping
-        for i in range(nstep):
-            # One timestep
-            dX1 = self._jstep_tgl_jit(dX1,X1)
-            if i<nstep-1:
-                X1 = self._jstep_jit(X1)
-                
-        # Remove time in control vector
-        dX1 = dX1[1:]
-        
-        # Reshaping
-        du1 = np.array(dX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        dv1 = np.array(dX1[self.swm.slicev]).reshape(self.swm.shapev)
-        dh1 = np.array(dX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        
-        dState.setvar([du1,dv1,dh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-    def __jstep_tgl(self,dX0,X0):
-        
-        _,dX1 = jvp(self._jstep_jit, (X0,), (dX0,))
-        
-        return dX1
-    
-    def _step_adj(self,adState, State, nstep=1,t=0):
-        
-        # Get state variable
-        adX0 = +adState.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        X0 = +State.getvar(
-            [self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']],vect=True)
-        
-        # Remove NaN
-        X0[np.isnan(X0)] = np.nan
-        adX0[np.isnan(adX0)] = np.nan
-        
-        # Get params in physical space
-        if State.params is not None:
-            adparams = +adState.getparams(['He','hbcx','hbcy'],vect=True)
-            adX0 = np.concatenate((adX0,adparams))
-            params = +State.getparams(['He','hbcx','hbcy'],vect=True)
-            X0 = np.concatenate((X0,params))         
-        
-        # Init
-        adX1 = +adX0
-        X1 = +X0
-        
-        # Current trajectory
-        # Add time in control vector (for JAX)
-        X1 = np.append(t,X1)
-        traj = [X1]
-        if nstep>1:
-            for i in range(nstep):
-                # One timestep
-                X1 = self._jstep_jit(X1)
-                if i<nstep-1:
-                    traj.append(+X1)
-            
-        # Reversed time propagation
-        # Add time in control vector (for JAX)
-        adX1 = np.append(traj[-1][0],adX1)
-        for i in reversed(range(nstep)):
-            X1 = traj[i]
-            # One timestep
-            adX1 = self._jstep_adj_jit(adX1,X1)
-        
-        # Remove time in control vector
-        adX1 = adX1[1:]
-        
-        # Reshaping
-        adu1 = np.array(adX1[self.swm.sliceu]).reshape(self.swm.shapeu)
-        adv1 = np.array(adX1[self.swm.slicev]).reshape(self.swm.shapev)
-        adh1 = np.array(adX1[self.swm.sliceh]).reshape(self.swm.shapeh)
-        adparams = np.array(adX1[self.swm.nstates:])
-        adHe = +adparams[self.sliceHe].reshape(self.shapeHe)
-        adhbcx = +adparams[self.slicehbcx].reshape(self.shapehbcx)
-        adhbcy = +adparams[self.slicehbcy].reshape(self.shapehbcy)        
-        
-        # Update state
-        adu1[np.isnan(adu1)] = 0
-        adv1[np.isnan(adv1)] = 0
-        adh1[np.isnan(adh1)] = 0
-        adState.setvar([adu1,adv1,adh1],[
-            self.name_var['U'],
-            self.name_var['V'],
-            self.name_var['SSH']])
-        
-        # Update parameters
-        adState.params['He'] = adHe
-        adState.params['hbcx'] = adhbcx
-        adState.params['hbcy'] = adhbcy
-    
-    def __jstep_adj(self,adX0,X0):
-        
-        _, adf = vjp(self._jstep_jit, X0)
-        
-        return adf(adX0)[0]
-    
-    def _compute_w1_IT(self,t,He,h_SN,h_WE):
-        """
-        Compute first characteristic variable w1 for internal tides from external 
-        data
-
-        Parameters
-        ----------
-        t : float 
-            time in seconds
-        He : 2D array
-        h_SN : ND array
-            amplitude of SSH for southern/northern borders
-        h_WE : ND array
-            amplitude of SSH for western/eastern borders
-
-        Returns
-        -------
-        w1ext: 1D array
-            flattened  first characteristic variable (South/North/West/East)
-        """
-        
-        # South
-        HeS = (He[0,:]+He[1,:])/2
-        fS = (self.f[0,:]+self.f[1,:])/2
-        w1S = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[0,:] + ky*self.swm.Yv[0,:]
-                
-                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
-                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fS**2)*( \
-                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fS*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fS*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                
-                w1S += v + jnp.sqrt(self.g/HeS) * h
-         
-        # North
-        fN = (self.f[-1,:]+self.f[-2,:])/2
-        HeN = (He[-1,:]+He[-2,:])/2
-        w1N = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = -jnp.cos(theta) * k
-                kxy = kx*self.swm.Xv[-1,:] + ky*self.swm.Yv[-1,:]
-                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
-                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fN**2)*(\
-                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fN*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fN*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                w1N += v - jnp.sqrt(self.g/HeN) * h
-
-        # West
-        fW = (self.f[:,0]+self.f[:,1])/2
-        HeW = (He[:,0]+He[:,1])/2
-        w1W = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,0] + ky*self.swm.Yu[:,0]
-                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fW**2)*(\
-                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
-                              + fW*ky*jnp.sin(w*t-kxy)
-                                  ) +\
-                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fW*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1W += u + jnp.sqrt(self.g/HeW) * h
-
-        
-        # East
-        HeE = (He[:,-1]+He[:,-2])/2
-        fE = (self.f[:,-1]+self.f[:,-2])/2
-        w1E = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
-            for i,theta in enumerate(self.bc_theta):
-                kx = -jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.swm.Xu[:,-1] + ky*self.swm.Yu[:,-1]
-                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fE**2)*(\
-                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
-                                + fE*ky*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fE*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1E += u - jnp.sqrt(self.g/HeE) * h
-        
-        return w1S,w1N,w1W,w1E     
 
 class Model_csw1l(M):
 
@@ -4937,6 +2404,11 @@ class Model_csw1l(M):
 
         return adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE
 
+
+###############################################################################
+#                             QG-SW Models                                    #
+###############################################################################
+
 class Model_qgsw(M):
 
     def __init__(self,config,State):
@@ -4954,6 +2426,7 @@ class Model_qgsw(M):
             dir_model = config.MOD.dir_model  
         SourceFileLoader("tools", dir_model+"/tools.py").load_module() 
         SourceFileLoader("helmholtz", dir_model+"/helmholtz.py").load_module() 
+        SourceFileLoader("helmholtz_multigrid", dir_model+"/helmholtz_multigrid.py").load_module() 
         SourceFileLoader("masks", dir_model+"/masks.py").load_module() 
         SourceFileLoader("flux", dir_model+"/flux.py").load_module()
         SourceFileLoader("finite_diff", dir_model+"/finite_diff.py").load_module()
@@ -4969,6 +2442,8 @@ class Model_qgsw(M):
             self.dtype = jnp.float64
         else:
             self.dtype = jnp.float32
+
+        self.nl = config.MOD.nl
 
         if config.MOD.name_class.lower()=='qg':
             model = model_qg
@@ -5117,18 +2592,36 @@ class Model_qgsw(M):
                     H = H0 = np.expand_dims(H, axis=(0,1))
         else:
             g_prime = config.MOD.g_prime
+            if not hasattr(g_prime, 'shape'):
+                g_prime = np.array(g_prime)
+            if len(g_prime.shape) == 1:
+                g_prime = g_prime.reshape(-1, 1, 1)
             H = config.MOD.H
+            if not hasattr(H, 'shape'):
+                H = np.array(H)
+            if len(H.shape) == 1:
+                H = H.reshape(-1, 1, 1)
+            elif len(H.shape) == 2:
+                H = np.expand_dims(H, axis=0)
         
         self.H0 = H
         
         # CFL
         if config.MOD.cfl is not None:
             grid_spacing = min(np.nanmin(State.DX), np.nanmin(State.DY)) 
-            dt = config.MOD.cfl * grid_spacing / np.nanmax(self.c)
+            # For nl>1 the fastest wave is the barotropic mode sqrt(g*sum(H))
+            if self.nl > 1:
+                H_arr = np.asarray(config.MOD.H)
+                g_arr = np.asarray(config.MOD.g_prime)
+                c_max = float(np.sqrt(g_arr[0] * H_arr.sum()))
+                print(f'Barotropic wave speed c_max = {c_max:.2f} m/s')
+            else:
+                c_max = float(np.nanmax(self.c))
+            dt = config.MOD.cfl * grid_spacing / c_max
             divisors = [i for i in range(1, 3600 + 1) if 3600 % i == 0]  # Find all divisors of one hour in seconds
             lower_divisors = [d for d in divisors if d <= dt]
             self.dt = max(lower_divisors)  # Get closest
-            print('CFL condition for c=', np.nanmean(self.c))
+            print(f'CFL condition for c= {c_max}')
             print('Model time-step', self.dt)
             # Time parameters
             if self.dt>0:
@@ -5178,6 +2671,12 @@ class Model_qgsw(M):
                 elif name=='SSH':
                     State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
 
+        # For nl>1, also initialize per-layer storage in State
+        if self.nl > 1:
+            State.var['u_layers'] = jnp.zeros((self.nl, State.ny, State.nx+1), dtype=self.dtype)
+            State.var['v_layers'] = jnp.zeros((self.nl, State.ny+1, State.nx), dtype=self.dtype)
+            State.var['h_layers'] = jnp.zeros((self.nl, State.ny, State.nx), dtype=self.dtype)
+
         # Initialize boundary condition dictionnary for each model variable
         self.bc = {}
         self.forcing = {}
@@ -5219,7 +2718,7 @@ class Model_qgsw(M):
             sponge_max = jnp.max(sponge)
             return (sponge - sponge_min) / (sponge_max - sponge_min)
 
-        if False:
+        if True:
             mask_h = State.mask.copy()
             lon_h = State.lon
             lat_h = State.lat
@@ -5253,7 +2752,6 @@ class Model_qgsw(M):
             sponge_v = grid.compute_weight_map(lon_v, lat_v, mask_v, config.MOD.dist_sponge_bc)
 
             
-
             fig, (ax1,ax2,ax3) = plt.subplots(1, 3, figsize=(15, 5))
             im1 = ax1.pcolormesh(sponge_h)
             plt.colorbar(im1, ax=ax1)
@@ -5290,6 +2788,8 @@ class Model_qgsw(M):
             "taux": 0.,
             "tauy": 0.,
             "bottom_drag_coef": config.MOD.bottom_drag_coef,
+            "rho_water": getattr(config.MOD, 'rho_water', 1025.0),
+            "h_wind": getattr(config.MOD, 'h_wind', None),
             "dtype": self.dtype,
             "mask": (1-State.mask.astype(int).T),
             "compile": True,
@@ -5300,13 +2800,19 @@ class Model_qgsw(M):
             "barotropic_filter": False,
             'barotropic_filter_spectral': False,
             'sponge_coef': self.sponge_coef,
+            'forcing_momentum': getattr(config.MOD, 'forcing_momentum', 'direct'),
         }
 
         self.model = model(params)
 
+        # Sponge masks: (1, 1, nx, ny) — broadcasts across all layers.
+        # Layer 0 is nudged toward surface BC; deep layers toward zero (their BC is 0).
         self.model.sponge_u = jnp.expand_dims(jnp.asarray(self.sponge_u.T.astype(self.dtype)), axis=(0,1))
         self.model.sponge_v = jnp.expand_dims(jnp.asarray(self.sponge_v.T.astype(self.dtype)), axis=(0,1))
         self.model.sponge_h = jnp.expand_dims(jnp.asarray(self.sponge_h.T.astype(self.dtype)), axis=(0,1))
+
+        # Maximum number of model steps per JIT call (limits GPU memory)
+        self.max_nstep = getattr(config.MOD, 'max_nstep', 240)
 
         # Model functions initialization
         self.model_step = self.model.step
@@ -5343,13 +2849,166 @@ class Model_qgsw(M):
         for name in self.name_var:
             State.params[self.name_var[name]] = np.zeros_like(State.var[self.name_var[name]])
 
+        # Wind forcing (must be loaded after self.timestamps and self.dt are set)
+        self._load_wind_forcing(config, State)
+
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            tangent_test(self,State,nstep=10)#, ampl=1e-3)
+            #tangent_test(self,State,nstep=10)#, ampl=1e-3)
             print('Adjoint test:')
+            #self.adjoint_test_jstep(nstep=10)
             adjoint_test(self,State,nstep=10)#, ampl=1e-3)
     
+    def _load_wind_forcing(self, config, State):
+        """
+        Read a NetCDF wind file, convert (u10, v10) to wind stress using the
+        bulk formula  tau = rho_air * Cd * |U10| * U10,  and precompute
+        taux / tauy at every model timestamp on the u- and v-grids.
+
+        Config keys used (all optional):
+          config.MOD.path_wind       – path to the .nc file (None → no wind)
+          config.MOD.name_var_wind   – dict with keys 'lon','lat','time','u10','v10'
+                                       (defaults to ERA5 conventions)
+          config.MOD.rho_air         – air density in kg/m³  (default 1.25)
+          config.MOD.Cd_wind         – drag coefficient      (default 1.5e-3)
+
+        Stores:
+          self.taux_wind  – ndarray (nt, ny, nx+1)  wind stress on u-grid
+          self.tauy_wind  – ndarray (nt, ny+1, nx)  wind stress on v-grid
+        """
+        self.taux_wind = None
+        self.tauy_wind = None
+
+        path_wind = getattr(config.MOD, 'path_wind', None)
+        if path_wind is None or not os.path.exists(path_wind):
+            return
+
+        rho_air = getattr(config.MOD, 'rho_air', 1.25)
+        Cd      = getattr(config.MOD, 'Cd_wind', 1.5e-3)
+        nv = getattr(config.MOD, 'name_var_wind',
+                     {'lon': 'longitude', 'lat': 'latitude', 'time': 'time',
+                      'u10': 'u10', 'v10': 'v10'})
+
+        ds = xr.open_dataset(path_wind)
+
+        # --- longitude convention ---
+        lon_vals = ds[nv['lon']].values
+        if lon_vals.min() < 0 and State.lon_unit == '0_360':
+            ds = ds.assign_coords({nv['lon']: (nv['lon'], lon_vals % 360)})
+        elif lon_vals.min() >= 0 and State.lon_unit == '-180_180':
+            ds = ds.assign_coords({nv['lon']: (nv['lon'], (lon_vals + 180) % 360 - 180)})
+        ds = ds.sortby(nv['lon'])
+
+        # --- compute wind stress on the wind file's native grid ---
+        u10 = ds[nv['u10']].values   # (ntime, nlat, nlon)
+        v10 = ds[nv['v10']].values
+        wspd   = np.sqrt(u10**2 + v10**2)
+        taux_w = rho_air * Cd * wspd * u10
+        tauy_w = rho_air * Cd * wspd * v10
+
+        wind_lons  = ds[nv['lon']].values
+        wind_lats  = ds[nv['lat']].values
+        wind_times = ds[nv['time']].values.astype('datetime64[s]')
+        ds.close()
+
+        # --- wind update cadence ---
+        wind_dt = getattr(config.MOD, 'wind_timestep', 3600)  # seconds
+        wind_dt = max(wind_dt, self.dt)  # at least one model step
+        total_seconds = (config.EXP.final_date - config.EXP.init_date).total_seconds()
+        nt_wind = 1 + int(total_seconds // wind_dt)
+        self.wind_dt = wind_dt
+
+        # --- spatial interpolation to model h-grid ---
+        from scipy.interpolate import RegularGridInterpolator
+        taux_hgrid = np.zeros((nt_wind, State.ny, State.nx))
+        tauy_hgrid = np.zeros((nt_wind, State.ny, State.nx))
+
+        # wind sample timestamps as datetime64[s]
+        wind_sample_times = np.array(
+            [config.EXP.init_date + timedelta(seconds=i * wind_dt) for i in range(nt_wind)],
+            dtype='datetime64[s]')
+
+        # ensure lats are monotonically increasing for RegularGridInterpolator
+        if wind_lats[0] > wind_lats[-1]:
+            wind_lats  = wind_lats[::-1]
+            taux_w     = taux_w[:, ::-1, :]
+            tauy_w     = tauy_w[:, ::-1, :]
+
+        for it in range(nt_wind):
+            # --- temporal linear interpolation ---
+            t_model = wind_sample_times[it]
+            idx_r = int(np.searchsorted(wind_times, t_model))
+            idx_r = np.clip(idx_r, 1, len(wind_times) - 1)
+            idx_l = idx_r - 1
+
+            dt_wind   = float((wind_times[idx_r] - wind_times[idx_l]).astype('float64'))
+            dt_interp = float((t_model          - wind_times[idx_l]).astype('float64'))
+            alpha = (dt_interp / dt_wind) if dt_wind > 0 else 0.
+            alpha = np.clip(alpha, 0., 1.)
+
+            taux_t = (1 - alpha) * taux_w[idx_l] + alpha * taux_w[idx_r]
+            tauy_t = (1 - alpha) * tauy_w[idx_l] + alpha * tauy_w[idx_r]
+
+            # --- spatial interpolation ---
+            pts = np.stack([State.lat.ravel(), State.lon.ravel()], axis=-1)
+
+            fi_taux = RegularGridInterpolator(
+                (wind_lats, wind_lons), taux_t,
+                method='linear', bounds_error=False, fill_value=0.)
+            fi_tauy = RegularGridInterpolator(
+                (wind_lats, wind_lons), tauy_t,
+                method='linear', bounds_error=False, fill_value=0.)
+
+            taux_hgrid[it] = fi_taux(pts).reshape(State.ny, State.nx)
+            tauy_hgrid[it] = fi_tauy(pts).reshape(State.ny, State.nx)
+
+        # --- interpolate from h-grid to u-grid (ny, nx+1) and v-grid (ny+1, nx) ---
+        taux_u = np.zeros((nt_wind, State.ny,     State.nx + 1))
+        tauy_v = np.zeros((nt_wind, State.ny + 1, State.nx    ))
+
+        taux_u[:, :, 1:State.nx] = 0.5 * (taux_hgrid[:, :, :-1] + taux_hgrid[:, :, 1:])
+        taux_u[:, :, 0]          = taux_hgrid[:, :,  0]
+        taux_u[:, :, State.nx]   = taux_hgrid[:, :, -1]
+
+        tauy_v[:, 1:State.ny, :] = 0.5 * (tauy_hgrid[:, :-1, :] + tauy_hgrid[:, 1:, :])
+        tauy_v[:, 0,          :] = tauy_hgrid[:,  0, :]
+        tauy_v[:, State.ny,   :] = tauy_hgrid[:, -1, :]
+
+        self.taux_wind = taux_u   # (nt_wind, ny, nx+1)
+        self.tauy_wind = tauy_v   # (nt_wind, ny+1, nx)
+        print(f'  - Wind forcing loaded: {path_wind}  ({nt_wind} wind snapshots, wind_timestep={wind_dt}s)')
+        print(f'    max |taux|={np.nanmax(np.abs(taux_u)):.3e}  '
+              f'max |tauy|={np.nanmax(np.abs(tauy_v)):.3e}')
+
+    def _get_wind_stress(self, t):
+        """
+        Return (taux, tauy) as jnp arrays for time t (seconds from init).
+        Returns (None, None) when no wind file was loaded.
+        """
+        if self.taux_wind is None:
+            return None, None
+        it = int(round(t / self.wind_dt)) if self.wind_dt > 0 else 0
+        it = int(np.clip(it, 0, len(self.taux_wind) - 1))
+        taux = jnp.asarray(self.taux_wind[it], dtype=self.dtype)  # (ny, nx+1)
+        tauy = jnp.asarray(self.tauy_wind[it], dtype=self.dtype)  # (ny+1, nx)
+        return taux, tauy
+
+    def _sync_layers_from_surface(self, State):
+        """Project 2D surface fields into per-layer arrays (layer 0 gets the perturbation)."""
+        ssh = jnp.asarray(State.getvar(name_var=self.name_var['SSH']), dtype=self.dtype)
+        u   = jnp.asarray(State.getvar(name_var=self.name_var['U']),   dtype=self.dtype)
+        v   = jnp.asarray(State.getvar(name_var=self.name_var['V']),   dtype=self.dtype)
+        State.var['h_layers'] = jnp.zeros((self.nl, self.ny, self.nx), dtype=self.dtype).at[0].set(ssh)
+        State.var['u_layers'] = jnp.zeros((self.nl, self.ny, self.nx+1), dtype=self.dtype).at[0].set(u)
+        State.var['v_layers'] = jnp.zeros((self.nl, self.ny+1, self.nx), dtype=self.dtype).at[0].set(v)
+
+    def _diagnose_surface(self, State):
+        """Set 2D surface SSH/U/V from per-layer arrays."""
+        State.setvar(State.var['h_layers'].sum(axis=0), name_var=self.name_var['SSH'])
+        State.setvar(State.var['u_layers'][0],          name_var=self.name_var['U'])
+        State.setvar(State.var['v_layers'][0],          name_var=self.name_var['V'])
+
     def init(self, State, t0=0):
 
         if type(self.init_from_bc)==dict:
@@ -5368,6 +3027,10 @@ class Model_qgsw(M):
                 if t0 in self.bc[name]:
                      State.setvar(self.bc[name][t0], self.name_var[name])
 
+        # For nl>1, project surface fields into per-layer arrays
+        if self.nl > 1:
+            self._sync_layers_from_surface(State)
+
     def save_output(self,State,present_date,name_var=None,t=None):
 
         State0 = State.copy()
@@ -5379,9 +3042,7 @@ class Model_qgsw(M):
             _name_var += ['H']
     
         State0.save_output(present_date, name_var=_name_var)
-
-        
-        
+    
     def set_bc(self,time_bc,var_bc):
 
         for i,t in enumerate(time_bc):
@@ -5392,9 +3053,15 @@ class Model_qgsw(M):
             if 'U' not in var_bc or 'V' not in var_bc:
                 # Compute (u,v) from ssh (geostrophy)
                 u, v = self.ssh2uv(ssh_bc_t)
+                # TESTTING
+                u *= 0
+                v *= 0
             else:
                 u = +var_bc['U'][i]
                 v = +var_bc['V'][i]
+                # Remove nan
+                u[np.isnan(u)] = 0.
+                v[np.isnan(v)] = 0.
 
             # Fill bc dictionnary
             self.bc['U'][t] = u
@@ -5461,101 +3128,142 @@ class Model_qgsw(M):
         h_on_v = 0.5*(_h[:,1:] + _h[:,:-1])
         return h_on_v
     
-    def jstep_core(self, t, u0, v0, h0, H, Fu, Fv, Fh, h_SN, h_WE, u_b, v_b, h_b,
-                nstep=1):
-        
+    def jstep_core(self, t, u0, v0, h0, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                taux=None, tauy=None, nstep=1):
+        """
+        taux: wind stress on u-grid, shape (ny, nx+1) in State convention, or None.
+        tauy: wind stress on v-grid, shape (ny+1, nx) in State convention, or None.
+        They are converted to SW model convention (nx-1, ny) and (nx, ny-1) internally.
+        Fu/Fv/Fh: 2D forcing in State convention — converted to per-layer for nl>1.
+        u_b/v_b/h_b: 2D BCs in State convention — converted to per-layer for nl>1.
+        """
         u, v, h = u0, v0, h0
 
-        # Add MDT
+        # Add MDT (surface only for nl>1)
         if self.mdt is not None:
-            h = h + self.mdt
-            u = u + self.mdu
-            v = v + self.mdv
+            if self.nl > 1:
+                h = h.at[:, 0:1, :, :].add(self.mdt)
+                u = u.at[:, 0:1, :, :].add(self.mdu)
+                v = v.at[:, 0:1, :, :].add(self.mdv)
+            else:
+                h = h + self.mdt
+                u = u + self.mdu
+                v = v + self.mdv
+
+        # Convert wind stress from State (ny, nx+1/ny+1) to SW model (nx-1/nx, ny/ny-1)
+        # SW model expects taux on interior u-faces: (nx-1, ny)
+        #                  tauy on interior v-faces: (nx, ny-1)
+        _taux = taux[:, 1:-1].T if taux is not None else None   # (nx-1, ny)
+        _tauy = tauy[1:-1, :].T if tauy is not None else None   # (nx, ny-1)
+
+        # Convert BCs and forcing from State convention to SW convention
+        if self.nl > 1:
+            # Per-layer: put 2D BC/forcing in layer 0, zeros in other layers
+            u_b_sw = jnp.zeros((self.nl, self.nx+1, self.ny), dtype=self.dtype).at[0].set(u_b.T)
+            v_b_sw = jnp.zeros((self.nl, self.nx, self.ny+1), dtype=self.dtype).at[0].set(v_b.T)
+            h_b_sw = jnp.zeros((self.nl, self.nx, self.ny),   dtype=self.dtype).at[0].set(h_b.T)
+            Fu_sw = jnp.zeros((self.nl, self.nx+1, self.ny), dtype=self.dtype).at[0].set(Fu.T) / (3600 * 24)
+            Fv_sw = jnp.zeros((self.nl, self.nx, self.ny+1), dtype=self.dtype).at[0].set(Fv.T) / (3600 * 24)
+            Fh_sw = jnp.zeros((self.nl, self.nx, self.ny),   dtype=self.dtype).at[0].set(Fh.T) / (3600 * 24)
+        else:
+            u_b_sw = u_b.T
+            v_b_sw = v_b.T
+            h_b_sw = h_b.T
+            Fu_sw = Fu.T / (3600 * 24)
+            Fv_sw = Fv.T / (3600 * 24)
+            Fh_sw = Fh.T / (3600 * 24)
 
         # Step
         u1, v1, h1 = self.model_step(
                 u, v, h, H=H, nstep=nstep,
-                u_b=u_b.T, v_b=v_b.T, h_b=h_b.T,
-                Fu=Fu.T / (3600 * 24), Fv=Fv.T / (3600 * 24), Fh=Fh.T / (3600 * 24), 
+                u_b=u_b_sw, v_b=v_b_sw, h_b=h_b_sw,
+                Fu=Fu_sw, Fv=Fv_sw, Fh=Fh_sw,
+                taux=_taux, tauy=_tauy,
             )
 
-        # Remove MDT
+        # Remove MDT (surface only for nl>1)
         if self.mdt is not None:
-            h1 = h1 - self.mdt
-            u1 = u1 - self.mdu
-            v1 = v1 - self.mdv
+            if self.nl > 1:
+                h1 = h1.at[:, 0:1, :, :].add(-self.mdt)
+                u1 = u1.at[:, 0:1, :, :].add(-self.mdu)
+                v1 = v1.at[:, 0:1, :, :].add(-self.mdv)
+            else:
+                h1 = h1 - self.mdt
+                u1 = u1 - self.mdu
+                v1 = v1 - self.mdv
 
         return u1, v1, h1
     
-    def jstep(self, t, u0, v0, h0, H, Fu, Fv, Fh, h_SN, h_WE, u_b, v_b, h_b, nstep=1):
+    def jstep(self, t, u0, v0, h0, H, Fu, Fv, Fh, u_b, v_b, h_b,
+             taux=None, tauy=None, nstep=1):
         return self.jstep_core(
-            t, u0, v0, h0, H, Fu, Fv, Fh, h_SN, h_WE, 
+            t, u0, v0, h0, H, Fu, Fv, Fh,
             u_b, v_b, h_b,
-            nstep
-
+            taux=taux, tauy=tauy,
+            nstep=nstep,
         )
     
-    def jstep_tgl(self, t, du0, dv0, dh0, dH, dFu, dFv, dFh, dh_SN, dh_WE,
-                u0, v0, h0, H, Fu, Fv, Fh, h_SN, h_WE,
-                u_b, v_b, h_b, nstep=1):
+    def jstep_tgl(self, t, du0, dv0, dh0, dH, dFu, dFv, dFh, 
+                u0, v0, h0, H, Fu, Fv, Fh, 
+                u_b, v_b, h_b, taux=None, tauy=None, nstep=1):
 
         # Define a partial function that fixes constant parameters
-        f = lambda u, v, h, H, Fu, Fv, Fh, h_SN, h_WE: self.jstep_core_jit(
-            t, u, v, h, H, Fu, Fv, Fh, h_SN, h_WE, u_b, v_b, h_b,
-            nstep
+        # taux/tauy are prescribed forcings: closed over, not differentiated
+        f = lambda u, v, h, H, Fu, Fv, Fh: self.jstep_core_jit(
+            t, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+            taux=taux, tauy=tauy,
+            nstep=nstep,
         )
 
         # JVP (forward mode)
         (u1, v1, h1), (du1, dv1, dh1) = jax.jvp(
             f,
-            (u0, v0, h0, H, Fu, Fv, Fh, h_SN, h_WE),
-            (du0, dv0, dh0, dH, dFu, dFv, dFh, dh_SN, dh_WE)
+            (u0, v0, h0, H, Fu, Fv, Fh),
+            (du0, dv0, dh0, dH, dFu, dFv, dFh)
         )
 
         return du1, dv1, dh1
     
-    def jstep_adj(self, t, adu1, adv1, adh1, adH, adFu, adFv, adFh, adh_SN, adh_WE,
-                u0, v0, h0, H, Fu, Fv, Fh, h_SN, h_WE, u_b, v_b, h_b, nstep=1):
+    def jstep_adj(self, t, adu1, adv1, adh1, adH, adFu, adFv, adFh,
+                u0, v0, h0, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                taux=None, tauy=None, nstep=1):
 
-        f = lambda u, v, h, H, Fu, Fv, Fh, h_SN, h_WE: self.jstep_core_jit(
-            t, u, v, h, H, Fu, Fv, Fh, h_SN, h_WE, u_b, v_b, h_b,
-            nstep
+        # taux/tauy are prescribed forcings: closed over, not differentiated
+        f = lambda u, v, h, H, Fu, Fv, Fh: self.jstep_core_jit(
+            t, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+            taux=taux, tauy=tauy,
+            nstep=nstep,
         )
 
         # Build the VJP function
-        (u1, v1, h1), vjp_fun = jax.vjp(f, u0, v0, h0, H, Fu, Fv, Fh, h_SN, h_WE)
+        (u1, v1, h1), vjp_fun = jax.vjp(f, u0, v0, h0, H, Fu, Fv, Fh)
 
         # Apply adjoints at output
-        adu0, adv0, adh0, _adH, _adFu, _adFv, _adFh, _adhSN, _adhWE = vjp_fun((adu1, adv1, adh1))
+        adu0, adv0, adh0, _adH, _adFu, _adFv, _adFh = vjp_fun((adu1, adv1, adh1))
         if adH is not None:
             adH += _adH
-        if adh_SN is not None:
-            adh_SN += _adhSN
-        if adh_WE is not None:
-            adh_WE += _adhWE
-
         adFu += _adFu
         adFv += _adFv
         adFh += _adFh
         
-
-        return adu0, adv0, adh0, adH, adFu, adFv, adFh, adh_SN, adh_WE
+        return adu0, adv0, adh0, adH, adFu, adFv, adFh
 
     def step(self,State,nstep=1,t=0):
 
-        h = State.getvar(name_var=self.name_var['SSH'])
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-
-        # Boundary condition
-        u_b, v_b, h_b = self._apply_bc(t,int(t+nstep*self.dt))
+        if self.nl > 1:
+            # Read per-layer state and convert to SW convention (1, nl, nx, ny)
+            u = jnp.expand_dims(State.var['u_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            v = jnp.expand_dims(State.var['v_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            h = jnp.expand_dims(State.var['h_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+        else:
+            h = State.getvar(name_var=self.name_var['SSH'])
+            u = State.getvar(name_var=self.name_var['U'])
+            v = State.getvar(name_var=self.name_var['V'])
+            u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
+            v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
+            h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
         
-        # Get state variable(s)
-        u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
-        v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
-        h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
-        
-        # Get parameters
+        # Get parameters (2D forcing from Basis)
         Fu = State.params[self.name_var['U']]
         Fv = State.params[self.name_var['V']]
         Fh = State.params[self.name_var['SSH']]
@@ -5564,47 +3272,59 @@ class Model_qgsw(M):
             H = jnp.expand_dims(H.astype(self.dtype).T, axis=0)
         else:
             H = None
-        if 'hbc' in self.name_params:
-            h_SN = State.params['hbcx']
-            h_WE = State.params['hbcy']
+
+        # Sub-stepping loop (limits lax.scan length for memory efficiency)
+        step_done = 0
+        while step_done < nstep:
+            n_chunk = min(nstep - step_done, self.max_nstep) if self.max_nstep > 0 else (nstep - step_done)
+            t_chunk = t + step_done * self.dt
+            u_b, v_b, h_b = self._apply_bc(t_chunk, int(t_chunk + n_chunk * self.dt))
+            taux, tauy = self._get_wind_stress(t_chunk)
+            u, v, h = self.jstep_jit(t_chunk, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                                      taux=taux, tauy=tauy, nstep=n_chunk)
+            step_done += n_chunk
+
+        if self.nl > 1:
+            # Convert back: (1, nl, nx, ny) → (nl, ny, nx)
+            State.var['h_layers'] = h[0].transpose(0, 2, 1)
+            State.var['u_layers'] = u[0].transpose(0, 2, 1)
+            State.var['v_layers'] = v[0].transpose(0, 2, 1)
+            # Diagnose 2D surface fields
+            self._diagnose_surface(State)
         else:
-            h_SN = None
-            h_WE = None
-
-        # Time loop
-        u, v, h = self.jstep_jit(t, u, v, h, H, Fu, Fv, Fh, h_SN, h_WE, u_b, v_b, h_b, nstep=nstep)
-
-        # Convert to numpy
-        u = u[0,0].T#np.array(u[0,0], dtype='float64').T
-        v = v[0,0].T#np.array(v[0,0], dtype='float64').T
-        h = h[0,0].T#np.array(h[0,0], dtype='float64').T
-
-        # Update state
-        State.setvar(u, name_var=self.name_var['U'])
-        State.setvar(v, name_var=self.name_var['V'])
-        State.setvar(h, name_var=self.name_var['SSH'])   
+            u = u[0,0].T
+            v = v[0,0].T
+            h = h[0,0].T
+            State.setvar(u, name_var=self.name_var['U'])
+            State.setvar(v, name_var=self.name_var['V'])
+            State.setvar(h, name_var=self.name_var['SSH'])   
 
     def step_tgl(self,dState,State,nstep=1,t=0):
 
-        dh = dState.getvar(name_var=self.name_var['SSH'])
-        du = dState.getvar(name_var=self.name_var['U'])
-        dv = dState.getvar(name_var=self.name_var['V'])
-        h = State.getvar(name_var=self.name_var['SSH'])
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
+        if self.nl > 1:
+            # Per-layer perturbation
+            du = jnp.expand_dims(dState.var['u_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            dv = jnp.expand_dims(dState.var['v_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            dh = jnp.expand_dims(dState.var['h_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            # Per-layer forward trajectory
+            u = jnp.expand_dims(State.var['u_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            v = jnp.expand_dims(State.var['v_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            h = jnp.expand_dims(State.var['h_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+        else:
+            dh = dState.getvar(name_var=self.name_var['SSH'])
+            du = dState.getvar(name_var=self.name_var['U'])
+            dv = dState.getvar(name_var=self.name_var['V'])
+            h = State.getvar(name_var=self.name_var['SSH'])
+            u = State.getvar(name_var=self.name_var['U'])
+            v = State.getvar(name_var=self.name_var['V'])
+            du = jnp.expand_dims(du.astype(self.dtype).T, axis=(0,1))
+            dv = jnp.expand_dims(dv.astype(self.dtype).T, axis=(0,1))
+            dh = jnp.expand_dims(dh.astype(self.dtype).T, axis=(0,1))
+            u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
+            v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
+            h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
 
-        # Boundary condition
-        u_b, v_b, h_b = self._apply_bc(t,int(t+nstep*self.dt))
-        
-        # Get state variable(s)
-        du = jnp.expand_dims(du.astype(self.dtype).T, axis=(0,1))
-        dv = jnp.expand_dims(dv.astype(self.dtype).T, axis=(0,1))
-        dh = jnp.expand_dims(dh.astype(self.dtype).T, axis=(0,1))
-        u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
-        v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
-        h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
-
-        # Get parameters
+        # Get parameters (2D forcing — per-layer conversion in jstep_core via AD)
         Fu = State.params[self.name_var['U']]
         Fv = State.params[self.name_var['V']]
         Fh = State.params[self.name_var['SSH']]
@@ -5618,52 +3338,86 @@ class Model_qgsw(M):
             dH = jnp.expand_dims(dH.astype(self.dtype).T, axis=0)
         else:
             H = dH = None
-        if 'hbc' in self.name_params:
-            h_SN = State.params['hbcx']
-            h_WE = State.params['hbcy']
-            dh_SN = dState.params['hbcx']
-            dh_WE = dState.params['hbcy']
-        else:
-            h_SN = dh_SN = None
-            h_WE = dh_WE = None
-
-        # Time loop
-        du, dv, dh = self.jstep_tgl_jit(t, du, dv, dh, dH, dFu, dFv, dFh, dh_SN, dh_WE,
-                                        u, v, h, H, Fu, Fv, Fh, h_SN, h_WE, u_b, v_b, h_b, nstep=nstep)
-
-        du = du[0,0].T#np.array(du[0,0], dtype='float64').T
-        dv = dv[0,0].T#np.array(dv[0,0], dtype='float64').T
-        dh = dh[0,0].T#np.array(dh[0,0], dtype='float64').T
         
-        # Update state
-        dState.setvar(du, name_var=self.name_var['U'])
-        dState.setvar(dv, name_var=self.name_var['V'])
-        dState.setvar(dh, name_var=self.name_var['SSH'])
+        # Sub-stepping loop (limits lax.scan length for memory efficiency)
+        step_done = 0
+        while step_done < nstep:
+            n_chunk = min(nstep - step_done, self.max_nstep) if self.max_nstep > 0 else (nstep - step_done)
+            t_chunk = t + step_done * self.dt
+            u_b, v_b, h_b = self._apply_bc(t_chunk, int(t_chunk + n_chunk * self.dt))
+            taux, tauy = self._get_wind_stress(t_chunk)
+            # Propagate tangent (JVP includes forward internally)
+            du, dv, dh = self.jstep_tgl_jit(t_chunk, du, dv, dh, dH, dFu, dFv, dFh,
+                                            u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                                            taux=taux, tauy=tauy, nstep=n_chunk)
+            # Propagate forward state for next chunk
+            u, v, h = self.jstep_jit(t_chunk, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                                      taux=taux, tauy=tauy, nstep=n_chunk)
+            step_done += n_chunk
+
+        if self.nl > 1:
+            # Convert back: (1, nl, nx, ny) → (nl, ny, nx)
+            dState.var['h_layers'] = dh[0].transpose(0, 2, 1)
+            dState.var['u_layers'] = du[0].transpose(0, 2, 1)
+            dState.var['v_layers'] = dv[0].transpose(0, 2, 1)
+            # Diagnose surface TLM
+            dState.setvar(dState.var['h_layers'].sum(axis=0), name_var=self.name_var['SSH'])
+            dState.setvar(dState.var['u_layers'][0],          name_var=self.name_var['U'])
+            dState.setvar(dState.var['v_layers'][0],          name_var=self.name_var['V'])
+        else:
+            du = du[0,0].T
+            dv = dv[0,0].T
+            dh = dh[0,0].T
+            dState.setvar(du, name_var=self.name_var['U'])
+            dState.setvar(dv, name_var=self.name_var['V'])
+            dState.setvar(dh, name_var=self.name_var['SSH'])
 
     def step_adj(self,adState,State,nstep=1,t=0):
 
-        adh0 = adState.getvar(name_var=self.name_var['SSH'])
-        adu0 = adState.getvar(name_var=self.name_var['U'])
-        adv0 = adState.getvar(name_var=self.name_var['V'])
-        h = State.getvar(name_var=self.name_var['SSH'])
-        u = State.getvar(name_var=self.name_var['U'])
-        v = State.getvar(name_var=self.name_var['V'])
-        
-        # Boundary condition
-        u_b, v_b, h_b = self._apply_bc(t,int(t+nstep*self.dt))
-        
-        # Get state variable(s) (expand dims to match TLM shapes)
-        adu = +adu0
-        adv = +adv0
-        adh = +adh0
-        adu = jnp.expand_dims(adu.astype(self.dtype).T, axis=(0,1))
-        adv = jnp.expand_dims(adv.astype(self.dtype).T, axis=(0,1))
-        adh = jnp.expand_dims(adh.astype(self.dtype).T, axis=(0,1))
-        u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
-        v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
-        h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
+        if self.nl > 1:
+            # --- Combine surface adjoint (from obs) with per-layer adjoint ---
+            # Adjoint of ssh = h_layers.sum(axis=0): broadcast ad_ssh to all layers
+            adh_surface = jnp.asarray(adState.getvar(name_var=self.name_var['SSH']), dtype=self.dtype)
+            adu_surface = jnp.asarray(adState.getvar(name_var=self.name_var['U']),   dtype=self.dtype)
+            adv_surface = jnp.asarray(adState.getvar(name_var=self.name_var['V']),   dtype=self.dtype)
 
-        # Get parameters
+            adh_layers = jnp.asarray(adState.var.get('h_layers',
+                            jnp.zeros((self.nl, self.ny, self.nx), dtype=self.dtype)), dtype=self.dtype)
+            adu_layers = jnp.asarray(adState.var.get('u_layers',
+                            jnp.zeros((self.nl, self.ny, self.nx+1), dtype=self.dtype)), dtype=self.dtype)
+            adv_layers = jnp.asarray(adState.var.get('v_layers',
+                            jnp.zeros((self.nl, self.ny+1, self.nx), dtype=self.dtype)), dtype=self.dtype)
+
+            # Adjoint of sum: each layer receives the surface SSH adjoint
+            adh_layers = adh_layers + adh_surface[None, :, :]
+            # Adjoint of selecting layer 0 for surface u/v
+            adu_layers = adu_layers.at[0].add(adu_surface)
+            adv_layers = adv_layers.at[0].add(adv_surface)
+
+            # Convert to SW convention (1, nl, nx, ny)
+            adu = jnp.expand_dims(adu_layers.transpose(0, 2, 1), axis=0)
+            adv = jnp.expand_dims(adv_layers.transpose(0, 2, 1), axis=0)
+            adh = jnp.expand_dims(adh_layers.transpose(0, 2, 1), axis=0)
+
+            # Forward trajectory from State (per-layer)
+            u = jnp.expand_dims(State.var['u_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            v = jnp.expand_dims(State.var['v_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+            h = jnp.expand_dims(State.var['h_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
+        else:
+            adh0 = adState.getvar(name_var=self.name_var['SSH'])
+            adu0 = adState.getvar(name_var=self.name_var['U'])
+            adv0 = adState.getvar(name_var=self.name_var['V'])
+            h = State.getvar(name_var=self.name_var['SSH'])
+            u = State.getvar(name_var=self.name_var['U'])
+            v = State.getvar(name_var=self.name_var['V'])
+            adu = jnp.expand_dims((+adu0).astype(self.dtype).T, axis=(0,1))
+            adv = jnp.expand_dims((+adv0).astype(self.dtype).T, axis=(0,1))
+            adh = jnp.expand_dims((+adh0).astype(self.dtype).T, axis=(0,1))
+            u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
+            v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
+            h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
+
+        # Get parameters (2D forcing)
         Fu = State.params[self.name_var['U']]
         Fv = State.params[self.name_var['V']]
         Fh = State.params[self.name_var['SSH']]
@@ -5672,14 +3426,8 @@ class Model_qgsw(M):
             H = jnp.expand_dims(H.astype(self.dtype).T, axis=0)
         else:
             H = None
-        if 'hbc' in self.name_params:
-            h_SN = State.params['hbcx']
-            h_WE = State.params['hbcy']
-        else:
-            h_SN = None
-            h_WE = None
         
-        # Get adjoint parameters
+        # Get adjoint parameters (2D — AD traces per-layer conversion automatically)
         adFu = adState.params[self.name_var['U']]
         adFv = adState.params[self.name_var['V']]
         adFh = adState.params[self.name_var['SSH']]
@@ -5688,43 +3436,202 @@ class Model_qgsw(M):
             adH = jnp.expand_dims(adH.astype(self.dtype).T, axis=0)
         else:
             adH = None
-        if 'hbc' in self.name_params:
-            adh_SN = adState.params['hbcx']
-            adh_WE = adState.params['hbcy']
+
+        # Build chunk schedule
+        chunks = []
+        step_done = 0
+        while step_done < nstep:
+            n_chunk = min(nstep - step_done, self.max_nstep) if self.max_nstep > 0 else (nstep - step_done)
+            t_chunk = t + step_done * self.dt
+            chunks.append((t_chunk, n_chunk))
+            step_done += n_chunk
+
+        # Forward pass: store boundary states at chunk boundaries
+        fwd_states = [(u, v, h)]
+        if len(chunks) > 1:
+            u_fwd, v_fwd, h_fwd = u, v, h
+            for t_chunk, n_chunk in chunks[:-1]:
+                u_b, v_b, h_b = self._apply_bc(t_chunk, int(t_chunk + n_chunk * self.dt))
+                taux, tauy = self._get_wind_stress(t_chunk)
+                u_fwd, v_fwd, h_fwd = self.jstep_jit(
+                    t_chunk, u_fwd, v_fwd, h_fwd, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                    taux=taux, tauy=tauy, nstep=n_chunk)
+                fwd_states.append((u_fwd, v_fwd, h_fwd))
+
+        # Reverse adjoint through chunks
+        for i in range(len(chunks) - 1, -1, -1):
+            t_chunk, n_chunk = chunks[i]
+            u_i, v_i, h_i = fwd_states[i]
+            u_b, v_b, h_b = self._apply_bc(t_chunk, int(t_chunk + n_chunk * self.dt))
+            taux, tauy = self._get_wind_stress(t_chunk)
+            adu, adv, adh, adH, adFu, adFv, adFh = self.jstep_adj_jit(
+                t_chunk, adu, adv, adh, adH, adFu, adFv, adFh,
+                u_i, v_i, h_i, H, Fu, Fv, Fh,
+                u_b, v_b, h_b,
+                taux=taux, tauy=tauy,
+                nstep=n_chunk)
+
+        if self.nl > 1:
+            # Convert back: (1, nl, nx, ny) → (nl, ny, nx)
+            adh_layers = adh[0].transpose(0, 2, 1)
+            adu_layers = adu[0].transpose(0, 2, 1)
+            adv_layers = adv[0].transpose(0, 2, 1)
+            # Store per-layer adjoints
+            adState.var['h_layers'] = adh_layers
+            adState.var['u_layers'] = adu_layers
+            adState.var['v_layers'] = adv_layers
+            # Reset surface adjoints (consumed — distributed to layers above)
+            adState.setvar(jnp.zeros((self.ny, self.nx),   dtype=self.dtype), self.name_var['SSH'])
+            adState.setvar(jnp.zeros((self.ny, self.nx+1), dtype=self.dtype), self.name_var['U'])
+            adState.setvar(jnp.zeros((self.ny+1, self.nx), dtype=self.dtype), self.name_var['V'])
         else:
-            adh_SN = None
-            adh_WE = None
+            adu = adu[0,0].T
+            adv = adv[0,0].T
+            adh = adh[0,0].T
+            adState.setvar(adu,self.name_var['U'])
+            adState.setvar(adv,self.name_var['V'])
+            adState.setvar(adh,self.name_var['SSH'])
 
-        # Reverse-time adjoint step
-        adu, adv, adh, adH, adFu, adFv, adFh, adh_SN, adh_WE = self.jstep_adj_jit(t, adu, adv, adh, adH, adFu, adFv, adFh, adh_SN, adh_WE,
-                                                                    u, v, h, H, Fu, Fv, Fh, h_SN, h_WE,   
-                                                                    u_b, v_b, h_b, 
-                                                                    nstep=nstep)
-
-        # Convert back to numpy arrays and store
-        adu = adu[0,0].T#np.array(adu[0,0], dtype='float64').T
-        adv = adv[0,0].T#np.array(adv[0,0], dtype='float64').T
-        adh = adh[0,0].T#np.array(adh[0,0], dtype='float64').T
         if 'H' in self.name_params:
-            adH = adH[0].T#np.array(adH[0], dtype='float64').T
+            adH = adH[0].T
             adState.params['H'] = adH
-        if 'hbc' in self.name_params:
-            adh_SN = np.array(adh_SN, dtype=self.dtype)
-            adh_WE = np.array(adh_WE, dtype=self.dtype)
-            adState.params['hbcx'] = adh_SN
-            adState.params['hbcy'] = adh_WE
-        #adFu = np.array(adFu, dtype='float64')
-        #adFv = np.array(adFv, dtype='float64')
-        #adFh = np.array(adFh, dtype='float64')
 
-        # Update state and parameters
-        adState.setvar(adu,self.name_var['U'])
-        adState.setvar(adv,self.name_var['V'])
-        adState.setvar(adh,self.name_var['SSH'])
-
+        # Update adjoint parameters (2D, same for both nl=1 and nl>1)
         adState.params[self.name_var['U']] = adFu 
         adState.params[self.name_var['V']] = adFv 
         adState.params[self.name_var['SSH']] = adFh 
+
+    def adjoint_test_jstep(self, nstep=1, seed=42):
+        """
+        Low-level adjoint test for jstep_tgl / jstep_adj.
+
+        Checks  <M dx, y> == <dx, M* y>
+        where M = jstep_tgl and M* = jstep_adj, operating on the
+        differentiated variables (u, v, h, H, Fu, Fv, Fh).
+
+        Boundary conditions (u_b, v_b, h_b) and wind stress are NOT
+        differentiated — they are closed over in the lambda inside
+        jstep_tgl / jstep_adj.
+        """
+        key = jax.random.PRNGKey(seed)
+        dtype = self.dtype
+        nx = self.nx
+        ny = self.ny
+
+        # --- shapes ---------------------------------------------------------
+        # u0/v0/h0 enter jstep in SW-internal convention (transposed + expanded)
+        nl = self.nl
+        u_shape = (1, nl, nx + 1, ny)
+        v_shape = (1, nl, nx, ny + 1)
+        h_shape = (1, nl, nx, ny)
+        H_shape = (1, nx, ny)
+        # Fu/Fv/Fh stay in State convention (ny, nx+1/ny+1/nx) — always 2D
+        Fu_shape = (ny, nx + 1)
+        Fv_shape = (ny + 1, nx)
+        Fh_shape = (ny, nx)
+        # boundary conditions (State convention)
+        ub_shape = (ny, nx + 1)
+        vb_shape = (ny + 1, nx)
+        hb_shape = (ny, nx)
+
+        def rand(key, shape):
+            key, subkey = jax.random.split(key)
+            return key, jax.random.normal(subkey, shape=shape, dtype=dtype) * 1e-4
+
+        # Masks from the SW model (squeeze batch/layer dims for masking)
+        mask_u = self.model.masks.u[0, 0]   # (nx+1, ny)
+        mask_v = self.model.masks.v[0, 0]   # (nx, ny+1)
+        mask_h = self.model.masks.h[0, 0]   # (nx, ny)
+
+        # --- base trajectory ------------------------------------------------
+        key, u0 = rand(key, u_shape)
+        key, v0 = rand(key, v_shape)
+        key, h0 = rand(key, h_shape)
+        u0 = u0 * mask_u
+        v0 = v0 * mask_v
+        h0 = h0 * mask_h
+
+        has_H = 'H' in self.name_params
+        if has_H:
+            key, H = rand(key, H_shape)
+        else:
+            H = None
+
+        key, Fu = rand(key, Fu_shape)
+        key, Fv = rand(key, Fv_shape)
+        key, Fh = rand(key, Fh_shape)
+
+        # boundary conditions (fixed, not differentiated)
+        key, u_b = rand(key, ub_shape)
+        key, v_b = rand(key, vb_shape)
+        key, h_b = rand(key, hb_shape)
+
+        # --- TLM perturbation -----------------------------------------------
+        key, du0 = rand(key, u_shape);  du0 = du0 * mask_u
+        key, dv0 = rand(key, v_shape);  dv0 = dv0 * mask_v
+        key, dh0 = rand(key, h_shape);  dh0 = dh0 * mask_h
+        if has_H:
+            key, dH = rand(key, H_shape)
+        else:
+            dH = None
+        key, dFu = rand(key, Fu_shape)
+        key, dFv = rand(key, Fv_shape)
+        key, dFh = rand(key, Fh_shape)
+
+        # --- ADJ cotangent (output space: u1, v1, h1) -----------------------
+        key, wu = rand(key, u_shape);  wu = wu * mask_u
+        key, wv = rand(key, v_shape);  wv = wv * mask_v
+        key, wh = rand(key, h_shape);  wh = wh * mask_h
+
+        # --- Run TLM --------------------------------------------------------
+        du1, dv1, dh1 = self.jstep_tgl(
+            0, du0, dv0, dh0, dH, dFu, dFv, dFh,
+            u0, v0, h0, H, Fu, Fv, Fh,
+            u_b, v_b, h_b, nstep=nstep)
+
+        # --- Run ADJ --------------------------------------------------------
+        # Zero accumulators so output = pure adjoint
+        adH_in  = jnp.zeros(H_shape, dtype=dtype) if has_H else None
+        adFu_in = jnp.zeros(Fu_shape, dtype=dtype)
+        adFv_in = jnp.zeros(Fv_shape, dtype=dtype)
+        adFh_in = jnp.zeros(Fh_shape, dtype=dtype)
+
+        adu0, adv0, adh0, adH_out, adFu_out, adFv_out, adFh_out = self.jstep_adj(
+            0, wu, wv, wh, adH_in, adFu_in, adFv_in, adFh_in,
+            u0, v0, h0, H, Fu, Fv, Fh,
+            u_b, v_b, h_b, nstep=nstep)
+
+        # --- Check NaN ------------------------------------------------------
+        has_nan = (
+            jnp.any(jnp.isnan(du1)) | jnp.any(jnp.isnan(dv1)) |
+            jnp.any(jnp.isnan(dh1)) | jnp.any(jnp.isnan(adu0)) |
+            jnp.any(jnp.isnan(adv0)) | jnp.any(jnp.isnan(adh0)))
+        if has_nan:
+            print(f'  jstep adjoint test (dtype={dtype}, {nstep=}): NaN detected!')
+            return float('nan')
+
+        # --- Inner products (f64 accumulation) ------------------------------
+        to64 = lambda x: x.astype(jnp.float64)
+
+        # <M dx, y>  (output space)
+        ps1 = (jnp.sum(to64(du1) * to64(wu))
+             + jnp.sum(to64(dv1) * to64(wv))
+             + jnp.sum(to64(dh1) * to64(wh)))
+
+        # <dx, M* y>  (input space: u, v, h, H, Fu, Fv, Fh)
+        ps2 = (jnp.sum(to64(du0) * to64(adu0))
+             + jnp.sum(to64(dv0) * to64(adv0))
+             + jnp.sum(to64(dh0) * to64(adh0))
+             + jnp.sum(to64(dFu) * to64(adFu_out))
+             + jnp.sum(to64(dFv) * to64(adFv_out))
+             + jnp.sum(to64(dFh) * to64(adFh_out)))
+        if has_H:
+            ps2 += jnp.sum(to64(dH) * to64(adH_out))
+
+        ratio = float(ps1 / ps2)
+        print(f'  jstep adjoint test (dtype={dtype}, {nstep=}): '
+              f'<Mdx,y>/<dx,M*y> = {ratio}')
+        
 
 class Model_bmit(M):
 
@@ -7264,7 +5171,6 @@ class Model_multi:
             adState.var[self.name_var_tot[name]] *= 0 
                 
 
-        
 ###############################################################################
 #                       Tangent and Adjoint tests                             #
 ###############################################################################     
@@ -7314,7 +5220,26 @@ def adjoint_test(M, State, t0=0, nstep=1, ampl=1):
     model_dtype = getattr(M, 'dtype', np.float64)
     np_dtype = np.float32 if model_dtype == jnp.float32 else np.float64
 
- 
+    # ------------------------------------------------------------------
+    # Build per-shape ocean masks so that land points stay at zero.
+    # Non-zero land values create large gradients at land-ocean boundaries
+    # that amplify float32 roundoff in WENO/padding operations, breaking
+    # the inner-product identity even though the operators are exact duals.
+    # ------------------------------------------------------------------
+    masks_by_shape = {}
+    if State.mask is not None:
+        ny, nx = State.mask.shape
+        mask_h = np.asarray(State.mask, dtype=bool)
+        masks_by_shape[(ny, nx)] = mask_h.astype(np_dtype)
+        # U-grid mask: (ny, nx+1)
+        mask_u = np.zeros((ny, nx + 1), dtype=np_dtype)
+        mask_u[:, 1:nx] = (mask_h[:, :-1] & mask_h[:, 1:]).astype(np_dtype)
+        masks_by_shape[(ny, nx + 1)] = mask_u
+        # V-grid mask: (ny+1, nx)
+        mask_v = np.zeros((ny + 1, nx), dtype=np_dtype)
+        mask_v[1:ny, :] = (mask_h[:-1, :] & mask_h[1:, :]).astype(np_dtype)
+        masks_by_shape[(ny + 1, nx)] = mask_v
+
     # ------------------------------------------------------------------
     # Use DIFFERENT seeds for trajectory / perturbation / adjoint vector.
     # State.random() always resets np.random.seed(0), so calling it three
@@ -7322,13 +5247,19 @@ def adjoint_test(M, State, t0=0, nstep=1, ampl=1):
     # adState the inner-product test degenerates and f32 rounding errors
     # no longer cancel, giving a spurious ~0.1 % deviation from 1.0.
     # ------------------------------------------------------------------
+    def _apply_mask(arr):
+        m = masks_by_shape.get(arr.shape)
+        return arr * m if m is not None else arr
+
     def make_rand_state(seed):
         np.random.seed(seed)
         s = State.copy(free=True)
         for name in s.var:
-            s.var[name] = (ampl * np.random.random(s.var[name].shape)).astype(np_dtype)
+            s.var[name] = _apply_mask(
+                (ampl * np.random.random(s.var[name].shape)).astype(np_dtype))
         for name in s.params:
-            s.params[name] = (ampl * np.random.random(s.params[name].shape)).astype(np_dtype)
+            s.params[name] = _apply_mask(
+                (ampl * np.random.random(s.params[name].shape)).astype(np_dtype))
         return s
 
     # Boundary conditions
@@ -7336,8 +5267,8 @@ def adjoint_test(M, State, t0=0, nstep=1, ampl=1):
     var_bc = {}
     for name in M.name_var:
         var_bc[name] = {
-            0: ampl * np.random.random(State.var[M.name_var[name]].shape).astype(np_dtype),
-            1: ampl * np.random.random(State.var[M.name_var[name]].shape).astype(np_dtype),
+            0: _apply_mask(ampl * np.random.random(State.var[M.name_var[name]].shape).astype(np_dtype)),
+            1: _apply_mask(ampl * np.random.random(State.var[M.name_var[name]].shape).astype(np_dtype)),
         }
     M.set_bc([t0, t0 + nstep * M.dt], var_bc)
 
@@ -7360,10 +5291,10 @@ def adjoint_test(M, State, t0=0, nstep=1, ampl=1):
     mask = np.isnan(adX0 + dX0 + adX1 + dX1)
 
     # Compute inner products in f64 for accurate accumulation
-    ps1 = np.inner(dX1[~mask].astype(np.float64), adX0[~mask].astype(np.float64))
-    ps2 = np.inner(dX0[~mask].astype(np.float64), adX1[~mask].astype(np.float64))
+    ps1 = np.inner(dX1[~mask], adX0[~mask])
+    ps2 = np.inner(dX0[~mask], adX1[~mask])
 
-    print(f'  adjoint_test ({np_dtype.__name__}):  <Mdx,y>/<dx,M*y> = {ps1/ps2}')
+    print(f'  adjoint_test ({np_dtype.__name__}):  <Mdx,y> = {ps1} <dx,M*y> = {ps2} \n<Mdx,y>/<dx,M*y> = {ps1/ps2}')
 
     
     

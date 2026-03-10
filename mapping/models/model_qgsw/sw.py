@@ -15,7 +15,6 @@ from jax import jit
 from finite_diff import interp_TP, interp_TP_inv, comp_ke, div_nofluxbc
 from flux import flux
 from helmholtz import HelmholtzNeumannSolver
-#from helmholtz_multigrid import MG_Helmholtz
 from masks import Masks
 from reconstruction import linear2_centered, wenoz4_left, wenoz6_left
 from tools import avg_pool2d
@@ -193,6 +192,30 @@ class SW:
         taux, tauy = param['taux'], param['tauy']
         self.set_wind_forcing(taux, tauy)
         self.bottom_drag_coef = param['bottom_drag_coef']
+        # Ocean water density (kg/m³) used in wind-stress → acceleration conversion
+        # tau [Pa] / (rho_water [kg/m³] × H [m]) × dx [m] gives m²/s² (scaled tendency)
+        self.rho_water = param['rho_water'] if 'rho_water' in param else 1025.0
+
+        # Physical layer depth (m) for wind-stress forcing.
+        # IMPORTANT for 1-layer QG/SW models: the model's equivalent depth H = c²/g
+        # is typically ~0.4–1 m, while the actual mixed-layer depth driving momentum
+        # exchange is ~50–200 m.  Setting h_wind to the physical mixed-layer depth
+        # gives the correct forcing magnitude.  If None, falls back to the model's
+        # reference layer thickness H_ref (the equivalent depth), which is physically
+        # correct only for multi-layer models where H represents the true layer depth.
+        self.h_wind = param.get('h_wind', None)
+        if self.nl == 1 and self.h_wind is None:
+            import warnings
+            warnings.warn(
+                "\n[SW model] nl=1 and h_wind is not set.\n"
+                "  The model's equivalent depth H = c²/g ≈ {:.2f} m is used as the\n"
+                "  wind-stress denominator, but the physical mixed-layer depth is\n"
+                "  typically 50–200 m.  Wind forcing will be ~{:.0f}× too large.\n"
+                "  → Set  param['h_wind'] = <mixed_layer_depth_m>  (e.g. 100.)".format(
+                    float(self.H.mean()),
+                    max(1., 100. / max(float(self.H.mean()), 1e-6))),
+                stacklevel=2,
+            )
 
         # Minimum layer thickness to prevent negative h_tot
         self.h_min = param['h_min'] if 'h_min' in param.keys() else 0.1
@@ -279,14 +302,15 @@ class SW:
                 else:
                     self.barotropic_filter_spectral = False
                     print('in exact form')
-                    coef_ugrid = (self.h_tot_ugrid * self.masks.u)[0,0]
-                    coef_vgrid = (self.h_tot_vgrid * self.masks.v)[0,0]
+                    from helmholtz_multigrid import MG_Helmholtz
+                    coef_ugrid = (self.h_ref_ugrid * self.masks.u)[0,0]
+                    coef_vgrid = (self.h_ref_vgrid * self.masks.v)[0,0]
                     lambd = 1. / (self.g * self.dt * self.tau)
                     self.helm_solver = MG_Helmholtz(self.dx, self.dy,
                             self.nx, self.ny, coef_ugrid, coef_vgrid=coef_vgrid,
                             lambd=lambd, dtype=self.dtype,
                             mask=self.masks.h[0,0], niter_bottom=20,
-                            use_compilation=False)
+                            use_compilation=True)
             else:
                 print(f'  - class {class_name}!=SW, ignoring barotropic filter ')
 
@@ -332,6 +356,11 @@ class SW:
         self.sponge_u = jnp.zeros((1,1,self.nx+1, self.ny))
         self.sponge_v = jnp.zeros((1,1,self.nx, self.ny+1))
         self.sponge_h = jnp.zeros((1,1,self.nx, self.ny))
+
+        # Momentum forcing mode: 'direct' uses Fu/Fv as given,
+        # 'mass_consistent' derives Fu/Fv from Fh so that velocity is
+        # conserved when mass is added:  Fu = -u/h * Fh, Fv = -v/h * Fh.
+        self.forcing_momentum = param.get('forcing_momentum', 'direct')
 
         
 
@@ -433,7 +462,7 @@ class SW:
         return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
 
     def advection_momentum(self, u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid,
-                           dx_p_ref=None, dy_p_ref=None):
+                           dx_p_ref=None, dy_p_ref=None, taux=None, tauy=None):
         """
         Advection RHS for momentum (u, v)
         """
@@ -453,7 +482,7 @@ class SW:
         dt_v -= jnp.diff(ke_pressure, axis=-1) + _dy_p_ref
 
         # wind forcing and bottom drag
-        dt_u, dt_v = self.add_wind_forcing(dt_u, dt_v, h_tot_ugrid, h_tot_vgrid)
+        dt_u, dt_v = self.add_wind_forcing(dt_u, dt_v, h_tot_ugrid, h_tot_vgrid, taux=taux, tauy=tauy)
         dt_u, dt_v = self.add_bottom_drag(dt_u, dt_v, u, v)
         dt_u, dt_v = self.add_diffusion(dt_u, dt_v, u, v)
 
@@ -503,14 +532,70 @@ class SW:
             return self.diff_coef * lap_h * self.masks.h
         return jnp.zeros_like(h)
 
-    def add_wind_forcing(self, du, dv, h_tot_ugrid, h_tot_vgrid):
+    def add_wind_forcing(self, du, dv, h_tot_ugrid, h_tot_vgrid, taux=None, tauy=None):
         """
         Add wind forcing to the derivatives du, dv.
+        taux/tauy: wind stress in Pa (N/m²) on (nx-1, ny) and (nx, ny-1) grids.
+        If None, falls back to self.taux / self.tauy.
+
+        Physics:
+          du/dt += tau_x / (rho_water * H_ref) * dx   [m²/s²]
+
+        The denominator uses the REFERENCE (time-mean) layer thickness h_ref_ugrid,
+        NOT the instantaneous h_tot.  Using h_tot creates a destructive feedback:
+        wind thins the layer on the upwind side → 1/h_tot grows → wind stress
+        explodes → NaN.  h_ref is time-invariant, so this feedback does not exist.
+        (This is standard practice in layered ocean models.)
+
+        Safety:
+          - jnp.where ensures land u/v points (mask=0) never evaluate tau/H,
+            preventing inf*0=NaN in JAX.
+          - H_ref is additionally clamped from below at h_min.
         """
-        H_ugrid = (h_tot_ugrid) / self.area
-        H_vgrid = (h_tot_vgrid) / self.area
-        du = du.at[..., 0,:,:].set(du[..., 0,:,:] + self.taux / H_ugrid[...,0,1:-1,:] * self.dx)
-        dv = dv.at[..., 0,:,:].set(dv[..., 0,:,:] + self.tauy / H_vgrid[...,0,:,1:-1] * self.dy)
+        _taux = taux if taux is not None else self.taux
+        _tauy = tauy if tauy is not None else self.tauy
+
+        # Interior ocean masks (trim boundary u/v rows/cols to match interior du/dv)
+        mask_u = self.masks.u[..., 1:-1, :]   # (..., nx-1, ny)
+        mask_v = self.masks.v[..., :, 1:-1]   # (..., nx,   ny-1)
+
+        # Layer depth used in wind-stress denominator (in metres).
+        #
+        # Two cases:
+        #   h_wind is set  →  use the prescribed physical mixed-layer depth (scalar).
+        #                     Required for 1-layer QG/SW models where the model's
+        #                     equivalent depth H = c²/g ≈ 0.4–1 m, while the real
+        #                     mixed-layer driving momentum exchange is ~50–200 m.
+        #   h_wind is None →  use self.h_ref_ugrid (model reference thickness, correct
+        #                     for multi-layer models where H is the true layer depth).
+        if self.h_wind is not None:
+            H_ref_u = float(self.h_wind)
+            H_ref_v = float(self.h_wind)
+        else:
+            # self.h_ref_ugrid shape: (nl, nx+1, ny) for spatially-varying H,
+            #                         (nl, 1, 1)     for uniform H.
+            # Take top layer (index 0), trim interior only when dim > 1.
+            H0_u = self.h_ref_ugrid[0]   # (nx+1, ny) or (1, 1)
+            H0_v = self.h_ref_vgrid[0]   # (nx, ny+1) or (1, 1)
+            if H0_u.shape[0] > 1:
+                H0_u = H0_u[1:-1, :]     # (nx-1, ny)
+            if H0_v.shape[1] > 1:
+                H0_v = H0_v[:, 1:-1]     # (nx, ny-1)
+            H_ref_u = jnp.maximum(H0_u / self.area, self.h_min)
+            H_ref_v = jnp.maximum(H0_v / self.area, self.h_min)
+
+        # Wind tendency: jnp.where so land points never compute tau/H (avoids inf*0=NaN)
+        wind_u = jnp.where(
+            mask_u[..., 0, :, :] > 0.5,
+            _taux / (self.rho_water * H_ref_u) * self.dx,
+            jnp.zeros_like(du[..., 0, :, :]))
+        wind_v = jnp.where(
+            mask_v[..., 0, :, :] > 0.5,
+            _tauy / (self.rho_water * H_ref_v) * self.dy,
+            jnp.zeros_like(dv[..., 0, :, :]))
+
+        du = du.at[..., 0, :, :].set(du[..., 0, :, :] + wind_u)
+        dv = dv.at[..., 0, :, :].set(dv[..., 0, :, :] + wind_v)
         return du, dv
 
     def add_bottom_drag(self, du, dv, u, v):
@@ -595,11 +680,12 @@ class SW:
                dt_v + filt_v, \
                dt_h
 
-    def compute_time_derivatives(self, u, v, h, ref_vals=None):
+    def compute_time_derivatives(self, u, v, h, ref_vals=None, taux=None, tauy=None):
         """
         Computes the state variables derivatives dt_u, dt_v, dt_h.
         ref_vals: optional tuple (h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref)
                   for pure-functional usage (needed for correct JAX AD through H).
+        taux/tauy: wind stress (overrides self.taux / self.tauy if provided).
         """
         if ref_vals is not None:
             h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref = ref_vals
@@ -611,7 +697,7 @@ class SW:
         dt_h = self.advection_h(U, V, h, h_ref) + self.add_h_diffusion(h)
         dt_u, dt_v = self.advection_momentum(
             u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid,
-            dx_p_ref, dy_p_ref)
+            dx_p_ref, dy_p_ref, taux=taux, tauy=tauy)
         if self.barotropic_filter:
             dt_u, dt_v, dt_h = self.filter_barotropic_waves(dt_u, dt_v, dt_h, u, v, h_tot_ugrid, h_tot_vgrid)
 
@@ -630,10 +716,15 @@ class SW:
         Fu=None,
         Fv=None,
         Fh=None,
+        taux=None,
+        tauy=None,
     ):
         """
         Performs nstep time-integration with RK3-SSP scheme.
         Memory-efficient for reverse-mode differentiation.
+        taux/tauy: wind stress arrays (nx-1, ny) and (nx, ny-1).
+        If None, falls back to self.taux / self.tauy set at initialisation.
+        Passing them here allows time-varying wind forcing.
         """
 
         import jax
@@ -665,40 +756,68 @@ class SW:
         ref_vals = self._compute_ref_values(H_total)
         _h_ref = ref_vals[0]  # h_ref for h_floor
 
+        # Resolve wind stress: prefer argument, fall back to self
+        _taux = taux if taux is not None else self.taux
+        _tauy = tauy if tauy is not None else self.tauy
+
         # ----------------------------
         # Single RK3 step
         # ----------------------------
         def single_step(carry, _):
             u, v, h = carry
 
-            u_prev = u
-            v_prev = v
-            h_prev = h
+            # Sponge as Rayleigh damping integrated within RK3 substages.
+            # Rate γ = sponge_coef / dt  so that ∫₀ᵈᵗ γ ds ≈ sponge_coef.
+            _gamma_u = (self.sponge_coef / self.dt) * self.sponge_u
+            _gamma_v = (self.sponge_coef / self.dt) * self.sponge_v
+            _gamma_h = (self.sponge_coef / self.dt) * self.sponge_h
 
-            # ---- RK3-SSP ----
-            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h, ref_vals)
+            # ---- RK3-SSP with sponge damping ----
+            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy)
+            dt0_u = dt0_u + _gamma_u * (_u_b - u)
+            dt0_v = dt0_v + _gamma_v * (_v_b - v)
+            dt0_h = dt0_h + _gamma_h * (_h_b - h)
             u = u + self.dt * dt0_u
             v = v + self.dt * dt0_v
             h = h + self.dt * dt0_h
 
-            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h, ref_vals)
+            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy)
+            dt1_u = dt1_u + _gamma_u * (_u_b - u)
+            dt1_v = dt1_v + _gamma_v * (_v_b - v)
+            dt1_h = dt1_h + _gamma_h * (_h_b - h)
             u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
             v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
             h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
 
-            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h, ref_vals)
+            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy)
+            dt2_u = dt2_u + _gamma_u * (_u_b - u)
+            dt2_v = dt2_v + _gamma_v * (_v_b - v)
+            dt2_h = dt2_h + _gamma_h * (_h_b - h)
             u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
             v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
             h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)
 
-            # ---- Sponge BC ----
-            u = u + self.sponge_coef * self.sponge_u * (_u_b - u_prev)
-            v = v + self.sponge_coef * self.sponge_v * (_v_b - v_prev)
-            h = h + self.sponge_coef * self.sponge_h * (_h_b - h_prev)
-
             # ---- External forcing ----
-            u = u + self.dt * _Fu
-            v = v + self.dt * _Fv
+            if self.forcing_momentum == 'mass_consistent':
+                # Derive momentum forcing from mass forcing so that
+                # velocity is conserved:  Fu = -u/h_tot * Fh
+                h_ = replicate_pad(h, self.masks.h)
+                h_ugrid = 0.5 * (h_[..., 1:, 1:-1] + h_[..., :-1, 1:-1])
+                h_vgrid = 0.5 * (h_[..., 1:-1, 1:] + h_[..., 1:-1, :-1])
+                h_tot_u = smooth_clamp(ref_vals[1] + h_ugrid,
+                                       self.h_min * self.area,
+                                       self.h_min_sharpness)
+                h_tot_v = smooth_clamp(ref_vals[2] + h_vgrid,
+                                       self.h_min * self.area,
+                                       self.h_min_sharpness)
+                Fh_ = replicate_pad(_Fh, self.masks.h)
+                Fh_u = 0.5 * (Fh_[..., 1:, 1:-1] + Fh_[..., :-1, 1:-1])
+                Fh_v = 0.5 * (Fh_[..., 1:-1, 1:] + Fh_[..., 1:-1, :-1])
+                u = u + self.dt * (-u / h_tot_u * Fh_u)
+                v = v + self.dt * (-v / h_tot_v * Fh_v)
+            else:
+                u = u + self.dt * _Fu
+                v = v + self.dt * _Fv
             h = h + self.dt * _Fh
 
             return (u, v, h), None
@@ -728,13 +847,14 @@ class SW:
 
         return u_phys, v_phys, h_phys
 
-    def step_tgl(self, u0, v0, h0, du0, dv0, dh0, H=None, dH=None, nstep=1):
+    def step_tgl(self, u0, v0, h0, du0, dv0, dh0, H=None, dH=None, nstep=1, taux=None, tauy=None):
         """
         Tangent Linear Model: computes the linearized evolution of perturbations.
+        taux/tauy: wind stress passed through to step().
         """
         def wrapped_step(x):
             u0, v0, h0, H = x
-            return self.step(u0, v0, h0, H, nstep=nstep)
+            return self.step(u0, v0, h0, H, nstep=nstep, taux=taux, tauy=tauy)
 
         primals = ((u0, v0, h0, H),)
         tangents = ((du0, dv0, dh0, dH),)
@@ -743,13 +863,14 @@ class SW:
 
         return dy  # returns (du, dv, dh)
 
-    def step_adj(self, u0, v0, h0, wuT, wvT, whT, H=None, nstep=1):
+    def step_adj(self, u0, v0, h0, wuT, wvT, whT, H=None, nstep=1, taux=None, tauy=None):
         """
         Adjoint Model: computes the adjoint propagation backward.
+        taux/tauy: wind stress passed through to step().
         """
         def wrapped_step(x):
             u0, v0, h0, H = x
-            return self.step(u0, v0, h0, H, nstep=nstep)
+            return self.step(u0, v0, h0, H, nstep=nstep, taux=taux, tauy=tauy)
         primals = ((u0, v0, h0, H),)
         cotangents = (wuT, wvT, whT)  
 
@@ -758,93 +879,99 @@ class SW:
         return adjoints  # returns (adj_u0, adj_v0, adj_h0, adj_H)
 
 
-def adjoint_test_sw(model, nstep=1, seed=42):
-    """
-    Low-level adjoint test for the SW model.
+    def adjoint_test_sw(self, nstep=1, seed=42):
+        """
+        Low-level adjoint test for the SW model.
 
-    Checks the identity:  <M dx, y> == <dx, M* y>
-    where M = step_tgl (tangent-linear) and M* = step_adj (adjoint).
+        Checks the identity:  <M dx, y> == <dx, M* y>
+        where M = step_tgl (tangent-linear) and M* = step_adj (adjoint).
 
-    All random vectors are generated directly in the model's working dtype
-    so there is no precision mismatch between what the operators see and
-    what the inner products use.
+        All random vectors are generated directly in the model's working dtype
+        so there is no precision mismatch between what the operators see and
+        what the inner products use.
 
-    Uses a state at rest (zeros) as the base trajectory to avoid nonlinear
-    blowup with random fields.  Perturbation and cotangent vectors are
-    small-amplitude, masked to ocean points.
+        Uses a state at rest (zeros) as the base trajectory to avoid nonlinear
+        blowup with random fields.  Perturbation and cotangent vectors are
+        small-amplitude, masked to ocean points.
 
-    Parameters
-    ----------
-    model : SW instance (already initialised)
-    nstep : number of time steps
-    seed  : random seed for reproducibility
-    """
-    key = jax.random.PRNGKey(seed)
-    dtype = model.dtype
-    n_ens = model.n_ens
-    nl = model.nl
-    nx = model.nx
-    ny = model.ny
+        Parameters
+        ----------
+        model : SW instance (already initialised)
+        nstep : number of time steps
+        seed  : random seed for reproducibility
+        """
+        key = jax.random.PRNGKey(seed)
+        dtype = self.dtype
+        n_ens = self.n_ens
+        nl = self.nl
+        nx = self.nx
+        ny = self.ny
 
-    def rand(key, shape):
-        key, subkey = jax.random.split(key)
-        return key, jax.random.normal(subkey, shape=shape, dtype=dtype) * 1e-4
+        def rand(key, shape):
+            key, subkey = jax.random.split(key)
+            return key, jax.random.normal(subkey, shape=shape, dtype=dtype) * 1e-4
 
-    # Shapes (physical space): u(n_ens, nl, nx+1, ny), v(n_ens, nl, nx, ny+1), h(n_ens, nl, nx, ny)
-    u_shape = (n_ens, nl, nx + 1, ny)
-    v_shape = (n_ens, nl, nx, ny + 1)
-    h_shape = (n_ens, nl, nx, ny)
+        # Shapes (physical space): u(n_ens, nl, nx+1, ny), v(n_ens, nl, nx, ny+1), h(n_ens, nl, nx, ny)
+        u_shape = (n_ens, nl, nx + 1, ny)
+        v_shape = (n_ens, nl, nx, ny + 1)
+        h_shape = (n_ens, nl, nx, ny)
 
-    # Base trajectory: state at rest (zero physical perturbation)
-    u0 = jnp.zeros(u_shape, dtype=dtype)
-    v0 = jnp.zeros(v_shape, dtype=dtype)
-    h0 = jnp.zeros(h_shape, dtype=dtype)
+        # Base trajectory: state at rest (zero physical perturbation)
+        #u0 = jnp.zeros(u_shape, dtype=dtype)
+        #v0 = jnp.zeros(v_shape, dtype=dtype)
+        #h0 = jnp.zeros(h_shape, dtype=dtype)
+        key, u0 = rand(key, u_shape)
+        key, v0 = rand(key, v_shape)
+        key, h0 = rand(key, h_shape)
+        u0 = u0 * self.masks.u
+        v0 = v0 * self.masks.v
+        h0 = h0 * self.masks.h
 
-    # TLM perturbation (small, masked to ocean)
-    key, du0 = rand(key, u_shape)
-    key, dv0 = rand(key, v_shape)
-    key, dh0 = rand(key, h_shape)
-    du0 = du0 * model.masks.u
-    dv0 = dv0 * model.masks.v
-    dh0 = dh0 * model.masks.h
+        # TLM perturbation (small, masked to ocean)
+        key, du0 = rand(key, u_shape)
+        key, dv0 = rand(key, v_shape)
+        key, dh0 = rand(key, h_shape)
+        du0 = du0 * self.masks.u
+        dv0 = dv0 * self.masks.v
+        dh0 = dh0 * self.masks.h
 
-    # ADJ cotangent (small, masked to ocean)
-    key, wu = rand(key, u_shape)
-    key, wv = rand(key, v_shape)
-    key, wh = rand(key, h_shape)
-    wu = wu * model.masks.u
-    wv = wv * model.masks.v
-    wh = wh * model.masks.h
+        # ADJ cotangent (small, masked to ocean)
+        key, wu = rand(key, u_shape)
+        key, wv = rand(key, v_shape)
+        key, wh = rand(key, h_shape)
+        wu = wu * self.masks.u
+        wv = wv * self.masks.v
+        wh = wh * self.masks.h
 
-    # Run TLM:  (du1, dv1, dh1) = M (du0, dv0, dh0)
-    du1, dv1, dh1 = model.step_tgl(u0, v0, h0, du0, dv0, dh0, nstep=nstep)
+        # Run TLM:  (du1, dv1, dh1) = M (du0, dv0, dh0)
+        du1, dv1, dh1 = self.step_tgl(u0, v0, h0, du0, dv0, dh0, nstep=nstep)
 
-    # Run ADJ:  ((au0, av0, ah0, aH),) = M* (wu, wv, wh)
-    adjoints = model.step_adj(u0, v0, h0, wu, wv, wh, nstep=nstep)
-    au0, av0, ah0, _aH = adjoints[0]
+        # Run ADJ:  ((au0, av0, ah0, aH),) = M* (wu, wv, wh)
+        adjoints = self.step_adj(u0, v0, h0, wu, wv, wh, nstep=nstep)
+        au0, av0, ah0, _aH = adjoints[0]
 
-    # Check for NaN
-    has_nan = (jnp.any(jnp.isnan(du1)) or jnp.any(jnp.isnan(dv1)) or
-               jnp.any(jnp.isnan(dh1)) or jnp.any(jnp.isnan(au0)) or
-               jnp.any(jnp.isnan(av0)) or jnp.any(jnp.isnan(ah0)))
-    if has_nan:
-        print(f'  SW adjoint test (dtype={dtype}, {nstep=}): NaN detected!')
-        print(f'    TLM NaN: du1={jnp.any(jnp.isnan(du1))}, '
-              f'dv1={jnp.any(jnp.isnan(dv1))}, dh1={jnp.any(jnp.isnan(dh1))}')
-        print(f'    ADJ NaN: au0={jnp.any(jnp.isnan(au0))}, '
-              f'av0={jnp.any(jnp.isnan(av0))}, ah0={jnp.any(jnp.isnan(ah0))}')
-        return float('nan')
+        # Check for NaN
+        has_nan = (jnp.any(jnp.isnan(du1)) or jnp.any(jnp.isnan(dv1)) or
+                jnp.any(jnp.isnan(dh1)) or jnp.any(jnp.isnan(au0)) or
+                jnp.any(jnp.isnan(av0)) or jnp.any(jnp.isnan(ah0)))
+        if has_nan:
+            print(f'  SW adjoint test (dtype={dtype}, {nstep=}): NaN detected!')
+            print(f'    TLM NaN: du1={jnp.any(jnp.isnan(du1))}, '
+                f'dv1={jnp.any(jnp.isnan(dv1))}, dh1={jnp.any(jnp.isnan(dh1))}')
+            print(f'    ADJ NaN: au0={jnp.any(jnp.isnan(au0))}, '
+                f'av0={jnp.any(jnp.isnan(av0))}, ah0={jnp.any(jnp.isnan(ah0))}')
+            return float('nan')
 
-    # Inner products (computed in f64 for accurate accumulation)
-    ps1 = (jnp.sum(du1.astype(jnp.float64) * wu.astype(jnp.float64))
-         + jnp.sum(dv1.astype(jnp.float64) * wv.astype(jnp.float64))
-         + jnp.sum(dh1.astype(jnp.float64) * wh.astype(jnp.float64)))
+        # Inner products (computed in f64 for accurate accumulation)
+        ps1 = (jnp.sum(du1.astype(jnp.float64) * wu.astype(jnp.float64))
+            + jnp.sum(dv1.astype(jnp.float64) * wv.astype(jnp.float64))
+            + jnp.sum(dh1.astype(jnp.float64) * wh.astype(jnp.float64)))
 
-    ps2 = (jnp.sum(du0.astype(jnp.float64) * au0.astype(jnp.float64))
-         + jnp.sum(dv0.astype(jnp.float64) * av0.astype(jnp.float64))
-         + jnp.sum(dh0.astype(jnp.float64) * ah0.astype(jnp.float64)))
+        ps2 = (jnp.sum(du0.astype(jnp.float64) * au0.astype(jnp.float64))
+            + jnp.sum(dv0.astype(jnp.float64) * av0.astype(jnp.float64))
+            + jnp.sum(dh0.astype(jnp.float64) * ah0.astype(jnp.float64)))
 
-    ratio = float(ps1 / ps2)
-    print(f'  SW adjoint test (dtype={dtype}, {nstep=}): '
-          f'<Mdx,y>/<dx,M*y> = {ratio}')
-    return ratio
+        ratio = float(ps1 / ps2)
+        print(f'  SW adjoint test (dtype={dtype}, {nstep=}): '
+            f'<Mdx,y>/<dx,M*y> = {ratio}')
+        return ratio

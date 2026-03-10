@@ -372,7 +372,6 @@ class Obsop_interp_l3(Obsop_interp):
             # Update adjoint variable
             adState.setvar(advar + adX.reshape(advar.shape), self.name_mod_var[name])  
 
-
 class Obsop_interp_l3_jax(Obsop_interp):
 
     def __init__(self,config,State,dict_obs,Model):
@@ -1173,74 +1172,3 @@ class Obsop_multi:
             if _Obsop.is_obs_time(t):
                 _mistfit = misfit[self.misfit_indt[t][i]]
                 _Obsop.adj(t, adState, State, _mistfit)
-
-    
-class Obsop_interp_jax(Obsop_interp):
-
-    def __init__(self,config,State,dict_obs,Model):
-        super().__init__(config,State,dict_obs,Model)
-
-        self.H_jit = jit(self.H, static_argnums=[1,2])
-        self.misfit_jit = jit(self.misfit, static_argnums=[1])
-
-    def _sparse_op(self,lon_obs,lat_obs):
-        
-        coords_geo_obs = np.column_stack((lon_obs, lat_obs))
-        coords_car_obs = grid.geo2cart(coords_geo_obs)
-
-        row = [] # indexes of observation grid
-        col = [] # indexes of state grid
-        data = [] # interpolation coefficients
-        Nobs = coords_geo_obs.shape[0]
-
-        for iobs in range(Nobs):
-            _dist = cdist(coords_car_obs[iobs][np.newaxis,:], self.coords_car, metric="euclidean")[0]
-            # Npix closest
-            ind_closest = np.argsort(_dist)
-            # Get Npix closest pixels (ignoring boundary pixels)
-            weights = []
-            for ipix in range(self.Npix):
-                if (not ind_closest[ipix] in self.ind_borders) and (_dist[ind_closest[ipix]]<=self.dmax):
-                    weights.append(np.exp(-(_dist[ind_closest[ipix]]**2/(2*(.5*self.dmax)**2))))
-                    row.append(iobs)
-                    col.append(ind_closest[ipix])
-            sum_weights = np.sum(weights)
-            # Fill interpolation coefficients 
-            for w in weights:
-                data.append(w/sum_weights)
-
-        data = jnp.array(data)
-        row = jnp.array(row)
-        col = jnp.array(col)
-        indexes = jnp.column_stack((row,col))
-
-        sparse_matrix = sparse.BCOO((data, indexes), shape=(Nobs, self.coords_geo.shape[0]))
-
-        return sparse_matrix
-    
-    def misfit(self,State_var,t):
-
-        # Initialization
-        misfit = np.array([])
-
-        for name in self.name_var_obs[t]:
-
-            # Get model state
-            X = State_var[self.name_mod_var[name]].ravel() 
-
-            # Project model state to obs space
-            if name in self.Hop[t]:
-                HX = self.Hop[t][name] @ X
-            else:
-                HX = +X
-
-            # Compute misfit & errors
-            _misfit = (HX-self.varobs[t][name])
-            _inverr = 1/self.errobs[t][name]
-            _misfit = jnp.where(jnp.isnan(_misfit),0,_misfit) 
-            _inverr = jnp.where(jnp.isnan(_inverr),0,_inverr) 
-
-            # Concatenate
-            misfit = jnp.concatenate((misfit,_inverr*_misfit))
-
-        return misfit

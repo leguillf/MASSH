@@ -331,52 +331,6 @@ MOD_DIFF_JAX = dict(
 )
 
 # 1.5-layer Quasi-Geostrophic models
-MOD_QG1L_NP = dict(
-
-    name_var = {'SSH':"ssh"},
-
-    init_from_bc = False,
-
-    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras
-
-    name_init_var = {},
-
-    dir_model = None,
-
-    var_to_save = None,
-
-    dtmodel = 300, # model timestep
-
-    upwind = 3, # Order of the upwind scheme for PV advection (either 1,2 or 3)
-
-    upwind_adj = None, # idem but for the adjoint loop
-
-    Reynolds = False, # If True, Reynolds decomposition will be applied. Be sure to have provided MDT and that obs are SLAs!
-
-    qgiter = 20, # number of iterations to perform the gradient conjugate algorithm (to inverse SSH from PV)
-
-    qgiter_adj = None, # idem for the adjoint loop
-
-    c0 = 2.7, # If not None, fixed value for phase velocity 
-
-    filec_aux = None, # if c0==None, auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
-
-    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
-
-    cmin = None,
-
-    cmax = None,
-
-    only_diffusion = False, # If True, use only diffusion in the QG propagation
-
-    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
-
-    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
-
-    g = 9.81 
-
-)
-
 MOD_QG1L_JAX = dict(
 
     name_class = 'Qgm', # Name of the model class in jqgm.py
@@ -452,103 +406,11 @@ MOD_QG1L_JAX = dict(
 )
 
 # 1.5-layer Shallow-Water model
-MOD_SW1L_NP = dict(
-
-    name_var = {'U':'u','V':'v','SSH':'ssh'},
-
-    name_init_var = [],
-
-    dir_model = None,
-
-    var_to_save = None,
-
-    dtmodel = 300, # model timestep
-
-    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
-
-    bc_kind = '1d', # Either 1d or 2d
-
-    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
-
-    He_init = 0.9, # Mean height (in m)
-
-    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
-    g = 9.81
-
-)
-
-MOD_SW1L_JAX = dict(
-
-    name_var = {'U':'u','V':'v','SSH':'ssh'},
-
-    name_init_var = [],
-
-    name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
-
-    dir_model = None,
-
-    var_to_save = None, # Variables to save in output netcdf files 
-
-    dtmodel = 300, # model timestep
-
-    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
-
-    bc_kind = '1d', # Either 1d or 2d
-
-    bc_island = "dirichlet", # Either "dirichlet" (orthogonal velocity forced to zero) or "radiative" (dissipative boundaries)
-
-    w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
-
-    w_names = ["m2"], # tidal components name (according to FES filenames)
-
-    He_init = 0.9, # Mean height (in m)
-
-    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
-    g = 9.81
-
-)
-
-MOD_SW1L_JAX_OLD = dict(
-
-    name_var = {'U':'u','V':'v','SSH':'ssh'},
-
-    name_init_var = [],
-
-    dir_model = None,
-
-    var_to_save = None,
-
-    dtmodel = 300, # model timestep
-
-    cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/sqrt(gHe)
-
-    time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
-
-    bc_kind = '1d', # Either 1d or 2d
-
-    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
-
-    He_init = 0.9, # Mean height (in m)
-
-    He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
-    g = 9.81
-
-)
-
 MOD_CSW1L = dict(
 
     name_var = {'U':'u','V':'v','SSH':'ssh'},
 
-    name_init_var = [],
+    name_init_var = {},
 
     dir_model = None,
 
@@ -620,68 +482,21 @@ MOD_CSW1L = dict(
 
 )
 
-
-MOD_SW1L_NL_JAX = dict(
-
-    name_var = {'U':'u','V':'v','SSH':'ssh'},
-
-    name_init_var = {}, # 
-
-    init_from_bc = False, # Whether or not to initialize the model with boundary fields.
-
-    dir_model = None,
-
-    var_to_save = None,
-
-    dtmodel = 300, # model timestep
-
-    cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/c
-
-    g = 9.81, # Gravitational acceleration (in m/s^2)
-
-    flag_linear = False, # Whether to use linear SW equations or not
- 
-    flag_use_weno = False, # Whether to use WENO scheme for advection terms
-
-    flag_baro_filter = False, # Whether to use barotropic filter or not
-
-    Tbar = 0, # Time scale of the barotropic filter (in seconds). Only used if *flag_baro_filter* is True
-
-    flag_obc = True, # Whether to use open boundary conditions or not
-
-    obc_kind = '1d', # Either 1d or 2d
-
-    flag_sponge = True, # Whether to use sponge layers close to the boundaries
-
-    sponge_width = 100., # Width of the sponge layer (in km)
-
-    sponge_coef = .9, # Sponge layer coefficient
-
-    flag_diffusion = False, # Whether to use diffusion or not
-
-    K_visc = 0., # Viscosity coefficient
-
-    He_init = 0.9, # Equivalent Height (in m)
-
-    w_waves = [2*3.14/12/3600], # igw frequencies (in seconds) 
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves
-
-    name_params = None,#['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbc', 'hbcy', 'itg')
-
-)
+# QG-SW Models
 
 MOD_QGSW = dict(
 
     name_class = 'qg', # Name of the model class (either qg or sw)
 
-    nl = 1, # number of layers in the model
-
     name_var = {'U':'u', 'V':'v', 'SSH':'ssh'},
+
+    name_init_var = {}, 
 
     var_to_save = None,
 
     name_params = None,#['H', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'H', 'hbc', 'hbcy', 'itg')
+
+    nl = 1, # number of layers in the model (for nl>1, set H and g_prime as lists/arrays)
 
     dtmodel = 1200, # model timestep
 
@@ -697,9 +512,9 @@ MOD_QGSW = dict(
 
     cmax = None, # Maximum value of phase velocity to consider
 
-    H = None, # mean water depth in meters
+    H = None, # mean layer depth(s) in meters.  Scalar or list, e.g. H=[500., 2500.] for nl=2
 
-    g_prime = None, 
+    g_prime = None, # reduced gravity(ies).  Scalar or list, e.g. g_prime=[9.81, 0.02] for nl=2
 
     init_from_bc = True,
 
@@ -722,6 +537,40 @@ MOD_QGSW = dict(
     sponge_coef = 0.,
 
     visc_coef = 0., # viscosity coefficient
+
+    path_wind = None, # path to NetCDF wind file containing u10/v10 (if None, no wind forcing)
+
+    name_var_wind = {'lon': 'longitude', 'lat': 'latitude', 'time': 'time',
+                     'u10': 'u10', 'v10': 'v10'}, # variable names in the wind NetCDF file
+
+    rho_air = 1.25, # air density (kg/m³) used in the bulk wind-stress formula
+
+    Cd_wind = 1.5e-3, # drag coefficient used in the bulk wind-stress formula tau = rho_air * Cd * |U10| * U10
+
+    rho_water = 1025.0, # ocean water density (kg/m³) used to convert wind stress [Pa] to acceleration [m²/s²]: tau/(rho_water*H)*dx
+
+    # Physical layer depth (m) for the wind-stress denominator:  tau / (rho_water * h_wind) * dx
+    # IMPORTANT for 1-layer QG/SW models: the model equivalent depth H = c²/g ≈ 0.4–1 m is
+    # NOT the physical mixed-layer depth (~50–200 m).  Without setting h_wind, wind forcing
+    # is 100–500× too large.  Set h_wind to the actual mixed-layer depth, e.g.:
+    #   h_wind = 100.     # 100 m mixed layer
+    # Leave None to use the model's reference layer thickness (correct only for multi-layer
+    # models where H represent the true physical layer depths).
+    h_wind = None,
+
+    wind_timestep = 3600, # wind update interval in seconds (default: 1 hour). Wind stress is
+                          # precomputed at this cadence and held constant between updates.
+                          # Reduces memory when the model timestep is very small.
+
+    max_nstep = 240, # maximum number of model steps per JIT call. Large nstep values are
+                     # split into chunks of max_nstep to limit GPU memory usage.
+                     # Decrease if running out of GPU memory.
+
+    # Momentum forcing mode for external forcing (Fu, Fv, Fh).
+    # 'direct'          : use Fu, Fv as provided (default).
+    # 'mass_consistent' : derive Fu, Fv from Fh so that velocity is conserved
+    #                     when mass is added:  Fu = -u/h * Fh,  Fv = -v/h * Fh.
+    forcing_momentum = 'direct',
 
 )
 
@@ -968,58 +817,6 @@ INV_4DVAR = dict(
     prec = False, # preconditoning
 
     path_background = None, # Path of a control vector from another experiment to use as the background 
-
-    anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
- 
-)
-
-INV_4DVAR_JAX = dict(
-
-    compute_test = False, # TLM, ADJ & GRAD tests
-
-    JAX_mem_fraction = None,
-
-    path_init_4Dvar = None, # To restart the minimization process from a specified control vector
-
-    restart_4Dvar = False, # To restart the minimization process from the last control vector
-
-    ftol = None, # The iteration stops when (f^k - f^{k+1})/max{|f^k|,|f^{k+1}|,1} <= ftol.
-
-    gtol = None, # Gradient norm must be less than gtol*g0 (g0 being the gradient at first iteration) before successful termination.
-
-    maxiter = 10, # Maximal number of iterations for the minimization process
-
-    opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
-
-    save_minimization = False, # save cost function and its gradient at each iteration 
-
-    path_save_control_vectors = None, # Path where to save the control vector at each 4Dvar iteration 
-
-    timestep_checkpoint = timedelta(hours=12), # timestep separating two consecutive analysis 
-
-    sigma_R = None, # Observational standard deviation
-
-    sigma_B = None,
-
-    prec = False, # preconditoning
-    
-    prescribe_background = False, # To prescribe a background on BM basis or compute it from a 4Dvar-Identity model (eq. to MIOST)
-
-    bkg_satellite = None, # satellite constellation for 4Dvar-Identity model background if prescribe_background == True
-
-    path_background = None, # Path to the precribed background on BM basis
-    
-    bkg_Kdiffus = 0., # 0 diffusion to perform the 4Dvar-Identity model 
-
-    name_bkg_var = 'res' ,# Default name of the BM basis variable the prescribed or computed background 
-
-    bkg_maxiter = 30, # 4Dvar-Identity model maximal number of iterations for the minimization process
-
-    bkg_maxiter_inner = 10, # 4Dvar-Identity model maximal number of iterations for the outer loop (only for incr4Dvar)
-
-    largescale_error_ratio = 1, # Ratio to reduce BM basis background error over lmeso wavelenghts
-
-    only_largescale = False, # Flag to prescribe only BM basis background error over lmeso wavelenghts
 
     anomaly_from_bc = False # Whether to perform the minimization with anomalies from boundary condition field(s)
  
@@ -1427,209 +1224,8 @@ BASIS_BMaux_JAX = dict(
 
 )
 
-BASIS_MIOST = dict(
-
-    name_mod_var = None, # Name of the related model variable
-    
-    flux = False,
-
-    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
-
-    wavelet_init = False, # Estimate the initial state 
-
-    facns = 1., #factor for wavelet spacing= space
-
-    facnlt = 2., #factor for wavelet spacing= time
-
-    npsp= 3.5, # Defines the wavelet shape
-
-    facpsp= 1.5, # factor to fix df between wavelets
-
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
-
-    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 2., # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    distortion_eq = 2.,
-
-    lat_distortion_eq = 5.,
-
-    distortion_eq_law = 2.,
-
-    file_aux = None,
-
-    filec_aux = None,
-
-    tssr = 0.5,
-
-    facRo = 8.,
-
-    Romax = 150.,
-
-    cutRo =  1.6,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
-
-)
-
-BASIS_MIOST_JAX = dict(
-
-    name_mod_var = None, # Name of the related model variable
-    
-    flux = False,
-
-    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
-
-    wavelet_init = False, # Estimate the initial state 
-
-    facns = 1., #factor for wavelet spacing= space
-
-    facnlt = 2., #factor for wavelet spacing= time
-
-    npsp= 3.5, # Defines the wavelet shape
-
-    facpsp= 1.5, # factor to fix df between wavelets
-
-    lmin= 80, # minimal wavelength (in km)
-
-    lmax= 970., # maximal wavelength (in km)
-
-    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
-
-    tdecmin = 2., # minimum time of decorrelation 
-
-    tdecmax = 40., # maximum time of decorrelation 
-
-    facQ= 1, # factor to be multiplied to the estimated Q
-
-    distortion_eq = 2.,
-
-    lat_distortion_eq = 5.,
-
-    distortion_eq_law = 2.,
-
-    file_aux = None,
-
-    filec_aux = None,
-
-    tssr = 0.5,
-
-    facRo = 8.,
-
-    Romax = 150.,
-
-    cutRo =  1.6,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
-
-)
 
 # Internal Tides
-BASIS_IT = dict(
-
-    name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
-
-    ### COMMON PARAMETER ###
-
-    scalemodes = None, # Only for SW1LM model, 
-
-    scalew_igws = None,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None, # name of the variable of the basis vector 
-
-    path_restart = None, # Path to the get the vector at the start of the minimization for the specified Basis  
-
-    facgauss = 3.5,  # factor for gaussian spacing= both space/time
-
-    ### - HBC PARAMETER ### 
-
-    sigma_B_bc = 1e-2, # Background variance for bc
-
-    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
-
-    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
-
-    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
-
-    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
-
-    ### - ITG PARAMETER - ### 
-
-    sigma_B_itg = 1e-2, # Background variance for itg
-
-    itg_time_dependant = False, # True if internal tide generation parameter changes in time  
-
-    D_itg = 100, # Space scale of gaussian decomposition for internal tide generation (in km), if None any decomposition basis is created
-
-    T_itg = 20, # Time scale of gaussian decomposition for internal tide generation (in days)
-
-    w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
-    ### - HE PARAMETER - ### 
-
-    control_He_offset = False, # if True an offset on the equivalent height is controlled
-
-    control_He_variation = True, # if True the spatial variations of equivalent height are controlled 
-
-    He_time_dependant = True, # True if equivalent height variations change in time (if control_He_variation = True)
-
-    D_He = 200, # Space scale of gaussian decomposition for He (in km)
-
-    T_He = 20, # Time scale of gaussian decomposition for He (in days)
-
-    sigma_B_He = 0.2, # Background variance for He
-
-    sigma_B_He_offset = 0.2, # Background variance for He offset (if control_He_offset = True)
-
-)
-
-BASIS_IT_OLD = dict(
-
-    Nwaves = 1, # number of wave component 
-
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
-
-    sigma_B_He = 0.2, # Background variance for He
-
-    sigma_B_bc = 1e-2, # Background variance for bc
-
-    facgauss = 3.5,  # factor for gaussian spacing= both space/time
-
-    D_He = 200, # Space scale of gaussian decomposition for He (in km)
-
-    T_He = 20, # Time scale of gaussian decomposition for He (in days)
-
-    D_bc = 200, # Space scale of gaussian decomposition for boundary conditions (in km)
-
-    T_bc = 20, # Time scale of gaussian decomposition for boundary conditions (in days)
-
-    facB_bc_coast = 1, # Factor for sigma_B_bc located at coast. Useful only if mask is provided
-
-    facB_He_coast = 1,  # Factor for sigma_B_He located at coast. Useful only if mask is provided
-
-    scalemodes = None, # Only for SW1LM model, 
-
-    scalew_igws = None,
-
-    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
-
-    var_background = None # name of the variable of the basis vector
-)
 
 BASIS_HBC_JAX = dict(
 
