@@ -55,14 +55,6 @@ EXP = dict(
 
     path_obs = None, # if set to None, observations are saved in *tmp_DA_path*
 
-    path_bathymetry = None, # path to read bathymetry netcdf file.   
-
-    name_var_bathy = {'lon':'','lat':'','var':''},
-
-    smooth_wavelength = None, # wavelength for the smoothing of bathymetry (in meters), if None no smoothing is applied 
-
-    path_tidal_velocity = None, # path to read tidal velocity netcdf file, for SW model with IT generation, Use FES files
-
     coriolis_force = True, # if set to False, coriolis force is set to 0 (for idealized case for instance)
 
     n_workers = 1 # number of workers to parallelize experiment preparation (like Obsop, ...)
@@ -109,6 +101,8 @@ GRID_GEO = dict(
 
     interp_method_mask = "nearest", # mask interpolation method between "bivariate", "nearest" and "inverse_distance_weighting" 
 
+    expand_pixel_mask = None, # number of pixels for expanding the mask, if not None
+
 )
 
 # Regular cartesian grid 
@@ -135,6 +129,8 @@ GRID_CAR = dict(
     name_var_mask = {'lon':'','lat':'','var':''},
 
     interp_method_mask = "nearest", # mask interpolation method between "bivariate", "nearest" and "inverse_distance_weighting" 
+
+    expand_pixel_mask = None, # number of pixels for expanding the mask, if not None 
 
 )
 
@@ -466,7 +462,7 @@ MOD_SW1L_JAX = dict(
 
     name_init_var = None,
 
-    name_params = ['He', 'hbcx', 'hbcy', 'itg'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+    name_params = {'HE':'He', 'HE_OFFSET':'He_offset', 'HBCX':'hbcx','HBCY':'hbcy','ITG':'itg'}, # list of parameters to control (among 'HE' 'HE_OFFSET', 'HBCX','HBCY','ITG')
 
     dir_model = None,
 
@@ -483,6 +479,14 @@ MOD_SW1L_JAX = dict(
     w_waves = [2*3.14/(12*60+25)/60], # igw frequencies (in seconds)
 
     w_names = ["m2"], # tidal components name (according to FES filenames)
+
+    path_tidal_velocity = None, # path to read tidal velocity netcdf file, for SW model with IT generation, Use FES files
+
+    path_bathymetry = None, # path to read bathymetry netcdf file.   
+
+    name_var_bathy = {'lon':'','lat':'','var':''},
+
+    smooth_wavelength = None, # wavelength for the smoothing of bathymetry (in meters), if None no smoothing is applied 
 
     He_init = 0.9, # Mean height (in m)
 
@@ -591,7 +595,6 @@ BC_EXT = dict(
 
 )
 
-
 #################################################################################################################################
 # OBSERVATIONAL OPERATORS
 #################################################################################################################################
@@ -613,6 +616,12 @@ OBSOP_INTERP_L3 = dict(
 
     mask_borders = False,
 
+    file_corr = None, # file of field to correct in the OBS, should be on the same grid as the mapping
+
+    name_var_corr = None, # name of the variable to correct and name in the netcdf file 
+
+    name_coord_corr={"lon":"longitude","lat":"latitude","time":"time"}
+
 )
 
 OBSOP_INTERP_L3_JAX = dict(
@@ -630,6 +639,12 @@ OBSOP_INTERP_L3_JAX = dict(
     Npix = 4, # Number of pixels to perform projection y=Hx
 
     mask_borders = False,
+
+    file_corr = None, # file of field to correct in the OBS, should be on the same grid as the mapping
+
+    name_var_corr = None, # name of the variable to correct and name in the netcdf file 
+
+    name_coord_corr={"lon":"longitude","lat":"latitude","time":"time"}
 
 )
 
@@ -649,7 +664,13 @@ OBSOP_INTERP_L4 = dict(
 
     interp_method = 'linear', # either 'nearest', 'linear', 'cubic' (use only 'cubic' when data is full of non-NaN)
 
-    gradients = False
+    gradients = False, 
+
+    file_corr = None, # file of field to correct in the OBS, should be on the same grid as the mapping
+
+    name_var_corr = None, # name of the variable to correct and name in the netcdf file 
+
+    name_coord_corr={"lon":"longitude","lat":"latitude","time":"time"}
 
 )
 
@@ -1471,7 +1492,7 @@ BASIS_IT_FLO = dict(
 
 BASIS_HBC = dict(
 
-    name_params = ['hbcx', 'hbcy'], # list of parameters to control (among 'He', 'hbcx', 'hbcy', 'itg')
+    name_mod_var = {'HBCX':'hbcx','HBCY':'hbcy'},
 
     ### COMMON PARAMETER ### 
 

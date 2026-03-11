@@ -1310,7 +1310,6 @@ class Basis_gauss3d:
         # Longitude unit
         self.lon_unit = State.lon_unit
         
-        
     
     def set_basis(self,time,return_q=False,**kwargs):
         
@@ -3499,7 +3498,8 @@ class Basis_hbc:
         self.km2deg =1./110 # Kilometer to deg factor 
 
         # Name of controlled parameters
-        self.name_params = config.BASIS.name_params 
+        # self.name_params = config.BASIS.name_params 
+        self.name_mod_var = config.BASIS.name_mod_var
 
         # Basis reduction factor
         self.facns = config.BASIS.facns # Factor for gaussian spacing in space
@@ -3579,14 +3579,14 @@ class Basis_hbc:
             self.set_bc_gauss_t(time, TIME_MIN, TIME_MAX) 
 
         # - In Space - # 
-        for name in self.name_params : 
+        for name in self.name_mod_var : 
 
             # - X height boundary conditions - #
-            if name == "hbcx":  
+            if name == "HBCX":  
                 self.shape_params["hbcS"], self.shape_params["hbcN"], self.shape_params_phys["hbcS"], self.shape_params_phys["hbcN"] = self.set_bc_gauss_hbcx(LAT_MIN, LAT_MAX, LON_MIN, LON_MAX)
             
             # - Y height boundary conditions - #
-            if name == "hbcy": 
+            if name == "HBCY": 
                 self.shape_params["hbcE"], self.shape_params["hbcW"], self.shape_params_phys["hbcE"], self.shape_params_phys["hbcW"] = self.set_bc_gauss_hbcy(LAT_MIN, LAT_MAX)
 
         ############################################
@@ -4011,14 +4011,14 @@ class Basis_hbc:
 
         # Update State
         if State is not None:
-            for name in self.name_params:
+            for name in self.name_mod_var:
                 # - Height boundary conditions hbcx - #
-                if name == "hbcx" : 
-                    State.params['hbcx'] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcS"]].reshape(self.shape_params_phys["hbcS"]),axis=1),
+                if name == "HBCX" : 
+                    State.params[self.name_mod_var[name]] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcS"]].reshape(self.shape_params_phys["hbcS"]),axis=1),
                                                             np.expand_dims(phi[self.slice_params_phys["hbcN"]].reshape(self.shape_params_phys["hbcN"]),axis=1)),axis=1)
                 # - Height boundary conditions hbcy - #
-                elif name == "hbcy" : 
-                    State.params['hbcy'] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcE"]].reshape(self.shape_params_phys["hbcE"]),axis=1),
+                elif name == "HBCY" : 
+                    State.params[self.name_mod_var[name]] = np.concatenate((np.expand_dims(phi[self.slice_params_phys["hbcE"]].reshape(self.shape_params_phys["hbcE"]),axis=1),
                                                             np.expand_dims(phi[self.slice_params_phys["hbcW"]].reshape(self.shape_params_phys["hbcW"]),axis=1)),axis=1)
             # State.params[self.name_mod_var] = phi
         else:
@@ -4040,17 +4040,17 @@ class Basis_hbc:
 
         adparams = np.zeros((self.nphys))
         if adState is not None: # If provided through adState object argument 
-            for name in self.name_params:
-                if name == "hbcx" : 
+            for name in self.name_mod_var:
+                if name == "HBCX" : 
                     # adparams["hbcS"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcS"])
                     # adparams["hbcN"] = adState.params[name][:,1,:,:,:].reshape(self.shape_params_phys["hbcN"])
-                    adparams[self.slice_params_phys["hbcS"]] = adState.params[name][:,0,:,:,:].flatten()
-                    adparams[self.slice_params_phys["hbcN"]] = adState.params[name][:,1,:,:,:].flatten()
-                elif name == "hbcy" : 
+                    adparams[self.slice_params_phys["hbcS"]] = adState.params[self.name_mod_var[name]][:,0,:,:,:].flatten()
+                    adparams[self.slice_params_phys["hbcN"]] = adState.params[self.name_mod_var[name]][:,1,:,:,:].flatten()
+                elif name == "HBCY" : 
                     # adparams["hbcE"] = adState.params[name][:,0,:,:,:].reshape(self.shape_params_phys["hbcE"])
                     # adparams["hbcW"] = adState.params[name][:,1,:,:,:].reshape(self.shape_params_phys["hbcW"])
-                    adparams[self.slice_params_phys["hbcE"]] = adState.params[name][:,0,:,:,:].flatten()
-                    adparams[self.slice_params_phys["hbcW"]] = adState.params[name][:,1,:,:,:].flatten()
+                    adparams[self.slice_params_phys["hbcE"]] = adState.params[self.name_mod_var[name]][:,0,:,:,:].flatten()
+                    adparams[self.slice_params_phys["hbcW"]] = adState.params[self.name_mod_var[name]][:,1,:,:,:].flatten()
                 # else :
                 #     param[name] = adState.params[name].reshape(self.shape_params_phys[name])
         # adparams = adparams.flatten()
@@ -4058,8 +4058,8 @@ class Basis_hbc:
 
         adX = self._operg_reduced_jit(t, adparams)
         
-        for _param in self.name_params : 
-            adState.params[_param] *= 0.
+        for name in self.name_mod_var: 
+            adState.params[self.name_mod_var[name]] *= 0.
         
         return adX
 

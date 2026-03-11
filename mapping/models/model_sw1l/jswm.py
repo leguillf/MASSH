@@ -41,8 +41,8 @@ class Swm:
 
         # Bathymetry gradient # 
 
-        self.grad_bathymetry_x = State.grad_bathymetry_x
-        self.grad_bathymetry_y = State.grad_bathymetry_y
+        self.grad_bathymetry_x = Model.grad_bathymetry_x
+        self.grad_bathymetry_y = Model.grad_bathymetry_y
 
         # Tidal Velocity # 
 
@@ -68,7 +68,7 @@ class Swm:
         self.nBc = 2*(self.ny + self.nx)
         self.nparams = Model.nparams # Number of parameters of the model 
 
-        if "hbcx" in Model.name_params and "hbcy" in Model.name_params : 
+        if "HBCX" in Model.name_params and "HBCY" in Model.name_params : 
             self.bc_theta = Model.bc_theta
 
         if hasattr(Model.f, "__len__") and Model.f.shape==self.X.shape:
@@ -228,15 +228,15 @@ class Swm:
             self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
 
         ### Test with coast ##
-        '''
-        h_right = h.copy() # right side of SSH 
-        h_left = h.copy() # left side of SSH
-        h_right = h_right.at[self.idxcoast["hE"]].set(hE) 
-        h_left = h_left.at[self.idxcoast["hW"]].set(hW)
-        
-        rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
-            self.g * (h_right[1:-1,2:-1] - h_left[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
-        '''
+        if self.bc_island=="dirichlet":
+            h_right = h.copy() # right side of SSH 
+            h_left = h.copy() # left side of SSH
+            h_right = h_right.at[self.idxcoast["hE"]].set(hE) 
+            h_left = h_left.at[self.idxcoast["hW"]].set(hW)
+            
+            rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
+                self.g * (h_right[1:-1,2:-1] - h_left[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+            
 
         return rhs_u
         
@@ -249,15 +249,15 @@ class Swm:
             self.g * (h[2:-1,1:-1] - h[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
 
         ### Test with coast ##
-        '''
-        h_up = h.copy() # upper side of SSH 
-        h_down = h.copy() # down side of SSH 
-        h_up = h_up.at[self.idxcoast["hN"]].set(hN)
-        h_down = h_down.at[self.idxcoast["hS"]].set(hS)
+        if self.bc_island=="dirichlet":
+            h_up = h.copy() # upper side of SSH 
+            h_down = h.copy() # down side of SSH 
+            h_up = h_up.at[self.idxcoast["hN"]].set(hN)
+            h_down = h_down.at[self.idxcoast["hS"]].set(hS)
 
-        rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
-            self.g * (h_up[2:-1,1:-1] - h_down[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
-        '''
+            rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
+                self.g * (h_up[2:-1,1:-1] - h_down[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
+            
 
         return rhs_v
         
@@ -271,22 +271,22 @@ class Swm:
                 rhs_itg[1:-1,1:-1])
         
         ### Test with coast ### 
-        '''
-        u_right = u.copy() # right side of u 
-        u_left = u.copy() # left side of u
-        v_up = v.copy() # upper side of v
-        v_down = v.copy() # dow side of v
-        
-        u_right = u_right.at[self.idxcoast["uE"]].set(uE)
-        u_left = u_left.at[self.idxcoast["uW"]].set(uW)
-        v_up = v_up.at[self.idxcoast["vN"]].set(vN)
-        v_down = v_down.at[self.idxcoast["vS"]].set(vS)
+        if self.bc_island=="dirichlet":
+            u_right = u.copy() # right side of u 
+            u_left = u.copy() # left side of u
+            v_up = v.copy() # upper side of v
+            v_down = v.copy() # dow side of v
+            
+            u_right = u_right.at[self.idxcoast["uE"]].set(uE)
+            u_left = u_left.at[self.idxcoast["uW"]].set(uW)
+            v_up = v_up.at[self.idxcoast["vN"]].set(vN)
+            v_down = v_down.at[self.idxcoast["vS"]].set(vS)
 
-        rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
-                (u_right[1:-1,1:] - u_left[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
-                (v_up[1:,1:-1] - v_down[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
-               rhs_itg[1:-1,1:-1])
-        '''
+            rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
+                    (u_right[1:-1,1:] - u_left[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
+                    (v_up[1:,1:-1] - v_down[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
+                rhs_itg[1:-1,1:-1])
+        
         
         return rhs_h
         
@@ -1292,14 +1292,14 @@ class Swm:
 
         # - Equivalent height - #
         He = self.Heb # value of He by default 
-        if 'He' in self.name_params:
-            He += params[self.slice_params['He']].reshape(self.shape_params['He'])
-        if 'He_offset' in self.name_params:
-            He += params[self.slice_params['He_offset']].reshape(self.shape_params['He_offset']) 
+        if 'HE' in self.name_params:
+            He += params[self.slice_params['HE']].reshape(self.shape_params['HE'])
+        if 'HE_OFFSET' in self.name_params:
+            He += params[self.slice_params['HE_OFFSET']].reshape(self.shape_params['HE_OFFSET']) 
 
         # - ITG : Internal Tide Generation - # 
-        if 'itg' in self.name_params:
-            itg = params[self.slice_params['itg']].reshape(self.shape_params['itg']) # parameters for itg forcing 
+        if 'ITG' in self.name_params:
+            itg = params[self.slice_params['ITG']].reshape(self.shape_params['ITG']) # parameters for itg forcing 
             rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
             for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
                 # print(_w_name)
@@ -1312,9 +1312,9 @@ class Swm:
             rhs_itg = jnp.zeros((self.ny, self.nx))
 
         # - SSH Boundary Condition - # 
-        if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
-            hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx']) # HBC control disabled 
-            hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy']) # HBC control disabled  
+        if 'HBCX' in self.name_params and 'HBCY' in self.name_params: 
+            hbcx = params[self.slice_params['HBCX']].reshape(self.shape_params['HBCX']) # HBC control disabled 
+            hbcy = params[self.slice_params['HBCY']].reshape(self.shape_params['HBCY']) # HBC control disabled  
 
             if self.bc_kind=='1d':
                 tbc = t + self.dt
@@ -1341,10 +1341,10 @@ class Swm:
 
         # -- External boarder -- # 
         # 1. if external boundary conditions are controled 
-        if 'hbcx' in self.name_params and 'hbcy' in self.name_params: 
+        if 'HBCX' in self.name_params and 'HBCY' in self.name_params: 
             u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
         # 2. if external boundary conditions aren't controled, but internal tide generation yes, entering wave in set to zero to enable generated waves exiting the domain 
-        elif 'itg' in self.name_params :  
+        elif 'ITG' in self.name_params :  
             w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
             u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
 
@@ -1355,8 +1355,8 @@ class Swm:
         # -- Coastal values -- # 
         #if np.any(self.idxcoast["hN"]) == True or np.any(self.idxcoast["hS"]) == True \
         #    or np.any(self.idxcoast["hW"]) == True or np.any(self.idxcoast["hE"]) == True :
-        if self.bc_island == "radiative" : 
-            vN, hN, vS, hS, uW, hW, uE, hE = self.coastbcs_jit(h,u0,v0,h0,vN,hN,vS,hS,uW,hW,uE,hE,He)
+        # if self.bc_island == "radiative" : 
+        #     vN, hN, vS, hS, uW, hW, uE, hE = self.coastbcs_jit(h,u0,v0,h0,vN,hN,vS,hS,uW,hW,uE,hE,He)
 
         ########################
         ###   OUTPUT ARRAY   ###

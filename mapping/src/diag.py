@@ -1780,6 +1780,9 @@ That could be due to non regular grid or bad written netcdf file')
                                       (self.exp.lat>=self.lat_min) & 
                                       (self.exp.lat<=self.lat_max)).compute(),
                                       drop=True)
+        
+
+        
         exp.close()
         del exp
 
@@ -1846,6 +1849,7 @@ That could be due to non regular grid or bad written netcdf file')
                 self.name_exp_time, self.name_exp_lat, self.name_exp_lon, 
                 )
         
+
         
         if self.compare_to_baseline:
             self.bas_regridded = self._regrid_geo(
@@ -1884,7 +1888,7 @@ That could be due to non regular grid or bad written netcdf file')
                                             bounds_error=False).reshape(_ref[self.name_ref_lon].shape)
 
             # Save to dataset
-            exp_regridded.append( xr.DataArray(
+            var_regridded = xr.DataArray(
                 name=data.name,
                 data=var_interp,
                 coords={self.name_ref_time: (_ref[self.name_ref_time].dims, _ref[self.name_ref_time].values),
@@ -1893,7 +1897,17 @@ That could be due to non regular grid or bad written netcdf file')
                         },
                 dims=_ref.dims
                 )
-            )
+            
+            dsout = xr.Dataset({self.name_exp_var:var_regridded})
+            # dsout = dsout.sel({self.name_exp_lon:slice(self.lon_min,self.lon_max),
+            #                self.name_exp_lat:slice(self.lat_min,self.lat_max)})
+            dsout.to_netcdf(f'{self.dir_output}/exp_regridded_{self.name_exp_var}_{_ref.name}.nc')
+
+            print(f'{self.dir_output}/exp_regridded_{self.name_exp_var}_{_ref.name}.nc'," : saved")
+
+            exp_regridded.append(var_regridded)
+
+
         return exp_regridded
 
     def _regrid_unstructured(self, data, name_time, name_lat, name_lon):

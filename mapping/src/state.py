@@ -20,6 +20,10 @@ from datetime import datetime
 import pyinterp 
 import pyinterp.fill
 
+from scipy.ndimage import binary_dilation
+
+import jax.numpy as jnp
+
 import warnings
 
 import time
@@ -115,106 +119,8 @@ class State:
             # Gravity
             self.g = 9.81
 
-            # Bathymetry field 
-            self.init_bathy(config)
-
-
-    # def __init__(self, config, first=True, verbose=True):
-    #     start_time = time.time()  # Start timing the entire function
-
-    #     if first and verbose:
-    #         print(config.GRID)
-
-    #     self.config = config
-
-    #     # Parameters
-    #     section_start = time.time()
-    #     self.name_time = config.EXP.name_time
-    #     self.name_lon = config.EXP.name_lon
-    #     self.name_lat = config.EXP.name_lat
-    #     self.name_exp_save = config.EXP.name_exp_save
-    #     self.path_save = config.EXP.path_save
-    #     if not os.path.exists(self.path_save):
-    #         os.makedirs(self.path_save)
-    #     self.flag_plot = config.EXP.flag_plot
-    #     print(f"Parameter initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     # Initialize state variables dictionary
-    #     self.var = {}
-
-    #     # Initialize control parameters dictionary
-    #     self.params = {}
-
-    #     # Initialize grid
-    #     if first:
-    #         section_start = time.time()
-    #         self.geo_grid = False
-    #         self.mask = None
-    #         if config.GRID.super == 'GRID_GEO':
-    #             self.ini_geo_grid(config.GRID)
-    #         elif config.GRID.super == 'GRID_CAR':
-    #             self.ini_car_grid(config.GRID)
-    #         elif config.GRID.super == 'GRID_FROM_FILE':
-    #             self.ini_grid_from_file(config.GRID)
-    #         elif config.GRID.super == 'GRID_RESTART':
-    #             self.ini_grid_restart()
-    #         else:
-    #             sys.exit("Initialization '" + config.GRID.name_grid + "' not implemented yet")
-    #         print(f"Grid initialization time: {time.time() - section_start:.4f} seconds")
-
-    #         section_start = time.time()
-    #         self.nx, self.ny = self.lon.shape  # ATTENTION: PAS self.ny, self.nx
-    #         self.lon_min = np.nanmin(self.lon)
-    #         self.lon_max = np.nanmax(self.lon)
-    #         self.lat_min = np.nanmin(self.lat)
-    #         self.lat_max = np.nanmax(self.lat)
-    #         if np.sign(self.lon_min) == -1:
-    #             self.lon_unit = '-180_180'
-    #         else:
-    #             self.lon_unit = '0_360'
-    #         print(f"Lon/Lat calculations time: {time.time() - section_start:.4f} seconds")
-
-    #         # Mask
-    #         section_start = time.time()
-    #         self.ini_mask(config)
-    #         print(f"Mask initialization time: {time.time() - section_start:.4f} seconds")
-
-    #         # Compute cartesian grid 
-    #         section_start = time.time()
-    #         DX, DY = grid.lonlat2dxdy(self.lon, self.lat)
-    #         dx = np.nanmean(DX)
-    #         dy = np.nanmean(DY)
-    #         DX[np.isnan(DX)] = dx  # For cartesian grid
-    #         DY[np.isnan(DY)] = dy  # For cartesian grid
-    #         X, Y = grid.dxdy2xy(DX, DY)
-    #         self.DX = DX
-    #         self.DY = DY
-    #         self.X = X
-    #         self.Y = Y
-    #         self.dx = dx
-    #         self.dy = dy
-    #         print(f"Cartesian grid computation time: {time.time() - section_start:.4f} seconds")
-
-    #         # Coriolis
-    #         section_start = time.time()
-    #         if config.EXP.coriolis_force:
-    #             self.f = 4 * np.pi / 86164 * np.sin(self.lat * np.pi / 180)
-    #         else:
-    #             self.f = 0 * self.lat
-    #         print(f"Coriolis force computation time: {time.time() - section_start:.4f} seconds")
-
-    #         # Gravity
-    #         section_start = time.time()
-    #         self.g = 9.81
-    #         print(f"Gravity assignment time: {time.time() - section_start:.4f} seconds")
-
-    #         # Bathymetry field
-    #         section_start = time.time()
-    #         self.init_bathy(config)
-    #         print(f"Bathymetry initialization time: {time.time() - section_start:.4f} seconds")
-
-    #     print(f"Total execution time: {time.time() - start_time:.4f} seconds")
-
+            # # Bathymetry field 
+            # self.init_bathy(config)
 
     def ini_geo_grid(self,config):
         """
@@ -239,40 +145,6 @@ class State:
         self.lon = lon
         self.lat = lat
         self.present_date = config.init_date
-    
-    # def ini_car_grid(self,config):
-    #     """
-    #     NAME
-    #         ini_car_grid
-    
-    #     DESCRIPTION
-    #         Create state grid, regular in (x,y) 
-    #         Args:
-    #             config (module): configuration module
-    #     """
-
-    #     km2deg = 1./110
-
-    #     ENSLAT = np.arange(
-    #         config.lat_min,
-    #         config.lat_max + config.dx*km2deg,
-    #         config.dx*km2deg)
-
-    #     ENSLON = np.arange(
-    #                 config.lon_min,
-    #                 config.lon_max+config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg,
-    #                 config.dx/np.cos(np.min(np.abs(ENSLAT))*np.pi/180.)*km2deg)
-
-    #     lat2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
-    #     lon2d = np.zeros((ENSLAT.size,ENSLON.size))*np.nan
-
-    #     for I in range(len(ENSLAT)):
-    #         for J in range(len(ENSLON)):
-    #             lat2d[I,J] = ENSLAT[I]
-    #             lon2d[I,J] = ENSLON[len(ENSLON)//2] + (J-len(ENSLON)//2)*config.dx/np.cos(ENSLAT[I]*np.pi/180.)*km2deg
-        
-    #     self.lon = lon2d
-    #     self.lat = lat2d
 
     def ini_car_grid(self,config):
         """
@@ -444,73 +316,79 @@ class State:
         
         self.mask += (np.isnan(self.lon) + np.isnan(self.lat)).astype(bool)
 
-    def init_bathy(self,config):
+        # EXPANDING MASK PIXELS #
+        if config.GRID.expand_pixel_mask is not None:
 
-        """
-        NAME
-            init_bathy
-
-        DESCRIPTION
-            Read bathymetry file, interpolate it to the grid
-        """
-
-        # Read bathymetry 
-        if config.EXP.path_bathymetry is not None and os.path.exists(config.EXP.path_bathymetry):
-            ds = xr.open_dataset(config.EXP.path_bathymetry).squeeze()
-            name_lon = config.EXP.name_var_bathy['lon']
-            name_lat = config.EXP.name_var_bathy['lat']
-            name_elevation = config.EXP.name_var_bathy['var']
-
-        else: # No bathymetry file prescripted
-            warnings.warn("No bathymetry field prescribed.")
-            return None 
-
-        # Convert longitudes
-        if np.sign(ds[name_lon].data.min())==-1 and self.lon_unit=='0_360':
-            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
-        elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
-            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
-        ds = ds.sortby(ds[name_lon])   
-
-
-        dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
-        dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
-        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
-        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
-
-        ds = ds.sel(
-            {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
-                name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
-
-        ds = ds.interp(coords={name_lon:self.lon[0,:],name_lat:self.lat[:,0]},method='cubic')
-
-        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0 
-
-        self.bathymetry = ds[name_elevation].values
-
-        # Calculating bathymetry gradient 
-        # X component of gradient
-        grad_x = np.zeros(self.X.shape)
-        grad_x[:,1:-1] = (self.bathymetry[:,2:]-self.bathymetry[:,0:-2])/(self.X[:,2:]-self.X[:,0:-2]) # inner part of gradient 
-        grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(self.X[:,1]-self.X[:,0])
-        grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(self.X[:,-1]-self.X[:,-2])
+            self.mask = binary_dilation(self.mask, iterations=config.GRID.expand_pixel_mask)
         
-        # Y component of gradient
-        grad_y = np.zeros(self.Y.shape)
-        grad_y[1:-1,:] = (self.bathymetry[2:,:]-self.bathymetry[0:-2,:])/(self.Y[2:,:]-self.Y[0:-2,:])
-        grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(self.Y[1,:]-self.Y[0,:])
-        grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(self.Y[-1,:]-self.Y[-2,:])
 
-        # Applying bathymetry smoothing if prescribed 
-        if config.EXP.smooth_wavelength != None and np.round(config.EXP.smooth_wavelength/self.dx).astype(np.int32) > 0 : 
-            N_pixel = np.round(config.EXP.smooth_wavelength/self.dx).astype(np.int32)
-            array_pascal = factorial(N_pixel-1)/(factorial(np.ones((1,N_pixel))*(N_pixel-1)-np.arange(0,N_pixel).reshape((1,N_pixel)))*factorial(np.arange(0,N_pixel).reshape((1,N_pixel))))
-            gaussian_kernel = (1/array_pascal.sum()**2)*array_pascal.T*array_pascal
-            grad_x = convolve2d(grad_x,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
-            grad_y = convolve2d(grad_y,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+    # def init_bathy(self,config):
+
+    #     """
+    #     NAME
+    #         init_bathy
+
+    #     DESCRIPTION
+    #         Read bathymetry file, interpolate it to the grid
+    #     """
+
+    #     # Read bathymetry 
+    #     if config.EXP.path_bathymetry is not None and os.path.exists(config.EXP.path_bathymetry):
+    #         ds = xr.open_dataset(config.EXP.path_bathymetry).squeeze()
+    #         name_lon = config.EXP.name_var_bathy['lon']
+    #         name_lat = config.EXP.name_var_bathy['lat']
+    #         name_elevation = config.EXP.name_var_bathy['var']
+
+    #     else: # No bathymetry file prescripted
+    #         warnings.warn("No bathymetry field prescribed.")
+    #         return None 
+
+    #     # Convert longitudes
+    #     if np.sign(ds[name_lon].data.min())==-1 and self.lon_unit=='0_360':
+    #         ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+    #     elif np.sign(ds[name_lon].data.min())==1 and self.lon_unit=='-180_180':
+    #         ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+    #     ds = ds.sortby(ds[name_lon])   
+
+
+    #     dlon =  np.nanmax(self.lon[:,1:] - self.lon[:,:-1])
+    #     dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
+    #     dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
+    #     dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
+
+    #     ds = ds.sel(
+    #         {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
+    #             name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
+
+    #     ds = ds.interp(coords={name_lon:self.lon[0,:],name_lat:self.lat[:,0]},method='cubic')
+
+    #     ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0 
+
+    #     self.bathymetry = ds[name_elevation].values
+
+    #     # Calculating bathymetry gradient 
+    #     # X component of gradient
+    #     grad_x = np.zeros(self.X.shape)
+    #     grad_x[:,1:-1] = (self.bathymetry[:,2:]-self.bathymetry[:,0:-2])/(self.X[:,2:]-self.X[:,0:-2]) # inner part of gradient 
+    #     grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(self.X[:,1]-self.X[:,0])
+    #     grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(self.X[:,-1]-self.X[:,-2])
         
-        self.grad_bathymetry_x = grad_x
-        self.grad_bathymetry_y = grad_y
+    #     # Y component of gradient
+    #     grad_y = np.zeros(self.Y.shape)
+    #     grad_y[1:-1,:] = (self.bathymetry[2:,:]-self.bathymetry[0:-2,:])/(self.Y[2:,:]-self.Y[0:-2,:])
+    #     grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(self.Y[1,:]-self.Y[0,:])
+    #     grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(self.Y[-1,:]-self.Y[-2,:])
+
+    #     # Applying bathymetry smoothing if prescribed 
+    #     if config.EXP.smooth_wavelength != None and np.round(config.EXP.smooth_wavelength/self.dx).astype(np.int32) > 0 : 
+    #         N_pixel = np.round(config.EXP.smooth_wavelength/self.dx).astype(np.int32)
+    #         array_pascal = factorial(N_pixel-1)/(factorial(np.ones((1,N_pixel))*(N_pixel-1)-np.arange(0,N_pixel).reshape((1,N_pixel)))*factorial(np.arange(0,N_pixel).reshape((1,N_pixel))))
+    #         gaussian_kernel = (1/array_pascal.sum()**2)*array_pascal.T*array_pascal
+    #         grad_x = convolve2d(grad_x,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+    #         grad_y = convolve2d(grad_y,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+        
+    #     self.grad_bathymetry_x = grad_x
+    #     self.grad_bathymetry_y = grad_y
             
     def save_output(self,date,name_var=None):
         
@@ -561,8 +439,12 @@ class State:
             var_to_save = +self.var[name]
 
             # Apply Mask
-            if self.mask is not None:
+            # if self.mask is not None:
+            #     var_to_save[self.mask] = np.nan
+            if isinstance(var_to_save, np.ndarray):
                 var_to_save[self.mask] = np.nan
+            else:  # assume JAX array
+                var_to_save = jnp.where(self.mask, jnp.nan, var_to_save)
         
             if len(var_to_save.shape)==2:
                 var_to_save = var_to_save[np.newaxis,:,:]

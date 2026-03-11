@@ -40,6 +40,8 @@ import time
 
 import functools
 
+from scipy.signal import convolve2d
+from scipy.special import factorial
 
 def Model(config, State, verbose=True):
     """
@@ -53,7 +55,7 @@ def Model(config, State, verbose=True):
         return
     
     elif config.MOD.super is None:
-        return Model_multi(config,State,verbose)
+        return Model_multi(config,State)
 
     elif config.MOD.super is not None:
         if verbose:
@@ -1719,6 +1721,9 @@ class Model_sw1l_jax(M):
         # Tidal velocities 
         self.init_tidal_velocity(config,State)
 
+        # Bathymetry field 
+        self.init_bathy(config,State)
+
         ####################################
         ### INITIALIZING MODEL VARIABLES ###
         ####################################
@@ -1793,7 +1798,7 @@ class Model_sw1l_jax(M):
         """
 
         # Read tidal velocities
-        if config.EXP.path_tidal_velocity is not None and os.path.exists(config.EXP.path_tidal_velocity): 
+        if config.MOD.path_tidal_velocity is not None and os.path.exists(config.MOD.path_tidal_velocity): 
             
             # Variables
             
@@ -1815,6 +1820,75 @@ class Model_sw1l_jax(M):
             warnings.warn("No tidal velocity field prescribed. This is not suitable if Internal Tide generation ('itg') is being controlled.")
             return None 
         
+
+    def init_bathy(self,config,State):
+
+        """
+        NAME
+            init_bathy
+
+        DESCRIPTION
+            Read bathymetry file, interpolate it to the grid
+        """
+
+        # Read bathymetry 
+        if config.MOD.path_bathymetry is not None and os.path.exists(config.MOD.path_bathymetry):
+            ds = xr.open_dataset(config.MOD.path_bathymetry).squeeze()
+            name_lon = config.MOD.name_var_bathy['lon']
+            name_lat = config.MOD.name_var_bathy['lat']
+            name_elevation = config.MOD.name_var_bathy['var']
+
+        else: # No bathymetry file prescripted
+            warnings.warn("No bathymetry field prescribed.")
+            return None 
+
+        # Convert longitudes
+        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds[name_lon])   
+
+
+        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
+        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
+        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
+        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
+
+        ds = ds.sel(
+            {name_lon:slice(State.lon_min-dlon,State.lon_max+dlon),
+                name_lat:slice(State.lat_min-dlat,State.lat_max+dlat)})
+
+        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
+
+        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0 
+
+        self.bathymetry = ds[name_elevation].values
+
+        # Calculating bathymetry gradient 
+        # X component of gradient
+        grad_x = np.zeros(State.X.shape)
+        grad_x[:,1:-1] = (self.bathymetry[:,2:]-self.bathymetry[:,0:-2])/(State.X[:,2:]-State.X[:,0:-2]) # inner part of gradient 
+        grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(State.X[:,1]-State.X[:,0])
+        grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(State.X[:,-1]-State.X[:,-2])
+        
+        # Y component of gradient
+        grad_y = np.zeros(State.Y.shape)
+        grad_y[1:-1,:] = (self.bathymetry[2:,:]-self.bathymetry[0:-2,:])/(State.Y[2:,:]-State.Y[0:-2,:])
+        grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(State.Y[1,:]-State.Y[0,:])
+        grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(State.Y[-1,:]-State.Y[-2,:])
+
+        # Applying bathymetry smoothing if prescribed 
+        if config.MOD.smooth_wavelength != None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0 : 
+            N_pixel = np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32)
+            array_pascal = factorial(N_pixel-1)/(factorial(np.ones((1,N_pixel))*(N_pixel-1)-np.arange(0,N_pixel).reshape((1,N_pixel)))*factorial(np.arange(0,N_pixel).reshape((1,N_pixel))))
+            gaussian_kernel = (1/array_pascal.sum()**2)*array_pascal.T*array_pascal
+            grad_x = convolve2d(grad_x,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+            grad_y = convolve2d(grad_y,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+        
+        self.grad_bathymetry_x = grad_x
+        self.grad_bathymetry_y = grad_y
+
     def open_interpolate(self,config,name,direction,State):
         """
         NAME
@@ -1830,9 +1904,9 @@ class Model_sw1l_jax(M):
         """
 
         if direction == "U":
-            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"eastward_velocity",name+".nc")).squeeze()
+            ds = xr.open_dataset(os.path.join(config.MOD.path_tidal_velocity,"eastward_velocity",name+".nc")).squeeze()
         elif direction == "V":
-            ds = xr.open_dataset(os.path.join(config.EXP.path_tidal_velocity,"northward_velocity",name+".nc")).squeeze()
+            ds = xr.open_dataset(os.path.join(config.MOD.path_tidal_velocity,"northward_velocity",name+".nc")).squeeze()
         
         # Convert longitudes
         if np.sign(ds["lon"].data.min())==-1 and State.lon_unit=='0_360':
@@ -1981,13 +2055,13 @@ class Model_sw1l_jax(M):
             self.Heb = config.MOD.He_init
         
         # Height boundary condition hbc structure  
-        if 'hbcx' in self.name_params and 'hbcy' in self.name_params :
+        if 'HBCX' in self.name_params and 'HBCY' in self.name_params :
             if config.MOD.Ntheta>0:
                 theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
                 self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
             else:
                 self.bc_theta = np.array([0])
-        elif 'hbcx' in self.name_params or 'hbcy' in self.name_params :
+        elif 'HBCX' in self.name_params or 'HBCY' in self.name_params :
             warnings.warn("Only partly controlling boundary conditions (either just x or y)", Warning)
             if config.MOD.Ntheta>0:
                 theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
@@ -2002,38 +2076,38 @@ class Model_sw1l_jax(M):
         for param in self.name_params : 
 
             # If the parameter is not implemented 
-            if param not in ['He','He_offset', 'hbcx', 'hbcy', 'itg'] : 
-                sys.exit(param+" not implemented. Please choose parameters among ['He', 'hbcx', 'hbcy', 'itg'].")
+            if param not in ['HE','HE_OFFSET','HBCX','HBCY','ITG'] : 
+                sys.exit(param+" not implemented. Please choose parameters among ['HE','HE_OFFSET','HBCX','HBCY','ITG'].")
 
             # - Equivalent Height : He 
-            elif param =='He' : 
-                self.shape_params['He'] = [State.ny,    # - Number of grid points along y axis.
+            elif param =='HE' : 
+                self.shape_params['HE'] = [State.ny,    # - Number of grid points along y axis.
                                            State.nx]    # - Number of grid points along x axis.
 
             # - Equivalent Height Offset : He_offset
-            elif param =='He_offset' : 
-                self.shape_params['He_offset'] = [State.ny,    # - Number of grid points along y axis.
+            elif param =='HE_OFFSET' : 
+                self.shape_params['HE_OFFSET'] = [State.ny,    # - Number of grid points along y axis.
                                                   State.nx]    # - Number of grid points along x axis.
                 
             # - Height Boundary Conditions along x : hbcx 
-            elif param =='hbcx' : 
-                self.shape_params['hbcx'] = [len(self.omegas),      # - Number of tidal frequency components 
+            elif param =='HBCX' : 
+                self.shape_params['HBCX'] = [len(self.omegas),      # - Number of tidal frequency components 
                                             2,                      # - Number of boundaries (North & South)
                                             2,                      # - Number of controlled components (cos & sin)
                                             len(self.bc_theta),     # - Number of angles
                                             State.nx]               # - Number of gridpoints along x axis
                 
             # - Height Boundary Conditions along y : hbcy
-            elif param =='hbcy' :
-                self.shape_params['hbcy'] = [len(self.omegas),      # - Number of tidal frequency components 
+            elif param =='HBCY' :
+                self.shape_params['HBCY'] = [len(self.omegas),      # - Number of tidal frequency components 
                                             2,                      # - Number of boundaries (East & West)
                                             2,                      # - Number of controlled components (cos & sin)
                                             len(self.bc_theta),     # - Number of angles
                                             State.ny]               # - Number of gridpoints along y axis
             
             # - Internal Tide Generation itg 
-            elif param =='itg' :
-                self.shape_params['itg'] = [len(self.omegas),       # - Number of tidal frequency components 
+            elif param =='ITG' :
+                self.shape_params['ITG'] = [len(self.omegas),       # - Number of tidal frequency components 
                                             4,                      # - Number of estimated parameter (cos and sin for x and y axis)
                                             State.ny,               # - Number of grid points along y axis.
                                             State.nx]               # - Number of grid points along x axis.      
@@ -2056,7 +2130,7 @@ class Model_sw1l_jax(M):
         #######################################################      
 
         for param in self.name_params :     
-            State.params[param] = np.zeros((self.shape_params[param]),dtype='float64')
+            State.params[self.name_params[param]] = np.zeros((self.shape_params[param]),dtype='float64')
 
     def _detect_coast(self,mask,axis):
         """
@@ -2280,7 +2354,7 @@ class Model_sw1l_jax(M):
         # - Get parameters variable 
         if State.params is not None:
             for param in self.name_params : 
-                params = +State.getparams(param,vect=True)
+                params = +State.getparams(self.name_params[param],vect=True)
                 X0 = np.concatenate((X0,params))
 
         # - Add time in input array
@@ -2349,7 +2423,7 @@ class Model_sw1l_jax(M):
         #setting params 
         params = X1[self.swm.nstates:]
         for param in self.name_params :    
-            State.params[param] = params[self.slice_params[param]].reshape(self.shape_params[param])
+            State.params[self.name_params[param]] = params[self.slice_params[param]].reshape(self.shape_params[param])
 
 class Model_sw1l_jax_flo(M):
     def __init__(self,config,State):
@@ -5036,16 +5110,163 @@ class Model_tracadv_vel(M):
 #                             Multi-models                                    #
 ###############################################################################      
 
+# class Model_multi:
+
+#     def __init__(self,config,State,verbose):
+
+#         self.Models = []
+#         _config = config.copy()
+
+#         for _MOD in config.MOD:
+#             _config.MOD = config.MOD[_MOD]
+#             self.Models.append(Model(config=_config,State=State,verbose=verbose))
+#             print()
+
+#         # Time parameters
+#         self.dt = int(np.max([M.dt for M in self.Models])) # We take the longer timestep 
+#         self.nt = 1 + int((config.EXP.final_date - config.EXP.init_date).total_seconds()//self.dt)
+#         self.T = np.arange(self.nt) * self.dt
+#         self.timestamps = [] 
+#         t = config.EXP.init_date
+#         while t<=config.EXP.final_date:
+#             self.timestamps.append(t)
+#             t += timedelta(seconds=self.dt)
+
+#         # Model variables: for each variable ('SSH', 'SST', 'Chl' etc...), 
+#         # we initialize a new variable for the sum of the different contributions
+#         self.name_var = {}
+#         _name_var_tmp = []
+#         self.var_to_save = []
+#         for M in self.Models:
+#             self.var_to_save = np.concatenate((self.var_to_save, M.var_to_save))
+#             for name in M.name_var:
+#                 if name not in _name_var_tmp:
+#                     _name_var_tmp.append(name)
+#                 else:
+#                     # At least two component for the same variable, so we initialize a global variable
+#                     new_name = f'{name}_tot'
+#                     self.name_var[name] = new_name
+#                     # Initialize new State variable
+#                     State.var[new_name] = State.var[M.name_var[name]].copy()
+#                     if M.name_var[name] in M.var_to_save and new_name not in self.var_to_save:
+#                         self.var_to_save = np.append(self.var_to_save,new_name)
+#         self.var_to_save = list(self.var_to_save)
+
+#         # Tests tgl & adj
+#         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+#             print('Tangent test:')
+#             tangent_test(self,State,nstep=10)
+#             print('Adjoint test:')
+#             adjoint_test(self,State,nstep=10)
+
+#     def init(self,State,t0=0):
+
+#         # Intialization
+#         var_tot_tmp = {}
+#         for name in self.name_var:
+#             var_tot_tmp[name] = 0
+
+#         # for M in self.Models:
+#         #     M.init(State,t0)
+
+#         ### CHANGE TO FIX : TO INIT SSH_TOT ###
+#         for M in self.Models:
+#             M.init(State,t0)
+#             # Add to total variables
+#             for name in self.name_var:
+#                 if name in M.name_var:
+#                     var_tot_tmp[name] += State.var[M.name_var[name]]
+            
+#         # # Update state
+#         for name in self.name_var:
+#             State.var[self.name_var[name]] = var_tot_tmp[name]
+        
+
+#     def set_bc(self,time_bc,var_bc):
+
+#         for M in self.Models:
+#             M.set_bc(time_bc,var_bc)
+
+#     def step(self,State,nstep=1,t=None):
+
+#         # Intialization
+#         var_tot_tmp = {}
+#         for name in self.name_var:
+#             var_tot_tmp[name] = np.zeros_like(State.var[self.name_var[name]]) 
+        
+#         # Loop over models
+#         for i,M in enumerate(self.Models):
+#             _nstep = nstep*self.dt//M.dt
+#             # Forward propagation
+#             #if i == 0: # ignoring the SW propagation 
+#             M.step(State,nstep=_nstep,t=t)
+#             # Add to total variables
+#             for name in self.name_var:
+#                 if name in M.name_var:
+#                     var_tot_tmp[name] += State.var[M.name_var[name]]
+        
+#         # Update state
+#         for name in self.name_var:
+#             State.var[self.name_var[name]] = var_tot_tmp[name]
+
+#     def step_tgl(self,dState,State,nstep=1,t=None):
+
+#         # Intialization
+#         var_tot_tmp = {}
+#         for name in self.name_var:
+#             var_tot_tmp[name] = np.zeros_like(State.var[self.name_var[name]]) 
+
+#         # Loop over models
+#         for i,M in enumerate(self.Models):
+#             _nstep = nstep*self.dt//M.dt
+#             # Tangent propagation
+#             #if i == 0: # ignoring the SW propagation
+#             M.step_tgl(dState,State,nstep=_nstep,t=t)
+#             # Add to total variables
+#             for name in self.name_var:
+#                 if name in M.name_var:
+#                     var_tot_tmp[name] += dState.var[M.name_var[name]]
+        
+#         # Update state
+#         for name in self.name_var:
+#             dState.var[self.name_var[name]] = var_tot_tmp[name]
+
+#     def step_adj(self,adState,State,nstep=1,t=None):
+
+#         # Intialization
+#         var_tot_tmp = {}
+#         for name in self.name_var:
+#             var_tot_tmp[name] = adState.var[self.name_var[name]]
+        
+#         # Loop over models
+#         for i,M in enumerate(self.Models):
+#             _nstep = nstep*self.dt//M.dt
+#             # Add to local variable
+#             #if i == 0: # ignoring the SW propagation
+#             for name in self.name_var:
+#                 if name in M.name_var:
+#                     adState.var[M.name_var[name]] += var_tot_tmp[name]  
+#             # Adjoint propagation
+#             M.step_adj(adState,State,nstep=_nstep,t=t)
+        
+#         for name in self.name_var:
+#             adState.var[self.name_var[name]] *= 0 
+
+#     def save_output(self,State,present_date,name_var=None,t=None):
+
+#         for M in self.Models:
+#             M.save_output(State,present_date,name_var=name_var,t=t)
+
 class Model_multi:
 
-    def __init__(self,config,State,verbose):
+    def __init__(self,config,State):
 
         self.Models = []
         _config = config.copy()
 
         for _MOD in config.MOD:
             _config.MOD = config.MOD[_MOD]
-            self.Models.append(Model(config=_config,State=State,verbose=verbose))
+            self.Models.append(Model(_config,State))
             print()
 
         # Time parameters
@@ -5061,6 +5282,7 @@ class Model_multi:
         # Model variables: for each variable ('SSH', 'SST', 'Chl' etc...), 
         # we initialize a new variable for the sum of the different contributions
         self.name_var = {}
+        self.name_var_tot = {}
         _name_var_tmp = []
         self.var_to_save = []
         for M in self.Models:
@@ -5072,17 +5294,31 @@ class Model_multi:
                     # At least two component for the same variable, so we initialize a global variable
                     new_name = f'{name}_tot'
                     self.name_var[name] = new_name
+                    self.name_var_tot[name] = new_name
                     # Initialize new State variable
-                    State.var[new_name] = State.var[M.name_var[name]].copy()
+                    if new_name in State.var:
+                        State.var[new_name] += State.var[M.name_var[name]]
+                    else:
+                        State.var[new_name] = State.var[M.name_var[name]].copy()
                     if M.name_var[name] in M.var_to_save and new_name not in self.var_to_save:
                         self.var_to_save = np.append(self.var_to_save,new_name)
         self.var_to_save = list(self.var_to_save)
 
+        for M in self.Models:
+            for name in M.name_var:
+                if name not in self.name_var_tot:
+                    self.name_var[name] = M.name_var[name]
+
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
-            print('Tangent test:')
+            #for M in self.Models:
+                #print('Tangent test:')
+                #tangent_test(M,State,nstep=10)
+                #print('Adjoint test:')
+                #adjoint_test(M,State,nstep=10)
+            print('MultiModel Tangent test:')
             tangent_test(self,State,nstep=10)
-            print('Adjoint test:')
+            print('QG1L_JAX Adjoint test:')
             adjoint_test(self,State,nstep=10)
 
     def init(self,State,t0=0):
@@ -5090,99 +5326,91 @@ class Model_multi:
         # Intialization
         var_tot_tmp = {}
         for name in self.name_var:
-            var_tot_tmp[name] = 0
+            var_tot_tmp[name] = np.zeros_like(State.var[self.name_var[name]]) 
 
-        # for M in self.Models:
-        #     M.init(State,t0)
-
-        ### CHANGE TO FIX : TO INIT SSH_TOT ###
         for M in self.Models:
-            M.init(State,t0)
-            # Add to total variables
+            M.init(State, t0=t0)
             for name in self.name_var:
                 if name in M.name_var:
                     var_tot_tmp[name] += State.var[M.name_var[name]]
-            
-        # # Update state
+
+        # Update state
         for name in self.name_var:
             State.var[self.name_var[name]] = var_tot_tmp[name]
-        
 
     def set_bc(self,time_bc,var_bc):
 
         for M in self.Models:
             M.set_bc(time_bc,var_bc)
 
+    def save_output(self,State,present_date,name_var=None,t=None):
+
+        for M in self.Models:
+            M.save_output(State,present_date,name_var,t)
+
     def step(self,State,nstep=1,t=None):
 
         # Intialization
         var_tot_tmp = {}
-        for name in self.name_var:
-            var_tot_tmp[name] = np.zeros_like(State.var[self.name_var[name]]) 
+        for name in self.name_var_tot:
+            var_tot_tmp[name] = jnp.zeros_like(State.var[self.name_var[name]]) 
         
         # Loop over models
-        for i,M in enumerate(self.Models):
+        for M in self.Models:
             _nstep = nstep*self.dt//M.dt
             # Forward propagation
-            #if i == 0: # ignoring the SW propagation 
             M.step(State,nstep=_nstep,t=t)
             # Add to total variables
             for name in self.name_var:
-                if name in M.name_var:
-                    var_tot_tmp[name] += State.var[M.name_var[name]]
-        
+                if name in M.name_var and (name in self.name_var_tot):
+                    var_tot_tmp[name] += +State.var[M.name_var[name]]
+                    
         # Update state
-        for name in self.name_var:
-            State.var[self.name_var[name]] = var_tot_tmp[name]
+        for name in self.name_var_tot:
+            State.var[self.name_var_tot[name]] = var_tot_tmp[name]
 
     def step_tgl(self,dState,State,nstep=1,t=None):
 
         # Intialization
         var_tot_tmp = {}
-        for name in self.name_var:
+        for name in self.name_var_tot:
             var_tot_tmp[name] = np.zeros_like(State.var[self.name_var[name]]) 
 
         # Loop over models
-        for i,M in enumerate(self.Models):
+        for M in self.Models:
             _nstep = nstep*self.dt//M.dt
             # Tangent propagation
-            #if i == 0: # ignoring the SW propagation
             M.step_tgl(dState,State,nstep=_nstep,t=t)
             # Add to total variables
             for name in self.name_var:
-                if name in M.name_var:
+                if name in M.name_var and name in var_tot_tmp:
                     var_tot_tmp[name] += dState.var[M.name_var[name]]
         
         # Update state
-        for name in self.name_var:
-            dState.var[self.name_var[name]] = var_tot_tmp[name]
+        for name in self.name_var_tot:
+            dState.var[self.name_var_tot[name]] = var_tot_tmp[name]
 
     def step_adj(self,adState,State,nstep=1,t=None):
 
         # Intialization
         var_tot_tmp = {}
-        for name in self.name_var:
-            var_tot_tmp[name] = adState.var[self.name_var[name]]
+        for name in self.name_var_tot:
+            var_tot_tmp[name] = adState.var[self.name_var_tot[name]]
         
         # Loop over models
-        for i,M in enumerate(self.Models):
+        for M in self.Models:
             _nstep = nstep*self.dt//M.dt
             # Add to local variable
-            #if i == 0: # ignoring the SW propagation
             for name in self.name_var:
-                if name in M.name_var:
+                if name in M.name_var and name in self.name_var_tot:
                     adState.var[M.name_var[name]] += var_tot_tmp[name]  
             # Adjoint propagation
             M.step_adj(adState,State,nstep=_nstep,t=t)
         
-        for name in self.name_var:
-            adState.var[self.name_var[name]] *= 0 
+        for name in self.name_var_tot:
+            adState.var[self.name_var_tot[name]] *= 0 
+             
 
-    def save_output(self,State,present_date,name_var=None,t=None):
-
-        for M in self.Models:
-            M.save_output(State,present_date,name_var=name_var,t=t)
-                      
 ###############################################################################
 #                       Tangent and Adjoint tests                             #
 ###############################################################################     

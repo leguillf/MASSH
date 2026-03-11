@@ -11,7 +11,7 @@ import numpy as np
 from src import grid as grid
 import pickle
 import matplotlib.pylab as plt
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, RegularGridInterpolator
 from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
 from scipy.spatial import KDTree
@@ -720,6 +720,12 @@ class Obsop_interp_l3_jax(Obsop_interp):
         self._misfit_reduced_jit = jit(self._misfit_reduced)
         self._misfit_jit = jit(self._misfit)
     
+        # CORRECTION OF OBS # 
+        self.file_corr = config.OBSOP.file_corr
+        self.name_var_corr = config.OBSOP.name_var_corr
+        self.name_coord_corr = config.OBSOP.name_coord_corr
+        self.init_date = config.EXP.init_date
+
     def _sparse_op(self, lon_obs, lat_obs):
         """Optimized sparse observation operator using KDTree."""
         
@@ -791,6 +797,39 @@ class Obsop_interp_l3_jax(Obsop_interp):
         self.data = {}
         self.indices = {}
 
+        if self.file_corr is not None:
+            # array_t_obs = np.zeros(self.t_obs.shape,dtype="datetime64[s]")
+            # for i,dt in enumerate(self.t_obs):
+            #     array_t_obs[i]=np.datetime64(self.init_date)+np.timedelta64(dt,'s')
+            
+            ds_corr = xr.open_mfdataset(self.file_corr)
+
+            lon = self.coords_geo[:,0].reshape(self.shape_grid)
+            lat = self.coords_geo[:,1].reshape(self.shape_grid)
+            lon_min = np.nanmin(lon)
+
+            if np.sign(lon_min)==-1:
+                lon_unit = '-180_180'
+            else:
+                lon_unit = '0_360'
+            if np.sign(ds_corr[self.name_coord_corr["lon"]].data.min())==-1 and lon_unit=='0_360':
+                ds_corr = ds_corr.assign_coords({self.name_coord_corr["lon"]:((self.name_coord_corr["lon"], ds_corr[self.name_coord_corr["lon"]].data % 360))})
+            elif np.sign(ds_corr[self.name_coord_corr["lon"]].data.min())>=0 and lon_unit=='-180_180':
+                ds_corr = ds_corr.assign_coords({self.name_coord_corr["lon"]:((self.name_coord_corr["lon"], (ds_corr[self.name_coord_corr["lon"]].data + 180) % 360 - 180 ))})
+            ds_corr = ds_corr.sortby(ds_corr[self.name_coord_corr["lon"]]) 
+
+            field_corr = ds_corr[self.name_var_corr["SSH"]]  
+            field_corr = field_corr.sel({self.name_coord_corr["lon"]:slice(np.min(lon)-0.5,np.max(lon)+0.5),
+                                         self.name_coord_corr["lat"]:slice(np.min(lat)-0.5,np.max(lat)+0.5),
+                                         self.name_coord_corr["time"]:slice(np.datetime64(self.date_obs[0])-np.timedelta64(1,"D"),np.datetime64(self.date_obs[-1])+np.timedelta64(1,"D"))})
+            field_corr = field_corr.load()
+
+            finterp = RegularGridInterpolator([field_corr[self.name_coord_corr["time"]].values,
+                                               field_corr[self.name_coord_corr["lon"]].values,
+                                               field_corr[self.name_coord_corr["lat"]].values],
+                                               field_corr.values,
+                                               bounds_error=False)
+
         for i,(date,t) in enumerate(zip(self.date_obs, self.t_obs)):
 
             self.varobs[t] = {}
@@ -859,6 +898,20 @@ class Obsop_interp_l3_jax(Obsop_interp):
                 mask = np.any(np.isnan(self.coords_geo),axis=1)
                 var_bc_interp = griddata(self.coords_geo[~mask], var_bc[self.name_var][i].flatten()[~mask], coords_obs, method='cubic')
                 var_obs -= var_bc_interp
+
+            ### CORRECTING OBS ### 
+            if self.file_corr is not None: 
+                ts = np.datetime64(self.init_date) + np.timedelta64(t, "s")
+                varobs_corr = finterp(
+                    np.transpose([
+                        np.full_like(lat_obs, ts, dtype="datetime64[ns]"), 
+                        lon_obs,
+                        lat_obs, 
+                    ])
+                )
+                # varobs_corr = finterp(np.transpose([(np.datetime64(self.init_date)+np.timedelta64(t,"s"))*np.ones_like(lat_obs,dtype='datetime64[s]'), lat_obs,lon_obs]))
+                var_obs-=varobs_corr
+            ######################
 
             # Fill dictionnaries
             self.varobs[t] = var_obs
@@ -1375,6 +1428,12 @@ class Obsop_interp_l4(Obsop_interp):
         self._misfit_reduced_jit = jit(self._misfit_reduced)
         self._misfit_jit = jit(self._misfit)
 
+        # CORRECTION OF OBS # 
+        self.file_corr = config.OBSOP.file_corr
+        self.name_var_corr = config.OBSOP.name_var_corr
+        self.name_coord_corr = config.OBSOP.name_coord_corr
+        self.init_date = config.EXP.init_date
+
     def process_obs(self, var_bc=None):
         
         # Initialize dictionnaries
@@ -1505,9 +1564,56 @@ class Obsop_interp_l4(Obsop_interp):
                 # Fill dictionnaries
                 self.varobs[i] = var_obs_interp.flatten()
                 self.errobs[i] = err_obs_interp.flatten()
-                
+        
+        ### CORRECTING THE OBS ### 
+        if self.file_corr is not None:
+            
+            array_t_obs = np.zeros(self.t_obs.shape,dtype="datetime64[s]")
+            for i,dt in enumerate(self.t_obs):
+                array_t_obs[i]=np.datetime64(self.init_date)+np.timedelta64(dt,'s')
+            
+            ds_corr = xr.open_mfdataset(self.file_corr)
+
+            lon = self.coords_geo[:,0].reshape(self.shape_grid)
+            lat = self.coords_geo[:,1].reshape(self.shape_grid)
+            lon0 = lon[0,:]
+            lat0 = lat[:,0]
+            lon_min = np.nanmin(lon)
+
+            if np.sign(lon_min)==-1:
+                lon_unit = '-180_180'
+            else:
+                lon_unit = '0_360'
+            if np.sign(ds_corr[self.name_coord_corr["lon"]].data.min())==-1 and lon_unit=='0_360':
+                ds_corr = ds_corr.assign_coords({self.name_coord_corr["lon"]:((self.name_coord_corr["lon"], ds_corr[self.name_coord_corr["lon"]].data % 360))})
+            elif np.sign(ds_corr[self.name_coord_corr["lon"]].data.min())>=0 and lon_unit=='-180_180':
+                ds_corr = ds_corr.assign_coords({self.name_coord_corr["lon"]:((self.name_coord_corr["lon"], (ds_corr[self.name_coord_corr["lon"]].data + 180) % 360 - 180 ))})
+            ds_corr = ds_corr.sortby(ds_corr[self.name_coord_corr["lon"]]) 
+
+            field_corr = ds_corr[self.name_var_corr["SSH"]] 
+            # Selecting field 
+            field_corr = field_corr.sel({self.name_coord_corr["lon"]:slice(np.min(lon)-0.5,np.max(lon)+0.5),
+                                         self.name_coord_corr["lat"]:slice(np.min(lat)-0.5,np.max(lat)+0.5),
+                                         self.name_coord_corr["time"]:slice(np.datetime64(self.date_obs[0])-np.timedelta64(1,"D"),np.datetime64(self.date_obs[-1])+np.timedelta64(1,"D"))})
+            # Interpolating field
+            array_t = [] # Time array 
+            for _t in self.t_obs:
+                array_t.append(np.datetime64(self.init_date)+np.timedelta64(_t,"s"))
+            array_t = np.array(array_t)
+            field_corr = field_corr.interp({self.name_coord_corr["lon"]:lon0,
+                                         self.name_coord_corr["lat"]:lat0,
+                                         self.name_coord_corr["time"]:array_t})
+
+            field_corr = field_corr.load()
+            
+            self.varobs -= field_corr.values.reshape(field_corr.shape[0],field_corr.shape[1]*field_corr.shape[2])
+
+
+        ############################
         self.varobs_arr = jnp.array(self.varobs)
         self.errobs_arr = jnp.array(self.errobs)
+
+
     
     def is_obs_time(self,t):
         """Check if t is in observation times."""

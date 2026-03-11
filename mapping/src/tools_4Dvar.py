@@ -310,10 +310,63 @@ class Variational:
             cost_model.append(time.time()-time0)
 
             if i==int(len(self.checkpoints)/2):
+            #     print(f"He_offset2 at {t} : ",State.params["He_offset2"].mean())
+            #     print(f"Max He at {t} : ",State.params["He2"].max())
+            #     print(f"Min He at {t} : ",State.params["He2"].min())
                 State.plot(title=f'State variables at {i}')
-            #     if self.it_plot % self.freq_it_plot == 0:
-            #         State.plot(title='State variables at the middle of cost function evaluation')
-            #         State.plot(title='State params at the middle of cost function evaluation', params=True)
+
+                # fig,ax = plt.subplots(2,2,figsize=(8,8))
+                # for i,_ax in enumerate(ax.flatten()):
+                #     _ax.set_title(f"ITG{i} M2")
+                #     plot=_ax.pcolormesh(State.params["itg2"][0,i,:,:])
+                #     fig.colorbar(plot,ax=_ax)
+                # plt.show()
+
+                # fig,ax = plt.subplots(2,2,figsize=(8,8))
+                # for i,_ax in enumerate(ax.flatten()):
+                #     _ax.set_title(f"ITG{i} N2")
+                #     plot=_ax.pcolormesh(State.params["itg2"][1,i,:,:])
+                #     fig.colorbar(plot,ax=_ax)
+                # plt.show()
+
+                # fig,ax = plt.subplots(2,2,figsize=(8,8))
+                # for i,_ax in enumerate(ax.flatten()):
+                #     _ax.set_title(f"ITG{i} S2")
+                #     plot=_ax.pcolormesh(State.params["itg2"][2,i,:,:])
+                #     fig.colorbar(plot,ax=_ax)
+                # plt.show()
+
+            #     plt.figure()
+            #     plt.title("He1")
+            #     plt.pcolormesh(State.params["He1"])
+            #     plt.colorbar()
+            #     plt.show()
+
+
+            #     plt.figure()
+            #     plt.title("He_offset1")
+            #     plt.pcolormesh(State.params["He_offset1"])
+            #     plt.colorbar()
+            #     plt.show()
+
+            #     plt.figure()
+            #     plt.title("He2")
+            #     plt.pcolormesh(State.params["He2"])
+            #     plt.colorbar()
+            #     plt.show()
+
+
+            #     plt.figure()
+            #     plt.title("He_offset2")
+            #     plt.pcolormesh(State.params["He_offset2"])
+            #     plt.colorbar()
+            #     plt.show()
+
+                # State.plot(title='State params at the middle of cost function evaluation', params=True)
+
+                # if self.it_plot % self.freq_it_plot == 0:
+                    # State.plot(title='State variables at the middle of cost function evaluation')
+                    # State.plot(title='State params at the middle of cost function evaluation', params=True)
 
         t = self.M.T[-1]
         State_dict[t] = State.copy()
@@ -376,8 +429,8 @@ class Variational:
                 grad_misfit.append(time.time()-time0)
 
             # if i==int(len(self.checkpoints)/2):
-            #     if self.it_plot % self.freq_it_plot == 0:
-            #         adState.plot(title='Adjoint State variables at the middle of cost function evaluation')
+            #     # if self.it_plot % self.freq_it_plot == 0:
+            #     adState.plot(title='Adjoint State variables at the middle of cost function evaluation')
         
         #print("[cost] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(cost_misfit), np.mean(cost_basis), np.mean(cost_model)) )   
         #print("[grad] mean computation time [seconds]: misfit: {:.2e}, basis: {:.2e}, model: {:.2e}".format(np.mean(grad_misfit), np.mean(grad_basis), np.mean(grad_model)) )

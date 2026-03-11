@@ -864,7 +864,30 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         var_bc = None
     print('process observation operators')
     Obsop.process_obs(var_bc)
-    
+
+    # ### TEST : CORRECTING THE OBSERVATIONS, FOR IMPLEMENTING SEQUENTIAL MAPPING ### --> very preliminary, only functions for multiple OBSOP 
+    # if config.OBSOP.super is None: 
+    #     for k,_OBSOP in enumerate(config.OBSOP):
+    #         if config.OBSOP[_OBSOP].super == "OBSOP_INTERP_L4" and config.OBSOP[_OBSOP].file_corr is not None:
+    #             print("Correcting obs ...")
+    #             array_t_obs = np.zeros(Obsop.Obsop[k].t_obs_jax.shape,dtype="datetime64[s]")
+    #             for i,dt in enumerate(np.array(Obsop.Obsop[k].t_obs_jax)):
+    #                 # print(np.datetime64(config.EXP.init_date)+np.timedelta64(dt,'s'))
+    #                 array_t_obs[i]=np.datetime64(config.EXP.init_date)+np.timedelta64(dt,'s')
+                
+    #             ds_corr = xr.open_mfdataset(config.OBSOP[_OBSOP].file_corr)
+    #             # print("File correction field opened")
+    #             for _var in config.OBSOP[_OBSOP].name_var_corr:
+    #                 field_corr = ds_corr[config.OBSOP[_OBSOP].name_var_corr[_var]].load()
+    #                 field_corr = field_corr.interp({"time":array_t_obs})
+    #                 Obsop.Obsop[k].varobs -= field_corr.values.reshape(field_corr.shape[0],field_corr.shape[1]*field_corr.shape[2])
+                # print("Obs corrected")
+
+                # plt.figure()
+                # plt.pcolormesh(Obsop.Obsop[k].varobs[12,:].reshape(161,161))
+                # plt.colorbar()
+                # plt.show()
+
     # Initial model state
     Model.init(State)
     State.plot(title='Init State')
@@ -953,19 +976,62 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
             fun = var.cost_and_grad
 
         # Callback function called at every minimization iterations
-        def callback(XX):
+        # def callback(XX):
+        #     if config.INV.save_minimization:
+
+        #         now = datetime.now()
+        #         current_time = now.strftime("%Y-%m-%d_%H%M%S")
+        #         ds = xr.Dataset({'res':(('x',),XX)})
+        #         ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
+        #         ds.close()
+
+        #         # ds = xr.Dataset({'res':(('x',),XX)})
+        #         # ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it.nc'))
+        #         # ds.close()
+
+        # Calback version from Val version # 
+        list_J=[]
+        iteration = 0
+        n_consecutive = config.INV.n_consecutive
+        ftol = config.INV.ftol
+        
+        def callback(intermediate_result):
+            nonlocal list_J
+            nonlocal iteration
+            nonlocal ftol
+            nonlocal n_consecutive
+            # Iteration +=1
+            iteration += 1
+
+            # print(f"\n \n At iterate   {iteration} \n")
+            # print(f"Jtot=  {intermediate_result.fun:.5e}")
+
+            # Printing status # 
+            # print("success : ",intermediate_result.success)
+            # print("status : ",intermediate_result.status)
+            # print("message : ",intermediate_result.message)
+
+
+            # Saving the control parameters
+
             if config.INV.save_minimization:
 
                 now = datetime.now()
                 current_time = now.strftime("%Y-%m-%d_%H%M%S")
-                ds = xr.Dataset({'res':(('x',),XX)})
+                ds = xr.Dataset({'res':(('x',),intermediate_result.x)})
                 ds.to_netcdf(os.path.join(config.EXP.tmp_DA_path,'X_it-'+current_time+'.nc'))
                 ds.close()
+            
+            # Saving the 
+            list_J.append(intermediate_result.fun)
+            if (n_consecutive is not None) and (ftol is not None) and len(list_J)>n_consecutive+1:
+                arrayJ_k =  np.array(list_J[-n_consecutive-1:-2])
+                arrayJ_k1 =  np.array(list_J[-n_consecutive:-1])
+                d_J = np.abs(arrayJ_k1-arrayJ_k)/np.maximum(arrayJ_k1,arrayJ_k)
+                if np.all(d_J<ftol):
+                    print(f"Criterion on ftol has been satisfied for a consecutive number of {n_consecutive} iterations (n_consecutive specified).")
+                    raise StopIteration
 
-                # ds = xr.Dataset({'res':(('x',),XX)})
-                # ds.to_netcdf(os.path.join(path_save_control_vectors,'X_it.nc'))
-                # ds.close()
-                
         # Minimization options
         options = {}
         if verbose:
@@ -974,8 +1040,13 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
             options['disp'] = False
         options['maxiter'] = maxiter
 
-        if config.INV.ftol is not None:
+        # If ftol stopping criterion should be raised 
+        # at the first iteration it happens (n_consecutive is None) 
+        if config.INV.ftol is not None and config.INV.n_consecutive is None : 
             options['ftol'] = config.INV.ftol
+
+        # if config.INV.ftol is not None:
+        #     options['ftol'] = config.INV.ftol
 
         if config.INV.gtol is not None:
             _, g0 = fun(Xopt*0.)
@@ -1041,6 +1112,8 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
         print ('\nIs the minimization successful? {}'.format(res.success))
         print ('\nFinal cost function value: {}'.format(res.fun))
         print ('\nNumber of iterations: {}'.format(res.nit))
+        print ('\nMessage: {}'.format(res.message))
+        print ('\nStatus: {}'.format(res.status))
         
         # Save minimization trajectory
         if config.INV.save_minimization:

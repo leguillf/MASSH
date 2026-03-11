@@ -96,7 +96,16 @@ def Obs(config, State, *args, **kwargs):
         
         # Read observation files
         if '.nc' in OBS.path and '*' not in OBS.path:
-            _ds = xr.open_dataset(OBS.path)
+
+            # dropping unused variables
+            drop_variables=[
+                v for v in xr.open_dataset(OBS.path).data_vars
+                if v not in list(OBS.name_var.values())
+            ]
+            if OBS.quality_flag_variable is not None:
+                drop_variables.remove(OBS.quality_flag_variable)
+
+            _ds = xr.open_dataset(OBS.path,drop_variables=drop_variables)
         else:
             if type(OBS.path)==list: # if a list of path is specified 
                 path = []
@@ -111,15 +120,25 @@ def Obs(config, State, *args, **kwargs):
 
             try:
 
+                # dropping unused variables
+                drop_variables=[
+                    v for v in xr.open_dataset(OBS.path[0]).data_vars
+                    if v not in list(OBS.name_var.values())
+                ]
+                if OBS.quality_flag_variable is not None:
+                    drop_variables.remove(OBS.quality_flag_variable)
+
+
                 if OBS.super=='OBS_SSH_SWATH' : # no need to specify the dimension along which to concatenate 
                     if OBS.drop_dims is not None : # dropping dims in the opening 
                         _preprocess =  partial(preprocess, dims=OBS.drop_dims)
                     else :
                         _preprocess = None
 
-                    _ds = xr.open_mfdataset(path,combine='nested',concat_dim = OBS.concat_dim,preprocess=_preprocess)
+                    _ds = xr.open_mfdataset(path,combine='nested',concat_dim = OBS.concat_dim,preprocess=_preprocess,drop_variables=drop_variables,parallel=True)
+
                 else :
-                    _ds = xr.open_mfdataset(path)
+                    _ds = xr.open_mfdataset(path,drop_variables=drop_variables,parallel=True)
                 
             except ValueError:
                 print('ValueError: opening with combine==nested')
@@ -130,16 +149,28 @@ def Obs(config, State, *args, **kwargs):
                     continue
                 _ds0 = xr.open_dataset(files[0])
                 name_time_dim = _ds0[OBS.name_time].dims[0]
+
+                # dropping unused variables
+                drop_variables=[
+                    v for v in _ds0.data_vars
+                    if v not in list(OBS.name_var.values())
+                ]
+                if OBS.quality_flag_variable is not None:
+                    drop_variables.remove(OBS.quality_flag_variable)
+
                 _ds0.close()
-                _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim)
+                
+                _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,drop_variables=drop_variables,parallel=True)
+
             except:
                 print('Error: unable to open multiple netcdf files')
                 continue
         
+
         # Copy and close dataset
         ds = _ds.copy()
         _ds.close()
-        
+
         # Name of obs files
         out_name = f'obs_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}'
 
@@ -173,6 +204,9 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         
     """
 
+    # ds = ds.sel(time=slice(min(dt_list),max(dt_list)), method="nearest",drop=True)
+    ds=ds.load()
+
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
     ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
 
@@ -181,13 +215,17 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, ds[obs_attr.name_lon].data % 360))})
     elif np.sign(ds[obs_attr.name_lon].data.min())==1 and lon_unit=='-180_180':
         ds = ds.assign_coords({obs_attr.name_lon:((obs_attr.name_time, (ds[obs_attr.name_lon].data + 180) % 360 - 180))})
-    
+
     # Select sub area
     lon_obs = ds[obs_attr.name_lon] 
     lat_obs = ds[obs_attr.name_lat]
 
     mask = ((bbox[0] <= lon_obs) & (bbox[1] >= lon_obs) & 
-        (bbox[2] <= lat_obs) & (bbox[3] >= lat_obs)).compute()  # Convert to NumPy
+        (bbox[2] <= lat_obs) & (bbox[3] >= lat_obs)).compute() 
+
+    # mask_np = mask.values  
+
+    # ds = ds.isel(time=mask_np.any(axis=1))
 
     ds = ds.where(mask, drop=True)
 
@@ -203,7 +241,8 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
             ds[obs_attr.name_var[name]] = ds[obs_attr.name_var[name]].where(
                 ds[obs_attr.quality_flag_variable].isin(obs_attr.list_index_valid_data),drop=False
             )
-    
+
+
     # Time loop
     count = 0
     for dt_curr in dt_list:
@@ -219,6 +258,7 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
             except:
                 print(dt_curr,': Warning: impossible to select data for this time')
                 continue
+
 
         lon = _ds[obs_attr.name_lon].values
         lat = _ds[obs_attr.name_lat].values
