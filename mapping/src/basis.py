@@ -600,7 +600,7 @@ class Basis_bm:
         
         DX = 1./ff*self.npsp * 0.5 # wavelet extension
         DXG = DX / self.facns # distance (km) between the wavelets grid in space
-        NP = np.empty(nf, dtype='int32') # Nomber of spatial wavelet locations for a given frequency
+        NP = np.empty(nf, dtype='int64') # Nomber of spatial wavelet locations for a given frequency
         nwave = 0
         self.nwavemeso = 0
 
@@ -1189,17 +1189,51 @@ class Basis_gauss3d:
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
 
+        # C-grid variable type (None, 'U', or 'V')
+        self.c_grid_var = getattr(config.BASIS, 'c_grid_var', None)
+
         # Grid params
-        self.nphys= State.lon.size
-        self.shape_phys = (State.ny,State.nx)
         self.ny = State.ny
         self.nx = State.nx
         self.lon_min = State.lon_min
         self.lon_max = State.lon_max
         self.lat_min = State.lat_min
         self.lat_max = State.lat_max
-        self.lon1d = State.lon.flatten()
-        self.lat1d = State.lat.flatten()
+
+        if self.c_grid_var == 'U':
+            self.shape_phys = (State.ny, State.nx + 1)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_u = np.zeros((State.ny, State.nx + 1))
+            lat_u = np.zeros((State.ny, State.nx + 1))
+            lon_u[:, 1:State.nx] = 0.5 * (lon_h[:, :-1] + lon_h[:, 1:])
+            lat_u[:, 1:State.nx] = 0.5 * (lat_h[:, :-1] + lat_h[:, 1:])
+            lon_u[:, 0] = lon_h[:, 0] - 0.5 * (lon_h[:, 1] - lon_h[:, 0])
+            lat_u[:, 0] = lat_h[:, 0] - 0.5 * (lat_h[:, 1] - lat_h[:, 0])
+            lon_u[:, State.nx] = lon_h[:, -1] + 0.5 * (lon_h[:, -1] - lon_h[:, -2])
+            lat_u[:, State.nx] = lat_h[:, -1] + 0.5 * (lat_h[:, -1] - lat_h[:, -2])
+            self.lon1d = lon_u.flatten()
+            self.lat1d = lat_u.flatten()
+        elif self.c_grid_var == 'V':
+            self.shape_phys = (State.ny + 1, State.nx)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_v = np.zeros((State.ny + 1, State.nx))
+            lat_v = np.zeros((State.ny + 1, State.nx))
+            lon_v[1:State.ny, :] = 0.5 * (lon_h[:-1, :] + lon_h[1:, :])
+            lat_v[1:State.ny, :] = 0.5 * (lat_h[:-1, :] + lat_h[1:, :])
+            lon_v[0, :] = lon_h[0, :] - 0.5 * (lon_h[1, :] - lon_h[0, :])
+            lat_v[0, :] = lat_h[0, :] - 0.5 * (lat_h[1, :] - lat_h[0, :])
+            lon_v[State.ny, :] = lon_h[-1, :] + 0.5 * (lon_h[-1, :] - lon_h[-2, :])
+            lat_v[State.ny, :] = lat_h[-1, :] + 0.5 * (lat_h[-1, :] - lat_h[-2, :])
+            self.lon1d = lon_v.flatten()
+            self.lat1d = lat_v.flatten()
+        else:
+            self.shape_phys = (State.ny, State.nx)
+            self.lon1d = State.lon.flatten()
+            self.lat1d = State.lat.flatten()
+
+        self.nphys = self.lon1d.size
 
         # Gravity 
         self.g = 9.81
@@ -1221,7 +1255,16 @@ class Basis_gauss3d:
 
         # Mask
         if State.mask is not None and np.any(State.mask):
-            self.mask1d = State.mask.ravel()
+            if self.c_grid_var == 'U':
+                mask_u = np.zeros((State.ny, State.nx + 1), dtype=bool)
+                mask_u[:, 1:State.nx] = State.mask[:, :-1] | State.mask[:, 1:]
+                self.mask1d = mask_u.ravel()
+            elif self.c_grid_var == 'V':
+                mask_v = np.zeros((State.ny + 1, State.nx), dtype=bool)
+                mask_v[1:State.ny, :] = State.mask[:-1, :] | State.mask[1:, :]
+                self.mask1d = mask_v.ravel()
+            else:
+                self.mask1d = State.mask.ravel()
         else:
             self.mask1d = None
 
@@ -1280,7 +1323,12 @@ class Basis_gauss3d:
     
         self.nbasis = ENST.size * ENSLAT.size
         self.nphys = self.lon1d.size
-        self.shape_phys = [self.ny, self.nx]
+        if self.c_grid_var == 'U':
+            self.shape_phys = [self.ny, self.nx + 1]
+        elif self.c_grid_var == 'V':
+            self.shape_phys = [self.ny + 1, self.nx]
+        else:
+            self.shape_phys = [self.ny, self.nx]
         self.shape_basis = [ENST.size,ENSLAT.size]
         
         # Fill Q matrix
@@ -1716,16 +1764,52 @@ class Basis_bmaux:
         self.path_background = config.BASIS.path_background
         self.var_background = config.BASIS.var_background
         self.norm_time = config.BASIS.norm_time
+
+        # C-grid variable type (None, 'U', or 'V')
+        self.c_grid_var = getattr(config.BASIS, 'c_grid_var', None)
         
         # Grid params
-        self.nphys= State.lon.size
-        self.shape_phys = (State.ny,State.nx)
+        self.ny = State.ny
+        self.nx = State.nx
         self.lon_min = State.lon_min
         self.lon_max = State.lon_max
         self.lat_min = State.lat_min
         self.lat_max = State.lat_max
-        self.lon1d = State.lon.flatten()
-        self.lat1d = State.lat.flatten()
+
+        if self.c_grid_var == 'U':
+            self.shape_phys = (State.ny, State.nx + 1)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_u = np.zeros((State.ny, State.nx + 1))
+            lat_u = np.zeros((State.ny, State.nx + 1))
+            lon_u[:, 1:State.nx] = 0.5 * (lon_h[:, :-1] + lon_h[:, 1:])
+            lat_u[:, 1:State.nx] = 0.5 * (lat_h[:, :-1] + lat_h[:, 1:])
+            lon_u[:, 0] = lon_h[:, 0] - 0.5 * (lon_h[:, 1] - lon_h[:, 0])
+            lat_u[:, 0] = lat_h[:, 0] - 0.5 * (lat_h[:, 1] - lat_h[:, 0])
+            lon_u[:, State.nx] = lon_h[:, -1] + 0.5 * (lon_h[:, -1] - lon_h[:, -2])
+            lat_u[:, State.nx] = lat_h[:, -1] + 0.5 * (lat_h[:, -1] - lat_h[:, -2])
+            self.lon1d = lon_u.flatten()
+            self.lat1d = lat_u.flatten()
+        elif self.c_grid_var == 'V':
+            self.shape_phys = (State.ny + 1, State.nx)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_v = np.zeros((State.ny + 1, State.nx))
+            lat_v = np.zeros((State.ny + 1, State.nx))
+            lon_v[1:State.ny, :] = 0.5 * (lon_h[:-1, :] + lon_h[1:, :])
+            lat_v[1:State.ny, :] = 0.5 * (lat_h[:-1, :] + lat_h[1:, :])
+            lon_v[0, :] = lon_h[0, :] - 0.5 * (lon_h[1, :] - lon_h[0, :])
+            lat_v[0, :] = lat_h[0, :] - 0.5 * (lat_h[1, :] - lat_h[0, :])
+            lon_v[State.ny, :] = lon_h[-1, :] + 0.5 * (lon_h[-1, :] - lon_h[-2, :])
+            lat_v[State.ny, :] = lat_h[-1, :] + 0.5 * (lat_h[-1, :] - lat_h[-2, :])
+            self.lon1d = lon_v.flatten()
+            self.lat1d = lat_v.flatten()
+        else:
+            self.shape_phys = (State.ny, State.nx)
+            self.lon1d = State.lon.flatten()
+            self.lat1d = State.lat.flatten()
+
+        self.nphys = self.lon1d.size
 
         # Gravity 
         self.g = 9.81
@@ -1750,7 +1834,16 @@ class Basis_bmaux:
 
         # Mask
         if State.mask is not None and np.any(State.mask):
-            self.mask1d = State.mask.ravel()
+            if self.c_grid_var == 'U':
+                mask_u = np.zeros((State.ny, State.nx + 1), dtype=bool)
+                mask_u[:, 1:State.nx] = State.mask[:, :-1] | State.mask[:, 1:]
+                self.mask1d = mask_u.ravel()
+            elif self.c_grid_var == 'V':
+                mask_v = np.zeros((State.ny + 1, State.nx), dtype=bool)
+                mask_v[1:State.ny, :] = State.mask[:-1, :] | State.mask[1:, :]
+                self.mask1d = mask_v.ravel()
+            else:
+                self.mask1d = State.mask.ravel()
         else:
             self.mask1d = None
 
@@ -1795,7 +1888,7 @@ class Basis_bmaux:
 
         print('Setting Basis BMaux...')
 
-        Mutltiple_basis_exp = True
+        Mutltiple_basis_exp = False
         if Mutltiple_basis_exp:  
             L_MIN = 30
             L_MAX = 1000 
@@ -1813,12 +1906,7 @@ class Basis_bmaux:
                 np.log(1./L_MIN),
                 np.log(1. / L_MAX) - np.log(1 + self.facpsp / self.npsp),
                 -np.log(1 + self.facpsp / self.npsp))[::-1]
-            #print('_',logff_all)
-            #print('A',self.lmax)
-            #print('B',(logff_all>1/self.lmax))
-            #print('C',self.lmin)
-            #print('D',(logff_all<1/self.lmin))
-            #print('E',(logff_all>1/self.lmax) & (logff_all<1/self.lmin))
+        
             logff = logff_all[(logff_all>=np.log(1/self.lmax)) & (logff_all<=np.log(1/self.lmin))] 
             ff = np.exp(logff)
             ff = ff[1/ff<=self.lmax]
@@ -1841,7 +1929,7 @@ class Basis_bmaux:
                 -np.log(1 + self.facpsp / self.npsp))[::-1]
             
             ff = np.exp(logff)
-            ff = ff[1/ff<=self.lmax]
+            #ff = ff[1/ff<=self.lmax]
             dff = ff[1:] - ff[:-1]
         
         # Ensemble of directions for the wavelets (2D plane)
@@ -2544,7 +2632,7 @@ class Basis_bmaux_jax(Basis_bmaux):
                 adState[self.name_mod_v] *= 0.
     
         return adX
-
+  
 ###############################################################################
 #                     Wavelet - multiple scale                                #
 ###############################################################################

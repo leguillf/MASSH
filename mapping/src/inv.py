@@ -26,6 +26,13 @@ from . import grid
 
 
 
+class ConvergenceReached(Exception):
+    pass
+
+class CrazyGradient(Exception):
+    pass
+
+
 def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, Bc=None, *args, **kwargs):
 
     """
@@ -41,13 +48,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
     
     print(config.INV)
     
-    if config.INV.super=='INV_OI':
-        return Inv_oi(config, State=State, dict_obs=dict_obs)
-    
-    elif config.INV.super=='INV_BFN':
-        return Inv_bfn(config, State=State, Model=Model, dict_obs=dict_obs, Bc=Bc)
-    
-    elif config.INV.super=='INV_4DVAR':
+    if config.INV.super=='INV_4DVAR':
         return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
     
     else:
@@ -68,9 +69,6 @@ def Inv_forward(config,State,Model,Bc=None):
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
     
     present_date = config.EXP.init_date
-    if config.EXP.saveoutputs:
-        State.save_output(present_date,name_var=Model.var_to_save)
-        
     nstep = int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt)
 
     if Bc is not None:
@@ -102,409 +100,7 @@ def Inv_forward(config,State,Model,Bc=None):
         
     return
        
-def Inv_oi(config,State,dict_obs):
-    
-    """
-    NAME
-        Inv_oi
 
-    DESCRIPTION
-        Run an optimal interpolation experiment 
-    
-    """
-    
-    from . import obs
-    
-    # Initialize variables (normally this step is done in mod.py, but here no Model object is provided)
-    for name in config.INV.name_var:
-        State.var[config.INV.name_var[name]] = np.zeros((State.ny,State.nx))
-
-    # Boundary box
-    box = [State.lon.min(),State.lon.max(),State.lat.min(),State.lat.max(),
-           None, None]
-    
-    # Time parameters
-    ndays = (config.EXP.final_date-config.EXP.init_date).total_seconds()/3600/24
-    dt = config.EXP.saveoutput_time_step.total_seconds()/3600/24
-    times = np.arange(0, ndays + dt, dt)
-
-    # Coordinates
-    lon1d = State.lon.flatten()
-    lat1d = State.lat.flatten()
-    
-    # Time loop
-    for t in times:
-
-        for name in config.INV.name_var:
-            
-            # Time boundary
-            box[4] = config.EXP.init_date + timedelta(days=t-config.INV.Lt)
-            box[5] = config.EXP.init_date + timedelta(days=t+config.INV.Lt)
-            
-            # Get obs in (time x lon x lat) cube
-            obs_val, obs_coords, _ = obs.get_obs(dict_obs, box, config.EXP.init_date, name)
-            obs_lon = obs_coords[0]
-            obs_lat = obs_coords[1]
-            obs_time = obs_coords[2]
-            
-            # Perform the optimal interpolation 
-            BHt = np.exp(-((t - obs_time[np.newaxis,:])/config.INV.Lt)**2 - 
-                        ((lon1d[:,np.newaxis] - obs_lon[np.newaxis,:])/config.INV.Lx)**2 - 
-                        ((lat1d[:,np.newaxis] - obs_lat[np.newaxis,:])/config.INV.Ly)**2)
-            HBHt = np.exp(-((obs_time[np.newaxis,:] - obs_time[:,np.newaxis])/config.INV.Lt)**2 -
-                        ((obs_lon[np.newaxis,:] - obs_lon[:,np.newaxis])/config.INV.Lx)**2 -
-                        ((obs_lat[np.newaxis,:] - obs_lat[:,np.newaxis])/config.INV.Ly)**2) 
-            R = np.diag(np.full((len(obs_val)), config.INV.sigma_R**2))
-            Coo = HBHt + R
-            Mi = np.linalg.inv(Coo)
-            sol = np.dot(np.dot(BHt, Mi), obs_val).reshape((State.ny,State.nx))
-            
-            # Set estimated variable
-            State.setvar(sol,name_var=config.INV.name_var[name])
-
-        # Save estimated fields for date t
-        date = config.EXP.init_date + timedelta(days=t)
-        State.save_output(date)
-
-    return 
-
-def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
-    """
-    NAME
-        Inv_bfn
-
-    DESCRIPTION
-        Run a Back and Forth Nudging experiment 
-    
-    """
-    
-    from . import tools_bfn as bfn
-
-    # Flag initialization
-    if config.GRID.super=='GRID_RESTART':
-        restart = True
-        bfn_first_window = False
-    else:
-        restart = False
-        bfn_first_window = True
-    bfn_last_window = False
-    if dict_obs is None:
-        call_obs_func = True
-        from . import obs
-    else:
-        call_obs_func = False
-    # BFN middle date initialization
-    if State.present_date is not None:
-        middle_bfn_date = State.present_date
-    else:
-        middle_bfn_date = config.EXP.init_date
-    # In the case of Nudging (i.e. bfn_max_iteration=1), set the bfn window length as the entire experimental time period
-    if config.bfn_max_iteration==1:
-        new_bfn_window_size = config.EXP.final_date - config.EXP.init_date
-    else:
-        new_bfn_window_size = config.INV.window_size
-
-    # propagation timestep
-    one_time_step = config.INV.propagation_timestep
-        
-    # Main time loop
-    while (middle_bfn_date <= config.EXP.final_date) and not bfn_last_window :
-        #############
-        # 1. SET-UP #
-        #############
-        # BFN period
-        init_bfn_date = max(config.EXP.init_date, middle_bfn_date - new_bfn_window_size/2)
-        init_bfn_date += timedelta(seconds=(init_bfn_date - config.EXP.init_date).total_seconds()\
-                         / one_time_step.total_seconds()%1)
-        middle_bfn_date = max(middle_bfn_date, config.EXP.init_date + new_bfn_window_size/2)
-        if ((middle_bfn_date + new_bfn_window_size/2) >= config.EXP.final_date):
-            bfn_last_window = True
-            final_bfn_date = config.EXP.final_date
-        else:
-            final_bfn_date = init_bfn_date + new_bfn_window_size
-            
-        if bfn_first_window or restart:
-            present_date_forward0 = init_bfn_date
-            
-        ########################
-        # 2. Create BFN object #
-        ########################
-        bfn_obj = bfn.bfn(
-            config,init_bfn_date,final_bfn_date,one_time_step,State)
-
-        ##########################
-        # 3. Boundary conditions #
-        ##########################
-        if Bc is not None:
-            time0 = np.datetime64(init_bfn_date)
-            tsec0 = (init_bfn_date - config.EXP.init_date).total_seconds()
-            time_bc = []
-            tsec_bc = []
-            while time0<=np.datetime64(final_bfn_date):
-                time_bc.append(time0)
-                tsec_bc.append(tsec0)
-                time0 += np.timedelta64(one_time_step)
-                tsec0 += one_time_step.total_seconds()
-                time_bc.append(time0)
-                tsec_bc.append(tsec0)
-            var_bc = Bc.interp(time_bc)
-            Model.set_bc(tsec_bc,var_bc)
-        
-        # Initial model state
-        if bfn_first_window:
-            Model.init(State)
-            State.plot(title='Init State')
-            
-
-        ###################
-        # 4. Observations #
-        ###################
-        # Selection        
-        if call_obs_func:
-            dict_obs_it = obs.obs(config)
-            bfn_obj.select_obs(dict_obs_it)
-            dict_obs_it.clear()
-            del dict_obs_it
-        else:
-            bfn_obj.select_obs(dict_obs)
-
-        # Projection
-        bfn_obj.do_projections()
-
-        ###############
-        # 5. BFN LOOP #
-        ###############
-        err_bfn0 = 0
-        err_bfn1 = 0
-        bfn_iter = 0
-        Nold_t = None
-        
-        time0 = datetime.now()
-        while bfn_iter==0 or\
-              (bfn_iter < config.INV.max_iteration
-              and abs(err_bfn0-err_bfn1)/err_bfn1 > config.INV.criterion):
-
-            if bfn_iter>0:
-                present_date_forward0 = init_bfn_date
-
-            err_bfn0 = err_bfn1
-            bfn_iter += 1
-            
-            ###################
-            # 5.1. FORTH LOOP #
-            ###################
-
-            # Save state at first timestep              
-            filename_forward = os.path.join(config.EXP.tmp_DA_path,'BFN_forward'\
-                + '_y' + str(present_date_forward0.year)\
-                + 'm' + str(present_date_forward0.month).zfill(2)\
-                + 'd' + str(present_date_forward0.day).zfill(2)\
-                + 'h' + str(present_date_forward0.hour).zfill(2)\
-                + str(present_date_forward0.minute).zfill(2) + '.nc')
-            State.save(filename_forward)
-            
-            while present_date_forward0 < final_bfn_date :
-                
-                # Time
-                t = (present_date_forward0 - config.EXP.init_date).total_seconds()
-
-                # Model propagation and apply Nudging
-                Model.step_nudging(State,
-                       one_time_step.total_seconds(),
-                       Nudging_term=Nold_t,
-                       t=t)
-
-                # Time increment 
-                present_date_forward = present_date_forward0 + one_time_step
-                
-                # Compute Nudging term (for next time step)
-                N_t = bfn_obj.compute_nudging_term(
-                        present_date_forward, State
-                        )
-
-                # Save current state     
-                name_save = 'BFN_forward'\
-                    + '_y' + str(present_date_forward.year)\
-                    + 'm' + str(present_date_forward.month).zfill(2)\
-                    + 'd' + str(present_date_forward.day).zfill(2)\
-                    + 'h' + str(present_date_forward.hour).zfill(2)\
-                    + str(present_date_forward.minute).zfill(2) + '.nc'
-                filename_forward = os.path.join(config.EXP.tmp_DA_path,name_save)
-                State.save(filename_forward)
-                if config.INV.save_trajectory:
-                    filename_traj = os.path.join(config.EXP.path_save,'BFN_' + str(middle_bfn_date)[:10]\
-                               + '_forward_' + str(bfn_iter),name_save)
-
-                    if not os.path.exists(os.path.dirname(filename_traj)):
-                        os.makedirs(os.path.dirname(filename_traj))
-                    State.save(filename_traj)
-                              
-                # Time update
-                present_date_forward0 = present_date_forward
-                Nold_t = N_t
-    
-            
-            # Plot for debugging
-            if config.EXP.flag_plot > 0:
-                State.plot(title=str(present_date_forward) + ': End of forward loop n°' + str(bfn_iter))
-
-            ##################
-            # 5.2. BACK LOOP #
-            ##################
-            if  bfn_iter < config.INV.max_iteration:
-                present_date_backward0 = final_bfn_date
-                # Save state at first timestep          
-                filename_backward = os.path.join(config.EXP.tmp_DA_path,'BFN_backward'\
-                    + '_y' + str(present_date_backward0.year)\
-                    + 'm' + str(present_date_backward0.month).zfill(2)\
-                    + 'd' + str(present_date_backward0.day).zfill(2)\
-                    + 'h' + str(present_date_backward0.hour).zfill(2)\
-                    + str(present_date_backward0.minute).zfill(2) + '.nc')
-                State.save(filename_backward)
-                
-                while present_date_backward0 > init_bfn_date :
-                    
-                    # Time
-                    t = (present_date_backward0 - config.EXP.init_date).total_seconds()
-
-                    # Propagate the state by nudging the model vorticity towards the 2D observations
-                    Model.step_nudging(State,
-                       -one_time_step.total_seconds(),
-                       Nudging_term=Nold_t,
-                       t=t)
-                    
-                    # Time increment
-                    present_date_backward = present_date_backward0 - one_time_step
-
-                    # Nudging term (next time step)
-                    N_t = bfn_obj.compute_nudging_term(
-                            present_date_backward,
-                            State
-                            )
-                    
-                    # Save current state   
-                    name_save = 'BFN_backward'\
-                    + '_y' + str(present_date_backward.year)\
-                    + 'm' + str(present_date_backward.month).zfill(2)\
-                    + 'd' + str(present_date_backward.day).zfill(2)\
-                    + 'h' + str(present_date_backward.hour).zfill(2)\
-                    + str(present_date_backward.minute).zfill(2) + '.nc'         
-                    filename_backward = os.path.join(config.EXP.tmp_DA_path,name_save)
-                    State.save(filename_backward)
-                    if config.INV.save_trajectory:
-                        filename_traj = os.path.join(config.EXP.path_save,'BFN_' + str(middle_bfn_date)[:10]\
-                                   + '_backward_' + str(bfn_iter),name_save)
-
-                        if not os.path.exists(os.path.dirname(filename_traj)):
-                            os.makedirs(os.path.dirname(filename_traj))
-                        State.save(filename_traj)
-
-                    # Time update
-                    present_date_backward0 = present_date_backward
-                    Nold_t = N_t
-
-                if config.EXP.flag_plot > 0:
-                    State.plot(title=str(present_date_backward) + ': End of backward loop n°' + str(bfn_iter))
-
-            #########################
-            # 5.3. CONVERGENCE TEST #
-            #########################
-            if bfn_iter < config.INV.max_iteration:
-                err_bfn1 = bfn_obj.convergence(
-                                        path_forth=os.path.join(config.EXP.tmp_DA_path,'BFN_forward_*.nc'),
-                                        path_back=os.path.join(config.EXP.tmp_DA_path,'BFN_backward_*.nc')
-                                        )
-            
-        time1 = datetime.now()
-                
-        print('Loop from',init_bfn_date.strftime("%Y-%m-%d"),'to',final_bfn_date.strftime("%Y-%m-%d :"),bfn_iter,'iterations in',time1-time0,'seconds')
-        
-        #####################
-        # 6. SAVING OUTPUTS #
-        #####################
-        # Set the saving temporal windowx
-        if config.INV.max_iteration==1:
-            write_date_min = init_bfn_date
-            write_date_max = final_bfn_date
-        elif bfn_first_window:
-            write_date_min = init_bfn_date
-            write_date_max = init_bfn_date + new_bfn_window_size/2 + config.INV.window_output/2
-        elif bfn_last_window:
-            write_date_min = middle_bfn_date - config.INV.window_output/2
-            write_date_max = final_bfn_date
-        else:
-            write_date_min = middle_bfn_date - config.INV.window_output/2
-            write_date_max = middle_bfn_date + config.INV.window_output/2
-
-        # Write outputs in the saving temporal window
-        present_date = init_bfn_date
-        # Save first timestep
-        if present_date==config.EXP.init_date:
-
-            current_file = os.path.join(config.EXP.tmp_DA_path,'BFN_forward'\
-                + '_y' + str(present_date.year)\
-                + 'm' + str(present_date.month).zfill(2)\
-                + 'd' + str(present_date.day).zfill(2)\
-                + 'h' + str(present_date.hour).zfill(2)\
-                + str(present_date.minute).zfill(2) + '.nc')
-            State.load(current_file)
-
-            if config.EXP.saveoutputs:
-                State.save_output(present_date,name_var=Model.var_to_save)
-
-        while present_date < final_bfn_date :
-            present_date += one_time_step
-            if (present_date > write_date_min) & (present_date <= write_date_max) :
-                # Save output every *saveoutput_time_step*
-                if (((present_date - config.EXP.init_date).total_seconds()
-                   /config.EXP.saveoutput_time_step.total_seconds())%1 == 0)\
-                   & (present_date>config.EXP.init_date)\
-                   & (present_date<=config.EXP.final_date) :
-                    # Read current converged state
-                    current_file = os.path.join(config.EXP.tmp_DA_path,'BFN_forward'\
-                        + '_y' + str(present_date.year)\
-                        + 'm' + str(present_date.month).zfill(2)\
-                        + 'd' + str(present_date.day).zfill(2)\
-                        + 'h' + str(present_date.hour).zfill(2)\
-                        + str(present_date.minute).zfill(2) + '.nc')
-                    State.load(current_file)
-                    
-                    # Smooth with previous BFN window
-                    if config.INV.window_overlap and not bfn_first_window and\
-                        present_date<=middle_bfn_date:
-                        # weight coefficients
-                        W1 = max((middle_bfn_date - present_date)
-                                 / (config.INV.window_output/2), 0)
-                        W2 = min((present_date - write_date_min)
-                                 / (config.INV.window_output/2), 1)
-                        # Read variables of previous output at this timestamp
-                        var1 = State.load_output(present_date,name_var=Model.var_to_save)
-                        # Update state by weight averaging
-                        var2 = State.getvar(name_var=Model.var_to_save)
-                        State.setvar(W1*var1+W2*var2,name_var=Model.var_to_save)
-                
-                    # Save output
-                    if config.EXP.saveoutputs:
-                        State.save_output(present_date,name_var=Model.var_to_save)
-        
-        ########################
-        # 8. PARAMETERS UPDATE #
-        ########################
-        if config.INV.window_overlap:
-            window_lag = config.INV.window_output/2
-        else:
-            window_lag = config.INV.window_output
-
-        if bfn_first_window:
-            middle_bfn_date = config.EXP.init_date + new_bfn_window_size/2 + window_lag
-            bfn_first_window = False
-        else:
-            middle_bfn_date += window_lag
-        if restart:
-            restart = False
-    print()
-
-    return
 
 def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,gpu_device=None) :
 
@@ -697,6 +293,16 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
             projg0 = np.max(np.abs(g0))
             options['gtol'] = config.INV.gtol*projg0
         
+        # Sustained convergence: override scipy stopping criteria
+        convergence_nit = getattr(config.INV, 'convergence_nit', None)
+        ftol_threshold = options.get('ftol', None)
+        gtol_threshold = options.get('gtol', None)
+        if convergence_nit is not None:
+            options['ftol'] = 0
+            options['gtol'] = 0
+
+        gradient_max_norm = getattr(config.INV, 'gradient_max_norm', None)
+        
         # Run minimization 
         from decimal import Decimal
         import time
@@ -718,7 +324,12 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
                 self.filename_out = os.path.join(path_save_control_vectors, 'iterations.txt')
                 with open(self.filename_out, "w") as f:
                     f.write("Minimization\n")  # Header
-                
+                self.convergence_count = 0
+                self.last_x = None
+                # For crazy gradient recovery
+                self.best_cost = float(J0)
+                self.best_x = np.array(Xopt).copy()
+                self.best_grad_norm = float(np.max(np.abs(G0)))
 
             def __call__(self, x, *args):
                 cost, grad = fun(x)
@@ -739,22 +350,68 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
                 self.J_list.append(float(cost))
                 self.G_list.append(float(mean_grad))
 
+                # Track best state
+                grad_norm = np.max(np.abs(grad))
+                if gradient_max_norm is not None and np.isfinite(cost) and np.isfinite(grad_norm) and grad_norm < gradient_max_norm:
+                    if float(cost) < self.best_cost:
+                        self.best_cost = float(cost)
+                        self.best_x = np.array(x).copy()
+                        self.best_grad_norm = grad_norm
+
+                # Check for crazy gradient
+                if gradient_max_norm is not None and ((not np.isfinite(cost)) or (not np.isfinite(grad_norm)) or grad_norm > gradient_max_norm):
+                    print(f"\nCrazy gradient detected (cost={cost}, grad_norm={grad_norm}). Will restart from best state.")
+                    raise CrazyGradient()
+
+                # Check sustained convergence
+                if convergence_nit is not None:
+                    converged = False
+                    if ftol_threshold is not None and abs(float(ftol)) <= ftol_threshold:
+                        converged = True
+                    if gtol_threshold is not None and np.max(np.abs(grad)) <= gtol_threshold:
+                        converged = True
+                    if converged:
+                        self.convergence_count += 1
+                    else:
+                        self.convergence_count = 0
+                    self.last_x = np.array(x).copy()
+                    if self.convergence_count >= convergence_nit:
+                        print(f'\nConvergence criteria met for {convergence_nit} consecutive iterations. Stopping.')
+                        raise ConvergenceReached()
+
                 return cost
 
             def jac(self, x, *args):
                 return self.cache['grad']
         
         wrapper = Wrapper()
-        res = opt.minimize(wrapper, Xopt,
-                        method=config.INV.opt_method,
-                        jac=wrapper.jac,
-                        options=options,
-                        callback=callback)
-        
-
-        print ('\nIs the minimization successful? {}'.format(res.success))
-        print ('\nFinal cost function value: {}'.format(res.fun))
-        print ('\nNumber of iterations: {}'.format(res.nit))
+        max_retries = getattr(config.INV, 'max_retries', 3)
+        retry = 0
+        while True:
+            try:
+                res = opt.minimize(wrapper, Xopt,
+                                method=config.INV.opt_method,
+                                jac=wrapper.jac,
+                                options=options,
+                                callback=callback)
+                print ('\nIs the minimization successful? {}'.format(res.success))
+                print ('\nFinal cost function value: {}'.format(res.fun))
+                print ('\nNumber of iterations: {}'.format(res.nit))
+                Xres = res.x
+                break
+            except ConvergenceReached:
+                print(f'\nNumber of iterations: {wrapper.it - 1}')
+                Xres = wrapper.last_x
+                break
+            except CrazyGradient:
+                retry += 1
+                if retry > max_retries:
+                    print(f"Maximum retries ({max_retries}) reached. Stopping minimization.")
+                    Xres = wrapper.best_x
+                    break
+                print(f"Restarting minimization from best state (retry {retry}/{max_retries})...")
+                Xopt = wrapper.best_x
+                wrapper = Wrapper()
         
         # Save minimization trajectory
         if config.INV.save_minimization:
@@ -763,8 +420,6 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
                              })
             ds.to_netcdf(os.path.join(path_save_control_vectors,'minimization_trajectory.nc'))
             ds.close()
-
-        Xres = res.x
     else:
         print('You ask for restart_4Dvar and maxiter==0, so we save directly the trajectory')
         Xres = +Xopt

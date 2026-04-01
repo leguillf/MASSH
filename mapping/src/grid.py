@@ -468,4 +468,43 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True,slope=10):
     
     return bc_weight
 
+
+def compute_sponge_components(lon2d, lat2d, mask, dist_scale):
+    """Compute separate sponge weight maps for coast, N/S edges, and W/E edges.
+
+    Returns three C² (quintic smoothstep) weight fields in [0, 1].
+    These can be combined with a product formula for smooth corner blending.
+
+    Parameters
+    ----------
+    lon2d, lat2d : ndarray (ny, nx)
+    mask : bool ndarray (ny, nx)   True on land / coast pixels.
+    dist_scale : float              Sponge width in km.
+
+    Returns
+    -------
+    w_coast, w_NS, w_WE : ndarray (ny, nx)
+    """
+    w_coast = compute_weight_map(lon2d, lat2d, mask, dist_scale, bc=False)
+
+    mask_NS = np.zeros_like(mask)
+    mask_NS[0, :] = True;  mask_NS[-1, :] = True
+    w_NS = compute_weight_map(lon2d, lat2d, mask_NS, dist_scale, bc=False)
+
+    mask_WE = np.zeros_like(mask)
+    mask_WE[:, 0] = True;  mask_WE[:, -1] = True
+    w_WE = compute_weight_map(lon2d, lat2d, mask_WE, dist_scale, bc=False)
+
+    return w_coast, w_NS, w_WE
+
+
+def smooth_weight_map(lon2d, lat2d, mask, dist_scale):
+    """Isotropic sponge weight with smooth corner blending.
+
+    Combines coast, N/S edge, and W/E edge weight maps via:
+        w = 1 - (1 - w_coast) * (1 - w_NS) * (1 - w_WE)
+    """
+    w_coast, w_NS, w_WE = compute_sponge_components(lon2d, lat2d, mask, dist_scale)
+    return 1.0 - (1.0 - w_coast) * (1.0 - w_NS) * (1.0 - w_WE)
+
     

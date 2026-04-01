@@ -1,15 +1,19 @@
-import numpy as np 
+import sys 
+sys.path.insert(0, '../../src') # add src to path to import modules
+from src.config import USE_FLOAT64
 
+import numpy as np 
 import jax.numpy as jnp 
 from jax import jit
 from jax import jvp,vjp
 import jax
+from jax import checkpoint as jax_checkpoint
 from jax.lax import scan, dynamic_index_in_dim
 from functools import partial
-jax.config.update("jax_enable_x64", True)
 
 import matplotlib.pylab as plt
 
+jax.config.update("jax_enable_x64", USE_FLOAT64)
     
 class CSWm: 
     
@@ -17,7 +21,7 @@ class CSWm:
     #                             Initialization                              #
     ###########################################################################
     
-    def __init__(self,X=None,Y=None,dt=None,time_scheme='rk4',bc_kind='1d',g=9.81,f=1e-4,Heb=0.7,obc_south=True, obc_north=True, obc_west=True, obc_east=True, periodic_x=False, periodic_y=False, **arr_kwargs):
+    def __init__(self,X=None,Y=None,dt=None,time_scheme='rk4',bc_kind='1d',g=9.81,f=1e-4,Heb=0.7,obc_south=True, obc_north=True, obc_west=True, obc_east=True, periodic_x=False, periodic_y=False, omegas=None, bc_theta=None, **arr_kwargs):
         
         self.X = X
         self.Y = Y
@@ -81,6 +85,14 @@ class CSWm:
         # Periodic Boundary Conditions
         self.periodic_x = periodic_x
         self.periodic_y = periodic_y
+
+        # Wave parameters for IT boundary conditions
+        self.omegas = np.asarray(omegas) if omegas is not None else np.array([])
+        self.bc_theta = np.asarray(bc_theta) if bc_theta is not None else np.array([0])
+
+        # Sponge BC (attributes set externally by wrapper when used)
+        self.flag_sponge_bc = False
+        self.sponge_coef = 0.
         
         # JAX compiling
         self.u_on_v_jit = jit(self.u_on_v)
@@ -96,6 +108,8 @@ class CSWm:
         self.step_rk4_tgl_jit = jit(self.step_rk4_tgl)
         self.step_rk4_adj_jit = jit(self.step_rk4_adj)
         self.step_leapfrog_jit = jit(self.step_leapfrog)
+        self.step_euler_nstep = jit(self._step_euler_nstep, static_argnames=['nstep'])
+        self.step_rk4_nstep = jit(self._step_rk4_nstep, static_argnames=['nstep'])
 
         if time_scheme=='rk4':
             self.step = self.step_rk4_jit
@@ -731,6 +745,251 @@ class CSWm:
         )
 
         return u_np1, v_np1, h_np1
+
+    def compute_IT_2D(self, t, He, h_SN, h_WE, flag_tangent=True):
+        """
+        Compute 2D plane wave IT fields for sponge boundary conditions.
+        
+        Parameters
+        ----------
+        t : float
+            time in seconds
+        He : 2D array
+            total equivalent depth (Heb + He anomaly)
+        h_SN : ND array
+            amplitude of SSH for southern/northern borders
+        h_WE : ND array
+            amplitude of SSH for western/eastern borders
+        flag_tangent : bool
+            if True, compute also u/v tangential components
+
+        Returns
+        -------
+        u, v, h : 2D arrays
+        """
+
+        u_S = jnp.zeros((self.ny, self.nx-1))
+        v_S = jnp.zeros((self.ny-1, self.nx))
+        h_S = jnp.zeros((self.ny, self.nx))
+        u_N = jnp.zeros((self.ny, self.nx-1))
+        v_N = jnp.zeros((self.ny-1, self.nx))
+        h_N = jnp.zeros((self.ny, self.nx))
+        u_W = jnp.zeros((self.ny, self.nx-1))
+        v_W = jnp.zeros((self.ny-1, self.nx))
+        h_W = jnp.zeros((self.ny, self.nx))
+        u_E = jnp.zeros((self.ny, self.nx-1))
+        v_E = jnp.zeros((self.ny-1, self.nx))
+        h_E = jnp.zeros((self.ny, self.nx))
+
+        He_on_u = (He[:,1:] + He[:,:-1]) / 2
+        He_on_v = (He[1:,:] + He[:-1,:]) / 2
+
+        for j, w in enumerate(self.omegas):
+            k_on_h = jnp.sqrt((w**2 - self.f**2) / (self.g * He))
+            k_on_u = jnp.sqrt((w**2 - self.f_on_u**2) / (self.g * He_on_u))
+            k_on_v = jnp.sqrt((w**2 - self.f_on_v**2) / (self.g * He_on_v))
+
+            for i, theta in enumerate(self.bc_theta):
+
+                ####################################
+                # South
+                ####################################
+                kx_on_h = jnp.sin(theta) * k_on_h
+                ky_on_h = jnp.cos(theta) * k_on_h
+                kx_on_u = jnp.sin(theta) * k_on_u
+                ky_on_u = jnp.cos(theta) * k_on_u
+                kx_on_v = jnp.sin(theta) * k_on_v
+                ky_on_v = jnp.cos(theta) * k_on_v
+                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
+                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
+                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
+
+                # h
+                h_S += self.sponge_on_h_S * (
+                    h_SN[j,0,0,i] * jnp.cos(w*t - kxy_on_h) +
+                    h_SN[j,0,1,i] * jnp.sin(w*t - kxy_on_h))
+
+                # v
+                h_cos_theta_on_v_S = h_SN[j,0,0,i]
+                h_sin_theta_on_v_S = h_SN[j,0,1,i]
+                v_S += self.sponge_on_v_S * (self.g / (w**2 - self.f_on_v**2) * (
+                    h_cos_theta_on_v_S * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
+                                - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
+                    h_sin_theta_on_v_S * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
+                                + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
+                    ))
+
+                # u
+                if flag_tangent:
+                    h_cos_theta_on_u_S = (h_cos_theta_on_v_S[1:] + h_cos_theta_on_v_S[:-1]) * 0.5
+                    h_sin_theta_on_u_S = (h_sin_theta_on_v_S[1:] + h_sin_theta_on_v_S[:-1]) * 0.5
+                    u_S += self.sponge_on_u_S * (self.g / (w**2 - self.f_on_u**2) * (
+                        h_cos_theta_on_u_S * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
+                                    + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
+                        h_sin_theta_on_u_S * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
+                                    - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
+                        ))
+
+                ####################################
+                # North
+                ####################################
+                kx_on_h = +jnp.sin(theta) * k_on_h
+                ky_on_h = -jnp.cos(theta) * k_on_h
+                kx_on_u = +jnp.sin(theta) * k_on_u
+                ky_on_u = -jnp.cos(theta) * k_on_u
+                kx_on_v = +jnp.sin(theta) * k_on_v
+                ky_on_v = -jnp.cos(theta) * k_on_v
+                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
+                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
+                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
+
+                # h
+                h_N += self.sponge_on_h_N * (
+                    h_SN[j,1,0,i] * jnp.cos(w*t - kxy_on_h) +
+                    h_SN[j,1,1,i] * jnp.sin(w*t - kxy_on_h))
+
+                # v
+                h_cos_theta_on_v_N = h_SN[j,1,0,i]
+                h_sin_theta_on_v_N = h_SN[j,1,1,i]
+                v_N += self.sponge_on_v_N * (self.g / (w**2 - self.f_on_v**2) * (
+                    h_cos_theta_on_v_N * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
+                                - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
+                    h_sin_theta_on_v_N * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
+                                + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
+                    ))
+
+                # u
+                if flag_tangent:
+                    h_cos_theta_on_u_N = (h_cos_theta_on_v_N[1:] + h_cos_theta_on_v_N[:-1]) * 0.5
+                    h_sin_theta_on_u_N = (h_sin_theta_on_v_N[1:] + h_sin_theta_on_v_N[:-1]) * 0.5
+                    u_N += self.sponge_on_u_N * (self.g / (w**2 - self.f_on_u**2) * (
+                        h_cos_theta_on_u_N * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
+                                    + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
+                        h_sin_theta_on_u_N * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
+                                    - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
+                        ))
+
+                ####################################
+                # West
+                ####################################
+                kx_on_h = jnp.cos(theta) * k_on_h
+                ky_on_h = jnp.sin(theta) * k_on_h
+                kx_on_u = jnp.cos(theta) * k_on_u
+                ky_on_u = jnp.sin(theta) * k_on_u
+                kx_on_v = jnp.cos(theta) * k_on_v
+                ky_on_v = jnp.sin(theta) * k_on_v
+                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
+                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
+                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
+
+                # h
+                h_W += self.sponge_on_h_W * (
+                    h_WE[j,0,0,i][:,None] * jnp.cos(w*t - kxy_on_h) +
+                    h_WE[j,0,1,i][:,None] * jnp.sin(w*t - kxy_on_h))
+
+                # u
+                h_cos_theta_on_u_W = h_WE[j,0,0,i][:,None]
+                h_sin_theta_on_u_W = h_WE[j,0,1,i][:,None]
+                u_W += self.sponge_on_u_W * (self.g / (w**2 - self.f_on_u**2) * (
+                    h_cos_theta_on_u_W * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
+                                + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
+                    h_sin_theta_on_u_W * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
+                                - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
+                    ))
+
+                # v
+                if flag_tangent:
+                    h_cos_theta_on_v_W = (h_cos_theta_on_u_W[1:] + h_cos_theta_on_u_W[:-1]) * 0.5
+                    h_sin_theta_on_v_W = (h_sin_theta_on_u_W[1:] + h_sin_theta_on_u_W[:-1]) * 0.5
+                    v_W += self.sponge_on_v_W * (self.g / (w**2 - self.f_on_v**2) * (
+                        h_cos_theta_on_v_W * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
+                                    - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
+                        h_sin_theta_on_v_W * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
+                                    + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
+                        ))
+
+                ####################################
+                # East
+                ####################################
+                kx_on_h = -jnp.cos(theta) * k_on_h
+                ky_on_h = jnp.sin(theta) * k_on_h
+                kx_on_u = -jnp.cos(theta) * k_on_u
+                ky_on_u = jnp.sin(theta) * k_on_u
+                kx_on_v = -jnp.cos(theta) * k_on_v
+                ky_on_v = jnp.sin(theta) * k_on_v
+                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
+                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
+                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
+
+                # h
+                h_E += self.sponge_on_h_E * (
+                    h_WE[j,1,0,i][:,None] * jnp.cos(w*t - kxy_on_h) +
+                    h_WE[j,1,1,i][:,None] * jnp.sin(w*t - kxy_on_h))
+
+                # u
+                h_cos_theta_on_u_E = h_WE[j,1,0,i][:,None]
+                h_sin_theta_on_u_E = h_WE[j,1,1,i][:,None]
+                u_E += self.sponge_on_u_E * (self.g / (w**2 - self.f_on_u**2) * (
+                    h_cos_theta_on_u_E * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
+                                + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
+                    h_sin_theta_on_u_E * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
+                                - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
+                    ))
+
+                # v
+                if flag_tangent:
+                    h_cos_theta_on_v_E = (h_cos_theta_on_u_E[1:] + h_cos_theta_on_u_E[:-1]) * 0.5
+                    h_sin_theta_on_v_E = (h_sin_theta_on_u_E[1:] + h_sin_theta_on_u_E[:-1]) * 0.5
+                    v_E += self.sponge_on_v_E * (self.g / (w**2 - self.f_on_v**2) * (
+                        h_cos_theta_on_v_E * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
+                                    - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
+                        h_sin_theta_on_v_E * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
+                                    + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
+                        ))
+
+        u_it = (u_S + u_N + u_W + u_E) / self.weight_sponge_u
+        v_it = (v_S + v_N + v_W + v_E) / self.weight_sponge_v
+        h_it = (h_S + h_N + h_W + h_E) / self.weight_sponge_h
+
+        return u_it, v_it, h_it
+
+    def _step_euler_nstep(self, u0, v0, h0, He=None, w1ext=None,
+                          u11u=None, v11u=None, u11p=None, v11p=None, dc2=None,
+                          nstep=1, t=0., He_total=None, h_SN=None, h_WE=None):
+        """Multi-step Euler with lax.scan and checkpointing."""
+
+        def body(carry, _):
+            u, v, h, tc = carry
+            u1, v1, h1 = self.step_euler(u, v, h, He, w1ext, u11u, v11u, u11p, v11p, dc2)
+            if self.flag_sponge_bc:
+                _u_b, _v_b, _h_b = self.compute_IT_2D(tc, He_total, h_SN, h_WE)
+                u1 = u1 + self.sponge_coef * self.sponge_u * (_u_b - u)
+                v1 = v1 + self.sponge_coef * self.sponge_v * (_v_b - v)
+                h1 = h1 + self.sponge_coef * self.sponge_h * (_h_b - h)
+            return (u1, v1, h1, tc + self.dt), None
+
+        body = jax_checkpoint(body)
+        (u, v, h, _), _ = scan(body, (u0, v0, h0, t), None, length=nstep)
+        return u, v, h
+
+    def _step_rk4_nstep(self, u0, v0, h0, He=None, w1ext=None,
+                         u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None,
+                         nstep=1, t=0., He_total=None, h_SN=None, h_WE=None):
+        """Multi-step RK4 with lax.scan and checkpointing."""
+
+        def body(carry, _):
+            u, v, h, tc = carry
+            u1, v1, h1 = self.step_rk4(u, v, h, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p)
+            if self.flag_sponge_bc:
+                _u_b, _v_b, _h_b = self.compute_IT_2D(tc, He_total, h_SN, h_WE)
+                u1 = u1 + self.sponge_coef * self.sponge_u * (_u_b - u)
+                v1 = v1 + self.sponge_coef * self.sponge_v * (_v_b - v)
+                h1 = h1 + self.sponge_coef * self.sponge_h * (_h_b - h)
+            return (u1, v1, h1, tc + self.dt), None
+
+        body = jax_checkpoint(body)
+        (u, v, h, _), _ = scan(body, (u0, v0, h0, t), None, length=nstep)
+        return u, v, h
       
     def step_euler_tgl(self,
                        du0, dv0, dh0, u0, v0, h0, 

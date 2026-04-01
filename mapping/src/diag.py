@@ -143,8 +143,20 @@ That could be due to non regular grid or bad written netcdf file')
         # Experimental data
         self.geo_grid = State.geo_grid
         self.name_exp_time = config.EXP.name_time
-        self.name_exp_lon = config.EXP.name_lon
-        self.name_exp_lat = config.EXP.name_lat
+        # C-grid type: None (h-grid), 'u', or 'v'
+        self.exp_grid_type = getattr(config.DIAG, 'exp_grid_type', None)
+        if self.exp_grid_type is not None:
+            suffix = '_' + self.exp_grid_type
+        else:
+            suffix = ''
+        if 'name_exp_lon' in config.DIAG and config.DIAG.name_exp_lon is not None:
+            self.name_exp_lon = config.DIAG.name_exp_lon
+        else:
+            self.name_exp_lon = config.EXP.name_lon + suffix
+        if 'name_exp_lat' in config.DIAG and config.DIAG.name_exp_lat is not None:
+            self.name_exp_lat = config.DIAG.name_exp_lat
+        else:
+            self.name_exp_lat = config.EXP.name_lat + suffix
         self.name_exp_var = config.DIAG.name_exp_var
         exp = xr.open_mfdataset(f'{config.EXP.path_save}/{config.EXP.name_exp_save}*nc',preprocess=lambda ds: ds[[self.name_exp_var]])
         exp = exp.assign_coords({self.name_exp_lon:exp[self.name_exp_lon]})
@@ -648,7 +660,7 @@ That could be due to non regular grid or bad written netcdf file')
             
             return psd
 
-    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral', center=False):
 
         # For memory leak when saving multiple png files...
         import matplotlib
@@ -682,6 +694,8 @@ That could be due to non regular grid or bad written netcdf file')
         ylim = (ds.rmse_score.min().values,ds.rmse_score.max().values)
         if clim is None:
             clim = (ds.ref.to_dataset().apply(np.nanmin).ref.values,ds.ref.to_dataset().apply(np.nanmax).ref.values)
+            if center:
+                clim = (-max(abs(clim[0]), abs(clim[1])), max(abs(clim[0]), abs(clim[1])))
         if range_err is None:
             range_err = ds.err.to_dataset().apply(np.abs).apply(np.nanmax).err.values
         
@@ -2020,10 +2034,10 @@ class Diag_multi:
         for _Diag in self.Diag:
             _Diag.psd_based_scores(plot=plot,threshold=threshold)
     
-    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral'):
+    def movie(self,framerate=24,Display=True,clim=None,range_err=None,cmap='Spectral',center=False):
 
         for _Diag in self.Diag:
-            _Diag.movie(framerate=framerate,Display=Display,clim=clim,range_err=range_err,cmap=cmap)
+            _Diag.movie(framerate=framerate,Display=Display,clim=clim,range_err=range_err,cmap=cmap,center=center)
         
     def Leaderboard(self):
 

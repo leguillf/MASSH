@@ -3,7 +3,7 @@ import sys
 import glob
 import numpy as np
 import multiprocessing as mp
-from scipy.interpolate import griddata
+from scipy.interpolate import griddata, LinearNDInterpolator, RegularGridInterpolator
 import matplotlib.pyplot as plt
 from astropy.convolution import Gaussian2DKernel
 from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
@@ -26,9 +26,11 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 def prepare_process(config, config_eq, State, 
                     init_date, final_date,
-                    nx_proc, ny_proc, dx, dy,
+                    grid_type=None,
+                    nx_proc=None, ny_proc=None, dx=None, dy=None,
+                    dlon=None, dlat=None,
                     time_window_size_proc=None, space_window_size_proc_x=None, space_window_size_proc_y=None, 
-                    time_overlap_frac=0.2, space_overlap_frac=0.2,
+                    time_overlap=5, space_overlap_x=2, space_overlap_y=2,
                     flag_init_from_previous=True, flag_init=False, flag_background=False,
                     flag_assim=True, flag_assim_restart=False,
                     name_exp_init=None, name_exp_background=None,
@@ -37,6 +39,87 @@ def prepare_process(config, config_eq, State,
     Prepare subprocesses for assimilation in subwindows in time and space.
     The subprocesses can then be run in parallel using multiprocessing. 
     The outputs of the subprocesses can then be merged using merge_output_date().
+
+    Parameters
+    ----------
+    config : Config
+        Main configuration object (contains GRID, EXP, MOD, INV, etc.).
+    config_eq : Config
+        Configuration used for subwindows that cross the equator (lat0 < 0 and lat1 > 0).
+    State : State
+        Global state object (used for grid info and output file naming).
+    init_date : datetime
+        Start date of the full assimilation period.
+    final_date : datetime
+        End date of the full assimilation period.
+    grid_type : str, optional
+        Grid type for subwindows: 'GRID_CAR' or 'GRID_GEO'.
+        If None, read from config.GRID.super (default: 'GRID_CAR').
+    nx_proc : int, optional
+        Number of grid points in x for each subwindow (GRID_CAR only).
+        If None and grid_type is 'GRID_CAR', defaults to 128.
+    ny_proc : int, optional
+        Number of grid points in y for each subwindow (GRID_CAR only).
+        If None and grid_type is 'GRID_CAR', defaults to 128.
+    dx : float, optional
+        Grid spacing in x in km for each subwindow (GRID_CAR only).
+        If None and grid_type is 'GRID_CAR', defaults to 10 km.
+    dy : float, optional
+        Grid spacing in y in km for each subwindow (GRID_CAR only).
+        If None and grid_type is 'GRID_CAR', defaults to 10 km.
+    dlon : float, optional
+        Grid spacing in longitude in degrees for each subwindow (GRID_GEO only).
+        If None and grid_type is 'GRID_GEO', read from config.GRID.dlon.
+    dlat : float, optional
+        Grid spacing in latitude in degrees for each subwindow (GRID_GEO only).
+        If None and grid_type is 'GRID_GEO', read from config.GRID.dlat.
+    time_window_size_proc : float, optional
+        Size of each temporal subwindow in days. If None, the full time period is used as a single window.
+    space_window_size_proc_x : float, optional
+        Size of each spatial subwindow in the x/longitude direction (degrees for GRID_GEO, degrees for GRID_CAR).
+        If None, the full longitude range is used.
+    space_window_size_proc_y : float, optional
+        Size of each spatial subwindow in the y/latitude direction (degrees).
+        If None, the full latitude range is used.
+    time_overlap : float, optional
+        Overlap between consecutive time windows in days (default: 5).
+    space_overlap_x : float, optional
+        Overlap between consecutive space windows in the x/longitude direction in degrees (default: 2).
+    space_overlap_y : float, optional
+        Overlap between consecutive space windows in the y/latitude direction in degrees (default: 2).
+    flag_init_from_previous : bool, optional
+        If True, initialize each time window from the output of the previous one (default: True).
+    flag_init : bool, optional
+        If True, initialize the control vector from a previous experiment given by name_exp_init (default: False).
+    flag_background : bool, optional
+        If True, use a background field from another experiment given by name_exp_background (default: False).
+    flag_assim : bool, optional
+        If True, create and launch assimilation subprocesses (default: True).
+    flag_assim_restart : bool, optional
+        If True, re-run assimilation even if a converged control vector already exists (default: False).
+    name_exp_init : str, optional
+        Name of a previous experiment to initialize control vectors from (used when flag_init is True).
+    name_exp_background : str, optional
+        Name of a previous experiment to use as background (used when flag_background is True).
+    gpu_devices : list of str, optional
+        List of GPU device IDs to distribute subprocesses across (default: ['0']).
+
+    Returns
+    -------
+    list_processes : list of list of Process
+        Assimilation subprocesses grouped by time window.
+    list_config : list of list of Config
+        Subwindow configurations grouped by time window.
+    list_State : list of list of State
+        Subwindow states grouped by time window.
+    list_date_start : list of datetime
+        Start date of each time window.
+    list_date_end : list of datetime
+        End date of each time window.
+    list_date_middle : list of datetime
+        Middle date of each time window.
+    list_lonlat : list of tuple
+        Center (lon, lat) of each spatial subwindow (from the first time window).
     """
 
     # Split full experimental time window in sub windows
@@ -53,6 +136,24 @@ def prepare_process(config, config_eq, State,
     n_wy = 0
 
     id_gpu = 0
+
+    # Determine grid type
+    if grid_type is None:
+        grid_type = getattr(config.GRID, 'super', 'GRID_CAR')
+    if grid_type == 'GRID_GEO':
+        if dlon is None:
+            dlon = config.GRID.dlon
+        if dlat is None:
+            dlat = config.GRID.dlat
+    elif grid_type == 'GRID_CAR':
+        if nx_proc is None:
+            nx_proc = 128
+        if ny_proc is None:
+            ny_proc = 128
+        if dx is None:
+            dx = 10
+        if dy is None:
+            dy = 10
 
     date1 = init_date
     lat_min = config.GRID.lat_min
@@ -71,7 +172,7 @@ def prepare_process(config, config_eq, State,
         # compute subwindow time period
         if time_window_size_proc is not None:
             time_delta = timedelta(days=time_window_size_proc)
-            date0 = init_date + n_wt * time_delta * (1-time_overlap_frac)
+            date0 = init_date + n_wt * (time_delta - timedelta(days=time_overlap))
             delta_t = (date0 - init_date) %  config.EXP.saveoutput_time_step
             date0 += delta_t
             date1 = min(date0 + time_delta, final_date)
@@ -87,12 +188,13 @@ def prepare_process(config, config_eq, State,
         while lat1<config.GRID.lat_max:
             # compute subwindow latitude borders
             if space_window_size_proc_y is not None:
-                lat0 = lat_min + n_wy * space_window_size_proc_y * (1-space_overlap_frac)
+                lat0 = lat_min + n_wy * (space_window_size_proc_y - space_overlap_y)
                 lat1 = lat0 + space_window_size_proc_y
                 _ny = ny_proc
                 if lat0 + space_window_size_proc_y/2 > config.GRID.lat_max:
                     lat1 = lat0 + space_window_size_proc_y/2  
-                    _ny = int(ny_proc/2)                  
+                    if ny_proc is not None:
+                        _ny = int(ny_proc/2)                  
                 n_wy += 1
             else:
                 lat0 = config.GRID.lat_min
@@ -104,20 +206,29 @@ def prepare_process(config, config_eq, State,
             while lon1<config.GRID.lon_max and not flag_avoid_next_window:
                 # compute subwindow longitude borders
                 if space_window_size_proc_x is not None:
-                    if n_wx==0:
-                        lon0 = config.GRID.lon_min
+                    if grid_type == 'GRID_GEO':
+                        # For GRID_GEO, longitude spacing is uniform in degrees
+                        lon0 = config.GRID.lon_min + n_wx * (space_window_size_proc_x - space_overlap_x)
+                        lon1 = lon0 + space_window_size_proc_x
+                        if lon0 + space_window_size_proc_x/2 > config.GRID.lon_max:
+                            lon1 = lon0 + space_window_size_proc_x/2
+                        n_wx += 1
                     else:
-                        if lat0>0:
-                            lon0 = lon_prev[0,-1] - space_overlap_frac * space_window_size_proc_x#- (space_overlap_frac + .5) * space_window_size_proc_x + nx_proc/2 * dx / np.cos(np.radians(lat0)) /111.32
+                        # For GRID_CAR, longitude spacing depends on latitude
+                        if n_wx==0:
+                            lon0 = config.GRID.lon_min
                         else:
-                            lon0 = lon_prev[-1,-1] - space_overlap_frac * space_window_size_proc_x#- (space_overlap_frac + .5) * space_window_size_proc_x + nx_proc/2 * dx / np.cos(np.radians(lat1)) /111.32
-                    #lon0 = config.GRID.lon_min + n_wx * space_window_size_proc * (1-space_overlap_frac)
-                    lon1 = lon0 + space_window_size_proc_x#min(lon0 + space_window_size_proc, config.GRID.lon_max)
-                    _nx = nx_proc
-                    if lon0 + space_window_size_proc_x/2 > config.GRID.lon_max:
-                        lon1 = lon0 + space_window_size_proc_x/2
-                        _nx = int(nx_proc/2)
-                    n_wx += 1
+                            if lat0>0:
+                                lon0 = lon_prev[0,-1] - space_overlap_x
+                            else:
+                                lon0 = lon_prev[-1,-1] - space_overlap_x
+                        lon1 = lon0 + space_window_size_proc_x
+                        _nx = nx_proc
+                        if lon0 + space_window_size_proc_x/2 > config.GRID.lon_max:
+                            lon1 = lon0 + space_window_size_proc_x/2
+                            if nx_proc is not None:
+                                _nx = int(nx_proc/2)
+                        n_wx += 1
                 else:
                     lon0 = config.GRID.lon_min
                     lon1 = config.GRID.lon_max
@@ -133,15 +244,20 @@ def prepare_process(config, config_eq, State,
                 _config.INV = _config.INV.copy()
                 _config.EXP.init_date = date0
                 _config.EXP.final_date = date1
-                _config.GRID.super = 'GRID_CAR'
                 _config.GRID.lon_min = lon0
                 _config.GRID.lon_max = lon1
                 _config.GRID.lat_min = lat0
                 _config.GRID.lat_max = lat1
-                _config.GRID.nx = _nx
-                _config.GRID.ny = _ny
-                _config.GRID.dx = dx 
-                _config.GRID.dy = dy 
+                if grid_type == 'GRID_GEO':
+                    _config.GRID.super = 'GRID_GEO'
+                    _config.GRID.dlon = dlon
+                    _config.GRID.dlat = dlat
+                else:
+                    _config.GRID.super = 'GRID_CAR'
+                    _config.GRID.nx = _nx
+                    _config.GRID.ny = _ny
+                    _config.GRID.dx = dx 
+                    _config.GRID.dy = dy 
                  
                 name_subwindow = f'subwindow_{str(list_date_middle[-1])[:10]}/subwindow_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
                 _config.EXP.tmp_DA_path += f'/{name_subwindow}'
@@ -232,58 +348,138 @@ def prepare_process(config, config_eq, State,
 
 def compute_weights_map(State, list_State):
 
-    """Compute weights maps for merging outputs from subprocesses.
-    The weights maps are based on Gaspari-Cohn functions in space and a linear function in depth.
-    The weights maps are then interpolated onto the target grid.
+    """Compute weights maps and precomputed interpolation operators for merging outputs from subprocesses.
+    
+    Weights use raised-cosine (Hann) tapering in both x and y directions for smooth blending 
+    with zero-derivative at subwindow boundaries. Weights are 1 at the center and 0 at the edges.
+    
+    Interpolation operators are precomputed once per subwindow and reused for all dates,
+    avoiding the expensive Delaunay triangulation of griddata at every time step.
+    
+    Returns
+    -------
+    weights_space : list of 2D arrays
+        Weight maps for each subwindow, interpolated onto the target grid.
+    weights_space_sum : 2D array
+        Sum of all weight maps (for normalization).
+    interpolators : list of callable or None
+        Precomputed interpolation operators mapping each subwindow grid to the target grid.
+        For regular grids (GRID_GEO), uses RegularGridInterpolator.
+        For irregular grids (GRID_CAR), uses LinearNDInterpolator.
+        Each callable takes a 2D array on the subwindow grid and returns a 2D array on the target grid.
     """
 
     weights_space = [] 
     weights_space_sum = np.zeros((State.ny, State.nx))
+    interpolators = []
 
-    if len(list_State[0])==1:
-        weights_space.append(np.ones((State.ny, State.nx)))
-        weights_space_sum += np.ones((State.ny, State.nx))
-        return weights_space, weights_space_sum
+    single_subwindow = (len(list_State[0]) == 1)
     
+    lon_out = State.lon
+    lat_out = State.lat
+
     for _State in list_State[0]:
 
-        winy = np.ones(_State.ny)
-        winx = np.ones(_State.nx)
-        winy[:int(_State.ny-_State.ny/2)] = gaspari_cohn(np.arange(0,_State.ny),_State.ny/2)[:int(_State.ny/2)][::-1]
-        winx[:int(_State.nx-_State.nx/2)] = gaspari_cohn(np.arange(0,_State.nx),_State.nx/2)[:int(_State.nx/2)][::-1]
-        winy[int(_State.ny/2):] = gaspari_cohn(np.arange(0,_State.ny),_State.ny/2)[:_State.ny-int(_State.ny/2)]
-        winx[int(_State.nx/2):] = gaspari_cohn(np.arange(0,_State.nx),_State.nx/2)[:_State.nx-int(_State.nx/2)]
-
-        win_dy = (1 - (_State.DY-_State.DY.min())/(_State.DY.max() - _State.DY.min()))**2
-
-        _weights_space = winy[:,np.newaxis] * winx[np.newaxis,:] * win_dy
+        if single_subwindow:
+            # Single subwindow: uniform weights (no tapering needed)
+            _weights_space = np.ones((_State.ny, _State.nx))
+        else:
+            # Raised-cosine (Hann) tapering: 1 at center, 0 at edges, smooth with zero-derivative at boundaries
+            ty = np.linspace(0, 2 * np.pi, _State.ny)
+            tx = np.linspace(0, 2 * np.pi, _State.nx)
+            winy = 0.5 * (1.0 - np.cos(ty))
+            winx = 0.5 * (1.0 - np.cos(tx))
+            _weights_space = winy[:, np.newaxis] * winx[np.newaxis, :]
         
         lon_in = _State.lon
         lat_in = _State.lat
-        lon_out = State.lon
-        lat_out = State.lat
 
-        if _State.lon_unit != State.lon_unit and State.lon_unit=='-180_180' and (lon_in.max()>180 or lon_in.min()<-180):
-            _weights_space_interp = np.zeros((State.ny,State.nx)) * np.nan
-            ind_0 = lon_in<=180
-            _weights_space_interp_0 = griddata((lon_in[ind_0].ravel(),lat_in[ind_0].ravel()), _weights_space[ind_0].ravel(), (lon_out.ravel(),lat_out.ravel()), method='linear').reshape((State.ny,State.nx))
-            _weights_space_interp = np.where(np.isnan(_weights_space_interp_0), _weights_space_interp, _weights_space_interp_0)
-            ind_1 = lon_in>180
-            lon_in_1 = lon_in[ind_1] 
-            # Convert to [-180, 180]
-            lon_in_1 = (lon_in_1 + 180) % 360 - 180 
-            lat_in_1 = lat_in[ind_1]
-            _weights_space_1 = _weights_space[ind_1]
-            _weights_space_interp_1 = griddata((lon_in_1.ravel(),lat_in_1.ravel()), _weights_space_1.ravel(), (lon_out.ravel(),lat_out.ravel()), method='linear').reshape((State.ny,State.nx))
-            _weights_space_interp = np.where(np.isnan(_weights_space_interp_1), _weights_space_interp, _weights_space_interp_1)
-        else:
-            _weights_space_interp = griddata((lon_in.ravel(),lat_in.ravel()), _weights_space.ravel(), (lon_out.ravel(),lat_out.ravel()), method='linear').reshape((State.ny,State.nx))
+        # Build interpolation operator (precomputed, reused for all dates)
+        _interp_func, _weights_space_interp = _build_interpolator(
+            lon_in, lat_in, _weights_space, lon_out, lat_out,
+            _State.lon_unit, State.lon_unit, State.ny, State.nx,
+            _State.geo_grid)
+
+        interpolators.append(_interp_func)
 
         ind = ~np.isnan(_weights_space_interp)
         weights_space.append(_weights_space_interp)
         weights_space_sum[ind] += _weights_space_interp[ind]
 
-    return weights_space, weights_space_sum
+    return weights_space, weights_space_sum, interpolators
+
+
+def _build_interpolator(lon_in, lat_in, values, lon_out, lat_out, 
+                        lon_unit_in, lon_unit_out, ny_out, nx_out, geo_grid):
+    """Build a reusable interpolation operator from a subwindow grid to the target grid.
+    
+    For regular (GRID_GEO) grids, uses RegularGridInterpolator (fast structured interpolation).
+    For irregular (GRID_CAR) grids, precomputes a LinearNDInterpolator (Delaunay triangulation done once).
+    
+    Returns a callable interp_func(values_2d) -> interpolated_2d and the interpolated input values.
+    """
+    needs_lon_split = (lon_unit_in != lon_unit_out and lon_unit_out == '-180_180' 
+                       and (lon_in.max() > 180 or lon_in.min() < -180))
+
+    if not needs_lon_split:
+        if geo_grid:
+            # Regular grid: use fast RegularGridInterpolator
+            lon_1d = lon_in[0, :]
+            lat_1d = lat_in[:, 0]
+            interp = RegularGridInterpolator((lat_1d, lon_1d), values, 
+                                             method='linear', bounds_error=False, fill_value=np.nan)
+            pts = np.column_stack([lat_out.ravel(), lon_out.ravel()])
+            values_interp = interp(pts).reshape(ny_out, nx_out)
+
+            def interp_func(var_2d):
+                rgi = RegularGridInterpolator((lat_1d, lon_1d), var_2d,
+                                              method='linear', bounds_error=False, fill_value=np.nan)
+                return rgi(pts).reshape(ny_out, nx_out)
+        else:
+            # Irregular grid: precompute Delaunay triangulation once
+            points = np.column_stack([lon_in.ravel(), lat_in.ravel()])
+            pts_out = np.column_stack([lon_out.ravel(), lat_out.ravel()])
+            lndi = LinearNDInterpolator(points, values.ravel())
+            values_interp = lndi(pts_out).reshape(ny_out, nx_out)
+
+            def interp_func(var_2d, _points=points, _pts_out=pts_out, _tri=lndi.tri):
+                lndi_fast = LinearNDInterpolator(_tri, var_2d.ravel())
+                return lndi_fast(_pts_out).reshape(ny_out, nx_out)
+    else:
+        # Longitude wrapping: split into two halves
+        pts_out = np.column_stack([lon_out.ravel(), lat_out.ravel()])
+        
+        ind_0 = lon_in <= 180
+        points_0 = np.column_stack([lon_in[ind_0].ravel(), lat_in[ind_0].ravel()])
+        
+        ind_1 = lon_in > 180
+        lon_in_1 = (lon_in[ind_1] + 180) % 360 - 180
+        lat_in_1 = lat_in[ind_1]
+        points_1 = np.column_stack([lon_in_1.ravel(), lat_in_1.ravel()])
+
+        if geo_grid:
+            # For the split case with regular grid, fall back to LinearNDInterpolator per half
+            lndi_0 = LinearNDInterpolator(points_0, values[ind_0].ravel())
+            lndi_1 = LinearNDInterpolator(points_1, values[ind_1].ravel())
+        else:
+            lndi_0 = LinearNDInterpolator(points_0, values[ind_0].ravel())
+            lndi_1 = LinearNDInterpolator(points_1, values[ind_1].ravel())
+
+        v0 = lndi_0(pts_out).reshape(ny_out, nx_out)
+        v1 = lndi_1(pts_out).reshape(ny_out, nx_out)
+        values_interp = np.where(np.isnan(v0), v1, v0)
+        values_interp = np.where(np.isnan(values_interp), np.nan, values_interp)
+
+        def interp_func(var_2d, _ind_0=ind_0, _ind_1=ind_1,
+                        _tri_0=lndi_0.tri, _tri_1=lndi_1.tri,
+                        _pts_out=pts_out):
+            f0 = LinearNDInterpolator(_tri_0, var_2d[_ind_0].ravel())
+            f1 = LinearNDInterpolator(_tri_1, var_2d[_ind_1].ravel())
+            r0 = f0(_pts_out).reshape(ny_out, nx_out)
+            r1 = f1(_pts_out).reshape(ny_out, nx_out)
+            return np.where(np.isnan(r0), r1, r0)
+
+    return interp_func, values_interp
 
 def plot_subdomains(lonlat_grid):
 
@@ -336,22 +532,20 @@ def plot_subdomains(lonlat_grid):
     # Show the plot
     plt.show()
 
-def merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, plot=False, save=True):
+def merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, plot=False, save=True):
 
     """Merge outputs from subprocesses for a given date.
-    The outputs from the subprocesses are interpolated onto the target grid and merged using the weights maps.
-    The merged outputs are then saved to the target grid.
+    
+    Uses precomputed interpolation operators (from compute_weights_map) to avoid
+    recomputing Delaunay triangulations at every time step.
     """
 
     State0 = State.copy()
+    ny, nx = State0.ny, State0.nx
 
-    lon_out = State0.lon.ravel()
-    lat_out = State0.lat.ravel()
-    ny,nx = State0.ny, State0.nx
-
-    dict_var = {name: np.zeros((ny,nx)) for name in name_var_save}
+    dict_var = {name: np.zeros((ny, nx)) for name in name_var_save}
         
-    for _State, _weights_space in zip(list_State, weights_space):
+    for _State, _weights_space, _interp_func in zip(list_State, weights_space, interpolators):
 
         try:
             # Load output
@@ -365,40 +559,24 @@ def merge_output_date(date, State, list_State, name_var_save, kernel, weights_sp
 
                 _var = _ds[name].values
                 
-                # Interp
+                # Handle C-grid staggering: average U/V-grid variables to H-grid
+                if _var.shape == (_State.ny, _State.nx + 1):
+                    # U-grid → H-grid: average adjacent columns
+                    _var = 0.5 * (_var[:, :-1] + _var[:, 1:])
+                elif _var.shape == (_State.ny + 1, _State.nx):
+                    # V-grid → H-grid: average adjacent rows
+                    _var = 0.5 * (_var[:-1, :] + _var[1:, :])
+                
+                # Fill NaN gaps near coasts before interpolation
                 if np.any(np.isnan(_var)) and kernel is not None:
                     _var = interpolate_replace_nans(_var, kernel)
                 
-                if _State.lon_unit != State.lon_unit and State.lon_unit=='-180_180' and lon.max()>180:
-
-                    _var_interp = np.zeros((State.ny,State.nx)) * np.nan
-
-                    ind_0 = lon<=180.
-                    _var_interp_0 = griddata(
-                            (lon[ind_0].ravel(), lat[ind_0].ravel()), _var[ind_0].ravel(),
-                            (lon_out, lat_out),
-                            method='linear'
-                        ).reshape((ny,nx))
-                    _var_interp = np.where(np.isnan(_var_interp_0), _var_interp, _var_interp_0)
-                    
-                    ind_1 = lon>180.
-                    lon_in_1 = lon[ind_1] 
-                    # Convert to [-180, 180]
-                    lon_in_1 = (lon_in_1 + 180) % 360 - 180 
-                    lat_in_1 = lat[ind_1]
-                    _var_interp_1 = griddata(
-                            (lon_in_1.ravel(), lat_in_1.ravel()),  _var[ind_1].ravel(),
-                            (lon_out, lat_out),
-                            method='linear'
-                        ).reshape((ny,nx))                    
-                    _var_interp = np.where(np.isnan(_var_interp_1), _var_interp, _var_interp_1)
-
+                # Interpolate using precomputed operator
+                if _interp_func is not None:
+                    _var_interp = _interp_func(_var)
                 else:
-                    _var_interp = griddata(
-                        (lon.ravel(), lat.ravel()), _var.ravel(),
-                        (lon_out, lat_out),
-                        method='linear'
-                    ).reshape((ny,nx))
+                    # Single subwindow, no interpolation needed (grids match)
+                    _var_interp = _var
 
                 # Merge
                 ind = ~np.isnan(_var_interp)
@@ -406,7 +584,8 @@ def merge_output_date(date, State, list_State, name_var_save, kernel, weights_sp
             
             _ds.close()
             del _ds
-        except:
+        except Exception as e:
+            print(f'[merge_output_date] Warning: failed to merge subwindow for date {date}: {e}')
             continue
 
     for name in name_var_save:
@@ -434,21 +613,21 @@ def generate_dates(start_date, end_date, delta):
         current_date += delta
     return dates
 
-def parallel_merge(dates, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, num_workers=4):
+def parallel_merge(dates, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, num_workers=4):
     """Merge outputs from subprocesses in parallel for a list of dates."""
     
     if num_workers<=1:
         for date in dates:
-            merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum)    
+            merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators)    
     else:
         with mp.Pool(processes=num_workers) as pool:
             pool.starmap(
                 merge_output_date,
-                [(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum) for date in dates]
+                [(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators) for date in dates]
             )
 
 def run_assimilation_time_window(config, date_start, date_middle, date_end, list_State, processes, 
-                                 weights_space, weights_space_sum,
+                                 weights_space, weights_space_sum, interpolators,
                                  name_var_save=['sla'], 
                                  flag_assim=True, flag_merge_outputs=True, flag_diag=True, flag_overwrite_outputs=True,
                                  nprocs=4, nprocs_output=None):
@@ -504,9 +683,16 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
     config0.EXP.path_save += f'/subwindow_{str(date_middle)[:10]}'
     if flag_diag and config.DIAG is not None:
         config0.DIAG = config.DIAG.copy()
-        config0.DIAG.dir_output += f'/subwindow_{str(date_middle)[:10]}'
-        config0.DIAG.time_min = date_start.strftime('%Y-%m-%d')
-        config0.DIAG.time_max = date_end.strftime('%Y-%m-%d')
+        if 'super' not in config0.DIAG:
+            for NAME_DIAG in config0.DIAG:
+                config0.DIAG[NAME_DIAG] = config.DIAG[NAME_DIAG].copy()
+                config0.DIAG[NAME_DIAG].dir_output += f'/subwindow_{str(date_middle)[:10]}'
+                config0.DIAG[NAME_DIAG].time_min = date_start.strftime('%Y-%m-%d')
+                config0.DIAG[NAME_DIAG].time_max = date_end.strftime('%Y-%m-%d')
+        else:
+            config0.DIAG.dir_output += f'/subwindow_{str(date_middle)[:10]}'
+            config0.DIAG.time_min = date_start.strftime('%Y-%m-%d')
+            config0.DIAG.time_max = date_end.strftime('%Y-%m-%d')
     
     State0 = state.State(config0, verbose=0)
     
@@ -519,7 +705,7 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
             kernel = Gaussian2DKernel(x_stddev=1, y_stddev=1)  # Kernel to convolve output maps to replace NaN pixels close to the coast for interpolation
             list_dates = generate_dates(date_start, date_end, config.EXP.saveoutput_time_step)
             num_workers = nprocs_output if nprocs_output is not None else nprocs
-            parallel_merge(list_dates, State0, list_State, name_var_save, kernel, weights_space, weights_space_sum, num_workers=num_workers)
+            parallel_merge(list_dates, State0, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, num_workers=num_workers)
 
         except:
             print('Unable to merge outputs')
@@ -541,54 +727,98 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
         
         del State0, config0
 
-def merge_time_windows_outputs(config, list_date_start, list_date_middle, list_date_end, time_window_size_proc, time_overlap_frac):
+def merge_time_windows_outputs(config, list_date_start, list_date_middle, list_date_end, time_overlap):
     
     """
     Merge outputs from different time windows.
-    The outputs from the different time windows are merged using a linear function in time.
-    The merged outputs are then saved to the target grid.
+    
+    In overlap regions between consecutive windows, a raised-cosine (Hann) blending 
+    is used for a smooth transition with zero-derivative at the boundaries,
+    avoiding artifacts from a linear ramp.
+
+    Parameters
+    ----------
+    config : Config
+        Main configuration object.
+    list_date_start : list of datetime
+        Start date of each time window.
+    list_date_middle : list of datetime
+        Middle date of each time window.
+    list_date_end : list of datetime
+        End date of each time window.
+    time_overlap : float
+        Overlap between consecutive time windows in days.
     """
 
-    for i in range(len(list_date_start)):
+    n_windows = len(list_date_start)
 
+    def _build_path(subwindow_middle, date):
+        return (f'{config.EXP.path_save}/subwindow_{str(subwindow_middle)[:10]}/'
+                f'{config.EXP.name_experiment}'
+                f'_y{date.year}'
+                f'm{str(date.month).zfill(2)}'
+                f'd{str(date.day).zfill(2)}'
+                f'h{str(date.hour).zfill(2)}'
+                f'm{str(date.minute).zfill(2)}.nc')
+    
+    def _build_output_path(date):
+        return (f'{config.EXP.path_save}/'
+                f'{config.EXP.name_experiment}'
+                f'_y{date.year}'
+                f'm{str(date.month).zfill(2)}'
+                f'd{str(date.day).zfill(2)}'
+                f'h{str(date.hour).zfill(2)}'
+                f'm{str(date.minute).zfill(2)}.nc')
+
+    # Collect all unique dates across all windows
+    all_dates = set()
+    for i in range(n_windows):
         date = list_date_start[i]
         while date <= list_date_end[i]:
-        
-            path_output = f'{config.EXP.path_save}/subwindow_{str(list_date_middle[i])[:10]}/{config.EXP.name_experiment}_y{date.year}'\
-                                                                                                    f'm{str(date.month).zfill(2)}'\
-                                                                                                    f'd{str(date.day).zfill(2)}'\
-                                                                                                    f'h{str(date.hour).zfill(2)}'\
-                                                                                                    f'm{str(date.minute).zfill(2)}.nc'
-            ds1 = xr.open_dataset(path_output).load()
-
-            if i<len(list_date_start)-1 and date>=list_date_start[i+1]:
-                path_output = f'{config.EXP.path_save}/subwindow_{str(list_date_middle[i+1])[:10]}/{config.EXP.name_experiment}_y{date.year}'\
-                                                                                                    f'm{str(date.month).zfill(2)}'\
-                                                                                                    f'd{str(date.day).zfill(2)}'\
-                                                                                                    f'h{str(date.hour).zfill(2)}'\
-                                                                                                    f'm{str(date.minute).zfill(2)}.nc'
-                ds2 = xr.open_dataset(path_output).load()
-
-                dsout = ds1.copy()
-                W1 = (list_date_end[i] - date).total_seconds()  / (24*3600*time_window_size_proc * time_overlap_frac)
-                W2 = (date - list_date_start[i+1]).total_seconds() / (24*3600*time_window_size_proc * time_overlap_frac)
-                for var in ds1.data_vars:
-                    if var in ds2.data_vars:
-                        denom = (W1 + W2)
-                        if denom == 0:
-                            continue
-                        dsout[var] = (W1 * ds1[var] + W2 * ds2[var]) / denom
-                    else:
-                        dsout[var] = ds1[var]
-            
-            else:
-                dsout = ds1.copy()
-            
-            path_output = f'{config.EXP.path_save}/{config.EXP.name_experiment}_y{date.year}'\
-                                                                            f'm{str(date.month).zfill(2)}'\
-                                                                            f'd{str(date.day).zfill(2)}'\
-                                                                            f'h{str(date.hour).zfill(2)}'\
-                                                                            f'm{str(date.minute).zfill(2)}.nc'
-            dsout.to_netcdf(path_output)
-            dsout.close()
+            all_dates.add(date)
             date += config.EXP.saveoutput_time_step
+    all_dates = sorted(all_dates)
+
+    for date in all_dates:
+        # Find which windows contain this date
+        active = [i for i in range(n_windows)
+                  if list_date_start[i] <= date <= list_date_end[i]]
+
+        if len(active) == 1:
+            # No overlap: use the single window directly
+            i = active[0]
+            dsout = xr.open_dataset(_build_path(list_date_middle[i], date)).load()
+
+        elif len(active) >= 2:
+            # Overlap region: blend the two closest consecutive windows
+            i, j = active[0], active[1]
+            overlap_start = list_date_start[j]
+            overlap_end = list_date_end[i]
+            overlap_duration = (overlap_end - overlap_start).total_seconds()
+
+            ds1 = xr.open_dataset(_build_path(list_date_middle[i], date)).load()
+            ds2 = xr.open_dataset(_build_path(list_date_middle[j], date)).load()
+
+            if overlap_duration > 0:
+                # alpha goes from 0 (at overlap_start) to 1 (at overlap_end)
+                alpha = (date - overlap_start).total_seconds() / overlap_duration
+                alpha = min(max(alpha, 0.0), 1.0)
+                # Raised-cosine (Hann) blending: smooth S-curve with zero derivative at boundaries
+                W2 = 0.5 * (1.0 - np.cos(np.pi * alpha))
+                W1 = 1.0 - W2
+            else:
+                W1, W2 = 0.5, 0.5
+
+            dsout = ds1.copy()
+            for var in ds1.data_vars:
+                if var in ds2.data_vars:
+                    dsout[var] = W1 * ds1[var] + W2 * ds2[var]
+                else:
+                    dsout[var] = ds1[var]
+            ds1.close()
+            ds2.close()
+        else:
+            continue
+
+        dsout.to_netcdf(_build_output_path(date))
+        dsout.close()

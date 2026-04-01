@@ -408,77 +408,97 @@ MOD_QG1L_JAX = dict(
 # 1.5-layer Shallow-Water model
 MOD_CSW1L = dict(
 
-    name_var = {'U':'u','V':'v','SSH':'ssh'},
+    # Model parameters
 
-    name_init_var = {},
+    name_var = {'U':'u','V':'v','SSH':'ssh'}, # Dictionnary of variable name 
 
-    dir_model = None,
+    name_params = ['He_mean', 'hbc', 'alpha'], # List of parameters to control (among 'He_mean', 'hbc', 'alpha', 'alpha_He', 'alpha_Uu', , 'alpha_Up', 'alpha_Uz')
 
-    var_to_save = None,
+    name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file
 
-    name_params = ['He_mean', 'He_ano', 'hbc'], # list of parameters to control (among 'He_mean', 'He_ano', 'hbc')
+    dir_model = None, # directory of the model (if other than mapping/models/model_sw1l)
+
+    var_to_save = None, # List of variable names (among of the values of name_var dictionary) to save. If None, all variables in name_var will be saved
+
+    g = 9.81, # Gravity acceleration (in m/s^2)
+
+    # Time stepping parameters
 
     dtmodel = 300, # model timestep
-
-    force_constant_km_grid = False, # Whether to force constant km grid spacing (True) or use the grid spacing from the grid (False)
-
-    dx_km = None, # If force_constant_km_grid is True, zonal grid spacing (in km)
-
-    dy_km = None, # If force_constant_km_grid is True, meridional grid spacing (in km)
-
-    path_mdt = None, # If provided, QGPV will be expressed thanks to the Reynolds decompositon
-
-    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
-
-    filec_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
-
-    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
-
-    filef_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
-
-    name_var_f = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
-
-    c0 = 2.7, # If filec_aux is None, fixed value for phase velocity (m/s)
-
-    H = 4e3, # Mean depth (in m)
 
     cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/sqrt(gHe)
 
     time_scheme = 'rk4', # Time scheme of the model (e.g. Euler,rk4)
 
-    bc_kind = '1d', # Either 1d or 2d
+    # MDT data
+
+    path_mdt = None, # path of MDT
+
+    name_var_mdt = {'lon':'','lat':'','mdt':'','mdu':'','mdv':''},
+
+    # First baroclinic mode phase velocity field 
+
+    c0 = 2.7, # If filec_aux is None, fixed value for phase velocity (m/s)
+
+    filec_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+
+    # Bathymetry parameters
+
+    H = 4e3, # Mean depth (in m)
+
+    file_H_aux = None, # if H is None, netcdf file for spatially varying depth field. The spatial interpolation is handled inline.
+
+    name_var_H = {'lon':'','lat':'','var':''}, # Variable names for the depth netcdf file
+
+    # IT parameters
 
     w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
 
     Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
 
-    g = 9.81,
+    # BM coupling parameters
 
     flag_coupling_from_bm = False, # Whether to compute He corrections from the balanced motion field
 
     path_vertical_modes = None, # Path of the vertical modes netcdf file
 
+    path_interaction_terms = None, # Path of the interaction terms netcdf file. If None, interaction terms will be computed from the vertical modes (if path_vertical_modes is not None) or from the analytical formula of the modes (if path_vertical_modes is None)
+
+    name_var_interaction_terms = {'lon':'','lat':'','U11_u':'','U11_p':'','U11_z':'', 'dc2':''}, # Variable names for the interaction terms netcdf file
+
     path_bm = None, # Path of the balanced motion netcdf file
 
-    name_var_bm = {'time':'','lon':'','lat':'','ssh_bm':''},
+    name_var_bm = {'time':'','lon':'','lat':'','ssh_bm':''}, # Variable names for the balanced motion netcdf file
 
-    obc_north = True,
+    # Boundary conditions parameters
 
-    obc_west = True,
+    bc_kind = '1d', # Either 1d or 2d (only for open boundaries conditions)
 
-    obc_south = True,
+    obc_north = False, # Whether to apply open boundary conditions on the north border
 
-    obc_east = True,
+    obc_west = False, # Whether to apply open boundary conditions on the west border
 
-    periodic_x = False,
+    obc_south = False, # Whether to apply open boundary conditions on the south border
 
-    periodic_y = False,
+    obc_east = False, # Whether to apply open boundary conditions on the east border
 
-    flag_bc_sponge = False,
+    periodic_x = False, # Whether to apply periodic boundary conditions in the zonal direction (overrides obc_west and obc_east)
 
-    dist_sponge_bc = None,
+    periodic_y = False, # Whether to apply periodic boundary conditions in the meridional direction (overrides obc_north and obc_south)
 
-    sponge_coef = 0.05,
+    flag_bc_sponge = True, # Whether to apply a sponge boundary condition (i.e. a damping term nudging the solution towards the boundary conditions) close to the borders and coastal areas (if *dist_sponge_bc* is not None)
+
+    dist_sponge_bc = None, # Width (in km) of the band where boundary conditions are applied to edges of the domain and to coastal aeras. If None, no sponge boundary condition is applied
+
+    sponge_coef = 0.05, # Damping coefficient of the sponge boundary condition (in s^-1). Typical values are between 0.01 and 0.1 (e.g. 0.05 means a damping timescale of 20 seconds
+
+    use_sponge_on_coast = True, # Whether to apply sponge near coastal areas (land mask)
+
+    tangential_sponge_factor = 1., # factor [0,1] reducing sponge on tangential velocity at open boundaries (1=isotropic, 0=no tangential damping)
+
+    mask_sponge_bc = True, # Whether to set the mask to True in the sponge boundary areas (i.e. to avoid assimilating observations in these areas)
 
 )
 
@@ -501,6 +521,8 @@ MOD_QGSW = dict(
     dtmodel = 1200, # model timestep
 
     f0 = None, # Coriolis parameter (in s^-1). If None, f0 will be computed from the grid
+
+    constant_f = False,
 
     c0 = 2.7,
 
@@ -534,18 +556,30 @@ MOD_QGSW = dict(
 
     dist_sponge_bc = None,
 
+    use_sponge_on_coast = True,
+
     sponge_coef = 0.,
 
-    visc_coef = 0., # viscosity coefficient
+    tangential_sponge_factor = 1., # factor [0,1] reducing sponge on tangential velocity at open boundaries (1=isotropic, 0=no tangential damping)
+
+    visc_coef = 0., # viscosity coefficient (in m^2/s). Typical values 10–30 m²/s, 50–100 m²/s if unstable
+
+    H_min = None, # minimum equivalent depth (in m). None means no clamping
+    
+    H_max = None, # maximum equivalent depth (in m). None means no clamping
+
+    diff_coef = 0., # diffusivity coefficient for h (in m^2/s). Typical values 20–50 m²/s, 100–200 m²/s if unstable
 
     path_wind = None, # path to NetCDF wind file containing u10/v10 (if None, no wind forcing)
 
     name_var_wind = {'lon': 'longitude', 'lat': 'latitude', 'time': 'time',
                      'u10': 'u10', 'v10': 'v10'}, # variable names in the wind NetCDF file
 
-    rho_air = 1.25, # air density (kg/m³) used in the bulk wind-stress formula
+    rho_air = 1.225, # air density (kg/m³) used in the bulk wind-stress formula
 
-    Cd_wind = 1.5e-3, # drag coefficient used in the bulk wind-stress formula tau = rho_air * Cd * |U10| * U10
+    Cd_wind = 1.3e-3, # drag coefficient used in the bulk wind-stress formula tau = rho_air * Cd * |U10| * U10
+
+    Cd_wind_formula = None, # Use the Large & Pond formula for drag coefficient. Set to None to use a constant drag coefficient (Cd_wind)
 
     rho_water = 1025.0, # ocean water density (kg/m³) used to convert wind stress [Pa] to acceleration [m²/s²]: tau/(rho_water*H)*dx
 
@@ -616,6 +650,10 @@ MOD_BMIT = dict(
 
     H = 4e3, # Mean depth (in m)
 
+    file_H_aux = None, # if H is None, netcdf file for spatially varying depth field
+
+    name_var_H = {'lon':'','lat':'','var':''}, # Variable names for the depth netcdf file
+
     bc_kind = '1d', # Either 1d or 2d
 
     w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
@@ -627,6 +665,14 @@ MOD_BMIT = dict(
     flag_coupling_from_bm = False, # Whether to compute He corrections from the balanced motion field
 
     path_vertical_modes = None, # Path of the vertical modes netcdf file
+
+    path_interaction_terms = None, # Path of the interaction terms netcdf file
+
+    name_var_interaction_terms = {'lon':'lon','lat':'lat','U11_u':None,'U11_p':None,'dc2':None}, # Variable names for the interaction terms
+
+    cmin = None, # Minimum phase velocity (m/s)
+
+    cmax = None, # Maximum phase velocity (m/s)
 
     obc_north = True,
 
@@ -645,6 +691,12 @@ MOD_BMIT = dict(
     dist_sponge_bc = None,
 
     sponge_coef = 0.05,
+
+    use_sponge_on_coast = True,
+
+    tangential_sponge_factor = 1.,
+
+    mask_sponge_bc = True, # Whether to set the mask to True in the sponge boundary areas (i.e. to avoid assimilating observations in these areas)
 
 )
 
@@ -737,50 +789,6 @@ OBSOP_INTERP_L4 = dict(
 #################################################################################################################################
 NAME_INV = None
 
-# Optimal Interpolation
-INV_OI = dict(
-
-    name_var = {'SSH':'ssh'},
-
-    Lt = 7, # days
-
-    Lx = 1, # degreee
-
-    Ly = 1, # degree
-
-    sigma_R = 5e-2 # meters
-
-)
-
-# Back and Forth Nudging
-INV_BFN = dict(
-
-    window_size = timedelta(days=7), # length of the bfn time window
-
-    window_output = timedelta(days=3), # length of the output time window, in the middle of the bfn window. (need to be smaller than *bfn_window_size*)
-
-    propagation_timestep = timedelta(hours=1), # propagation time step of the BFN, corresponding to the time step at which the nudging term is computed
-
-    window_overlap = True, # overlap the BFN windows
-
-    criterion = 0.01, # convergence criterion. typical value: 0.01
-
-    max_iteration = 5, # maximal number of iterations if *bfn_criterion* is not met
-
-    save_trajectory = False, # save or not the back and forth iterations (for debugging)
-
-    dist_scale = 10, #
-
-    save_obs_proj = False, # save or not the projected observation as pickle format. Set to True to maximize the speed of the algorithm.
-
-    path_save_proj = None, # path to save projected observations
-
-    use_bc_as_init = False, # Whether to use boundary conditions as initialization for the first temporal window
-
-    scalenudg = None 
-
-)
-
 # 4-Dimensional Variational 
 INV_4DVAR = dict(
 
@@ -800,7 +808,13 @@ INV_4DVAR = dict(
 
     gtol = None, # Gradient norm must be less than gtol*g0 (g0 being the gradient at first iteration) before successful termination.
 
+    convergence_nit = None, # Number of consecutive iterations the convergence criteria (ftol/gtol) must be met before stopping. If None, scipy stops as soon as the criteria is met once.
+
     maxiter = 10, # Maximal number of iterations for the minimization process
+
+    gradient_max_norm = 1e6, # If the gradient norm exceeds this, minimization will restart from best state
+
+    max_retries = 5, # Number of times to retry minimization after crazy gradients
 
     opt_method = 'L-BFGS-B', # method for scipy.optimize.minimize
 
@@ -999,6 +1013,8 @@ BASIS_GAUSS3D = dict(
 
     name_mod_var = '', # Name of the related model variable 
 
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
+
     compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
 
     name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
@@ -1038,6 +1054,8 @@ BASIS_GAUSS3D = dict(
 BASIS_GAUSS3D_JAX = dict(
 
     name_mod_var = '', # Name of the related model variable 
+
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
 
     compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
 
@@ -1110,6 +1128,8 @@ BASIS_BMaux = dict(
 
     name_mod_var = None, # Name of the related model variable 
 
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
+
     compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
 
     name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
@@ -1132,7 +1152,7 @@ BASIS_BMaux = dict(
 
     lmax = 970., # maximal wavelength (in km)
 
-    factdec = 0.5, # factor to be multiplied to the computed time of decorrelation 
+    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
 
     tdecmin = 2.5, # minimum time of decorrelation 
 
@@ -1167,6 +1187,8 @@ BASIS_BMaux = dict(
 BASIS_BMaux_JAX = dict(
 
     name_mod_var = None, # Name of the related model variable 
+
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
 
     compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
 
@@ -1319,7 +1341,15 @@ DIAG_OSSE = dict(
 
     options_ref =  {},
 
+    name_exp_time = None,
+
+    name_exp_lon = None,
+
+    name_exp_lat = None,
+
     name_exp_var = '',
+
+    exp_grid_type = None,  # None for h-grid, 'u' for u-grid, 'v' for v-grid
 
     compare_to_baseline = False,
 
