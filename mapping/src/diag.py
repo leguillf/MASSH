@@ -1297,7 +1297,10 @@ That could be due to non regular grid or bad written netcdf file')
         # convert data vector and time vector into xarray.Dataarray
         da = xr.DataArray(var_alongtrack, coords=_ref.coords, dims=_ref.dims)
 
-        # resample 
+        # sorting by time
+        da = da.sortby(self.name_ref_time)
+
+        # resampling
         da_resample = da.resample(time=self.bin_time_step)
 
         # compute stats
@@ -1336,6 +1339,9 @@ That could be due to non regular grid or bad written netcdf file')
         # convert data vector and time vector into xarray.Dataarray
         da = xr.DataArray(var_exp_interp, coords=_ref.coords, dims=_ref.dims)
 
+        # sorting by time
+        da = da.sortby(self.name_ref_time)
+
         # resample 
         da_resample = da.resample(time=self.bin_time_step)
 
@@ -1369,6 +1375,9 @@ That could be due to non regular grid or bad written netcdf file')
         if self.compare_to_baseline:
             # convert data vector and time vector into xarray.Dataarray
             da = xr.DataArray(var_bas_interp, coords=_ref.coords, dims=_ref.dims)
+
+            # sorting by time
+            da = da.sortby(self.name_ref_time)
 
             # resample 
             da_resample = da.resample(time=self.bin_time_step)
@@ -1404,6 +1413,9 @@ That could be due to non regular grid or bad written netcdf file')
 
         # convert data vector and time vector into xarray.Dataarray
         da = xr.DataArray(var_alongtrack - var_exp_interp, coords=_ref.coords, dims=_ref.dims)
+
+        # sorting by time
+        da = da.sortby(self.name_ref_time)
 
         # resample 
         da_resample = da.resample(time=self.bin_time_step)
@@ -1446,6 +1458,9 @@ That could be due to non regular grid or bad written netcdf file')
         if self.compare_to_baseline:
             # convert data vector and time vector into xarray.Dataarray
             da = xr.DataArray(var_alongtrack - var_bas_interp, coords=_ref.coords, dims=_ref.dims)
+
+            # sorting by time
+            da = da.sortby(self.name_ref_time)
 
             # resample 
             da_resample = da.resample(time=self.bin_time_step)

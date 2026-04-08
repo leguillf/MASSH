@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import pickle
 import numpy as np
 import multiprocessing as mp
 from scipy.interpolate import griddata, LinearNDInterpolator, RegularGridInterpolator
@@ -26,15 +27,18 @@ os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 def prepare_process(config, config_eq, State, 
                     init_date, final_date,
-                    grid_type=None,
+                    grid_type=None, grid_type_eq=None,
                     nx_proc=None, ny_proc=None, dx=None, dy=None,
                     dlon=None, dlat=None,
                     time_window_size_proc=None, space_window_size_proc_x=None, space_window_size_proc_y=None, 
+                    space_window_size_proc_x_eq=None, space_window_size_proc_y_eq=None,
+                    nx_proc_eq=None, ny_proc_eq=None,
                     time_overlap=5, space_overlap_x=2, space_overlap_y=2,
                     flag_init_from_previous=True, flag_init=False, flag_background=False,
                     flag_assim=True, flag_assim_restart=False,
                     name_exp_init=None, name_exp_background=None,
-                    gpu_devices=['0']):
+                    gpu_devices=['0'],
+                    dir_save_pickle=None):
     """
     Prepare subprocesses for assimilation in subwindows in time and space.
     The subprocesses can then be run in parallel using multiprocessing. 
@@ -55,6 +59,9 @@ def prepare_process(config, config_eq, State,
     grid_type : str, optional
         Grid type for subwindows: 'GRID_CAR' or 'GRID_GEO'.
         If None, read from config.GRID.super (default: 'GRID_CAR').
+    grid_type_eq : str, optional
+        Grid type for equatorial subwindows: 'GRID_CAR' or 'GRID_GEO'.
+        If None, uses grid_type.
     nx_proc : int, optional
         Number of grid points in x for each subwindow (GRID_CAR only).
         If None and grid_type is 'GRID_CAR', defaults to 128.
@@ -81,6 +88,21 @@ def prepare_process(config, config_eq, State,
     space_window_size_proc_y : float, optional
         Size of each spatial subwindow in the y/latitude direction (degrees).
         If None, the full latitude range is used.
+    space_window_size_proc_x_eq : float, optional
+        Size of equatorial subwindows in x/longitude direction (degrees).
+        If None, uses space_window_size_proc_x.
+    space_window_size_proc_y_eq : float, optional
+        Size of equatorial subwindows in y/latitude direction (degrees).
+        The equatorial tile is always centered at latitude 0, spanning
+        [-space_window_size_proc_y_eq/2, +space_window_size_proc_y_eq/2].
+        Other tiles are positioned outward from the equatorial tile edges.
+        If None, no special equatorial handling (standard tiling from lat_min).
+    nx_proc_eq : int, optional
+        Number of grid points in x for equatorial subwindows (GRID_CAR only).
+        If None, uses nx_proc.
+    ny_proc_eq : int, optional
+        Number of grid points in y for equatorial subwindows (GRID_CAR only).
+        If None, uses ny_proc.
     time_overlap : float, optional
         Overlap between consecutive time windows in days (default: 5).
     space_overlap_x : float, optional
@@ -103,6 +125,10 @@ def prepare_process(config, config_eq, State,
         Name of a previous experiment to use as background (used when flag_background is True).
     gpu_devices : list of str, optional
         List of GPU device IDs to distribute subprocesses across (default: ['0']).
+    dir_save_pickle : str, optional
+        If provided, save pickle files (config and state) for each subwindow
+        to this directory. The directory structure will mirror the subwindow layout.
+        If None, no pickle files are saved (default: None).
 
     Returns
     -------
@@ -120,6 +146,12 @@ def prepare_process(config, config_eq, State,
         Middle date of each time window.
     list_lonlat : list of tuple
         Center (lon, lat) of each spatial subwindow (from the first time window).
+    weights_space : list of 2D arrays
+        Weight maps for each subwindow, interpolated onto the target grid.
+    weights_space_sum : 2D array
+        Sum of all weight maps (for normalization).
+    interpolators : list of callable
+        Precomputed interpolation operators mapping each subwindow grid to the target grid.
     """
 
     # Split full experimental time window in sub windows
@@ -132,14 +164,14 @@ def prepare_process(config, config_eq, State,
     list_lonlat = []
     iproc = 0
     n_wt = 0 
-    n_wx = 0
-    n_wy = 0
 
     id_gpu = 0
 
     # Determine grid type
     if grid_type is None:
         grid_type = getattr(config.GRID, 'super', 'GRID_CAR')
+    if grid_type_eq is None:
+        grid_type_eq = grid_type
     if grid_type == 'GRID_GEO':
         if dlon is None:
             dlon = config.GRID.dlon
@@ -154,12 +186,78 @@ def prepare_process(config, config_eq, State,
             dx = 10
         if dy is None:
             dy = 10
+    # Also resolve dlon/dlat from config_eq when grid_type_eq is GRID_GEO
+    if grid_type_eq == 'GRID_GEO' and dlon is None:
+        dlon = config_eq.GRID.dlon
+    if grid_type_eq == 'GRID_GEO' and dlat is None:
+        dlat = config_eq.GRID.dlat
+
+    # Pre-compute latitude bands: (lat0, lat1, _ny, _nx_proc_band, _space_x_band, is_eq)
+    lat_bands = []
+    if space_window_size_proc_y is not None:
+        has_eq_band = (space_window_size_proc_y_eq is not None
+                       and config.GRID.lat_min < 0 and config.GRID.lat_max > 0)
+
+        if has_eq_band:
+            _nx_eq = nx_proc_eq if nx_proc_eq is not None else nx_proc
+            _ny_eq = ny_proc_eq if ny_proc_eq is not None else ny_proc
+            _space_x_eq = space_window_size_proc_x_eq if space_window_size_proc_x_eq is not None else space_window_size_proc_x
+
+            eq_south = -space_window_size_proc_y_eq / 2
+            eq_north = space_window_size_proc_y_eq / 2
+            lat_bands.append((eq_south, eq_north, _ny_eq, _nx_eq, _space_x_eq, True))
+
+            # Southern bands: from equatorial south edge downward
+            _lat1 = eq_south + space_overlap_y
+            while _lat1 > config.GRID.lat_min:
+                _lat0 = _lat1 - space_window_size_proc_y
+                _ny_band = ny_proc
+                if _lat0 < config.GRID.lat_min:
+                    _lat0 = config.GRID.lat_min
+                    _ny_band = max(1, int(ny_proc * (_lat1 - _lat0) / space_window_size_proc_y))
+                # Skip if band is entirely within the equatorial band
+                if _lat0 >= eq_south:
+                    break
+                lat_bands.append((_lat0, _lat1, _ny_band, nx_proc, space_window_size_proc_x, False))
+                if _lat0 <= config.GRID.lat_min:
+                    break
+                _lat1 = _lat0 + space_overlap_y
+
+            # Northern bands: from equatorial north edge upward
+            _lat0 = eq_north - space_overlap_y
+            while _lat0 < config.GRID.lat_max:
+                _lat1 = _lat0 + space_window_size_proc_y
+                _ny_band = ny_proc
+                if _lat1 > config.GRID.lat_max:
+                    _lat1 = config.GRID.lat_max
+                    _ny_band = max(1, int(ny_proc * (_lat1 - _lat0) / space_window_size_proc_y))
+                # Skip if band is entirely within the equatorial band
+                if _lat1 <= eq_north:
+                    break
+                lat_bands.append((_lat0, _lat1, _ny_band, nx_proc, space_window_size_proc_x, False))
+                if _lat1 >= config.GRID.lat_max:
+                    break
+                _lat0 = _lat1 - space_overlap_y
+        else:
+            # Standard: from lat_min upward
+            _n = 0
+            while True:
+                _lat0 = config.GRID.lat_min + _n * (space_window_size_proc_y - space_overlap_y)
+                if _lat0 >= config.GRID.lat_max:
+                    break
+                _lat1 = _lat0 + space_window_size_proc_y
+                _ny_band = ny_proc
+                if _lat1 > config.GRID.lat_max:
+                    _lat1 = config.GRID.lat_max
+                    _ny_band = max(1, int(ny_proc * (_lat1 - _lat0) / space_window_size_proc_y))
+                lat_bands.append((_lat0, _lat1, _ny_band, nx_proc, space_window_size_proc_x, False))
+                _n += 1
+    else:
+        lat_bands = [(config.GRID.lat_min, config.GRID.lat_max, ny_proc, nx_proc, space_window_size_proc_x, False)]
+
+    lat_bands.sort(key=lambda x: x[0])
 
     date1 = init_date
-    lat_min = config.GRID.lat_min
-    lon_min = config.GRID.lon_min
-    lat1 = lat_min
-    lon1 = lon_min
     i = -1
     while date1<final_date:
 
@@ -183,35 +281,27 @@ def prepare_process(config, config_eq, State,
         list_date_start.append(date0)
         list_date_end.append(date1)
         list_date_middle.append(date0 + (date1-date0)/2)
+        print(f'*** Time window: {date0} -> {date1}')
 
-        j = -1
-        while lat1<config.GRID.lat_max:
-            # compute subwindow latitude borders
-            if space_window_size_proc_y is not None:
-                lat0 = lat_min + n_wy * (space_window_size_proc_y - space_overlap_y)
-                lat1 = lat0 + space_window_size_proc_y
-                _ny = ny_proc
-                if lat0 + space_window_size_proc_y/2 > config.GRID.lat_max:
-                    lat1 = lat0 + space_window_size_proc_y/2  
-                    if ny_proc is not None:
-                        _ny = int(ny_proc/2)                  
-                n_wy += 1
-            else:
-                lat0 = config.GRID.lat_min
-                lat1 = config.GRID.lat_max
-            if lat1<config.GRID.lat_min:
+        iproc_tw = 0
+        _prev_lat_band = None
+        for lat0, lat1, _ny, _nx_proc_band, _space_x_band, is_eq in lat_bands:
+            if lat1 < config.GRID.lat_min:
                 continue
-            j += 1
+            _grid_type_config = grid_type_eq if is_eq else grid_type
             flag_avoid_next_window = False
+            n_wx = 0
+            lon1 = config.GRID.lon_min
             while lon1<config.GRID.lon_max and not flag_avoid_next_window:
                 # compute subwindow longitude borders
-                if space_window_size_proc_x is not None:
-                    if grid_type == 'GRID_GEO':
+                _nx = _nx_proc_band
+                if _space_x_band is not None:
+                    if _grid_type_config == 'GRID_GEO':
                         # For GRID_GEO, longitude spacing is uniform in degrees
-                        lon0 = config.GRID.lon_min + n_wx * (space_window_size_proc_x - space_overlap_x)
-                        lon1 = lon0 + space_window_size_proc_x
-                        if lon0 + space_window_size_proc_x/2 > config.GRID.lon_max:
-                            lon1 = lon0 + space_window_size_proc_x/2
+                        lon0 = config.GRID.lon_min + n_wx * (_space_x_band - space_overlap_x)
+                        lon1 = lon0 + _space_x_band
+                        if lon0 + _space_x_band/2 > config.GRID.lon_max:
+                            lon1 = lon0 + _space_x_band/2
                         n_wx += 1
                     else:
                         # For GRID_CAR, longitude spacing depends on latitude
@@ -222,21 +312,24 @@ def prepare_process(config, config_eq, State,
                                 lon0 = lon_prev[0,-1] - space_overlap_x
                             else:
                                 lon0 = lon_prev[-1,-1] - space_overlap_x
-                        lon1 = lon0 + space_window_size_proc_x
-                        _nx = nx_proc
-                        if lon0 + space_window_size_proc_x/2 > config.GRID.lon_max:
-                            lon1 = lon0 + space_window_size_proc_x/2
-                            if nx_proc is not None:
-                                _nx = int(nx_proc/2)
+                        lon1 = lon0 + _space_x_band
+                        _nx = _nx_proc_band
+                        if lon0 + _space_x_band/2 > config.GRID.lon_max:
+                            lon1 = lon0 + _space_x_band/2
+                            if _nx_proc_band is not None:
+                                _nx = int(_nx_proc_band/2)
                         n_wx += 1
                 else:
                     lon0 = config.GRID.lon_min
                     lon1 = config.GRID.lon_max
+                    _nx = _nx_proc_band
                     
                 # create config for the subwindow
-                if lat0<0 and lat1>0:
+                if is_eq or (lat0<0 and lat1>0):
+                    _base_config = config_eq.copy()
                     _config = config_eq.copy()
                 else:
+                    _base_config = config.copy()
                     _config = config.copy()
                 _config.EXP = _config.EXP.copy()
                 _config.GRID = _config.GRID.copy()
@@ -248,7 +341,7 @@ def prepare_process(config, config_eq, State,
                 _config.GRID.lon_max = lon1
                 _config.GRID.lat_min = lat0
                 _config.GRID.lat_max = lat1
-                if grid_type == 'GRID_GEO':
+                if _grid_type_config == 'GRID_GEO':
                     _config.GRID.super = 'GRID_GEO'
                     _config.GRID.dlon = dlon
                     _config.GRID.dlat = dlat
@@ -295,10 +388,10 @@ def prepare_process(config, config_eq, State,
                             f'h{str(date0.hour).zfill(2)}'\
                             f'm{str(date0.minute).zfill(2)}.nc')
                     _config.GRID = exp.Config({'super': 'GRID_FROM_FILE', 'path_init_grid': filename, 'name_init_lon': 'lon', 'name_init_lat': 'lat', 
-                                                'name_init_mask': config.GRID.name_init_mask, 'name_var_mask': config.GRID.name_var_mask, 'subsampling': None})
+                                                'name_init_mask': _base_config.GRID.name_init_mask, 'name_var_mask': _base_config.GRID.name_var_mask, 'subsampling': None})
                     if 'super' not in _config.MOD:
                         for NAME_MOD in _config.MOD:
-                            _config.MOD[NAME_MOD] = config.MOD[NAME_MOD].copy()
+                            _config.MOD[NAME_MOD] = _base_config.MOD[NAME_MOD].copy()
                             _config.MOD[NAME_MOD].init_from_bc = False
                     else:
                         _config.MOD.init_from_bc = False
@@ -318,7 +411,13 @@ def prepare_process(config, config_eq, State,
                 list_config[i].append(_config)
                 list_State[i].append(_State)   
                 if i==0:
+                    if (lat0, lat1) != _prev_lat_band:
+                        eq_tag = ' [EQ]' if is_eq else ''
+                        print(f'\t ** Latitudes from {lat0:.2f} to {lat1:.2f} [{_ny}x{_nx}]{eq_tag}')
+                        _prev_lat_band = (lat0, lat1)
+                    print(f'\t\t * Longitudes from {lon0:.2f} to {lon1:.2f}')
                     list_lonlat.append(((lon1+lon0)/2,(lat1+lat0)/2))
+                iproc_tw += 1
 
                 # create directories
                 if not os.path.exists(_config.EXP.tmp_DA_path):
@@ -326,8 +425,17 @@ def prepare_process(config, config_eq, State,
                 if not os.path.exists(_config.EXP.path_save):
                     os.makedirs(_config.EXP.path_save)
 
+                # Save pickle files for each subwindow
+                if path_save_pickle is not None:
+                    path_pickle = f'{path_save_pickle}/{name_subwindow}'
+                    if not os.path.exists(path_pickle):
+                        os.makedirs(path_pickle)
+                    with open(f'{path_pickle}/state.pkl', "wb") as f:
+                        pickle.dump(_State, f)
+                    with open(f'{path_pickle}/config.pkl', "wb") as f:
+                        pickle.dump(_config, f)
+
                 if flag_assim and (flag_assim_restart or not os.path.exists(f'{_config.INV.path_save_control_vectors}/Xres.nc')):
-                    print(iproc, name_subwindow)
                     worker = partial(inv.Inv_4Dvar, config=_config, State=_State, verbose=0, gpu_device=gpu_devices[id_gpu])
                     p = mp.get_context("spawn").Process(target=worker)
                     if flag_init_from_previous:
@@ -335,26 +443,84 @@ def prepare_process(config, config_eq, State,
                     else:
                         list_processes[0].append(p)
                     id_gpu += 1
-                    iproc += 1
                     if id_gpu==len(gpu_devices):
                         id_gpu = 0
-            n_wx = 0
-            lon1 = config.GRID.lon_min
-        n_wy = 0
-        lat1 = config.GRID.lat_min
-        j = 0
+                elif i==0:
+                    if not flag_assim_restart:
+                        print(f'Assimilation already done for this subwindow, skipping (use flag_assim_restart=True to re-run)')
+                    if not flag_assim:
+                        print(f'Assimilation not requested for this subwindow, skipping (use flag_assim=True to run)')
 
-    return list_processes, list_config, list_State, list_date_start, list_date_end, list_date_middle, list_lonlat
+        iproc += iproc_tw
 
-def compute_weights_map(State, list_State):
+        if i == 0:
+            lonlat_grid = [(_State.lon, _State.lat) for _State in list_State[0]]
+            plot_subdomains(lonlat_grid)
+            # Compute weights and interpolators after first time window
+            weights_space, weights_space_sum, interpolators = compute_weights_map(
+                State, list_State, path_save_pickle=path_save_pickle,
+                space_overlap_x=space_overlap_x, space_overlap_y=space_overlap_y,
+                lon_min=config.GRID.lon_min, lon_max=config.GRID.lon_max,
+                lat_min=config.GRID.lat_min, lat_max=config.GRID.lat_max)
+            plot_weights(State, weights_space_sum)
+
+    print(f'Number of tiles: {iproc} ({iproc_tw} per time window)')
+
+    # Save global pickles
+    if dir_save_pickle is not None:
+        path_save_pickle = f'{dir_save_pickle}/{config.EXP.name_experiment}'
+        if not os.path.exists(path_save_pickle):
+            os.makedirs(path_save_pickle)
+        with open(f'{path_save_pickle}/config.pkl', 'wb') as f:
+            pickle.dump(config, f)
+        with open(f'{path_save_pickle}/State.pkl', 'wb') as f:
+            pickle.dump(State, f)
+        with open(f'{path_save_pickle}/dates.pkl', 'wb') as f:
+            pickle.dump((list_date_start, list_date_middle, list_date_end), f)
+        with open(f'{path_save_pickle}/list_State.pkl', 'wb') as f:
+            pickle.dump(list_State, f)
+
+    return list_processes, list_config, list_State, list_date_start, list_date_end, list_date_middle, list_lonlat, \
+           weights_space, weights_space_sum, interpolators
+
+def compute_weights_map(State, list_State, path_save_pickle=None,
+                        space_overlap_x=2, space_overlap_y=2,
+                        lon_min=None, lon_max=None, lat_min=None, lat_max=None,
+                        taper_factor=1.0):
 
     """Compute weights maps and precomputed interpolation operators for merging outputs from subprocesses.
     
-    Weights use raised-cosine (Hann) tapering in both x and y directions for smooth blending 
-    with zero-derivative at subwindow boundaries. Weights are 1 at the center and 0 at the edges.
+    Weights use smootherstep tapering based on per-row (longitude) and per-column
+    (latitude) distance from tile edges. This correctly handles GRID_CAR tiles whose 
+    shape is trapezoidal in lon/lat space. No tapering is applied on sides that lie
+    at the domain boundary. After interpolation, weights are normalized so that the
+    sum is exactly 1.0 everywhere, compensating for varying overlap widths.
     
     Interpolation operators are precomputed once per subwindow and reused for all dates,
     avoiding the expensive Delaunay triangulation of griddata at every time step.
+    
+    Parameters
+    ----------
+    State : State
+        Global state object (target grid).
+    list_State : list of list of State
+        Subwindow states grouped by time window.
+    path_save_pickle : str, optional
+        If provided, save weights_space, weights_space_sum and interpolators
+        to '{path_save_pickle}/weights.pkl'. If None, no pickle is saved.
+    space_overlap_x : float, optional
+        Overlap in x direction in degrees (default: 2).
+    space_overlap_y : float, optional
+        Overlap in y direction in degrees (default: 2).
+    lon_min, lon_max : float, optional
+        Domain boundaries in longitude. Tiles touching these boundaries 
+        are not tapered on that side. If None, all sides are tapered.
+    lat_min, lat_max : float, optional
+        Domain boundaries in latitude. Same behavior as lon_min/lon_max.
+    taper_factor : float, optional
+        Multiplier for the taper width relative to the overlap distance (default: 1.0).
+        A value of 1.0 ensures the taper zone exactly matches the overlap,
+        giving a uniform weight sum of 1.0 via smootherstep symmetry S(t)+S(1-t)=1.
     
     Returns
     -------
@@ -384,12 +550,45 @@ def compute_weights_map(State, list_State):
             # Single subwindow: uniform weights (no tapering needed)
             _weights_space = np.ones((_State.ny, _State.nx))
         else:
-            # Raised-cosine (Hann) tapering: 1 at center, 0 at edges, smooth with zero-derivative at boundaries
-            ty = np.linspace(0, 2 * np.pi, _State.ny)
-            tx = np.linspace(0, 2 * np.pi, _State.nx)
-            winy = 0.5 * (1.0 - np.cos(ty))
-            winx = 0.5 * (1.0 - np.cos(tx))
-            _weights_space = winy[:, np.newaxis] * winx[np.newaxis, :]
+            _lon = _State.lon
+            _lat = _State.lat
+
+            # Per-row distances for longitude (handles GRID_CAR trapezoidal tiles)
+            # Each row has its own western/eastern edge
+            dist_west = _lon - _lon[:, 0:1]
+            dist_east = _lon[:, -1:] - _lon
+            # Per-column distances for latitude
+            dist_south = _lat - _lat[0:1, :]
+            dist_north = _lat[-1:, :] - _lat
+
+            # Don't taper at domain boundaries (per-row for lon, per-column for lat)
+            tol = 0.5  # tolerance in degrees for boundary detection
+            at_west = np.zeros((_State.ny, 1), dtype=bool)
+            at_east = np.zeros((_State.ny, 1), dtype=bool)
+            at_south = np.zeros((1, _State.nx), dtype=bool)
+            at_north = np.zeros((1, _State.nx), dtype=bool)
+            if lon_min is not None:
+                at_west[:, 0] = _lon[:, 0] <= lon_min + tol
+            if lon_max is not None:
+                at_east[:, 0] = _lon[:, -1] >= lon_max - tol
+            if lat_min is not None:
+                at_south[0, :] = _lat[0, :] <= lat_min + tol
+            if lat_max is not None:
+                at_north[0, :] = _lat[-1, :] >= lat_max - tol
+
+            # Normalized distance: 0 at edge, 1 at taper_factor * overlap distance
+            taper_x = taper_factor * space_overlap_x
+            taper_y = taper_factor * space_overlap_y
+            wx_west = np.where(at_west, 1.0, np.clip(dist_west / taper_x, 0, 1))
+            wx_east = np.where(at_east, 1.0, np.clip(dist_east / taper_x, 0, 1))
+            wy_south = np.where(at_south, 1.0, np.clip(dist_south / taper_y, 0, 1))
+            wy_north = np.where(at_north, 1.0, np.clip(dist_north / taper_y, 0, 1))
+
+            # Smootherstep (C² Hermite): 6t⁵ - 15t⁴ + 10t³
+            def _smootherstep(t):
+                return t * t * t * (t * (t * 6 - 15) + 10)
+
+            _weights_space = _smootherstep(wx_west) * _smootherstep(wx_east) * _smootherstep(wy_south) * _smootherstep(wy_north)
         
         lon_in = _State.lon
         lat_in = _State.lat
@@ -406,7 +605,62 @@ def compute_weights_map(State, list_State):
         weights_space.append(_weights_space_interp)
         weights_space_sum[ind] += _weights_space_interp[ind]
 
+    if path_save_pickle is not None:
+        if not os.path.exists(path_save_pickle):
+            os.makedirs(path_save_pickle)
+        with open(f'{path_save_pickle}/weights.pkl', 'wb') as f:
+            pickle.dump({'weights_space': weights_space,
+                         'weights_space_sum': weights_space_sum,
+                         'interpolators': interpolators}, f)
+
     return weights_space, weights_space_sum, interpolators
+
+
+class _RegularInterpolator:
+    """Picklable regular grid interpolator."""
+    def __init__(self, lat_1d, lon_1d, pts, ny_out, nx_out):
+        self.lat_1d = lat_1d
+        self.lon_1d = lon_1d
+        self.pts = pts
+        self.ny_out = ny_out
+        self.nx_out = nx_out
+
+    def __call__(self, var_2d):
+        rgi = RegularGridInterpolator((self.lat_1d, self.lon_1d), var_2d,
+                                      method='linear', bounds_error=False, fill_value=np.nan)
+        return rgi(self.pts).reshape(self.ny_out, self.nx_out)
+
+
+class _IrregularInterpolator:
+    """Picklable irregular grid interpolator using precomputed Delaunay triangulation."""
+    def __init__(self, tri, pts_out, ny_out, nx_out):
+        self.tri = tri
+        self.pts_out = pts_out
+        self.ny_out = ny_out
+        self.nx_out = nx_out
+
+    def __call__(self, var_2d):
+        lndi = LinearNDInterpolator(self.tri, var_2d.ravel())
+        return lndi(self.pts_out).reshape(self.ny_out, self.nx_out)
+
+
+class _SplitInterpolator:
+    """Picklable interpolator for longitude-wrapping grids."""
+    def __init__(self, ind_0, ind_1, tri_0, tri_1, pts_out, ny_out, nx_out):
+        self.ind_0 = ind_0
+        self.ind_1 = ind_1
+        self.tri_0 = tri_0
+        self.tri_1 = tri_1
+        self.pts_out = pts_out
+        self.ny_out = ny_out
+        self.nx_out = nx_out
+
+    def __call__(self, var_2d):
+        f0 = LinearNDInterpolator(self.tri_0, var_2d[self.ind_0].ravel())
+        f1 = LinearNDInterpolator(self.tri_1, var_2d[self.ind_1].ravel())
+        r0 = f0(self.pts_out).reshape(self.ny_out, self.nx_out)
+        r1 = f1(self.pts_out).reshape(self.ny_out, self.nx_out)
+        return np.where(np.isnan(r0), r1, r0)
 
 
 def _build_interpolator(lon_in, lat_in, values, lon_out, lat_out, 
@@ -426,25 +680,16 @@ def _build_interpolator(lon_in, lat_in, values, lon_out, lat_out,
             # Regular grid: use fast RegularGridInterpolator
             lon_1d = lon_in[0, :]
             lat_1d = lat_in[:, 0]
-            interp = RegularGridInterpolator((lat_1d, lon_1d), values, 
-                                             method='linear', bounds_error=False, fill_value=np.nan)
             pts = np.column_stack([lat_out.ravel(), lon_out.ravel()])
-            values_interp = interp(pts).reshape(ny_out, nx_out)
-
-            def interp_func(var_2d):
-                rgi = RegularGridInterpolator((lat_1d, lon_1d), var_2d,
-                                              method='linear', bounds_error=False, fill_value=np.nan)
-                return rgi(pts).reshape(ny_out, nx_out)
+            interp_func = _RegularInterpolator(lat_1d, lon_1d, pts, ny_out, nx_out)
+            values_interp = interp_func(values)
         else:
             # Irregular grid: precompute Delaunay triangulation once
             points = np.column_stack([lon_in.ravel(), lat_in.ravel()])
             pts_out = np.column_stack([lon_out.ravel(), lat_out.ravel()])
             lndi = LinearNDInterpolator(points, values.ravel())
             values_interp = lndi(pts_out).reshape(ny_out, nx_out)
-
-            def interp_func(var_2d, _points=points, _pts_out=pts_out, _tri=lndi.tri):
-                lndi_fast = LinearNDInterpolator(_tri, var_2d.ravel())
-                return lndi_fast(_pts_out).reshape(ny_out, nx_out)
+            interp_func = _IrregularInterpolator(lndi.tri, pts_out, ny_out, nx_out)
     else:
         # Longitude wrapping: split into two halves
         pts_out = np.column_stack([lon_out.ravel(), lat_out.ravel()])
@@ -457,29 +702,36 @@ def _build_interpolator(lon_in, lat_in, values, lon_out, lat_out,
         lat_in_1 = lat_in[ind_1]
         points_1 = np.column_stack([lon_in_1.ravel(), lat_in_1.ravel()])
 
-        if geo_grid:
-            # For the split case with regular grid, fall back to LinearNDInterpolator per half
-            lndi_0 = LinearNDInterpolator(points_0, values[ind_0].ravel())
-            lndi_1 = LinearNDInterpolator(points_1, values[ind_1].ravel())
-        else:
-            lndi_0 = LinearNDInterpolator(points_0, values[ind_0].ravel())
-            lndi_1 = LinearNDInterpolator(points_1, values[ind_1].ravel())
+        lndi_0 = LinearNDInterpolator(points_0, values[ind_0].ravel())
+        lndi_1 = LinearNDInterpolator(points_1, values[ind_1].ravel())
 
         v0 = lndi_0(pts_out).reshape(ny_out, nx_out)
         v1 = lndi_1(pts_out).reshape(ny_out, nx_out)
         values_interp = np.where(np.isnan(v0), v1, v0)
         values_interp = np.where(np.isnan(values_interp), np.nan, values_interp)
 
-        def interp_func(var_2d, _ind_0=ind_0, _ind_1=ind_1,
-                        _tri_0=lndi_0.tri, _tri_1=lndi_1.tri,
-                        _pts_out=pts_out):
-            f0 = LinearNDInterpolator(_tri_0, var_2d[_ind_0].ravel())
-            f1 = LinearNDInterpolator(_tri_1, var_2d[_ind_1].ravel())
-            r0 = f0(_pts_out).reshape(ny_out, nx_out)
-            r1 = f1(_pts_out).reshape(ny_out, nx_out)
-            return np.where(np.isnan(r0), r1, r0)
+        interp_func = _SplitInterpolator(ind_0, ind_1, lndi_0.tri, lndi_1.tri, pts_out, ny_out, nx_out)
 
     return interp_func, values_interp
+
+def plot_weights(State, weights_space_sum):
+    """Plot the weights_space_sum on a map with coastlines."""
+
+    fig, ax = plt.subplots(figsize=(15, 6), subplot_kw={'projection': ccrs.PlateCarree()})
+
+    im = ax.pcolormesh(State.lon, State.lat, weights_space_sum, transform=ccrs.PlateCarree(), cmap=cm.viridis)
+    plt.colorbar(im, ax=ax, label="Weight sum")
+
+    ax.set_global()
+    ax.coastlines()
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    ax.add_feature(cfeature.LAND, edgecolor='black')
+
+    gl = ax.gridlines(draw_labels=True, linestyle='--', linewidth=0.5)
+    gl.top_labels = False
+    gl.right_labels = False
+
+    plt.show()
 
 def plot_subdomains(lonlat_grid):
 
@@ -627,16 +879,28 @@ def parallel_merge(dates, State, list_State, name_var_save, kernel, weights_spac
             )
 
 def run_assimilation_time_window(config, date_start, date_middle, date_end, list_State, processes, 
-                                 weights_space, weights_space_sum, interpolators,
+                                 weights_space=None, weights_space_sum=None, interpolators=None,
                                  name_var_save=['sla'], 
                                  flag_assim=True, flag_merge_outputs=True, flag_diag=True, flag_overwrite_outputs=True,
-                                 nprocs=4, nprocs_output=None):
+                                 nprocs=4, nprocs_output=None,
+                                 path_pickle=None):
     
     """
     Run assimilation in a given time window using subprocesses.
     The subprocesses are run in parallel and the outputs are merged.
     Diagnostics are then computed on the merged outputs.
+    
+    If weights_space, weights_space_sum, and interpolators are None,
+    they are loaded from '{path_pickle}/weights.pkl'.
     """
+
+    # Load weights and interpolators from pickle if not provided
+    if weights_space is None and path_pickle is not None:
+        with open(f'{path_pickle}/weights.pkl', 'rb') as f:
+            data = pickle.load(f)
+        weights_space = data['weights_space']
+        weights_space_sum = data['weights_space_sum']
+        interpolators = data['interpolators']
 
     ############################
     # Run subprocesses

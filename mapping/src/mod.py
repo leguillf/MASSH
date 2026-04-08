@@ -397,7 +397,7 @@ class Model_diffusion(M):
             # Update state
             if self.name_var[name] in State.params:
                 params = State.params[self.name_var[name]]
-                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+                var1 += nstep*self.dt/(3600*24) * params
 
             State.setvar(var1, self.name_var[name])
         
@@ -425,7 +425,7 @@ class Model_diffusion(M):
             # Update state
             if self.name_var[name] in dState.params:
                 params = dState.params[self.name_var[name]]
-                var1 += (1-self.Wbc)*nstep*self.dt/(3600*24) * params
+                var1 += nstep*self.dt/(3600*24) * params
 
             dState.setvar(var1,self.name_var[name])
         
@@ -457,7 +457,7 @@ class Model_diffusion(M):
 
             # Update state and parameters
             if self.name_var[name] in State.params:
-                adState.params[self.name_var[name]] += (1-self.Wbc)*nstep*self.dt/(3600*24) * advar0 
+                adState.params[self.name_var[name]] += nstep*self.dt/(3600*24) * advar0 
             
             advar1[np.isnan(advar1)] = 0
             adState.setvar(advar1,self.name_var[name])

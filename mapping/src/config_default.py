@@ -1093,6 +1093,115 @@ BASIS_GAUSS3D_JAX = dict(
 
 ) 
 
+BASIS_MIOST = dict(
+
+    name_mod_var = None, # Name of the related model variable
+    
+    flux = False,
+
+    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+
+    wavelet_init = False, # Estimate the initial state 
+
+    facns = 1., #factor for wavelet spacing= space
+
+    facnlt = 2., #factor for wavelet spacing= time
+
+    npsp= 3.5, # Defines the wavelet shape
+
+    facpsp= 1.5, # factor to fix df between wavelets
+
+    lmin= 80, # minimal wavelength (in km)
+
+    lmax= 970., # maximal wavelength (in km)
+
+    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2., # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    distortion_eq = 2.,
+
+    lat_distortion_eq = 5.,
+
+    distortion_eq_law = 2.,
+
+    file_aux = None,
+
+    filec_aux = None,
+
+    tssr = 0.5,
+
+    facRo = 8.,
+
+    Romax = 150.,
+
+    cutRo =  1.6,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
+BASIS_MIOST_JAX = dict(
+
+    name_mod_var = None, # Name of the related model variable
+    
+    flux = False,
+
+    save_wave_basis = False, # save the basis matrix in tmp_DA_path. If False, the matrix is stored in line
+
+    wavelet_init = False, # Estimate the initial state 
+
+    facns = 1., #factor for wavelet spacing= space
+
+    facnlt = 2., #factor for wavelet spacing= time
+
+    npsp= 3.5, # Defines the wavelet shape
+
+    facpsp= 1.5, # factor to fix df between wavelets
+
+    lmin= 80, # minimal wavelength (in km)
+
+    lmax= 970., # maximal wavelength (in km)
+
+    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation 
+
+    tdecmin = 2., # minimum time of decorrelation 
+
+    tdecmax = 40., # maximum time of decorrelation 
+
+    facQ= 1, # factor to be multiplied to the estimated Q
+
+    distortion_eq = 2.,
+
+    lat_distortion_eq = 5.,
+
+    distortion_eq_law = 2.,
+
+    file_aux = None,
+
+    filec_aux = None,
+
+    tssr = 0.5,
+
+    facRo = 8.,
+
+    Romax = 150.,
+
+    cutRo =  1.6,
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+)
+
+
 # Wavelet 3D
 BASIS_WAVELET3D = dict(
 
