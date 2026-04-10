@@ -36,6 +36,12 @@ class Swm:
         self.Yv = self.rho_on_v(self.Y) # Y coordinates on the v grid
 
         ########
+        # TIME #
+        ########
+
+        self.init_date_offset = State.init_date_offset
+
+        ########
         # DATA #
         ########
 
@@ -47,7 +53,15 @@ class Swm:
         # Tidal Velocity # 
 
         self.tidal_U = Model.tidal_U
+        self.tidal_U_phi = Model.tidal_U_phi        
         self.tidal_V = Model.tidal_V
+        self.tidal_V_phi = Model.tidal_V_phi
+
+        self.phi_ray = Model.phi_ray
+
+        # Generation # 
+
+        self.generation = Model.generation
 
         ##############
         # PARAMETERS #
@@ -1299,17 +1313,36 @@ class Swm:
 
         # - ITG : Internal Tide Generation - # 
         if 'ITG' in self.name_params:
-            itg = params[self.slice_params['ITG']].reshape(self.shape_params['ITG']) # parameters for itg forcing 
+            
             rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
-            for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
-                # print(_w_name)
-                # print(self.tidal_U)
-                # print(self.tidal_U[_w_name])
-                rhs_itg+=self.grad_bathymetry_x*self.tidal_U[i]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
-                rhs_itg+=self.grad_bathymetry_y*self.tidal_V[i]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
-    
+
+            # Initial version of ITG with control 
+            # itg = params[self.slice_params['ITG']].reshape(self.shape_params['ITG']) # parameters for itg forcing 
+            # for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
+
+            #     rhs_itg+=self.grad_bathymetry_x*self.tidal_U[i]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
+            #     rhs_itg+=self.grad_bathymetry_y*self.tidal_V[i]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
+
+            # Version of ITG informed by mode decomposition 
+            t_day = self.init_date_offset+t/86400
+            for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) :
+
+                A1_u=self.tidal_U[i,:,:]*np.cos(np.deg2rad(self.tidal_U_phi[i,:,:]))
+                A2_u=-self.tidal_U[i,:,:]*np.sin(np.deg2rad(self.tidal_U_phi[i,:,:]))
+
+                A1_v=self.tidal_V[i,:,:]*np.cos(np.deg2rad(self.tidal_V_phi[i,:,:]))
+                A2_v=-self.tidal_V[i,:,:]*np.sin(np.deg2rad(self.tidal_V_phi[i,:,:]))
+
+                u0_bar =  A1_u*jnp.cos(_omega*(t_day-15340)+self.phi_ray[i])+A2_u*jnp.sin(_omega*(t_day-15340)+self.phi_ray[i])
+                v0_bar =  A1_v*jnp.cos(_omega*(t_day-15340)+self.phi_ray[i])+A2_v*jnp.sin(_omega*(t_day-15340)+self.phi_ray[i])
+
+                u_grad_H_x = u0_bar*self.grad_bathymetry_x
+                u_grad_H_y = v0_bar*self.grad_bathymetry_y
+
+                rhs_itg += self.generation * (u_grad_H_x+u_grad_H_y)
+
         else : 
-            rhs_itg = jnp.zeros((self.ny, self.nx))
+            rhs_itg = np.zeros_like(self.X)
 
         # - SSH Boundary Condition - # 
         if 'HBCX' in self.name_params and 'HBCY' in self.name_params: 

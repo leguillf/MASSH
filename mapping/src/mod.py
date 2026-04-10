@@ -40,8 +40,11 @@ import time
 
 import functools
 
+import scipy
 from scipy.signal import convolve2d
 from scipy.special import factorial
+
+import pickle
 
 def Model(config, State, verbose=True):
     """
@@ -1724,6 +1727,9 @@ class Model_sw1l_jax(M):
         # Bathymetry field 
         self.init_bathy(config,State)
 
+        # Generation term 
+        self.init_generation(config,State)
+
         ####################################
         ### INITIALIZING MODEL VARIABLES ###
         ####################################
@@ -1786,8 +1792,6 @@ class Model_sw1l_jax(M):
 
         return
 
-    
-
     def init_tidal_velocity(self,config,State):
         """
         NAME
@@ -1806,20 +1810,82 @@ class Model_sw1l_jax(M):
                                      State.lat[:,0].size, # Number of latitude grid points 
                                      State.lon[0,:].size, # Number of longitude grid points 
                                      ))
+            self.tidal_U_phi = np.zeros((len(self.omega_names), # Number of tidal components
+                                     State.lat[:,0].size, # Number of latitude grid points 
+                                     State.lon[0,:].size, # Number of longitude grid points 
+                                     ))
             
             self.tidal_V = np.zeros((len(self.omega_names), # Number of tidal components
                                      State.lat[:,0].size, # Number of latitude grid points
                                      State.lon[0,:].size, # Number of longitude grid points  
                                      ))
+            self.tidal_V_phi = np.zeros((len(self.omega_names), # Number of tidal components
+                                     State.lat[:,0].size, # Number of latitude grid points
+                                     State.lon[0,:].size, # Number of longitude grid points  
+                                     ))
             
             for (i,name) in enumerate(self.omega_names):
-                self.tidal_U[i,:,:] = self.open_interpolate(config,name,"U",State)
-                self.tidal_V[i,:,:] = self.open_interpolate(config,name,"V",State)
+                self.tidal_U[i,:,:], self.tidal_U_phi[i,:,:]= self.open_interpolate(config,name,"U",State)
+                self.tidal_V[i,:,:], self.tidal_V_phi[i,:,:] = self.open_interpolate(config,name,"V",State)
         
         else: # No tidal velocity file prescripted
             warnings.warn("No tidal velocity field prescribed. This is not suitable if Internal Tide generation ('itg') is being controlled.")
             return None 
         
+        if config.MOD.path_file_data_astr is not None and os.path.exists(config.MOD.path_file_data_astr): 
+            data_astr = pickle.load( open( config.MOD.path_file_data_astr, "rb" ) )
+
+            self.phi_ray = np.zeros(len(self.omega_names)) # Number of tidal components
+            self.omegas = np.zeros(len(self.omega_names)) # Redifining omegas
+
+            for (i,name) in enumerate(self.omega_names):
+                finterpDP = scipy.interpolate.interp1d(data_astr['time_jd'], np.mod(data_astr[name]['phi_astr']-data_astr[name]['phi_astr'][0]+np.pi, 2*np.pi)-np.pi)
+
+                jd = 15340
+                Phi_astr = finterpDP(jd) + data_astr[name]['phi_astr'][0]
+                w=data_astr[name]['freq'] *86400
+                self.phi_ray[i] = Phi_astr + w*15340.          
+                self.omegas[i] = w
+        
+    def init_generation(self,config,State):
+        """
+        NAME
+            init_generation
+
+        DESCRIPTION
+            Reads generation term file, interpolate it to the grid
+        """
+        # Read generation term
+        if config.MOD.path_generation is not None and os.path.exists(config.MOD.path_generation):
+            ds = xr.open_dataset(config.MOD.path_generation).squeeze()
+            name_lon = config.MOD.name_var_generation['lon']
+            name_lat = config.MOD.name_var_generation['lat']
+            name_generation = config.MOD.name_var_generation['var']
+
+        else: # No geenration file prescripted
+            warnings.warn("No generation field prescribed.")
+            return None 
+
+        # Convert longitudes
+        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+        ds = ds.sortby(ds[name_lon])   
+
+
+        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
+        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
+        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
+        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
+
+        ds = ds.sel(
+            {name_lon:slice(State.lon_min-dlon,State.lon_max+dlon),
+                name_lat:slice(State.lat_min-dlat,State.lat_max+dlat)})
+
+        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
+
+        self.generation = ds[name_generation].values
 
     def init_bathy(self,config,State):
 
@@ -1930,9 +1996,9 @@ class Model_sw1l_jax(M):
         ds = ds.interp(coords={"lon":State.lon[0,:],"lat":State.lat[:,0]},method='cubic')
         
         if direction == "U":
-            return ds["Ua"].values*1E-2 # Converting into m/s
+            return ds["Ua"].values*1E-2, np.deg2rad(ds["Ug"]) # Converting velocity into m/s and phase into rad
         elif direction == "V":
-            return ds["Va"].values*1E-2 # Converting into m/s
+            return ds["Va"].values*1E-2, np.deg2rad(ds["Vg"]) # Converting velocity into m/s and phase into rad
 
     def init_variables(self,config,State) : 
 
@@ -2047,12 +2113,55 @@ class Model_sw1l_jax(M):
         ### - INITIALIZING SPECIFICATIONS - ###
         #######################################
 
-        # - Equivalent Height He background 
-        if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-            ds = xr.open_dataset(config.MOD.He_data['path'])
-            self.Heb = ds[config.MOD.He_data['var']].values
+        # Open Rossby Radius if provided
+        if config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
+
+            ds = xr.open_dataset(config.MOD.filec_aux)
+            name_lon = config.MOD.name_var_c['lon']
+            lon = ds[name_lon]
+            # Convert longitude 
+            if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+                ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
+                ds = ds.sortby(name_lon)    
+            elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+                ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
+                ds = ds.sortby(name_lon)   
+
+            # interpolating nans  
+            ds = ds.interpolate_na(dim = name_lon)
+
+            self.c = grid.interp2d(ds,
+                                   config.MOD.name_var_c,
+                                   State.lon,
+                                   State.lat)
+            
+            if config.MOD.cmin is not None:
+                self.c[self.c<config.MOD.cmin] = config.MOD.cmin
+            
+            if config.MOD.cmax is not None:
+                self.c[self.c>config.MOD.cmax] = config.MOD.cmax
+            
+            if config.EXP.flag_plot>0:
+                plt.figure()
+                plt.pcolormesh(self.c)
+                plt.colorbar()
+                plt.title('Rossby phase velocity')
+                plt.show()
+                
         else:
-            self.Heb = config.MOD.He_init
+            self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
+        
+        # Equivalent depth
+        self.Heb = self.c**2 / self.g
+        
+        if self.c is None: # prescribing Heb from He values 
+
+            # - Equivalent Height He background 
+            if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
+                ds = xr.open_dataset(config.MOD.He_data['path'])
+                self.Heb = ds[config.MOD.He_data['var']].values
+            else:
+                self.Heb = config.MOD.He_init
         
         # Height boundary condition hbc structure  
         if 'HBCX' in self.name_params and 'HBCY' in self.name_params :
@@ -5489,10 +5598,6 @@ def adjoint_test(M,State,t0=0,nstep=1):
     
     print(ps1/ps2)
 
-    
-
-    
-    
 
     
     

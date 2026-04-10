@@ -56,6 +56,8 @@ class State:
             os.makedirs(self.EXP.path_save)
         self.flag_plot = config.EXP.flag_plot
 
+        self.init_date_offset = (np.datetime64(config.EXP.init_date)-np.datetime64('1950-01-01 00:00:00')).astype("timedelta64[D]").astype("float64")
+
         #  Initialize state variables dictionary
         self.var = {}
 

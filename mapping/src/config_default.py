@@ -488,6 +488,22 @@ MOD_SW1L_JAX = dict(
 
     smooth_wavelength = None, # wavelength for the smoothing of bathymetry (in meters), if None no smoothing is applied 
 
+    path_generation = None,  # path to read generation term netcdf file.
+
+    name_var_generation = {'lon':'','lat':'','var':''},   
+
+    path_file_data_astr = None, # path to read the data_astr file
+
+    filec_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
+
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+
+    cmin=None,
+
+    cmax=None,
+
+    c0=None, # Constant phase velocity prescription
+
     He_init = 0.9, # Mean height (in m)
 
     He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used

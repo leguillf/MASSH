@@ -249,7 +249,8 @@ def Inv_forward(config,State,Model,Basis,X,Bc,Obsop,ssh_truth=None):
     t_checkpoints = [Model.T[0]]
     check = 0
     for i,t in enumerate(Model.timestamps[:-1]):
-        if i>0 and (Obsop.is_obs(t) or check==nstep_check):
+        # if i>0 and (Obsop.is_obs(t) or check==nstep_check):
+        if i>0 and check==nstep_check:
             checkpoints.append(i)
             time_checkpoints.append(np.datetime64(t))
             t_checkpoints.append(Model.T[i])
@@ -332,10 +333,10 @@ def Inv_forward(config,State,Model,Basis,X,Bc,Obsop,ssh_truth=None):
         # current time in secondes
         t = (present_date - config.EXP.init_date).total_seconds()
         
-        if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
+        # if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
 
-            # Reduced basis
-            Basis.operg(t/3600/24,Xa,State=State0)
+        #     # Reduced basis
+        #     Basis.operg(t/3600/24,Xa,State=State0)
 
         # Save
         if config.EXP.saveoutputs:
