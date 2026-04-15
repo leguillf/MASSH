@@ -167,6 +167,13 @@ def prepare_process(config, config_eq, State,
 
     id_gpu = 0
 
+    if dir_save_pickle is not None:
+        path_save_pickle = f'{dir_save_pickle}/{config.EXP.name_experiment}'
+        if not os.path.exists(path_save_pickle):
+            os.makedirs(path_save_pickle)
+    else:
+        path_save_pickle = None
+
     # Determine grid type
     if grid_type is None:
         grid_type = getattr(config.GRID, 'super', 'GRID_CAR')
@@ -426,7 +433,7 @@ def prepare_process(config, config_eq, State,
                     os.makedirs(_config.EXP.path_save)
 
                 # Save pickle files for each subwindow
-                if path_save_pickle is not None:
+                if dir_save_pickle is not None:
                     path_pickle = f'{path_save_pickle}/{name_subwindow}'
                     if not os.path.exists(path_pickle):
                         os.makedirs(path_pickle)
@@ -467,10 +474,7 @@ def prepare_process(config, config_eq, State,
     print(f'Number of tiles: {iproc} ({iproc_tw} per time window)')
 
     # Save global pickles
-    if dir_save_pickle is not None:
-        path_save_pickle = f'{dir_save_pickle}/{config.EXP.name_experiment}'
-        if not os.path.exists(path_save_pickle):
-            os.makedirs(path_save_pickle)
+    if path_save_pickle is not None:
         with open(f'{path_save_pickle}/config.pkl', 'wb') as f:
             pickle.dump(config, f)
         with open(f'{path_save_pickle}/State.pkl', 'wb') as f:
