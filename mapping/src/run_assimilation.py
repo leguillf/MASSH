@@ -1,10 +1,12 @@
 import os
 import sys
 import glob
+import copy as _copy
 import pickle
 import numpy as np
 import multiprocessing as mp
 from scipy.interpolate import griddata, LinearNDInterpolator, RegularGridInterpolator
+from scipy.ndimage import distance_transform_edt
 import matplotlib.pyplot as plt
 from astropy.convolution import Gaussian2DKernel
 from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
@@ -162,6 +164,7 @@ def prepare_process(config, config_eq, State,
     list_date_end = []
     list_date_middle = []
     list_lonlat = []
+    list_tile_paths = []
     iproc = 0
     n_wt = 0 
 
@@ -380,9 +383,6 @@ def prepare_process(config, config_eq, State,
                     _State.lon_min = _State.lon.min()
                     _State.lon_max = _State.lon.max()
                     _State.lon_unit = '0_360'
-                
-                if np.where(_State.mask)[0].size>.9*_State.mask.size:
-                    continue
 
                 # Init from file from previous window
                 if n_wt>1 and flag_init_from_previous:
@@ -424,6 +424,8 @@ def prepare_process(config, config_eq, State,
                         _prev_lat_band = (lat0, lat1)
                     print(f'\t\t * Longitudes from {lon0:.2f} to {lon1:.2f}')
                     list_lonlat.append(((lon1+lon0)/2,(lat1+lat0)/2))
+                    if dir_save_pickle is not None:
+                        list_tile_paths.append(f'{path_save_pickle}/{name_subwindow}')
                 iproc_tw += 1
 
                 # create directories
@@ -466,6 +468,7 @@ def prepare_process(config, config_eq, State,
             # Compute weights and interpolators after first time window
             weights_space, weights_space_sum, interpolators = compute_weights_map(
                 State, list_State, path_save_pickle=path_save_pickle,
+                list_tile_paths=list_tile_paths or None,
                 space_overlap_x=space_overlap_x, space_overlap_y=space_overlap_y,
                 lon_min=config.GRID.lon_min, lon_max=config.GRID.lon_max,
                 lat_min=config.GRID.lat_min, lat_max=config.GRID.lat_max)
@@ -488,6 +491,7 @@ def prepare_process(config, config_eq, State,
            weights_space, weights_space_sum, interpolators
 
 def compute_weights_map(State, list_State, path_save_pickle=None,
+                        list_tile_paths=None,
                         space_overlap_x=2, space_overlap_y=2,
                         lon_min=None, lon_max=None, lat_min=None, lat_max=None,
                         taper_factor=1.0):
@@ -503,6 +507,10 @@ def compute_weights_map(State, list_State, path_save_pickle=None,
     Interpolation operators are precomputed once per subwindow and reused for all dates,
     avoiding the expensive Delaunay triangulation of griddata at every time step.
     
+    When list_tile_paths is provided, each tile's weight map and interpolator are saved
+    individually to '{tile_path}/weights.pkl' and freed from memory. Only weights_space_sum
+    is kept in memory. This avoids OOM when pickling 100+ tiles at once.
+    
     Parameters
     ----------
     State : State
@@ -510,8 +518,12 @@ def compute_weights_map(State, list_State, path_save_pickle=None,
     list_State : list of list of State
         Subwindow states grouped by time window.
     path_save_pickle : str, optional
-        If provided, save weights_space, weights_space_sum and interpolators
+        If provided, save weights_space_sum and list_tile_paths
         to '{path_save_pickle}/weights.pkl'. If None, no pickle is saved.
+    list_tile_paths : list of str, optional
+        Per-tile pickle directories (one per subwindow in list_State[0]).
+        If provided, saves each tile's weights and interpolator individually.
+        If None, all weights/interpolators are accumulated in memory.
     space_overlap_x : float, optional
         Overlap in x direction in degrees (default: 2).
     space_overlap_y : float, optional
@@ -528,27 +540,26 @@ def compute_weights_map(State, list_State, path_save_pickle=None,
     
     Returns
     -------
-    weights_space : list of 2D arrays
+    weights_space : list of 2D arrays or None
         Weight maps for each subwindow, interpolated onto the target grid.
+        None when list_tile_paths is provided (saved per-tile instead).
     weights_space_sum : 2D array
         Sum of all weight maps (for normalization).
     interpolators : list of callable or None
         Precomputed interpolation operators mapping each subwindow grid to the target grid.
-        For regular grids (GRID_GEO), uses RegularGridInterpolator.
-        For irregular grids (GRID_CAR), uses LinearNDInterpolator.
-        Each callable takes a 2D array on the subwindow grid and returns a 2D array on the target grid.
+        None when list_tile_paths is provided (saved per-tile instead).
     """
 
-    weights_space = [] 
+    weights_space = [] if list_tile_paths is None else None
     weights_space_sum = np.zeros((State.ny, State.nx))
-    interpolators = []
+    interpolators = [] if list_tile_paths is None else None
 
     single_subwindow = (len(list_State[0]) == 1)
     
     lon_out = State.lon
     lat_out = State.lat
 
-    for _State in list_State[0]:
+    for itile, _State in enumerate(list_State[0]):
 
         if single_subwindow:
             # Single subwindow: uniform weights (no tapering needed)
@@ -565,16 +576,36 @@ def compute_weights_map(State, list_State, path_save_pickle=None,
             dist_south = _lat - _lat[0:1, :]
             dist_north = _lat[-1:, :] - _lat
 
-            # Don't taper at domain boundaries (per-row for lon, per-column for lat)
+            # Don't taper at domain boundaries (per-row for lon, per-column for lat).
+            # EXCEPTION: when the longitude domain is global (span >= 360), the
+            # west and east "boundaries" are actually the same periodic seam,
+            # so tapering MUST be applied on both sides — otherwise the
+            # weights_space_sum is discontinuous at ±180° (jumps from 1 inside
+            # the leftmost tile to whatever the periodic-wrap contribution
+            # provides on the other side). For non-global domains, the
+            # leftmost/rightmost tiles must NOT taper toward the hard boundary,
+            # otherwise weights_space_sum collapses to ~0 there.
             tol = 0.5  # tolerance in degrees for boundary detection
+            global_lon = (lon_min is not None and lon_max is not None
+                          and (lon_max - lon_min) >= 360 - tol)
             at_west = np.zeros((_State.ny, 1), dtype=bool)
             at_east = np.zeros((_State.ny, 1), dtype=bool)
             at_south = np.zeros((1, _State.nx), dtype=bool)
             at_north = np.zeros((1, _State.nx), dtype=bool)
-            if lon_min is not None:
-                at_west[:, 0] = _lon[:, 0] <= lon_min + tol
-            if lon_max is not None:
-                at_east[:, 0] = _lon[:, -1] >= lon_max - tol
+            # Normalize tile east/west edges to the domain longitude convention
+            # so boundary detection works even when a tile has been wrapped to
+            # '0_360' (tile crossing the dateline). After normalization, a
+            # dateline-crossing tile has west < 0 and east > 0 (or wrapped),
+            # so it will NOT match either domain boundary — correct.
+            _lon_west_cmp = _lon[:, 0]
+            _lon_east_cmp = _lon[:, -1]
+            if getattr(_State, 'lon_unit', None) == '0_360' and lon_max is not None and lon_max <= 180:
+                _lon_west_cmp = ((_lon_west_cmp + 180) % 360) - 180
+                _lon_east_cmp = ((_lon_east_cmp + 180) % 360) - 180
+            if lon_min is not None and not global_lon:
+                at_west[:, 0] = _lon_west_cmp <= lon_min + tol
+            if lon_max is not None and not global_lon:
+                at_east[:, 0] = _lon_east_cmp >= lon_max - tol
             if lat_min is not None:
                 at_south[0, :] = _lat[0, :] <= lat_min + tol
             if lat_max is not None:
@@ -603,19 +634,26 @@ def compute_weights_map(State, list_State, path_save_pickle=None,
             _State.lon_unit, State.lon_unit, State.ny, State.nx,
             _State.geo_grid)
 
-        interpolators.append(_interp_func)
-
         ind = ~np.isnan(_weights_space_interp)
-        weights_space.append(_weights_space_interp)
         weights_space_sum[ind] += _weights_space_interp[ind]
+
+        if list_tile_paths is not None:
+            # Save per-tile and free memory immediately
+            tile_path = list_tile_paths[itile]
+            with open(f'{tile_path}/weights.pkl', 'wb') as f:
+                pickle.dump({'weights_space': _weights_space_interp,
+                             'interpolator': _interp_func}, f)
+            del _interp_func, _weights_space_interp
+        else:
+            interpolators.append(_interp_func)
+            weights_space.append(_weights_space_interp)
 
     if path_save_pickle is not None:
         if not os.path.exists(path_save_pickle):
             os.makedirs(path_save_pickle)
         with open(f'{path_save_pickle}/weights.pkl', 'wb') as f:
-            pickle.dump({'weights_space': weights_space,
-                         'weights_space_sum': weights_space_sum,
-                         'interpolators': interpolators}, f)
+            pickle.dump({'weights_space_sum': weights_space_sum,
+                         'list_tile_paths': list_tile_paths}, f)
 
     return weights_space, weights_space_sum, interpolators
 
@@ -735,6 +773,9 @@ def plot_weights(State, weights_space_sum):
     gl.top_labels = False
     gl.right_labels = False
 
+    # Savefigure
+    plt.savefig('weights_space_sum.png', dpi=300, bbox_inches='tight')
+
     plt.show()
 
 def plot_subdomains(lonlat_grid):
@@ -749,17 +790,27 @@ def plot_subdomains(lonlat_grid):
         color = cmap(norm(dx))  # Get normalized color
         color_with_alpha = (*color[:3], alpha_value)  # Convert to RGBA
 
-        vertices = np.array([
-            [lon_grid[0,0], lat_grid[0,0]], 
-            [lon_grid[0,-1], lat_grid[0,-1]], 
-            [lon_grid[-1,-1], lat_grid[-1,-1]], 
-            [lon_grid[-1,0], lat_grid[-1,0]]
-            ])
+        # Bring corner longitudes back to [-180, 180].
+        lons = np.array([lon_grid[0,0], lon_grid[0,-1], lon_grid[-1,-1], lon_grid[-1,0]])
+        lats = np.array([lat_grid[0,0], lat_grid[0,-1], lat_grid[-1,-1], lat_grid[-1,0]])
+        lons = ((lons + 180) % 360) - 180
 
-        poly_shape = Polygon(vertices)
+        # If the tile straddles the dateline, split into two polygons (one on
+        # each side of ±180°), otherwise cartopy with set_global() in
+        # PlateCarree clips whichever part falls outside [-180, 180].
+        if lons.max() - lons.min() > 180:
+            # Build two versions: lons_pos in [0, 360], lons_neg in [-360, 0]
+            lons_pos = np.where(lons < 0, lons + 360, lons)
+            lons_neg = np.where(lons > 0, lons - 360, lons)
+            polys = [
+                Polygon(np.column_stack([np.clip(lons_pos, None, 180), lats])),
+                Polygon(np.column_stack([np.clip(lons_neg, -180, None), lats])),
+            ]
+        else:
+            polys = [Polygon(np.column_stack([lons, lats]))]
 
-        # Add the polygon to GeoAxes
-        ax.add_feature(ShapelyFeature([poly_shape], ccrs.PlateCarree(), edgecolor='black', facecolor=color_with_alpha, linewidth=2))
+        # Add the polygon(s) to GeoAxes
+        ax.add_feature(ShapelyFeature(polys, ccrs.PlateCarree(), edgecolor='black', facecolor=color_with_alpha, linewidth=2))
 
     # Create a figure and an axis with PlateCarree projection
     fig, ax = plt.subplots(figsize=(15, 6), subplot_kw={'projection': ccrs.PlateCarree()})
@@ -785,23 +836,83 @@ def plot_subdomains(lonlat_grid):
     gl.top_labels = False  # Remove top labels
     gl.right_labels = False  # Remove right labels
 
+    # Save figure
+    plt.savefig('subdomains.png', dpi=300, bbox_inches='tight')
+
     # Show the plot
     plt.show()
 
-def merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, plot=False, save=True):
+# Per-worker cache for tile weight/interpolator pickles. Each worker process
+# in mp.Pool gets its own module import, so this dict is naturally per-worker.
+# Avoids re-unpickling Delaunay triangulations for every date.
+_TILE_WEIGHTS_CACHE = {}
+
+
+def _load_tile_weights(tile_path):
+    cached = _TILE_WEIGHTS_CACHE.get(tile_path)
+    if cached is not None:
+        return cached
+    with open(f'{tile_path}/weights.pkl', 'rb') as f:
+        data = pickle.load(f)
+    _TILE_WEIGHTS_CACHE[tile_path] = data
+    return data
+
+
+def _fill_nans_nearest(arr):
+    """Fast NaN fill using nearest-finite neighbour (EDT-based).
+    Much faster than astropy's interpolate_replace_nans for the purpose of
+    plugging coastal holes before linear interpolation.
+    """
+    nan_mask = np.isnan(arr)
+    if not nan_mask.any():
+        return arr
+    if nan_mask.all():
+        return arr
+    # distance_transform_edt on the NaN mask returns, for each NaN pixel,
+    # the indices of the closest non-NaN pixel.
+    idx = distance_transform_edt(nan_mask, return_distances=False, return_indices=True)
+    return arr[tuple(idx)]
+
+
+def merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, list_tile_paths=None, plot=False, save=True):
 
     """Merge outputs from subprocesses for a given date.
     
     Uses precomputed interpolation operators (from compute_weights_map) to avoid
     recomputing Delaunay triangulations at every time step.
+    
+    When list_tile_paths is provided, weights and interpolators are loaded
+    per-tile from '{tile_path}/weights.pkl' instead of from in-memory lists.
+    Pickle files are cached per worker process to avoid re-reading them for
+    every date.
     """
 
-    State0 = State.copy()
+    # Shallow copy of State: avoids re-running State.__init__ (which calls
+    # os.makedirs on Lustre) and deep-copying grid/mask arrays. We give it a
+    # fresh `var` dict so setvar() does not mutate the caller's State.
+    State0 = _copy.copy(State)
+    State0.var = dict(State.var)
     ny, nx = State0.ny, State0.nx
+
+    # Cells not covered by any tile (weights_space_sum == 0) must be flagged as
+    # NaN, otherwise 0/0 would produce NaN/garbage that propagates into the
+    # surrounding ocean via interpolation. Use a safe inverse for the division.
+    no_coverage = (weights_space_sum <= 0) | ~np.isfinite(weights_space_sum)
+    inv_wsum = np.zeros_like(weights_space_sum)
+    inv_wsum[~no_coverage] = 1.0 / weights_space_sum[~no_coverage]
 
     dict_var = {name: np.zeros((ny, nx)) for name in name_var_save}
         
-    for _State, _weights_space, _interp_func in zip(list_State, weights_space, interpolators):
+    for i, _State in enumerate(list_State):
+
+        # Load weights/interpolator: per-tile from disk (cached) or from in-memory lists
+        if list_tile_paths is not None:
+            tile_data = _load_tile_weights(list_tile_paths[i])
+            _weights_space = tile_data['weights_space']
+            _interp_func = tile_data['interpolator']
+        else:
+            _weights_space = weights_space[i]
+            _interp_func = interpolators[i]
 
         try:
             # Load output
@@ -823,9 +934,9 @@ def merge_output_date(date, State, list_State, name_var_save, kernel, weights_sp
                     # V-grid → H-grid: average adjacent rows
                     _var = 0.5 * (_var[:-1, :] + _var[1:, :])
                 
-                # Fill NaN gaps near coasts before interpolation
-                if np.any(np.isnan(_var)) and kernel is not None:
-                    _var = interpolate_replace_nans(_var, kernel)
+                # Fill NaN gaps near coasts before interpolation (fast EDT-based nearest-neighbour fill)
+                if np.any(np.isnan(_var)):
+                    _var = _fill_nans_nearest(_var)
                 
                 # Interpolate using precomputed operator
                 if _interp_func is not None:
@@ -834,9 +945,9 @@ def merge_output_date(date, State, list_State, name_var_save, kernel, weights_sp
                     # Single subwindow, no interpolation needed (grids match)
                     _var_interp = _var
 
-                # Merge
+                # Merge (safe division: 0 where no coverage)
                 ind = ~np.isnan(_var_interp)
-                dict_var[name][ind] += (_weights_space * _var_interp / weights_space_sum)[ind]
+                dict_var[name][ind] += (_weights_space * _var_interp * inv_wsum)[ind]
             
             _ds.close()
             del _ds
@@ -845,6 +956,8 @@ def merge_output_date(date, State, list_State, name_var_save, kernel, weights_sp
             continue
 
     for name in name_var_save:
+        # Cells not covered by any tile -> NaN (avoid propagating 0)
+        dict_var[name][no_coverage] = np.nan
         # Mask
         if State0.mask is not None and np.any(State0.mask):
             dict_var[name][State0.mask] = np.nan
@@ -869,18 +982,151 @@ def generate_dates(start_date, end_date, delta):
         current_date += delta
     return dates
 
-def parallel_merge(dates, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, num_workers=4):
-    """Merge outputs from subprocesses in parallel for a list of dates."""
-    
-    if num_workers<=1:
+def parallel_merge(dates, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, list_tile_paths=None, num_workers=4):
+    """Merge outputs from subprocesses in parallel for a list of dates.
+
+    When ``list_tile_paths`` is provided, uses a tile-partitioned worker pool:
+    each worker is assigned a fixed subset of tiles, loads its weights/interpolator
+    pickles ONCE at startup, and contributes partial sums for every date. The main
+    process reduces and saves. This bounds worker memory to (n_tiles / num_workers)
+    tiles instead of having every worker cache every tile (which OOM-kills workers
+    silently and makes the pool hang).
+    """
+
+    if num_workers <= 1:
         for date in dates:
-            merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators)    
-    else:
+            merge_output_date(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, list_tile_paths=list_tile_paths)
+        return
+
+    # Fall back to old per-date pool when tiles are kept in memory (no pickle path).
+    if list_tile_paths is None:
         with mp.Pool(processes=num_workers) as pool:
             pool.starmap(
                 merge_output_date,
-                [(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators) for date in dates]
+                [(date, State, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, None) for date in dates]
             )
+        return
+
+    # Tile-partitioned design (avoids per-worker cache blow-up).
+    n_tiles = len(list_tile_paths)
+    nw = min(num_workers, n_tiles)
+
+    # Round-robin partition so workers get roughly equal load.
+    parts_paths = [[] for _ in range(nw)]
+    parts_states = [[] for _ in range(nw)]
+    for i, (p, s) in enumerate(zip(list_tile_paths, list_State)):
+        parts_paths[i % nw].append(p)
+        parts_states[i % nw].append(s)
+
+    ctx = mp.get_context('spawn')
+    task_qs = [ctx.Queue() for _ in range(nw)]
+    result_qs = [ctx.Queue() for _ in range(nw)]
+    procs = []
+    for k in range(nw):
+        p = ctx.Process(
+            target=_merge_worker_loop,
+            args=(parts_paths[k], parts_states[k], name_var_save,
+                  State.ny, State.nx, weights_space_sum,
+                  task_qs[k], result_qs[k]),
+            daemon=False,
+        )
+        p.start()
+        procs.append(p)
+
+    # Cells uncovered by any tile -> NaN in the merged output
+    no_coverage = (weights_space_sum <= 0) | ~np.isfinite(weights_space_sum)
+
+    try:
+        for date in dates:
+            for q in task_qs:
+                q.put(date)
+            dict_var = {n: np.zeros((State.ny, State.nx)) for n in name_var_save}
+            for k, q in enumerate(result_qs):
+                contrib = q.get()
+                if contrib is None:
+                    raise RuntimeError(f'merge worker {k} died on date {date}')
+                for n in name_var_save:
+                    dict_var[n] += contrib[n]
+
+            State0 = _copy.copy(State)
+            State0.var = dict(State.var)
+            for n in name_var_save:
+                dict_var[n][no_coverage] = np.nan
+                if State0.mask is not None and np.any(State0.mask):
+                    dict_var[n][State0.mask] = np.nan
+                State0.setvar(dict_var[n], n)
+            State0.save_output(date, name_var=name_var_save)
+            print(f'[parallel_merge] {date} done', flush=True)
+    finally:
+        for q in task_qs:
+            try:
+                q.put(None)
+            except Exception:
+                pass
+        for p in procs:
+            p.join(timeout=30)
+            if p.is_alive():
+                p.terminate()
+
+
+def _merge_worker_loop(tile_paths, states, name_var_save, ny, nx,
+                       weights_space_sum, task_q, result_q):
+    """Worker: load assigned tiles once, then process dates sent via task_q."""
+    try:
+        tiles = [_load_tile_weights(p) for p in tile_paths]
+    except Exception as e:
+        print(f'[merge worker] failed to load tiles: {e}', flush=True)
+        try:
+            result_q.put(None)
+        except Exception:
+            pass
+        return
+
+    # Safe inverse of weights_space_sum: 0 where there is no coverage,
+    # so the partial reductions don't produce NaN/inf. The main process
+    # marks no_coverage cells as NaN after summing.
+    no_coverage = (weights_space_sum <= 0) | ~np.isfinite(weights_space_sum)
+    inv_wsum = np.zeros_like(weights_space_sum)
+    inv_wsum[~no_coverage] = 1.0 / weights_space_sum[~no_coverage]
+
+    while True:
+        try:
+            date = task_q.get()
+        except Exception:
+            return
+        if date is None:
+            return
+
+        contrib = {n: np.zeros((ny, nx)) for n in name_var_save}
+        for tile_data, _State in zip(tiles, states):
+            _weights_space = tile_data['weights_space']
+            _interp_func = tile_data['interpolator']
+            try:
+                _ds = _State.load_output(date)
+                for name in name_var_save:
+                    _var = _ds[name].values
+                    if _var.shape == (_State.ny, _State.nx + 1):
+                        _var = 0.5 * (_var[:, :-1] + _var[:, 1:])
+                    elif _var.shape == (_State.ny + 1, _State.nx):
+                        _var = 0.5 * (_var[:-1, :] + _var[1:, :])
+                    if np.any(np.isnan(_var)):
+                        _var = _fill_nans_nearest(_var)
+                    if _interp_func is not None:
+                        _var_interp = _interp_func(_var)
+                    else:
+                        _var_interp = _var
+                    ind = ~np.isnan(_var_interp)
+                    contrib[name][ind] += (_weights_space * _var_interp * inv_wsum)[ind]
+                _ds.close()
+                del _ds
+            except Exception as e:
+                print(f'[merge worker] tile failed for {date}: {e}', flush=True)
+                continue
+
+        try:
+            result_q.put(contrib)
+        except Exception:
+            return
 
 def run_assimilation_time_window(config, date_start, date_middle, date_end, list_State, processes, 
                                  weights_space=None, weights_space_sum=None, interpolators=None,
@@ -898,13 +1144,15 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
     they are loaded from '{path_pickle}/weights.pkl'.
     """
 
+    list_tile_paths = None
+
     # Load weights and interpolators from pickle if not provided
     if weights_space is None and path_pickle is not None:
         with open(f'{path_pickle}/weights.pkl', 'rb') as f:
             data = pickle.load(f)
-        weights_space = data['weights_space']
         weights_space_sum = data['weights_space_sum']
-        interpolators = data['interpolators']
+        list_tile_paths = data.get('list_tile_paths')
+        # Per-tile weights/interpolators are loaded on-the-fly by merge_output_date
 
     ############################
     # Run subprocesses
@@ -973,7 +1221,7 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
             kernel = Gaussian2DKernel(x_stddev=1, y_stddev=1)  # Kernel to convolve output maps to replace NaN pixels close to the coast for interpolation
             list_dates = generate_dates(date_start, date_end, config.EXP.saveoutput_time_step)
             num_workers = nprocs_output if nprocs_output is not None else nprocs
-            parallel_merge(list_dates, State0, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, num_workers=num_workers)
+            parallel_merge(list_dates, State0, list_State, name_var_save, kernel, weights_space, weights_space_sum, interpolators, list_tile_paths=list_tile_paths, num_workers=num_workers)
 
         except:
             print('Unable to merge outputs')

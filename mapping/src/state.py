@@ -45,7 +45,7 @@ class State:
         self.name_exp_save = config.EXP.name_exp_save
         self.path_save = config.EXP.path_save
         self.tmp_DA_path = config.EXP.tmp_DA_path
-        if not os.path.exists(self.path_save):
+        if first and not os.path.exists(self.path_save):
             os.makedirs(self.path_save)
         self.flag_plot = config.EXP.flag_plot
 
@@ -342,10 +342,23 @@ class State:
         dlat =  np.nanmax(self.lat[1:,:] - self.lat[:-1,:])
         dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
         dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
-       
-        ds = ds.sel(
-            {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
-             name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
+
+        # If the tile extends beyond the mask file's native longitude axis
+        # (e.g. GRID_CAR pole-most row overflowing past ±180 because of the
+        # 1/cos(lat) scaling), slicing in longitude would drop the wrap region
+        # and pyinterp would return NaN there -- flagging real ocean as land.
+        # In that case, keep the full periodic axis and rely on is_circle=True.
+        ds_lon_min = float(ds[name_lon].data.min())
+        ds_lon_max = float(ds[name_lon].data.max())
+        tile_overflows_axis = (self.lon.min() < ds_lon_min - 1e-6
+                               or self.lon.max() > ds_lon_max + 1e-6)
+
+        if tile_overflows_axis:
+            ds = ds.sel({name_lat: slice(self.lat_min-dlat, self.lat_max+dlat)})
+        else:
+            ds = ds.sel(
+                {name_lon:slice(self.lon_min-dlon,self.lon_max+dlon),
+                 name_lat:slice(self.lat_min-dlat,self.lat_max+dlat)})
 
         lon = ds[name_lon].values
         lat = ds[name_lat].values
@@ -357,8 +370,10 @@ class State:
         elif len(var.shape)==3:
             mask = var[0,:,:]
         
-        # Interpolate to state grid
-        if self.lon_unit=='-180_180':
+        # Interpolate to state grid. Force a circular longitude axis whenever
+        # the tile overflows the native axis range, so pyinterp wraps queries
+        # by ±360 (otherwise out-of-range points return NaN and get masked).
+        if self.lon_unit=='-180_180' or tile_overflows_axis:
             is_circle = True
         else:
             is_circle = False

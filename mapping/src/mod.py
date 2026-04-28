@@ -4437,10 +4437,10 @@ class Model_bmit(M):
     
     def save_output(self,State,present_date,name_var=None,t=None):
 
-        name_var_to_save = [self.name_var['SSH_BM'], 
-                            self.name_var['SSH_IT'], 
-                            self.name_var['SSH'], 
-                            self.name_var['U_IT']+'_interp', 
+        name_var_to_save = [self.name_var['SSH_BM'],
+                            self.name_var['SSH_IT'],
+                            self.name_var['SSH'],
+                            self.name_var['U_IT']+'_interp',
                             self.name_var['V_IT']+'_interp',
                             'He',
                             'He_mean',
