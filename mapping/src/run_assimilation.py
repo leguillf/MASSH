@@ -274,6 +274,13 @@ def prepare_process(config, config_eq, State,
     else:
         obs_datasets_eq = _obs.open_obs_datasets(config_eq)
 
+    # Tile-level spatial cache: spatial selection is the expensive step
+    # (reads SWOT 2D lon/lat). Tile coordinates repeat across time windows,
+    # so we compute the spatial subset once per tile and reuse it for every
+    # subsequent time window — only a cheap time slice is then needed.
+    _tile_obs_cache = {}
+    _tile_obs_cache_eq = {}
+
     date1 = init_date
     i = -1
     while date1<final_date:
@@ -299,21 +306,6 @@ def prepare_process(config, config_eq, State,
         list_date_end.append(date1)
         list_date_middle.append(date0 + (date1-date0)/2)
         print(f'*** Time window: {date0} -> {date1}')
-
-        # Pre-select obs datasets in time once per time window (re-used by all
-        # spatial tiles below). This avoids xarray having to traverse the full
-        # year of timestamps inside Obs() for every tile.
-        if config.OBS is not None:
-            _tw_obs_datasets = _obs.select_obs_datasets_time(
-                obs_datasets, config, date0, date1)
-            if obs_datasets_eq is obs_datasets:
-                _tw_obs_datasets_eq = _tw_obs_datasets
-            else:
-                _tw_obs_datasets_eq = _obs.select_obs_datasets_time(
-                    obs_datasets_eq, config_eq, date0, date1)
-        else:
-            _tw_obs_datasets = {}
-            _tw_obs_datasets_eq = {}
 
         iproc_tw = 0
         _prev_lat_band = None
@@ -459,7 +451,22 @@ def prepare_process(config, config_eq, State,
                 # Select obs over the tile from the pre-opened global datasets,
                 # write the per-tile cache, and disable recomputation in subprocesses.
                 if config.OBS is not None:
-                    _tile_datasets = _tw_obs_datasets_eq if (is_eq or (lat0 < 0 and lat1 > 0)) else _tw_obs_datasets
+                    _is_eq_tile = is_eq or (lat0 < 0 and lat1 > 0)
+                    _global_ds = obs_datasets_eq if _is_eq_tile else obs_datasets
+                    _spatial_cache = _tile_obs_cache_eq if _is_eq_tile else _tile_obs_cache
+                    _config_for_obs = config_eq if _is_eq_tile else config
+                    # Cache key: tile midpoint (same coords across time windows)
+                    _tile_key = (round((lon0 + lon1) / 2, 6),
+                                 round((lat0 + lat1) / 2, 6))
+                    if _tile_key not in _spatial_cache:
+                        _bbox_tile = _obs.compute_bbox(_config, _State)
+                        _spatial_cache[_tile_key] = _obs.select_obs_datasets_space(
+                            _global_ds, _config_for_obs, _bbox_tile,
+                            lon_unit=_State.lon_unit)
+                    _tile_spatial_ds = _spatial_cache[_tile_key]
+                    # Time-slice the (already small) per-tile dataset for this window
+                    _tile_datasets = _obs.select_obs_datasets_time(
+                        _tile_spatial_ds, _config_for_obs, date0, date1)
                     _config.EXP = _config.EXP.copy()
                     _config.EXP.write_obs = True
                     _obs.Obs(_config, _State, obs_datasets=_tile_datasets)
@@ -521,6 +528,8 @@ def prepare_process(config, config_eq, State,
                 pass
         if _ds_dict is obs_datasets_eq and obs_datasets_eq is obs_datasets:
             break
+    _tile_obs_cache.clear()
+    _tile_obs_cache_eq.clear()
 
     # Save global pickles
     if path_save_pickle is not None:

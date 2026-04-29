@@ -151,6 +151,96 @@ def select_obs_datasets_time(obs_datasets, config, date_start, date_end):
     return out
 
 
+def _lon_convert_mode(ds, OBS, lon_unit):
+    """Decide whether to convert longitudes to 0..360 or -180..180.
+
+    The lon min/max are computed lazily once per ds and cached on ds.attrs
+    (so SWOT 2D lon is streamed only the first time).
+    Returns one of '0_360', '-180_180', or None.
+    """
+    if '_lon_min_cached' not in ds.attrs:
+        try:
+            ds.attrs['_lon_min_cached'] = float(ds[OBS.name_lon].min().compute())
+            ds.attrs['_lon_max_cached'] = float(ds[OBS.name_lon].max().compute())
+        except Exception:
+            ds.attrs['_lon_min_cached'] = 0.0
+            ds.attrs['_lon_max_cached'] = 0.0
+    lmin = ds.attrs['_lon_min_cached']
+    lmax = ds.attrs['_lon_max_cached']
+    if np.sign(lmin) == -1 and lon_unit == '0_360':
+        return '0_360'
+    if (np.sign(lmin) >= 0 or lmax > 180) and lon_unit == '-180_180':
+        return '-180_180'
+    return None
+
+
+def select_obs_datasets_space(obs_datasets, config, bbox, lon_unit='0_360'):
+    """Restrict each obs dataset to a lon/lat bbox, lazily.
+
+    For 2D coords (e.g. SWOT swath), the bbox mask is reduced to the time
+    dim and applied via isel — this keeps the per-pixel arrays lazy and
+    avoids the where(drop=True) deep-copy that caused 50 GiB OOMs.
+    For 1D coords, the standard where(drop=True) is used.
+    Returns a new dict {name_obs: ds_subset}.
+    """
+    if obs_datasets is None or len(obs_datasets) == 0:
+        return {}
+    out = {}
+    for name_obs, ds in obs_datasets.items():
+        OBS = config.OBS[name_obs]
+        # Pick a lon view that matches the requested unit (lazy, no full read)
+        convert = _lon_convert_mode(ds, OBS, lon_unit)
+        lon_raw = ds[OBS.name_lon]
+        if convert == '0_360':
+            lon_for_mask = lon_raw % 360
+        elif convert == '-180_180':
+            lon_for_mask = (lon_raw + 180) % 360 - 180
+        else:
+            lon_for_mask = lon_raw
+        lat = ds[OBS.name_lat]
+        bbox_mask = ((bbox[0] <= lon_for_mask) & (bbox[1] >= lon_for_mask) &
+                     (bbox[2] <= lat) & (bbox[3] >= lat))
+        # Time dim
+        time_arr = ds[OBS.name_time]
+        time_dim = time_arr.dims[0] if time_arr.ndim >= 1 else OBS.name_time
+        reduce_dims = [d for d in bbox_mask.dims if d != time_dim]
+        if reduce_dims:
+            time_mask = bbox_mask.any(dim=reduce_dims).compute()
+            ds_sel = ds.isel({time_dim: time_mask.values})
+        else:
+            ds_sel = ds.where(bbox_mask.compute(), drop=True)
+        out[name_obs] = ds_sel
+    return out
+
+
+def compute_bbox(config, State):
+    """Replicate the bbox computation done inside Obs() (with 2*d{lon,lat} pad).
+
+    Used by callers that want to pre-select obs datasets over a tile before
+    invoking Obs().
+    """
+    if config.EXP.lon_obs_min is not None:
+        lon_obs_min = config.EXP.lon_obs_min
+    else:
+        lon_obs_min = State.lon_min
+    if config.EXP.lon_obs_max is not None:
+        lon_obs_max = config.EXP.lon_obs_max
+    else:
+        lon_obs_max = State.lon_max
+    if config.EXP.lat_obs_min is not None:
+        lat_obs_min = config.EXP.lat_obs_min
+    else:
+        lat_obs_min = State.lat_min
+    if config.EXP.lat_obs_max is not None:
+        lat_obs_max = config.EXP.lat_obs_max
+    else:
+        lat_obs_max = State.lat_max
+    dlon = np.nanmax(State.lon[:, 1:] - State.lon[:, :-1])
+    dlat = np.nanmax(State.lat[1:, :] - State.lat[:-1, :])
+    return [lon_obs_min - 2 * dlon, lon_obs_max + 2 * dlon,
+            lat_obs_min - 2 * dlat, lat_obs_max + 2 * dlat]
+
+
 def Obs(config, State, obs_datasets=None, *args, **kwargs):
     """
     NAME
