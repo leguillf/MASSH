@@ -21,7 +21,7 @@ from cartopy.feature import ShapelyFeature
 from shapely.geometry import Polygon
 import xarray as xr
 
-from . import exp, grid, state, mod, inv, diag
+from . import exp, grid, state, mod, inv, diag, obs as _obs
 from .tools import gaspari_cohn
 
 os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
@@ -267,6 +267,13 @@ def prepare_process(config, config_eq, State,
 
     lat_bands.sort(key=lambda x: x[0])
 
+    # Open obs datasets once over the full domain. They are reused per tile.
+    obs_datasets = _obs.open_obs_datasets(config)
+    if config_eq is config:
+        obs_datasets_eq = obs_datasets
+    else:
+        obs_datasets_eq = _obs.open_obs_datasets(config_eq)
+
     date1 = init_date
     i = -1
     while date1<final_date:
@@ -434,6 +441,18 @@ def prepare_process(config, config_eq, State,
                 if not os.path.exists(_config.EXP.path_save):
                     os.makedirs(_config.EXP.path_save)
 
+                # Select obs over the tile from the pre-opened global datasets,
+                # write the per-tile cache, and disable recomputation in subprocesses.
+                if config.OBS is not None:
+                    _tile_datasets = obs_datasets_eq if (is_eq or (lat0 < 0 and lat1 > 0)) else obs_datasets
+                    _config.EXP = _config.EXP.copy()
+                    _config.EXP.write_obs = True
+                    _obs.Obs(_config, _State, obs_datasets=_tile_datasets)
+                    _config.EXP.compute_obs = False
+                    if hasattr(_config, 'OBSOP') and _config.OBSOP is not None:
+                        _config.OBSOP = _config.OBSOP.copy()
+                        _config.OBSOP.compute_op = False
+
                 # Save pickle files for each subwindow
                 if dir_save_pickle is not None:
                     path_pickle = f'{path_save_pickle}/{name_subwindow}'
@@ -475,6 +494,18 @@ def prepare_process(config, config_eq, State,
             plot_weights(State, weights_space_sum)
 
     print(f'Number of tiles: {iproc} ({iproc_tw} per time window)')
+
+    # Close pre-opened obs datasets
+    for _ds_dict in (obs_datasets, obs_datasets_eq):
+        if _ds_dict is None:
+            continue
+        for _name, _ds in list(_ds_dict.items()):
+            try:
+                _ds.close()
+            except Exception:
+                pass
+        if _ds_dict is obs_datasets_eq and obs_datasets_eq is obs_datasets:
+            break
 
     # Save global pickles
     if path_save_pickle is not None:

@@ -17,7 +17,107 @@ import glob
 from .tools import detrendn, read_auxdata
 from .exp import Config
 
-def Obs(config, State, *args, **kwargs):
+
+def _open_obs_dataset(name_obs, OBS):
+    """Open the multi-file dataset for one OBS block.
+
+    Tries the fast path first (combine='nested' + parallel=True with preprocess),
+    then falls back to no-preprocess, and finally to combine='by_coords'.
+    Returns the opened dataset or None if all attempts failed.
+    """
+
+    def preprocess(ds):
+        name_var = [OBS.name_time, OBS.name_lon, OBS.name_lat]
+        for key in OBS.name_var:
+            if isinstance(OBS.name_var[key], list):
+                for name in OBS.name_var[key]:
+                    name_var.append(name)
+            else:
+                name_var.append(OBS.name_var[key])
+        ds = ds[name_var]
+        return ds
+
+    if '.nc' in OBS.path and '*' not in OBS.path:
+        try:
+            return xr.open_dataset(OBS.path)
+        except Exception:
+            print(f'[{name_obs}] Error: unable to open {OBS.path}')
+            return None
+
+    if '*' in OBS.path:
+        path = OBS.path
+    else:
+        path = f'{OBS.path}*.nc'
+
+    files = sorted(glob.glob(path))
+    if len(files) == 0:
+        print(f'[{name_obs}] Warning: no files matching {path}')
+        return None
+
+    # Get time dim name from first file (cheap)
+    try:
+        _ds0 = xr.open_dataset(files[0])
+        name_time_dim = _ds0[OBS.name_time].dims[0]
+        _ds0.close()
+    except Exception:
+        name_time_dim = None
+
+    # Try combine='nested' with preprocess + parallel (fast path)
+    if name_time_dim is not None:
+        try:
+            return xr.open_mfdataset(
+                files, combine='nested', concat_dim=name_time_dim,
+                preprocess=preprocess, compat='override', coords='minimal',
+                parallel=True)
+        except Exception:
+            pass
+
+        # Try combine='nested' without preprocess
+        try:
+            return xr.open_mfdataset(
+                files, combine='nested', concat_dim=name_time_dim,
+                compat='override', coords='minimal', parallel=True)
+        except Exception:
+            pass
+
+    # Last resort: by_coords
+    try:
+        return xr.open_mfdataset(
+            files, preprocess=preprocess, compat='override', coords='minimal')
+    except Exception:
+        try:
+            return xr.open_mfdataset(files, compat='override', coords='minimal')
+        except Exception:
+            print(f'[{name_obs}] Error: unable to open multiple netcdf files')
+            return None
+
+
+def open_obs_datasets(config):
+    """Open all OBS datasets declared in config once, lazily.
+
+    Eagerly loads only the time/lon/lat coordinate arrays so that bbox masks
+    can be built per tile without re-reading them from disk.
+    Returns a dict {name_obs: xarray.Dataset} (or empty dict if config.OBS is None).
+    """
+    if config.OBS is None:
+        return {}
+    datasets = {}
+    for name_obs, OBS in config.OBS.items():
+        print(f'Opening obs dataset: {name_obs}')
+        ds = _open_obs_dataset(name_obs, OBS)
+        if ds is None:
+            continue
+        # Eagerly load coordinate arrays used to build per-tile masks
+        for cname in (OBS.name_time, OBS.name_lon, OBS.name_lat):
+            try:
+                ds[cname].load()
+            except Exception:
+                pass
+        datasets[name_obs] = ds
+    return datasets
+
+
+def Obs(config, State, obs_datasets=None, *args, **kwargs):
     """
     NAME
         obs
@@ -103,53 +203,21 @@ def Obs(config, State, *args, **kwargs):
     for name_obs, OBS in config.OBS.items():
 
         print(f'\n{name_obs}:\n{OBS}')
-        
-        # Preprocessing function to select only variables of interest
-        def preprocess(ds):
-            name_var = [OBS.name_time, OBS.name_lon, OBS.name_lat]
-            for key in OBS.name_var:
-                if isinstance(OBS.name_var[key], list):
-                    for name in OBS.name_var[key]:
-                        name_var.append(name)
-                else:
-                    name_var.append(OBS.name_var[key])
-            ds = ds[name_var]
-            return ds
-        
-        # Read observation files
-        if '.nc' in OBS.path and '*' not in OBS.path:
-            _ds = xr.open_dataset(OBS.path)
+
+        # Reuse pre-opened dataset if provided, otherwise open here
+        _close_after = False
+        if obs_datasets is not None and name_obs in obs_datasets:
+            _ds = obs_datasets[name_obs]
         else:
-            if '*' in OBS.path:
-                path = OBS.path
-            else:
-                path = f'{OBS.path}*.nc'    
-            try:
-                _ds = xr.open_mfdataset(path,preprocess=preprocess,compat='override',coords='minimal')
-            except:
-                try: 
-                    print('opening without preprocess')
-                    _ds = xr.open_mfdataset(path,compat='override',coords='minimal')
-                except: 
-                    try:
-                        print('opening with combine==nested')
-                        files = glob.glob(path)
-                        # Get time dimension to concatenate
-                        if len(files)==0:
-                            continue
-                        _ds0 = xr.open_dataset(files[0])
-                        name_time_dim = _ds0[OBS.name_time].dims[0]
-                        _ds0.close()
-                        # Open nested files
-                        _ds = xr.open_mfdataset(path,combine='nested',concat_dim=name_time_dim,preprocess=preprocess,compat='override',coords='minimal')
-                    except:
-                        print('Error: unable to open multiple netcdf files')
-                        continue
-        
-        # Copy and close dataset
+            _ds = _open_obs_dataset(name_obs, OBS)
+            _close_after = True
+            if _ds is None:
+                continue
+
+        # Shallow copy (do NOT load() — let _obs_alti / _obs_l4 select the bbox first)
         ds = _ds.copy()
-        _ds.close()
-        ds = ds.load()
+        if _close_after:
+            _ds.close()
         
         # Name of obs files
         out_name = f'obs_{box}_{int(config.EXP.assimilation_time_step.total_seconds())}'
@@ -195,10 +263,20 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
         ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
     
     # Select sub area
-    lon_obs = ds[obs_attr.name_lon] 
+    lon_obs = ds[obs_attr.name_lon]
     lat_obs = ds[obs_attr.name_lat]
-    ds = ds.where(((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
-                  (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs)).compute(), drop=True)
+    bbox_mask = ((bbox[0] <= lon_obs) & (bbox[1] >= lon_obs) &
+                 (bbox[2] <= lat_obs) & (bbox[3] >= lat_obs))
+    # For swath data (2D lon/lat), reduce mask to the time dim and use isel,
+    # to avoid xr.where(drop=True) deep-copying the full per-pixel arrays
+    # (which can require tens of GiB for global SWOT).
+    _reduce_dims = [d for d in bbox_mask.dims if d != obs_attr.name_time]
+    if _reduce_dims:
+        time_mask = bbox_mask.any(dim=_reduce_dims).compute()
+        ds = ds.isel({obs_attr.name_time: time_mask.values})
+    else:
+        ds = ds.where(bbox_mask.compute(), drop=True)
+    ds = ds.load()
     # MDT 
     if True in [obs_attr.add_mdt, obs_attr.substract_mdt]:
         finterpmdt = read_auxdata(obs_attr.path_mdt, obs_attr.name_var_mdt, lon_unit)
@@ -350,6 +428,7 @@ def _obs_l4(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, ou
     lat_obs = ds[obs_attr.name_lat]
     ds = ds.where(((bbox[0]<=lon_obs) & (bbox[1]>=lon_obs) & 
                   (bbox[2]<=lat_obs) & (bbox[3]>=lat_obs)).compute(), drop=True)
+    ds = ds.load()
 
     lon_obs = ds[obs_attr.name_lon].values
     lat_obs = ds[obs_attr.name_lat].values
