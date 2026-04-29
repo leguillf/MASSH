@@ -6,6 +6,10 @@ Created on Wed Jan  6 20:15:09 2021
 @author: leguillou
 """
 import os, sys
+# Disable HDF5 file locking BEFORE importing xarray/netCDF4. On shared
+# filesystems (NFS/Lustre) concurrent reads from sibling subprocesses can
+# raise "NetCDF: Not a valid ID" otherwise.
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 import xarray as xr
 import numpy as np
 
@@ -150,13 +154,14 @@ def _open_obs_dataset(name_obs, OBS, date_start=None, date_end=None):
     except Exception:
         name_time_dim = None
 
-    # Try combine='nested' with preprocess + parallel (fast path)
+    # Try combine='nested' with preprocess (serial open: parallel=True triggers
+    # a libnetcdf assertion `nc4_nc4f_list_add` with non-thread-safe builds).
     if name_time_dim is not None:
         try:
             return xr.open_mfdataset(
                 files, combine='nested', concat_dim=name_time_dim,
                 preprocess=preprocess, compat='override', coords='minimal',
-                parallel=True)
+                parallel=False)
         except Exception:
             pass
 
@@ -164,7 +169,7 @@ def _open_obs_dataset(name_obs, OBS, date_start=None, date_end=None):
         try:
             return xr.open_mfdataset(
                 files, combine='nested', concat_dim=name_time_dim,
-                compat='override', coords='minimal', parallel=True)
+                compat='override', coords='minimal', parallel=False)
         except Exception:
             pass
 

@@ -1,4 +1,8 @@
 import os
+# Disable HDF5 file locking BEFORE any xarray/netCDF4 import. On shared
+# filesystems (NFS/Lustre) concurrent reads from sibling subprocesses can
+# raise "NetCDF: Not a valid ID" otherwise.
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 import sys
 import glob
 import copy as _copy
@@ -13,6 +17,7 @@ from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
 from datetime import timedelta
 from functools import partial
 from concurrent.futures import ThreadPoolExecutor
+import threading
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -24,8 +29,6 @@ import xarray as xr
 
 from . import exp, grid, state, mod, inv, diag, obs as _obs
 from .tools import gaspari_cohn
-
-os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
 
 
 def prepare_process(config, config_eq, State, 
@@ -42,6 +45,7 @@ def prepare_process(config, config_eq, State,
                     name_exp_init=None, name_exp_background=None,
                     gpu_devices=['0'],
                     obs_max_workers=None,
+                    read_obs=False,
                     dir_save_pickle=None):
     """
     Prepare subprocesses for assimilation in subwindows in time and space.
@@ -134,6 +138,13 @@ def prepare_process(config, config_eq, State,
         netcdf reads via xarray) is parallelized across that many threads per
         time window. Threads are used (not processes) so that the lazy global
         xarray datasets are shared cheaply. Default None = serial.
+    read_obs : bool, optional
+        If True (default), observation files are opened, filtered by the
+        experiment time range, and a per-tile dict_obs is built before the
+        subprocesses run. If False, the obs opening and per-tile selection
+        are skipped entirely — useful for re-running an experiment that
+        already has its dict_obs / per-tile obs files cached on disk
+        (set together with config.EXP.compute_obs=False / write_obs=True).
     dir_save_pickle : str, optional
         If provided, save pickle files (config and state) for each subwindow
         to this directory. The directory structure will mirror the subwindow layout.
@@ -277,23 +288,31 @@ def prepare_process(config, config_eq, State,
     # Open obs datasets once over the full domain. They are reused per tile.
     # Filter input files by filename-encoded date so we only open what falls
     # within the experiment time range [init_date, final_date].
-    obs_datasets = _obs.open_obs_datasets(config,
-                                          date_start=init_date,
-                                          date_end=final_date)
-    # Reuse for config_eq when the OBS block is the same (same object or
-    # equal dict) to avoid opening every file a second time.
+    # When read_obs=False, skip the (potentially expensive) opening entirely
+    # and rely on previously cached dict_obs / obs files on disk.
     _same_obs = config_eq is config or getattr(config_eq, 'OBS', None) is getattr(config, 'OBS', None)
     if not _same_obs:
         try:
             _same_obs = getattr(config_eq, 'OBS', None) == getattr(config, 'OBS', None)
         except Exception:
             _same_obs = False
-    if _same_obs:
-        obs_datasets_eq = obs_datasets
+    if not read_obs:
+        print('[run_assimilation] read_obs=False: skipping obs dataset opening '
+              'and per-tile obs selection (using cached dict_obs if available).')
+        obs_datasets = {}
+        obs_datasets_eq = {}
     else:
-        obs_datasets_eq = _obs.open_obs_datasets(config_eq,
-                                                 date_start=init_date,
-                                                 date_end=final_date)
+        obs_datasets = _obs.open_obs_datasets(config,
+                                              date_start=init_date,
+                                              date_end=final_date)
+        # Reuse for config_eq when the OBS block is the same (same object or
+        # equal dict) to avoid opening every file a second time.
+        if _same_obs:
+            obs_datasets_eq = obs_datasets
+        else:
+            obs_datasets_eq = _obs.open_obs_datasets(config_eq,
+                                                     date_start=init_date,
+                                                     date_end=final_date)
 
     # Tile-level spatial cache: spatial selection is the expensive step
     # (reads SWOT 2D lon/lat). Tile coordinates repeat across time windows,
@@ -301,6 +320,13 @@ def prepare_process(config, config_eq, State,
     # subsequent time window — only a cheap time slice is then needed.
     _tile_obs_cache = {}
     _tile_obs_cache_eq = _tile_obs_cache if _same_obs else {}
+    # netCDF4 (the default xarray engine) is NOT thread-safe: concurrent
+    # .compute() / .load() on datasets backed by the same file handle raises
+    # "NetCDF: Not a valid ID". Serialize all netCDF I/O across worker
+    # threads. Per-tile spatial selection still benefits from the
+    # ThreadPoolExecutor for Python-level overhead (mask building, Obs()
+    # bookkeeping), but file reads themselves run one at a time.
+    _nc_lock = threading.Lock()
 
     # =====================================================================
     # 1) Build tile geometry templates ONCE (lon/lat tiling is identical
@@ -420,15 +446,17 @@ def prepare_process(config, config_eq, State,
         _global_ds = obs_datasets_eq if is_eq_tile else obs_datasets
         _spatial_cache = _tile_obs_cache_eq if is_eq_tile else _tile_obs_cache
         _config_for_obs = config_eq if is_eq_tile else config
-        if tile_idx not in _spatial_cache:
-            _bbox_tile = _obs.compute_bbox(_config, _State)
-            _spatial_cache[tile_idx] = _obs.select_obs_datasets_space(
-                _global_ds, _config_for_obs, _bbox_tile,
-                lon_unit=_State.lon_unit)
-        spatial_ds = _spatial_cache[tile_idx]
-        tile_ds = _obs.select_obs_datasets_time(
-            spatial_ds, _config_for_obs, date0, date1)
-        _obs.Obs(_config, _State, obs_datasets=tile_ds)
+        # Serialize all netCDF reads (.compute() / .load()) — see _nc_lock note.
+        with _nc_lock:
+            if tile_idx not in _spatial_cache:
+                _bbox_tile = _obs.compute_bbox(_config, _State)
+                _spatial_cache[tile_idx] = _obs.select_obs_datasets_space(
+                    _global_ds, _config_for_obs, _bbox_tile,
+                    lon_unit=_State.lon_unit)
+            spatial_ds = _spatial_cache[tile_idx]
+            tile_ds = _obs.select_obs_datasets_time(
+                spatial_ds, _config_for_obs, date0, date1)
+            _obs.Obs(_config, _State, obs_datasets=tile_ds)
 
     date1 = init_date
     i = -1
@@ -531,7 +559,7 @@ def prepare_process(config, config_eq, State,
             window_configs.append((tile_idx, tpl, _config, tpl['state']))
 
         # ---- Parallel obs selection across tiles for this time window ----
-        if config.OBS is not None and len(window_configs) > 0:
+        if read_obs and config.OBS is not None and len(window_configs) > 0:
             if obs_max_workers is None or obs_max_workers <= 1:
                 for tile_idx, tpl, _config, _State in window_configs:
                     _select_tile_obs(tile_idx, tpl, _config, _State, date0, date1)

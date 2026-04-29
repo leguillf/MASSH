@@ -7,6 +7,11 @@ Created on Tue Jul 28 14:49:01 2020
 """
 from .config import USE_FLOAT64
 import os,sys
+# Disable HDF5 file locking BEFORE importing xarray/netCDF4 — spawn worker
+# subprocesses re-import this module and would otherwise hit
+# "NetCDF: Not a valid ID" on shared filesystems when several tiles read
+# the same obs files concurrently.
+os.environ.setdefault("HDF5_USE_FILE_LOCKING", "FALSE")
 import xarray as xr 
 import numpy as np 
 from src import grid as grid
@@ -25,6 +30,21 @@ import jax
 
 jax.config.update("jax_enable_x64", USE_FLOAT64)
 
+
+def _open_obs_file(path, _retries=4, _sleep=0.5):
+    """xr.open_dataset with retry, to absorb transient HDF5/netCDF read
+    failures ('NetCDF: Not a valid ID') that can occur when many sibling
+    subprocesses read the same files from a shared filesystem.
+    """
+    import time as _time
+    last_exc = None
+    for _i in range(_retries):
+        try:
+            return xr.open_dataset(path)
+        except Exception as e:
+            last_exc = e
+            _time.sleep(_sleep * (2 ** _i))
+    raise last_exc
 
 
 def Obsop(config, State, dict_obs, Model, verbose=1, *args, **kwargs):
@@ -118,9 +138,11 @@ class Obsop_interp:
 
         # Mask land
         if State.mask is not None:
-            self.ind_mask = np.where(State.mask)[1]
+            # Flattened indices (matching the ravel order of self.coords_geo)
+            # so they can be compared against ind_closest from cdist.
+            self.ind_mask = set(np.flatnonzero(State.mask.ravel()).tolist())
         else:
-            self.ind_mask = []
+            self.ind_mask = set()
         
         # Mask boundary pixels
         self.ind_borders = []
@@ -258,7 +280,7 @@ class Obsop_interp_l3(Obsop_interp):
                 ####################
                 # Merge observations
                 ####################
-                with xr.open_dataset(obs_file) as ncin:
+                with _open_obs_file(obs_file) as ncin:
                     lon = ncin[sat_info['name_lon']].values.ravel() 
                     lat = ncin[sat_info['name_lat']].values.ravel()
 
@@ -515,7 +537,7 @@ class Obsop_interp_l3_jax(Obsop_interp):
                 if obs_name not in self.name_obs:
                     continue
 
-                with xr.open_dataset(obs_file) as ncin:
+                with _open_obs_file(obs_file) as ncin:
 
                     lon = ncin[sat_info['name_lon']].values
                     lat = ncin[sat_info['name_lat']].values
@@ -772,7 +794,7 @@ class Obsop_interp_l4(Obsop_interp):
 
                 try:
                 
-                    with xr.open_dataset(obs_file) as ncin:
+                    with _open_obs_file(obs_file) as ncin:
 
                         lon = ncin[sat_info['name_lon']].values
                         lat = ncin[sat_info['name_lat']].values
