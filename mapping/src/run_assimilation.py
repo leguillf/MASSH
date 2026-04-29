@@ -12,6 +12,7 @@ from astropy.convolution import Gaussian2DKernel
 from astropy.convolution import Gaussian2DKernel, interpolate_replace_nans
 from datetime import timedelta
 from functools import partial
+from concurrent.futures import ThreadPoolExecutor
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
@@ -40,6 +41,7 @@ def prepare_process(config, config_eq, State,
                     flag_assim=True, flag_assim_restart=False,
                     name_exp_init=None, name_exp_background=None,
                     gpu_devices=['0'],
+                    obs_max_workers=None,
                     dir_save_pickle=None):
     """
     Prepare subprocesses for assimilation in subwindows in time and space.
@@ -127,6 +129,11 @@ def prepare_process(config, config_eq, State,
         Name of a previous experiment to use as background (used when flag_background is True).
     gpu_devices : list of str, optional
         List of GPU device IDs to distribute subprocesses across (default: ['0']).
+    obs_max_workers : int, optional
+        If set to a value > 1, the per-tile observation selection (which involves
+        netcdf reads via xarray) is parallelized across that many threads per
+        time window. Threads are used (not processes) so that the lazy global
+        xarray datasets are shared cheaply. Default None = serial.
     dir_save_pickle : str, optional
         If provided, save pickle files (config and state) for each subwindow
         to this directory. The directory structure will mirror the subwindow layout.
@@ -289,21 +296,148 @@ def prepare_process(config, config_eq, State,
     _tile_obs_cache = {}
     _tile_obs_cache_eq = _tile_obs_cache if _same_obs else {}
 
+    # =====================================================================
+    # 1) Build tile geometry templates ONCE (lon/lat tiling is identical
+    #    across time windows). For each tile we keep:
+    #      - the State object (geometry only, shared across time windows)
+    #      - a "geometry config" with lon/lat/grid set but no time/path mutations
+    #      - the parent config (config or config_eq) for downstream lookups
+    # =====================================================================
+    tile_templates = []
+    _prev_lat_band = None
+    for lat0, lat1, _ny, _nx_proc_band, _space_x_band, is_eq in lat_bands:
+        if lat1 < config.GRID.lat_min:
+            continue
+        _grid_type_config = grid_type_eq if is_eq else grid_type
+        flag_avoid_next_window = False
+        n_wx = 0
+        lon1 = config.GRID.lon_min
+        while lon1 < config.GRID.lon_max and not flag_avoid_next_window:
+            _nx = _nx_proc_band
+            if _space_x_band is not None:
+                if _grid_type_config == 'GRID_GEO':
+                    lon0 = config.GRID.lon_min + n_wx * (_space_x_band - space_overlap_x)
+                    lon1 = lon0 + _space_x_band
+                    if lon0 + _space_x_band/2 > config.GRID.lon_max:
+                        lon1 = lon0 + _space_x_band/2
+                    n_wx += 1
+                else:
+                    if n_wx == 0:
+                        lon0 = config.GRID.lon_min
+                    else:
+                        if lat0 > 0:
+                            lon0 = lon_prev[0, -1] - space_overlap_x
+                        else:
+                            lon0 = lon_prev[-1, -1] - space_overlap_x
+                    lon1 = lon0 + _space_x_band
+                    _nx = _nx_proc_band
+                    if lon0 + _space_x_band/2 > config.GRID.lon_max:
+                        lon1 = lon0 + _space_x_band/2
+                        if _nx_proc_band is not None:
+                            _nx = int(_nx_proc_band/2)
+                    n_wx += 1
+            else:
+                lon0 = config.GRID.lon_min
+                lon1 = config.GRID.lon_max
+                _nx = _nx_proc_band
+
+            is_eq_tile = is_eq or (lat0 < 0 and lat1 > 0)
+            parent_config = config_eq if is_eq_tile else config
+
+            # Geometry-only config (no time / no path mutations yet)
+            tpl_cfg = parent_config.copy()
+            tpl_cfg.EXP = tpl_cfg.EXP.copy()
+            tpl_cfg.GRID = tpl_cfg.GRID.copy()
+            tpl_cfg.MOD = tpl_cfg.MOD.copy()
+            tpl_cfg.INV = tpl_cfg.INV.copy()
+            tpl_cfg.GRID.lon_min = lon0
+            tpl_cfg.GRID.lon_max = lon1
+            tpl_cfg.GRID.lat_min = lat0
+            tpl_cfg.GRID.lat_max = lat1
+            if _grid_type_config == 'GRID_GEO':
+                tpl_cfg.GRID.super = 'GRID_GEO'
+                tpl_cfg.GRID.dlon = dlon
+                tpl_cfg.GRID.dlat = dlat
+            else:
+                tpl_cfg.GRID.super = 'GRID_CAR'
+                tpl_cfg.GRID.nx = _nx
+                tpl_cfg.GRID.ny = _ny
+                tpl_cfg.GRID.dx = dx
+                tpl_cfg.GRID.dy = dy
+
+            _State = state.State(tpl_cfg, verbose=0)
+
+            if np.any(_State.lon.max() > config.GRID.lon_max):
+                if (((lat0 + lat1) / 2 < 0 and np.any(_State.lon[-1] > config.GRID.lon_max))
+                        or ((lat0 + lat1) / 2 > 0 and np.any(_State.lon[0] > config.GRID.lon_max))):
+                    flag_avoid_next_window = True
+
+            lon_prev = +_State.lon
+            if _State.lon.min() < -180 or _State.lon.max() > 180:
+                _State.lon = _State.lon % 360
+                _State.lon_min = _State.lon.min()
+                _State.lon_max = _State.lon.max()
+                _State.lon_unit = '0_360'
+
+            tile_geom_name = f'subwindow_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
+
+            if (lat0, lat1) != _prev_lat_band:
+                eq_tag = ' [EQ]' if is_eq else ''
+                print(f'\t ** Latitudes from {lat0:.2f} to {lat1:.2f} [{_ny}x{_nx}]{eq_tag}')
+                _prev_lat_band = (lat0, lat1)
+            print(f'\t\t * Longitudes from {lon0:.2f} to {lon1:.2f}')
+            list_lonlat.append(((lon1 + lon0) / 2, (lat1 + lat0) / 2))
+
+            tile_templates.append({
+                'lon0': lon0, 'lon1': lon1, 'lat0': lat0, 'lat1': lat1,
+                'is_eq': is_eq_tile,
+                'tpl_cfg': tpl_cfg,
+                'parent_config': parent_config,
+                'state': _State,
+                'geom_name': tile_geom_name,
+                # Original (un-mutated) parent paths used to derive per-window paths
+                'orig_tmp_DA_path': parent_config.EXP.tmp_DA_path,
+                'orig_path_save': parent_config.EXP.path_save,
+                'orig_path_save_control_vectors': parent_config.INV.path_save_control_vectors,
+                'orig_path_background': parent_config.INV.path_background,
+            })
+    n_tiles = len(tile_templates)
+    print(f'Number of spatial tiles per time window: {n_tiles}')
+
+    # =====================================================================
+    # 2) Time loop: build per-window configs by cloning tile templates,
+    #    then run obs selection for all tiles of this window in parallel.
+    # =====================================================================
+    def _select_tile_obs(tile_idx, tpl, _config, _State, date0, date1):
+        """Per-tile obs selection (called from a thread pool)."""
+        is_eq_tile = tpl['is_eq']
+        _global_ds = obs_datasets_eq if is_eq_tile else obs_datasets
+        _spatial_cache = _tile_obs_cache_eq if is_eq_tile else _tile_obs_cache
+        _config_for_obs = config_eq if is_eq_tile else config
+        if tile_idx not in _spatial_cache:
+            _bbox_tile = _obs.compute_bbox(_config, _State)
+            _spatial_cache[tile_idx] = _obs.select_obs_datasets_space(
+                _global_ds, _config_for_obs, _bbox_tile,
+                lon_unit=_State.lon_unit)
+        spatial_ds = _spatial_cache[tile_idx]
+        tile_ds = _obs.select_obs_datasets_time(
+            spatial_ds, _config_for_obs, date0, date1)
+        _obs.Obs(_config, _State, obs_datasets=tile_ds)
+
     date1 = init_date
     i = -1
-    while date1<final_date:
-
+    while date1 < final_date:
         i += 1
-        if flag_init_from_previous or i==0:
+        if flag_init_from_previous or i == 0:
             list_processes.append([])
         list_config.append([])
         list_State.append([])
 
-        # compute subwindow time period
+        # subwindow time period
         if time_window_size_proc is not None:
             time_delta = timedelta(days=time_window_size_proc)
             date0 = init_date + n_wt * (time_delta - timedelta(days=time_overlap))
-            delta_t = (date0 - init_date) %  config.EXP.saveoutput_time_step
+            delta_t = (date0 - init_date) % config.EXP.saveoutput_time_step
             date0 += delta_t
             date1 = min(date0 + time_delta, final_date)
             n_wt += 1
@@ -312,209 +446,142 @@ def prepare_process(config, config_eq, State,
             date1 = final_date
         list_date_start.append(date0)
         list_date_end.append(date1)
-        list_date_middle.append(date0 + (date1-date0)/2)
+        list_date_middle.append(date0 + (date1 - date0) / 2)
+        date_middle_str = str(list_date_middle[-1])[:10]
         print(f'*** Time window: {date0} -> {date1}')
 
+        # Build per-window configs from tile templates
+        window_configs = []
+        for tile_idx, tpl in enumerate(tile_templates):
+            _config = tpl['tpl_cfg'].copy()
+            _config.EXP = _config.EXP.copy()
+            _config.GRID = _config.GRID.copy()
+            _config.MOD = _config.MOD.copy()
+            _config.INV = _config.INV.copy()
+            _config.EXP.init_date = date0
+            _config.EXP.final_date = date1
+
+            name_subwindow = f'subwindow_{date_middle_str}/{tpl["geom_name"]}'
+            _config.EXP.tmp_DA_path = f'{tpl["orig_tmp_DA_path"]}/{name_subwindow}'
+            _config.EXP.path_save = f'{tpl["orig_path_save"]}/{name_subwindow}'
+            if tpl['orig_path_save_control_vectors'] is not None:
+                _config.INV.path_save_control_vectors = (
+                    f'{tpl["orig_path_save_control_vectors"]}/{name_subwindow}')
+            if tpl['orig_path_background'] is not None:
+                _config.INV.path_background = (
+                    f'{tpl["orig_path_background"]}/{name_subwindow}')
+
+            # Init from file from previous window
+            if n_wt > 1 and flag_init_from_previous:
+                name_prev_subwindow = (
+                    f'subwindow_{str(list_date_middle[-2])[:10]}/{tpl["geom_name"]}')
+                path_output = config.EXP.path_save + f'/{name_prev_subwindow}/'
+                filename = os.path.join(
+                    path_output,
+                    f'{State.name_exp_save}'
+                    f'_y{date0.year}'
+                    f'm{str(date0.month).zfill(2)}'
+                    f'd{str(date0.day).zfill(2)}'
+                    f'h{str(date0.hour).zfill(2)}'
+                    f'm{str(date0.minute).zfill(2)}.nc')
+                _base_config = tpl['parent_config']
+                _config.GRID = exp.Config({
+                    'super': 'GRID_FROM_FILE',
+                    'path_init_grid': filename,
+                    'name_init_lon': 'lon', 'name_init_lat': 'lat',
+                    'name_init_mask': _base_config.GRID.name_init_mask,
+                    'name_var_mask': _base_config.GRID.name_var_mask,
+                    'subsampling': None})
+                if 'super' not in _config.MOD:
+                    for NAME_MOD in _config.MOD:
+                        _config.MOD[NAME_MOD] = _base_config.MOD[NAME_MOD].copy()
+                        _config.MOD[NAME_MOD].init_from_bc = False
+                else:
+                    _config.MOD.init_from_bc = False
+
+            if flag_init and name_exp_init is not None:
+                path_control_init = _config.INV.path_save_control_vectors.replace(
+                    config.EXP.name_experiment, name_exp_init)
+                _config.INV.path_init_4Dvar = os.path.join(path_control_init, 'Xres.nc')
+
+            if flag_background and name_exp_background is not None:
+                path_background = _config.INV.path_background.replace(
+                    config.EXP.name_experiment, name_exp_background)
+                _config.INV.path_background = os.path.join(path_background, 'Xres.nc')
+
+            # makedirs (sequential, fast)
+            if not os.path.exists(_config.EXP.tmp_DA_path):
+                os.makedirs(_config.EXP.tmp_DA_path)
+            if not os.path.exists(_config.EXP.path_save):
+                os.makedirs(_config.EXP.path_save)
+
+            list_config[i].append(_config)
+            list_State[i].append(tpl['state'])
+            if i == 0 and dir_save_pickle is not None:
+                list_tile_paths.append(f'{path_save_pickle}/{name_subwindow}')
+
+            if config.OBS is not None:
+                _config.EXP.write_obs = True
+            window_configs.append((tile_idx, tpl, _config, tpl['state']))
+
+        # ---- Parallel obs selection across tiles for this time window ----
+        if config.OBS is not None and len(window_configs) > 0:
+            if obs_max_workers is None or obs_max_workers <= 1:
+                for tile_idx, tpl, _config, _State in window_configs:
+                    _select_tile_obs(tile_idx, tpl, _config, _State, date0, date1)
+            else:
+                _nw = min(int(obs_max_workers), len(window_configs))
+                with ThreadPoolExecutor(max_workers=_nw) as ex:
+                    futures = [
+                        ex.submit(_select_tile_obs, tile_idx, tpl, _config, _State, date0, date1)
+                        for (tile_idx, tpl, _config, _State) in window_configs
+                    ]
+                    for f in futures:
+                        f.result()  # propagate exceptions
+            # Disable recomputation in subprocesses (now that cache is on disk)
+            for _, _, _config, _ in window_configs:
+                _config.EXP.compute_obs = False
+                if hasattr(_config, 'OBSOP') and _config.OBSOP is not None:
+                    _config.OBSOP = _config.OBSOP.copy()
+                    _config.OBSOP.compute_op = False
+
+        # ---- Pickle saves & assim process creation (sequential, cheap) ----
         iproc_tw = 0
-        _prev_lat_band = None
-        for lat0, lat1, _ny, _nx_proc_band, _space_x_band, is_eq in lat_bands:
-            if lat1 < config.GRID.lat_min:
-                continue
-            _grid_type_config = grid_type_eq if is_eq else grid_type
-            flag_avoid_next_window = False
-            n_wx = 0
-            lon1 = config.GRID.lon_min
-            while lon1<config.GRID.lon_max and not flag_avoid_next_window:
-                # compute subwindow longitude borders
-                _nx = _nx_proc_band
-                if _space_x_band is not None:
-                    if _grid_type_config == 'GRID_GEO':
-                        # For GRID_GEO, longitude spacing is uniform in degrees
-                        lon0 = config.GRID.lon_min + n_wx * (_space_x_band - space_overlap_x)
-                        lon1 = lon0 + _space_x_band
-                        if lon0 + _space_x_band/2 > config.GRID.lon_max:
-                            lon1 = lon0 + _space_x_band/2
-                        n_wx += 1
-                    else:
-                        # For GRID_CAR, longitude spacing depends on latitude
-                        if n_wx==0:
-                            lon0 = config.GRID.lon_min
-                        else:
-                            if lat0>0:
-                                lon0 = lon_prev[0,-1] - space_overlap_x
-                            else:
-                                lon0 = lon_prev[-1,-1] - space_overlap_x
-                        lon1 = lon0 + _space_x_band
-                        _nx = _nx_proc_band
-                        if lon0 + _space_x_band/2 > config.GRID.lon_max:
-                            lon1 = lon0 + _space_x_band/2
-                            if _nx_proc_band is not None:
-                                _nx = int(_nx_proc_band/2)
-                        n_wx += 1
+        for tile_idx, tpl, _config, _State in window_configs:
+            name_subwindow = f'subwindow_{date_middle_str}/{tpl["geom_name"]}'
+            iproc_tw += 1
+            if dir_save_pickle is not None:
+                path_pickle = f'{path_save_pickle}/{name_subwindow}'
+                if not os.path.exists(path_pickle):
+                    os.makedirs(path_pickle)
+                with open(f'{path_pickle}/state.pkl', 'wb') as f:
+                    pickle.dump(_State, f)
+                with open(f'{path_pickle}/config.pkl', 'wb') as f:
+                    pickle.dump(_config, f)
+
+            if flag_assim and (flag_assim_restart
+                               or not os.path.exists(f'{_config.INV.path_save_control_vectors}/Xres.nc')):
+                worker = partial(inv.Inv_4Dvar, config=_config, State=_State,
+                                 verbose=0, gpu_device=gpu_devices[id_gpu])
+                p = mp.get_context("spawn").Process(target=worker)
+                if flag_init_from_previous:
+                    list_processes[i].append(p)
                 else:
-                    lon0 = config.GRID.lon_min
-                    lon1 = config.GRID.lon_max
-                    _nx = _nx_proc_band
-                    
-                # create config for the subwindow
-                if is_eq or (lat0<0 and lat1>0):
-                    _base_config = config_eq.copy()
-                    _config = config_eq.copy()
-                else:
-                    _base_config = config.copy()
-                    _config = config.copy()
-                _config.EXP = _config.EXP.copy()
-                _config.GRID = _config.GRID.copy()
-                _config.MOD = _config.MOD.copy()
-                _config.INV = _config.INV.copy()
-                _config.EXP.init_date = date0
-                _config.EXP.final_date = date1
-                _config.GRID.lon_min = lon0
-                _config.GRID.lon_max = lon1
-                _config.GRID.lat_min = lat0
-                _config.GRID.lat_max = lat1
-                if _grid_type_config == 'GRID_GEO':
-                    _config.GRID.super = 'GRID_GEO'
-                    _config.GRID.dlon = dlon
-                    _config.GRID.dlat = dlat
-                else:
-                    _config.GRID.super = 'GRID_CAR'
-                    _config.GRID.nx = _nx
-                    _config.GRID.ny = _ny
-                    _config.GRID.dx = dx 
-                    _config.GRID.dy = dy 
-                 
-                name_subwindow = f'subwindow_{str(list_date_middle[-1])[:10]}/subwindow_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
-                _config.EXP.tmp_DA_path += f'/{name_subwindow}'
-                _config.EXP.path_save += f'/{name_subwindow}'
-                if _config.INV.path_save_control_vectors is not None:
-                    _config.INV.path_save_control_vectors += f'/{name_subwindow}'
-                if _config.INV.path_background is not None:
-                    _config.INV.path_background += f'/{name_subwindow}'
-
-                # initialize State 
-                _State = state.State(_config, verbose=0)
-
-                if np.any(_State.lon.max()>config.GRID.lon_max):
-                    if ((lat0+lat1)/2<0 and np.any(_State.lon[-1]>config.GRID.lon_max)) or ((lat0+lat1)/2>0 and np.any(_State.lon[0]>config.GRID.lon_max)):  
-                        flag_avoid_next_window = True
-
-                lon_prev = +_State.lon
-                if _State.lon.min()<-180 or _State.lon.max()>180:
-                    _State.lon = _State.lon % 360
-                    _State.lon_min = _State.lon.min()
-                    _State.lon_max = _State.lon.max()
-                    _State.lon_unit = '0_360'
-
-                # Init from file from previous window
-                if n_wt>1 and flag_init_from_previous:
-                    name_prev_subwindow = f'subwindow_{str(list_date_middle[-2])[:10]}/subwindow_{round((lon1+lon0)/2)}_{round((lat1+lat0)/2)}'
-                    path_output = config.EXP.path_save + f'/{name_prev_subwindow}/'
-                    filename = os.path.join(path_output,f'{State.name_exp_save}'\
-                            f'_y{date0.year}'\
-                            f'm{str(date0.month).zfill(2)}'\
-                            f'd{str(date0.day).zfill(2)}'\
-                            f'h{str(date0.hour).zfill(2)}'\
-                            f'm{str(date0.minute).zfill(2)}.nc')
-                    _config.GRID = exp.Config({'super': 'GRID_FROM_FILE', 'path_init_grid': filename, 'name_init_lon': 'lon', 'name_init_lat': 'lat', 
-                                                'name_init_mask': _base_config.GRID.name_init_mask, 'name_var_mask': _base_config.GRID.name_var_mask, 'subsampling': None})
-                    if 'super' not in _config.MOD:
-                        for NAME_MOD in _config.MOD:
-                            _config.MOD[NAME_MOD] = _base_config.MOD[NAME_MOD].copy()
-                            _config.MOD[NAME_MOD].init_from_bc = False
-                    else:
-                        _config.MOD.init_from_bc = False
-                
-                # Start from converged state vector
-                if flag_init and name_exp_init is not None:
-                    path_control_init = _config.INV.path_save_control_vectors.replace(config.EXP.name_experiment, name_exp_init)
-                    _config.INV.path_init_4Dvar = os.path.join(path_control_init, 'Xres.nc')
-                
-                # Use background from another experiment
-                if flag_background and name_exp_background is not None:
-                    path_background = _config.INV.path_background.replace(config.EXP.name_experiment, name_exp_background)
-                    _config.INV.path_background = os.path.join(path_background, 'Xres.nc')
-                
-                
-                # append to list
-                list_config[i].append(_config)
-                list_State[i].append(_State)   
-                if i==0:
-                    if (lat0, lat1) != _prev_lat_band:
-                        eq_tag = ' [EQ]' if is_eq else ''
-                        print(f'\t ** Latitudes from {lat0:.2f} to {lat1:.2f} [{_ny}x{_nx}]{eq_tag}')
-                        _prev_lat_band = (lat0, lat1)
-                    print(f'\t\t * Longitudes from {lon0:.2f} to {lon1:.2f}')
-                    list_lonlat.append(((lon1+lon0)/2,(lat1+lat0)/2))
-                    if dir_save_pickle is not None:
-                        list_tile_paths.append(f'{path_save_pickle}/{name_subwindow}')
-                iproc_tw += 1
-
-                # create directories
-                if not os.path.exists(_config.EXP.tmp_DA_path):
-                    os.makedirs(_config.EXP.tmp_DA_path)
-                if not os.path.exists(_config.EXP.path_save):
-                    os.makedirs(_config.EXP.path_save)
-
-                # Select obs over the tile from the pre-opened global datasets,
-                # write the per-tile cache, and disable recomputation in subprocesses.
-                if config.OBS is not None:
-                    _is_eq_tile = is_eq or (lat0 < 0 and lat1 > 0)
-                    _global_ds = obs_datasets_eq if _is_eq_tile else obs_datasets
-                    _spatial_cache = _tile_obs_cache_eq if _is_eq_tile else _tile_obs_cache
-                    _config_for_obs = config_eq if _is_eq_tile else config
-                    # Cache key: tile midpoint (same coords across time windows)
-                    _tile_key = (round((lon0 + lon1) / 2, 6),
-                                 round((lat0 + lat1) / 2, 6))
-                    if _tile_key not in _spatial_cache:
-                        _bbox_tile = _obs.compute_bbox(_config, _State)
-                        _spatial_cache[_tile_key] = _obs.select_obs_datasets_space(
-                            _global_ds, _config_for_obs, _bbox_tile,
-                            lon_unit=_State.lon_unit)
-                    _tile_spatial_ds = _spatial_cache[_tile_key]
-                    # Time-slice the (already small) per-tile dataset for this window
-                    _tile_datasets = _obs.select_obs_datasets_time(
-                        _tile_spatial_ds, _config_for_obs, date0, date1)
-                    _config.EXP = _config.EXP.copy()
-                    _config.EXP.write_obs = True
-                    _obs.Obs(_config, _State, obs_datasets=_tile_datasets)
-                    _config.EXP.compute_obs = False
-                    if hasattr(_config, 'OBSOP') and _config.OBSOP is not None:
-                        _config.OBSOP = _config.OBSOP.copy()
-                        _config.OBSOP.compute_op = False
-
-                # Save pickle files for each subwindow
-                if dir_save_pickle is not None:
-                    path_pickle = f'{path_save_pickle}/{name_subwindow}'
-                    if not os.path.exists(path_pickle):
-                        os.makedirs(path_pickle)
-                    with open(f'{path_pickle}/state.pkl', "wb") as f:
-                        pickle.dump(_State, f)
-                    with open(f'{path_pickle}/config.pkl', "wb") as f:
-                        pickle.dump(_config, f)
-
-                if flag_assim and (flag_assim_restart or not os.path.exists(f'{_config.INV.path_save_control_vectors}/Xres.nc')):
-                    worker = partial(inv.Inv_4Dvar, config=_config, State=_State, verbose=0, gpu_device=gpu_devices[id_gpu])
-                    p = mp.get_context("spawn").Process(target=worker)
-                    if flag_init_from_previous:
-                        list_processes[i].append(p)
-                    else:
-                        list_processes[0].append(p)
-                    id_gpu += 1
-                    if id_gpu==len(gpu_devices):
-                        id_gpu = 0
-                elif i==0:
-                    if not flag_assim_restart:
-                        print(f'Assimilation already done for this subwindow, skipping (use flag_assim_restart=True to re-run)')
-                    if not flag_assim:
-                        print(f'Assimilation not requested for this subwindow, skipping (use flag_assim=True to run)')
+                    list_processes[0].append(p)
+                id_gpu += 1
+                if id_gpu == len(gpu_devices):
+                    id_gpu = 0
+            elif i == 0:
+                if not flag_assim_restart:
+                    print('Assimilation already done for this subwindow, skipping (use flag_assim_restart=True to re-run)')
+                if not flag_assim:
+                    print('Assimilation not requested for this subwindow, skipping (use flag_assim=True to run)')
 
         iproc += iproc_tw
 
         if i == 0:
-            lonlat_grid = [(_State.lon, _State.lat) for _State in list_State[0]]
+            lonlat_grid = [(_S.lon, _S.lat) for _S in list_State[0]]
             plot_subdomains(lonlat_grid)
-            # Compute weights and interpolators after first time window
             weights_space, weights_space_sum, interpolators = compute_weights_map(
                 State, list_State, path_save_pickle=path_save_pickle,
                 list_tile_paths=list_tile_paths or None,
