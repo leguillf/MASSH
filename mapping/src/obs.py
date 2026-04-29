@@ -121,6 +121,36 @@ def open_obs_datasets(config):
     return datasets
 
 
+def select_obs_datasets_time(obs_datasets, config, date_start, date_end):
+    """Restrict each obs dataset to [date_start, date_end] along its time dim.
+
+    Operates on the (already-loaded) 1D time coordinate to build a boolean
+    mask, then uses isel on the underlying time *dimension* — this keeps
+    SWOT swath data lazy (no broadcast against per-pixel arrays).
+    Returns a new dict {name_obs: ds_subset}.
+    """
+    if obs_datasets is None or len(obs_datasets) == 0:
+        return {}
+    t0 = np.datetime64(date_start)
+    t1 = np.datetime64(date_end)
+    out = {}
+    for name_obs, ds in obs_datasets.items():
+        OBS = config.OBS[name_obs]
+        time_arr = ds[OBS.name_time]
+        # Identify the underlying time dimension (handles cases where
+        # name_time is itself a coord on a differently-named dim)
+        time_dim = time_arr.dims[0] if time_arr.ndim >= 1 else OBS.name_time
+        mask = ((time_arr >= t0) & (time_arr <= t1)).values
+        if mask.ndim != 1:
+            # fallback: any() over non-time-dim axes (rare)
+            axes = tuple(i for i, d in enumerate(time_arr.dims) if d != time_dim)
+            mask = mask.any(axis=axes) if axes else mask
+        if not mask.any():
+            continue
+        out[name_obs] = ds.isel({time_dim: mask})
+    return out
+
+
 def Obs(config, State, obs_datasets=None, *args, **kwargs):
     """
     NAME

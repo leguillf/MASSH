@@ -300,6 +300,21 @@ def prepare_process(config, config_eq, State,
         list_date_middle.append(date0 + (date1-date0)/2)
         print(f'*** Time window: {date0} -> {date1}')
 
+        # Pre-select obs datasets in time once per time window (re-used by all
+        # spatial tiles below). This avoids xarray having to traverse the full
+        # year of timestamps inside Obs() for every tile.
+        if config.OBS is not None:
+            _tw_obs_datasets = _obs.select_obs_datasets_time(
+                obs_datasets, config, date0, date1)
+            if obs_datasets_eq is obs_datasets:
+                _tw_obs_datasets_eq = _tw_obs_datasets
+            else:
+                _tw_obs_datasets_eq = _obs.select_obs_datasets_time(
+                    obs_datasets_eq, config_eq, date0, date1)
+        else:
+            _tw_obs_datasets = {}
+            _tw_obs_datasets_eq = {}
+
         iproc_tw = 0
         _prev_lat_band = None
         for lat0, lat1, _ny, _nx_proc_band, _space_x_band, is_eq in lat_bands:
@@ -444,7 +459,7 @@ def prepare_process(config, config_eq, State,
                 # Select obs over the tile from the pre-opened global datasets,
                 # write the per-tile cache, and disable recomputation in subprocesses.
                 if config.OBS is not None:
-                    _tile_datasets = obs_datasets_eq if (is_eq or (lat0 < 0 and lat1 > 0)) else obs_datasets
+                    _tile_datasets = _tw_obs_datasets_eq if (is_eq or (lat0 < 0 and lat1 > 0)) else _tw_obs_datasets
                     _config.EXP = _config.EXP.copy()
                     _config.EXP.write_obs = True
                     _obs.Obs(_config, _State, obs_datasets=_tile_datasets)
