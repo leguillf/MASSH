@@ -10,6 +10,7 @@ import xarray as xr
 import numpy as np
 
 import datetime 
+import re
 from scipy import signal
 import matplotlib.pylab as plt
 import glob 
@@ -18,12 +19,88 @@ from .tools import detrendn, read_auxdata
 from .exp import Config
 
 
-def _open_obs_dataset(name_obs, OBS):
+# Date patterns recognized in obs file names, in order of preference.
+# Each entry is (regex, "fmt") with named groups y, m, d (d optional).
+_FILENAME_DATE_PATTERNS = [
+    # 8-digit YYYYMMDD (most specific) — accept either standalone or
+    # surrounded by non-digits, but require y >= 1900 to avoid matching
+    # arbitrary 8-digit run numbers.
+    re.compile(r'(?<!\d)(?P<y>(?:19|20)\d{2})(?P<m>\d{2})(?P<d>\d{2})(?!\d)'),
+    # YYYY-MM-DD or YYYY_MM_DD
+    re.compile(r'(?<!\d)(?P<y>(?:19|20)\d{2})[-_](?P<m>\d{2})[-_](?P<d>\d{2})(?!\d)'),
+    # 6-digit YYYYMM (used by some monthly archives)
+    re.compile(r'(?<!\d)(?P<y>(?:19|20)\d{2})(?P<m>\d{2})(?!\d)'),
+]
+
+
+def _extract_file_date_range(fname):
+    """Extract a (start, end) datetime pair from a file basename.
+
+    Looks for a YYYYMMDD / YYYY-MM-DD / YYYYMM pattern in the filename.
+    Returns (None, None) when no recognizable date is present (so the file
+    is *kept* — we never drop a file based on absence of a date).
+    """
+    base = os.path.basename(fname)
+    for pat in _FILENAME_DATE_PATTERNS:
+        m = pat.search(base)
+        if m is None:
+            continue
+        try:
+            y = int(m.group('y'))
+            mo = int(m.group('m'))
+            try:
+                d = int(m.group('d'))
+                start = datetime.datetime(y, mo, d)
+                end = start + datetime.timedelta(days=1)
+            except (IndexError, KeyError):
+                # Monthly pattern: span the whole month
+                start = datetime.datetime(y, mo, 1)
+                if mo == 12:
+                    end = datetime.datetime(y + 1, 1, 1)
+                else:
+                    end = datetime.datetime(y, mo + 1, 1)
+            return start, end
+        except ValueError:
+            continue
+    return None, None
+
+
+def _filter_files_by_date(files, date_start, date_end):
+    """Keep only files whose filename-encoded date overlaps [date_start, date_end].
+
+    Files with no recognizable date in the name are kept (conservative).
+    """
+    if date_start is None and date_end is None:
+        return files
+    t0 = None if date_start is None else (
+        date_start if isinstance(date_start, datetime.datetime)
+        else datetime.datetime.fromisoformat(str(date_start)))
+    t1 = None if date_end is None else (
+        date_end if isinstance(date_end, datetime.datetime)
+        else datetime.datetime.fromisoformat(str(date_end)))
+    out = []
+    for f in files:
+        f_start, f_end = _extract_file_date_range(f)
+        if f_start is None:
+            out.append(f)
+            continue
+        if t1 is not None and f_start > t1:
+            continue
+        if t0 is not None and f_end <= t0:
+            continue
+        out.append(f)
+    return out
+
+
+def _open_obs_dataset(name_obs, OBS, date_start=None, date_end=None):
     """Open the multi-file dataset for one OBS block.
 
     Tries the fast path first (combine='nested' + parallel=True with preprocess),
     then falls back to no-preprocess, and finally to combine='by_coords'.
     Returns the opened dataset or None if all attempts failed.
+
+    When date_start/date_end are provided, files whose filename contains a
+    date pattern outside that range are skipped before opening.
     """
 
     def preprocess(ds):
@@ -53,6 +130,17 @@ def _open_obs_dataset(name_obs, OBS):
     if len(files) == 0:
         print(f'[{name_obs}] Warning: no files matching {path}')
         return None
+
+    # Filter by filename date pattern (e.g. "20250603" or "202506") so we
+    # don't open files that fall entirely outside the experiment period.
+    n_total = len(files)
+    files = _filter_files_by_date(files, date_start, date_end)
+    if len(files) == 0:
+        print(f'[{name_obs}] Warning: no files in date range '
+              f'[{date_start}, {date_end}] (out of {n_total} candidates)')
+        return None
+    if len(files) < n_total:
+        print(f'[{name_obs}] Date filter: {len(files)}/{n_total} files kept')
 
     # Get time dim name from first file (cheap)
     try:
@@ -92,19 +180,24 @@ def _open_obs_dataset(name_obs, OBS):
             return None
 
 
-def open_obs_datasets(config):
+def open_obs_datasets(config, date_start=None, date_end=None):
     """Open all OBS datasets declared in config once, lazily.
 
     Eagerly loads only the time/lon/lat coordinate arrays so that bbox masks
     can be built per tile without re-reading them from disk.
     Returns a dict {name_obs: xarray.Dataset} (or empty dict if config.OBS is None).
+
+    When date_start/date_end are provided, only files whose filename date
+    pattern overlaps that range are opened. This avoids paying the cost of
+    opening (potentially) thousands of out-of-period files for a global archive.
     """
     if config.OBS is None:
         return {}
     datasets = {}
     for name_obs, OBS in config.OBS.items():
         print(f'Opening obs dataset: {name_obs}')
-        ds = _open_obs_dataset(name_obs, OBS)
+        ds = _open_obs_dataset(name_obs, OBS,
+                               date_start=date_start, date_end=date_end)
         if ds is None:
             continue
         # Eagerly load 1D coordinate arrays used to build per-tile masks.
@@ -333,7 +426,9 @@ def Obs(config, State, obs_datasets=None, *args, **kwargs):
         if obs_datasets is not None and name_obs in obs_datasets:
             _ds = obs_datasets[name_obs]
         else:
-            _ds = _open_obs_dataset(name_obs, OBS)
+            _ds = _open_obs_dataset(name_obs, OBS,
+                                    date_start=time_obs_min,
+                                    date_end=time_obs_max)
             _close_after = True
             if _ds is None:
                 continue

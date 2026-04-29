@@ -275,7 +275,11 @@ def prepare_process(config, config_eq, State,
     lat_bands.sort(key=lambda x: x[0])
 
     # Open obs datasets once over the full domain. They are reused per tile.
-    obs_datasets = _obs.open_obs_datasets(config)
+    # Filter input files by filename-encoded date so we only open what falls
+    # within the experiment time range [init_date, final_date].
+    obs_datasets = _obs.open_obs_datasets(config,
+                                          date_start=init_date,
+                                          date_end=final_date)
     # Reuse for config_eq when the OBS block is the same (same object or
     # equal dict) to avoid opening every file a second time.
     _same_obs = config_eq is config or getattr(config_eq, 'OBS', None) is getattr(config, 'OBS', None)
@@ -287,7 +291,9 @@ def prepare_process(config, config_eq, State,
     if _same_obs:
         obs_datasets_eq = obs_datasets
     else:
-        obs_datasets_eq = _obs.open_obs_datasets(config_eq)
+        obs_datasets_eq = _obs.open_obs_datasets(config_eq,
+                                                 date_start=init_date,
+                                                 date_end=final_date)
 
     # Tile-level spatial cache: spatial selection is the expensive step
     # (reads SWOT 2D lon/lat). Tile coordinates repeat across time windows,
