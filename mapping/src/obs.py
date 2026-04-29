@@ -107,10 +107,14 @@ def open_obs_datasets(config):
         ds = _open_obs_dataset(name_obs, OBS)
         if ds is None:
             continue
-        # Eagerly load coordinate arrays used to build per-tile masks
+        # Eagerly load 1D coordinate arrays used to build per-tile masks.
+        # Skip 2D coords (e.g. SWOT swath lon/lat) — keeping them as dask
+        # arrays lets the per-tile mask be computed lazily without
+        # materializing the global per-pixel field.
         for cname in (OBS.name_time, OBS.name_lon, OBS.name_lat):
             try:
-                ds[cname].load()
+                if ds[cname].ndim <= 1:
+                    ds[cname].load()
             except Exception:
                 pass
         datasets[name_obs] = ds
@@ -256,16 +260,27 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     ds = ds.assign_coords({obs_attr.name_time:ds[obs_attr.name_time]})
     ds = ds.swap_dims({ds[obs_attr.name_time].dims[0]:obs_attr.name_time})
 
-    # Convert longitude
-    if np.sign(ds[obs_attr.name_lon].data.min())==-1 and lon_unit=='0_360':
-        ds[obs_attr.name_lon].data = ds[obs_attr.name_lon].data % 360
-    elif (np.sign(ds[obs_attr.name_lon].data.min())>=0 or ds[obs_attr.name_lon].data.max()>180) and lon_unit=='-180_180':
-        ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
-    
-    # Select sub area
-    lon_obs = ds[obs_attr.name_lon]
+    # Determine longitude conversion to apply (deferred until after bbox selection
+    # to avoid materializing global SWOT arrays — e.g. (98M, 69) float64 = 50.9 GiB).
+    lon_min_raw = float(ds[obs_attr.name_lon].min())
+    lon_max_raw = float(ds[obs_attr.name_lon].max())
+    if np.sign(lon_min_raw) == -1 and lon_unit == '0_360':
+        _lon_convert = '0_360'
+    elif (np.sign(lon_min_raw) >= 0 or lon_max_raw > 180) and lon_unit == '-180_180':
+        _lon_convert = '-180_180'
+    else:
+        _lon_convert = None
+
+    # Build a (lazy) lon view in the requested unit for the bbox mask only
+    lon_obs_raw = ds[obs_attr.name_lon]
+    if _lon_convert == '0_360':
+        lon_obs_for_mask = lon_obs_raw % 360
+    elif _lon_convert == '-180_180':
+        lon_obs_for_mask = (lon_obs_raw + 180) % 360 - 180
+    else:
+        lon_obs_for_mask = lon_obs_raw
     lat_obs = ds[obs_attr.name_lat]
-    bbox_mask = ((bbox[0] <= lon_obs) & (bbox[1] >= lon_obs) &
+    bbox_mask = ((bbox[0] <= lon_obs_for_mask) & (bbox[1] >= lon_obs_for_mask) &
                  (bbox[2] <= lat_obs) & (bbox[3] >= lat_obs))
     # For swath data (2D lon/lat), reduce mask to the time dim and use isel,
     # to avoid xr.where(drop=True) deep-copying the full per-pixel arrays
@@ -277,6 +292,12 @@ def _obs_alti(ds, dt_list, dict_obs, obs_name, obs_attr, dt_timestep, out_path, 
     else:
         ds = ds.where(bbox_mask.compute(), drop=True)
     ds = ds.load()
+
+    # Apply longitude conversion now (on the small per-tile subset)
+    if _lon_convert == '0_360':
+        ds[obs_attr.name_lon].data = ds[obs_attr.name_lon].data % 360
+    elif _lon_convert == '-180_180':
+        ds[obs_attr.name_lon].data = (ds[obs_attr.name_lon].data + 180) % 360 - 180
     # MDT 
     if True in [obs_attr.add_mdt, obs_attr.substract_mdt]:
         finterpmdt = read_auxdata(obs_attr.path_mdt, obs_attr.name_var_mdt, lon_unit)
