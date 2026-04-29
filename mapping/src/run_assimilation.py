@@ -269,7 +269,15 @@ def prepare_process(config, config_eq, State,
 
     # Open obs datasets once over the full domain. They are reused per tile.
     obs_datasets = _obs.open_obs_datasets(config)
-    if config_eq is config:
+    # Reuse for config_eq when the OBS block is the same (same object or
+    # equal dict) to avoid opening every file a second time.
+    _same_obs = config_eq is config or getattr(config_eq, 'OBS', None) is getattr(config, 'OBS', None)
+    if not _same_obs:
+        try:
+            _same_obs = getattr(config_eq, 'OBS', None) == getattr(config, 'OBS', None)
+        except Exception:
+            _same_obs = False
+    if _same_obs:
         obs_datasets_eq = obs_datasets
     else:
         obs_datasets_eq = _obs.open_obs_datasets(config_eq)
@@ -279,7 +287,7 @@ def prepare_process(config, config_eq, State,
     # so we compute the spatial subset once per tile and reuse it for every
     # subsequent time window — only a cheap time slice is then needed.
     _tile_obs_cache = {}
-    _tile_obs_cache_eq = {}
+    _tile_obs_cache_eq = _tile_obs_cache if _same_obs else {}
 
     date1 = init_date
     i = -1
