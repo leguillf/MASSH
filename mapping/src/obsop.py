@@ -876,6 +876,35 @@ class Obsop_interp_l4(Obsop_interp):
                     _var_obs_interp[~np.isnan(_var_obs_interp_cubic)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_cubic)]
                     _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)]
                 
+                elif self.interp_method == 'block_mean':
+                    # Proper L4 swath -> grid projection: assign each obs
+                    # pixel to its nearest target cell and average inside
+                    # the cell. Yields a constant value within the swath
+                    # for a constant input (e.g. flat noise field).
+                    # Cell-wise error: obs error / sqrt(N_in_cell), assuming
+                    # decorrelated per-pixel noise.
+                    _tree = KDTree(self.coords_geo)
+                    _coords_obs = np.column_stack((lon_obs, lat_obs))
+                    _valid = ~(np.isnan(lon_obs) | np.isnan(lat_obs)
+                               | np.isnan(var_obs))
+                    _, _idx = _tree.query(_coords_obs[_valid])
+                    _ncell = self.coords_geo.shape[0]
+                    _sum_var = np.bincount(_idx, weights=var_obs[_valid],
+                                           minlength=_ncell)
+                    _sum_err2 = np.bincount(_idx,
+                                            weights=err_obs[_valid] ** 2,
+                                            minlength=_ncell)
+                    _count = np.bincount(_idx, minlength=_ncell).astype(float)
+                    _empty = (_count == 0)
+                    _count_safe = np.where(_empty, 1.0, _count)
+                    # Cell-wise error: assume correlated per-pixel noise
+                    # (conservative) -> err_cell = sqrt(<err^2>) (no /sqrt(N)).
+                    _var_obs_interp = np.where(_empty, np.nan,
+                                               _sum_var / _count_safe)
+                    _err_obs_interp = np.where(
+                        _empty, np.nan,
+                        np.sqrt(_sum_err2 / _count_safe))
+
                 elif self.interp_method=='rtree': 
 
                     def _regrid_unstructured(lon_target, lat_target, lon, lat, var):
@@ -894,7 +923,7 @@ class Obsop_interp_l4(Obsop_interp):
                         idw, _ = mesh.radial_basis_function(
                             np.vstack((lon_target.ravel(), lat_target.ravel())).T,
                             within=True,
-                            k=11,
+                            k=4,
                             rbf='multiquadric',
                             epsilon=None,
                             smooth=0,
