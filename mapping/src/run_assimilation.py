@@ -506,6 +506,16 @@ def prepare_process(config, config_eq, State,
             # picked up by other already-launched workers).
             _State = _copy.copy(tpl['state'])
             _State.path_save = _config.EXP.path_save
+            _State.tmp_DA_path = _config.EXP.tmp_DA_path
+            # Also re-point self.config so that State.copy() (called inside
+            # inv.py: State0 = State.copy() -> State(self.config, first=False))
+            # rebuilds path_save from the per-window config rather than from
+            # the (parent / template) config. Otherwise every tile's
+            # trajectory writes land on the same template path_save and
+            # concurrent writers corrupt the netCDF files, surfacing later
+            # as: "did not find a match in any of xarray's currently
+            # installed IO backends".
+            _State.config = _config
             if tpl['orig_path_save_control_vectors'] is not None:
                 _config.INV.path_save_control_vectors = (
                     f'{tpl["orig_path_save_control_vectors"]}/{name_subwindow}')
