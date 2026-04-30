@@ -498,6 +498,14 @@ def prepare_process(config, config_eq, State,
             name_subwindow = f'subwindow_{date_middle_str}/{tpl["geom_name"]}'
             _config.EXP.tmp_DA_path = f'{tpl["orig_tmp_DA_path"]}/{name_subwindow}'
             _config.EXP.path_save = f'{tpl["orig_path_save"]}/{name_subwindow}'
+            # The State object is shared across time windows (built once per
+            # tile geometry). Its path_save was captured from the parent
+            # config at template-creation time and must be refreshed per
+            # time window. Use a shallow copy so we don't mutate the
+            # template state (which is reused for the next time window /
+            # picked up by other already-launched workers).
+            _State = _copy.copy(tpl['state'])
+            _State.path_save = _config.EXP.path_save
             if tpl['orig_path_save_control_vectors'] is not None:
                 _config.INV.path_save_control_vectors = (
                     f'{tpl["orig_path_save_control_vectors"]}/{name_subwindow}')
@@ -550,13 +558,13 @@ def prepare_process(config, config_eq, State,
                 os.makedirs(_config.EXP.path_save)
 
             list_config[i].append(_config)
-            list_State[i].append(tpl['state'])
+            list_State[i].append(_State)
             if i == 0 and dir_save_pickle is not None:
                 list_tile_paths.append(f'{path_save_pickle}/{name_subwindow}')
 
             if config.OBS is not None:
                 _config.EXP.write_obs = True
-            window_configs.append((tile_idx, tpl, _config, tpl['state']))
+            window_configs.append((tile_idx, tpl, _config, _State))
 
         # ---- Parallel obs selection across tiles for this time window ----
         if read_obs and config.OBS is not None and len(window_configs) > 0:
