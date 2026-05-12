@@ -1223,22 +1223,33 @@ def parallel_merge(dates, State, list_State, name_var_save, kernel, weights_spac
             for q in task_qs:
                 q.put(date)
             dict_var = {n: np.zeros((State.ny, State.nx)) for n in name_var_save}
+            # Accumulate the fractional weight from failed tiles (0‥1 per cell).
+            # A cell where missing_weight == 1 was covered only by failed tiles.
+            total_missing_weight = np.zeros((State.ny, State.nx))
             for k, q in enumerate(result_qs):
-                contrib = q.get()
-                if contrib is None:
+                result = q.get()
+                if result is None:
                     raise RuntimeError(f'merge worker {k} died on date {date}')
                 for n in name_var_save:
-                    dict_var[n] += contrib[n]
+                    dict_var[n] += result['contrib'][n]
+                total_missing_weight += result['missing_weight']
 
-            State0 = _copy.copy(State)
-            State0.var = dict(State.var)
-            for n in name_var_save:
-                dict_var[n][no_coverage] = np.nan
-                if State0.mask is not None and np.any(State0.mask):
-                    dict_var[n][State0.mask] = np.nan
-                State0.setvar(dict_var[n], n)
-            State0.save_output(date, name_var=name_var_save)
-            print(f'[parallel_merge] {date} done', flush=True)
+            # Cells whose entire coverage came from failed tiles → NaN
+            tile_failed_mask = total_missing_weight > 0
+
+            try:
+                State0 = _copy.copy(State)
+                State0.var = dict(State.var)
+                for n in name_var_save:
+                    dict_var[n][no_coverage] = np.nan
+                    dict_var[n][tile_failed_mask] = np.nan
+                    if State0.mask is not None and np.any(State0.mask):
+                        dict_var[n][State0.mask] = np.nan
+                    State0.setvar(dict_var[n], n)
+                State0.save_output(date, name_var=name_var_save)
+                print(f'[parallel_merge] {date} done', flush=True)
+            except Exception as e:
+                print(f'[parallel_merge] WARNING: failed to save output for {date}: {e}', flush=True)
     finally:
         for q in task_qs:
             try:
@@ -1280,6 +1291,8 @@ def _merge_worker_loop(tile_paths, states, name_var_save, ny, nx,
             return
 
         contrib = {n: np.zeros((ny, nx)) for n in name_var_save}
+        # Weight fraction lost to failed tiles for this date.
+        missing_weight = np.zeros((ny, nx))
         for tile_data, _State in zip(tiles, states):
             _weights_space = tile_data['weights_space']
             _interp_func = tile_data['interpolator']
@@ -1303,10 +1316,13 @@ def _merge_worker_loop(tile_paths, states, name_var_save, ny, nx,
                 del _ds
             except Exception as e:
                 print(f'[merge worker] tile failed for {date}: {e}', flush=True)
+                # Accumulate the fractional weight this tile would have contributed
+                # so the main process can mark those cells NaN instead of 0.
+                missing_weight += _weights_space * inv_wsum
                 continue
 
         try:
-            result_q.put(contrib)
+            result_q.put({'contrib': contrib, 'missing_weight': missing_weight})
         except Exception:
             return
 
@@ -1478,45 +1494,48 @@ def merge_time_windows_outputs(config, list_date_start, list_date_middle, list_d
     all_dates = sorted(all_dates)
 
     for date in all_dates:
-        # Find which windows contain this date
-        active = [i for i in range(n_windows)
-                  if list_date_start[i] <= date <= list_date_end[i]]
+        try:
+            # Find which windows contain this date
+            active = [i for i in range(n_windows)
+                      if list_date_start[i] <= date <= list_date_end[i]]
 
-        if len(active) == 1:
-            # No overlap: use the single window directly
-            i = active[0]
-            dsout = xr.open_dataset(_build_path(list_date_middle[i], date)).load()
+            if len(active) == 1:
+                # No overlap: use the single window directly
+                i = active[0]
+                dsout = xr.open_dataset(_build_path(list_date_middle[i], date)).load()
 
-        elif len(active) >= 2:
-            # Overlap region: blend the two closest consecutive windows
-            i, j = active[0], active[1]
-            overlap_start = list_date_start[j]
-            overlap_end = list_date_end[i]
-            overlap_duration = (overlap_end - overlap_start).total_seconds()
+            elif len(active) >= 2:
+                # Overlap region: blend the two closest consecutive windows
+                i, j = active[0], active[1]
+                overlap_start = list_date_start[j]
+                overlap_end = list_date_end[i]
+                overlap_duration = (overlap_end - overlap_start).total_seconds()
 
-            ds1 = xr.open_dataset(_build_path(list_date_middle[i], date)).load()
-            ds2 = xr.open_dataset(_build_path(list_date_middle[j], date)).load()
+                ds1 = xr.open_dataset(_build_path(list_date_middle[i], date)).load()
+                ds2 = xr.open_dataset(_build_path(list_date_middle[j], date)).load()
 
-            if overlap_duration > 0:
-                # alpha goes from 0 (at overlap_start) to 1 (at overlap_end)
-                alpha = (date - overlap_start).total_seconds() / overlap_duration
-                alpha = min(max(alpha, 0.0), 1.0)
-                # Raised-cosine (Hann) blending: smooth S-curve with zero derivative at boundaries
-                W2 = 0.5 * (1.0 - np.cos(np.pi * alpha))
-                W1 = 1.0 - W2
-            else:
-                W1, W2 = 0.5, 0.5
-
-            dsout = ds1.copy()
-            for var in ds1.data_vars:
-                if var in ds2.data_vars:
-                    dsout[var] = W1 * ds1[var] + W2 * ds2[var]
+                if overlap_duration > 0:
+                    # alpha goes from 0 (at overlap_start) to 1 (at overlap_end)
+                    alpha = (date - overlap_start).total_seconds() / overlap_duration
+                    alpha = min(max(alpha, 0.0), 1.0)
+                    # Raised-cosine (Hann) blending: smooth S-curve with zero derivative at boundaries
+                    W2 = 0.5 * (1.0 - np.cos(np.pi * alpha))
+                    W1 = 1.0 - W2
                 else:
-                    dsout[var] = ds1[var]
-            ds1.close()
-            ds2.close()
-        else:
-            continue
+                    W1, W2 = 0.5, 0.5
 
-        dsout.to_netcdf(_build_output_path(date))
-        dsout.close()
+                dsout = ds1.copy()
+                for var in ds1.data_vars:
+                    if var in ds2.data_vars:
+                        dsout[var] = W1 * ds1[var] + W2 * ds2[var]
+                    else:
+                        dsout[var] = ds1[var]
+                ds1.close()
+                ds2.close()
+            else:
+                continue
+
+            dsout.to_netcdf(_build_output_path(date))
+            dsout.close()
+        except Exception as e:
+            print(f'[merge_time_windows_outputs] WARNING: failed for {date}: {e}', flush=True)
