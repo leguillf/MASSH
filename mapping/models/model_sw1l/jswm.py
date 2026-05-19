@@ -90,35 +90,73 @@ class CSWm:
         self.omegas = np.asarray(omegas) if omegas is not None else np.array([])
         self.bc_theta = np.asarray(bc_theta) if bc_theta is not None else np.array([0])
 
+        # Warn if Ntheta is below the boundary tangential Nyquist minimum.
+        # Criterion: Ntheta >= L_bdy / lambda_min, where L_bdy = max boundary length and
+        # lambda_min = 2*pi*c_min/omega_max.  This ensures all entering wave directions
+        # (up to grazing incidence) are represented without aliasing along the boundary.
+        if self.omegas.size > 0:
+            _He_bdy = np.concatenate([
+                np.asarray(self.Heb[0,:]), np.asarray(self.Heb[-1,:]),
+                np.asarray(self.Heb[:,0]), np.asarray(self.Heb[:,-1])])
+            _He_pos = _He_bdy[_He_bdy > 0]
+            if _He_pos.size > 0:
+                _c_min = np.sqrt(self.g * np.nanmin(_He_pos))
+                _lambda_min = 2*np.pi * _c_min / np.max(np.abs(self.omegas))
+                _L_bdy = max(
+                    float(np.asarray(self.X).max() - np.asarray(self.X).min()),
+                    float(np.asarray(self.Y).max() - np.asarray(self.Y).min()))
+                _ntheta_min = int(np.ceil(_L_bdy / _lambda_min))
+                _ntheta_actual = (len(self.bc_theta) - 1) // 2
+                if _ntheta_actual < _ntheta_min:
+                    import warnings
+                    warnings.warn(
+                        f'CSWm: Ntheta={_ntheta_actual} is below the boundary Nyquist minimum '
+                        f'Ntheta_min={_ntheta_min} '
+                        f'(lambda_min={_lambda_min/1e3:.1f} km, L_bdy={_L_bdy/1e3:.1f} km). '
+                        f'Aliasing in along-boundary wave angle. '
+                        f'Consider increasing Ntheta or setting Ntheta=-1 for auto.',
+                        stacklevel=2)
+
         # Sponge BC (attributes set externally by wrapper when used)
         self.flag_sponge_bc = False
         self.sponge_coef = 0.
+
+        # IT phase method for sponge boundary conditions
+        # 'plane_wave'     : local k(x,y) * coords  (original, phase inconsistent with varying He)
+        # 'plane_wave_bdy' : k from boundary row/col -> true 1D plane wave (recommended)
+        # 'wkb'            : cumulative-path-integral phase + He^{-1/4} amplitude correction
+        self.bc_it_method = 'plane_wave'
         
-        # JAX compiling
+        # JAX compiling — always-needed utilities
         self.u_on_v_jit = jit(self.u_on_v)
         self.v_on_u_jit = jit(self.v_on_u)
         self.rhs_u_jit = jit(self.rhs_u)
         self.rhs_v_jit = jit(self.rhs_v)
         self.rhs_h_jit = jit(self.rhs_h)
         self.obcs_jit = jit(self.obcs)
-        self.step_euler_jit = jit(self.step_euler)
-        self.step_euler_tgl_jit = jit(self.step_euler_tgl)
-        self.step_euler_adj_jit = jit(self.step_euler_adj)
-        self.step_rk4_jit = jit(self.step_rk4)
-        self.step_rk4_tgl_jit = jit(self.step_rk4_tgl)
-        self.step_rk4_adj_jit = jit(self.step_rk4_adj)
-        self.step_leapfrog_jit = jit(self.step_leapfrog)
-        self.step_euler_nstep = jit(self._step_euler_nstep, static_argnames=['nstep'])
-        self.step_rk4_nstep = jit(self._step_rk4_nstep, static_argnames=['nstep'])
 
-        if time_scheme=='rk4':
-            self.step = self.step_rk4_jit
-            self.step_tgl = self.step_rk4_tgl_jit
-            self.step_adj = self.step_rk4_adj_jit
-        elif time_scheme=='Euler':
-            self.step = self.step_euler_jit
-            self.step_tgl = self.step_euler_tgl_jit
-            self.step_adj = self.step_euler_adj_jit
+        # Only JIT the active time scheme to avoid unnecessary compile overhead.
+        # Leapfrog and the unused scheme are still available as plain methods;
+        # call jit() explicitly if needed.
+        self.step_leapfrog_jit = jit(self.step_leapfrog)
+        if time_scheme == 'rk4':
+            self.step_rk4_jit   = jit(self.step_rk4)
+            self.step_rk4_tgl_jit = jit(self.step_rk4_tgl)
+            self.step_rk4_adj_jit = jit(self.step_rk4_adj)
+            self.step_rk4_nstep = jit(self._step_rk4_nstep, static_argnames=['nstep'])
+            self.step          = self.step_rk4_jit
+            self.step_tgl      = self.step_rk4_tgl_jit
+            self.step_adj      = self.step_rk4_adj_jit
+            self.step_nstep    = self.step_rk4_nstep
+        elif time_scheme == 'Euler':
+            self.step_euler_jit   = jit(self.step_euler)
+            self.step_euler_tgl_jit = jit(self.step_euler_tgl)
+            self.step_euler_adj_jit = jit(self.step_euler_adj)
+            self.step_euler_nstep = jit(self._step_euler_nstep, static_argnames=['nstep'])
+            self.step          = self.step_euler_jit
+            self.step_tgl      = self.step_euler_tgl_jit
+            self.step_adj      = self.step_euler_adj_jit
+            self.step_nstep    = self.step_euler_nstep
 
     ###########################################################################
     #                           Spatial scheme                                #
@@ -673,22 +711,22 @@ class CSWm:
         #######################
         #  Right hand sides   #
         #######################
-        # k1
-        ku1 = self.rhs_u_jit(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
-        kv1 = self.rhs_v_jit(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
-        kh1 = self.rhs_h_jit(u1,v1,h1,He, u11p, v11p)*self.dt
+        # k1  (use plain methods — inner jit is a no-op under the outer jit)
+        ku1 = self.rhs_u(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
+        kv1 = self.rhs_v(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
+        kh1 = self.rhs_h(u1,v1,h1,He, u11p, v11p)*self.dt
         # k2
-        ku2 = self.rhs_u_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
-        kv2 = self.rhs_v_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
-        kh2 = self.rhs_h_jit(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1,He, u11p, v11p)*self.dt
+        ku2 = self.rhs_u(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
+        kv2 = self.rhs_v(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
+        kh2 = self.rhs_h(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1,He, u11p, v11p)*self.dt
         # k3
-        ku3 = self.rhs_u_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
-        kv3 = self.rhs_v_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
-        kh3 = self.rhs_h_jit(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2,He, u11p, v11p)*self.dt
+        ku3 = self.rhs_u(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
+        kv3 = self.rhs_v(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
+        kh3 = self.rhs_h(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2,He, u11p, v11p)*self.dt
         # k4
-        ku4 = self.rhs_u_jit(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
-        kv4 = self.rhs_v_jit(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
-        kh4 = self.rhs_h_jit(u1+ku3,v1+kv3,h1+kh3,He, u11p, v11p)*self.dt
+        ku4 = self.rhs_u(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
+        kv4 = self.rhs_v(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
+        kh4 = self.rhs_h(u1+ku3,v1+kv3,h1+kh3,He, u11p, v11p)*self.dt
         
         #######################
         #   Time propagation  #
@@ -746,206 +784,263 @@ class CSWm:
 
         return u_np1, v_np1, h_np1
 
-    def compute_IT_2D(self, t, He, h_SN, h_WE, flag_tangent=True):
+    def _wave_phases(self, w, He, He_on_u, He_on_v):
         """
-        Compute 2D plane wave IT fields for sponge boundary conditions.
-        
-        Parameters
-        ----------
-        t : float
-            time in seconds
-        He : 2D array
-            total equivalent depth (Heb + He anomaly)
-        h_SN : ND array
-            amplitude of SSH for southern/northern borders
-        h_WE : ND array
-            amplitude of SSH for western/eastern borders
-        flag_tangent : bool
-            if True, compute also u/v tangential components
+        Compute per-boundary phase and amplitude arrays for ALL angles in
+        self.bc_theta at once, for a given frequency w and equivalent depth He.
+
+        Instead of iterating over theta in Python (which unrolls under jit/scan),
+        we vectorise over theta using standard broadcasting: theta has shape
+        (n_theta,) and grid arrays have shape (..., ny, nx).  This reduces the
+        XLA graph to O(1) nodes regardless of n_theta, dramatically cutting both
+        compile time and the number of dispatched kernels at runtime.
 
         Returns
         -------
-        u, v, h : 2D arrays
+        For each of the 12 combinations (direction S/N/W/E × grid h/u/v):
+
+          phase  : array (n_theta, ny_g, nx_g)   -- phase kxy(theta)
+          amp    : array (n_theta, ny_g, nx_g)   -- amplitude correction (WKB) or 1.0
+          kx_g   : array (n_theta, ny_g, nx_g)   -- k_x component
+          ky_g   : array (n_theta, ny_g, nx_g)   -- k_y component
+
+        All returned as the compound dict:
+          out[direction][grid] = (phase, amp, kx, ky)
+
+        Method is controlled by self.bc_it_method (plane_wave / plane_wave_bdy / wkb).
         """
+        thetas = jnp.asarray(self.bc_theta)   # (n_theta,)
+        sin_t  = jnp.sin(thetas)               # (n_theta,)
+        cos_t  = jnp.cos(thetas)               # (n_theta,)
+        # add trailing spatial dims for broadcasting: (n_theta, 1, 1)
+        sin_t3 = sin_t[:, None, None]
+        cos_t3 = cos_t[:, None, None]
 
-        u_S = jnp.zeros((self.ny, self.nx-1))
-        v_S = jnp.zeros((self.ny-1, self.nx))
-        h_S = jnp.zeros((self.ny, self.nx))
-        u_N = jnp.zeros((self.ny, self.nx-1))
-        v_N = jnp.zeros((self.ny-1, self.nx))
-        h_N = jnp.zeros((self.ny, self.nx))
-        u_W = jnp.zeros((self.ny, self.nx-1))
-        v_W = jnp.zeros((self.ny-1, self.nx))
-        h_W = jnp.zeros((self.ny, self.nx))
-        u_E = jnp.zeros((self.ny, self.nx-1))
-        v_E = jnp.zeros((self.ny-1, self.nx))
-        h_E = jnp.zeros((self.ny, self.nx))
+        out = {d: {} for d in ('S', 'N', 'W', 'E')}
 
+        grids = [
+            ('h', He,      self.f,       self.X,  self.Y),
+            ('u', He_on_u, self.f_on_u,  self.Xu, self.Yu),
+            ('v', He_on_v, self.f_on_v,  self.Xv, self.Yv),
+        ]
+
+        for gname, He_g, f_g, X_g, Y_g in grids:
+            ny_g, nx_g = He_g.shape
+            # wavenumber on this grid: (ny_g, nx_g)
+            k_g = jnp.sqrt((w**2 - f_g**2) / (self.g * He_g))
+
+            # k components for each (theta, y, x): (n_theta, ny_g, nx_g)
+            # Direction conventions:
+            #   S : (kx, ky) = ( sin θ,  cos θ) * k
+            #   N : (kx, ky) = ( sin θ, -cos θ) * k
+            #   W : (kx, ky) = ( cos θ,  sin θ) * k
+            #   E : (kx, ky) = (-cos θ,  sin θ) * k
+            kx_S =  sin_t3 * k_g;  ky_S =  cos_t3 * k_g
+            kx_N =  sin_t3 * k_g;  ky_N = -cos_t3 * k_g
+            kx_W =  cos_t3 * k_g;  ky_W =  sin_t3 * k_g
+            kx_E = -cos_t3 * k_g;  ky_E =  sin_t3 * k_g
+
+            # default amplitude: 1.0 (no correction)
+            amp_ones = jnp.ones((len(thetas), ny_g, nx_g))
+
+            if self.bc_it_method == 'plane_wave':
+                # phase = k(x,y) · (x, y)  [original, kept for back-compat]
+                phi_S =  sin_t3*k_g*X_g + cos_t3*k_g*Y_g
+                phi_N =  sin_t3*k_g*X_g - cos_t3*k_g*Y_g
+                phi_W =  cos_t3*k_g*X_g + sin_t3*k_g*Y_g
+                phi_E = -cos_t3*k_g*X_g + sin_t3*k_g*Y_g
+                amp_S = amp_N = amp_W = amp_E = amp_ones
+
+            elif self.bc_it_method == 'plane_wave_bdy':
+                # k evaluated at the boundary edge, broadcast inward
+                k_S_bdy = jnp.sqrt((w**2 - f_g[0 ,:]**2) / (self.g * He_g[0 ,:]))   # (nx_g,)
+                k_N_bdy = jnp.sqrt((w**2 - f_g[-1,:]**2) / (self.g * He_g[-1,:]))
+                k_W_bdy = jnp.sqrt((w**2 - f_g[:,0 ]**2) / (self.g * He_g[:,0 ]))   # (ny_g,)
+                k_E_bdy = jnp.sqrt((w**2 - f_g[:,-1]**2) / (self.g * He_g[:,-1]))
+                phi_S =  sin_t3*k_S_bdy[None,:]*X_g + cos_t3*k_S_bdy[None,:]*Y_g
+                phi_N =  sin_t3*k_N_bdy[None,:]*X_g - cos_t3*k_N_bdy[None,:]*Y_g
+                phi_W =  cos_t3*k_W_bdy[:,None]*X_g + sin_t3*k_W_bdy[:,None]*Y_g
+                phi_E = -cos_t3*k_E_bdy[:,None]*X_g + sin_t3*k_E_bdy[:,None]*Y_g
+                amp_S = amp_N = amp_W = amp_E = amp_ones
+
+            else:  # 'wkb'
+                DX_g = X_g[:,1:] - X_g[:,:-1]   # (ny_g, nx_g-1)
+                DY_g = Y_g[1:,:] - Y_g[:-1,:]   # (ny_g-1, nx_g)
+
+                # normal / tangential wavenumber components (n_theta, ny_g, nx_g)
+                abs_cos = jnp.abs(cos_t3);  abs_sin = jnp.abs(sin_t3)
+
+                # S / N  (normal = y)
+                ky_n  = abs_cos * k_g;  kx_t = abs_sin * k_g
+                dPhi_y  = 0.5*(ky_n[:,:-1,:] + ky_n[:,1:,:]) * DY_g   # (n_t, ny_g-1, nx_g)
+                dPhi_x  = 0.5*(kx_t[:,:,:-1] + kx_t[:,:,1:]) * DX_g  # (n_t, ny_g, nx_g-1)
+                phi_yS  = jnp.concatenate([jnp.zeros((len(thetas),1,nx_g)),
+                                            jnp.cumsum(dPhi_y, axis=1)], axis=1)
+                phi_yN  = jnp.concatenate([jnp.flip(jnp.cumsum(
+                                            jnp.flip(dPhi_y, axis=1), axis=1), axis=1),
+                                            jnp.zeros((len(thetas),1,nx_g))], axis=1)
+                phi_xSN = jnp.concatenate([jnp.zeros((len(thetas),ny_g,1)),
+                                            jnp.cumsum(dPhi_x, axis=2)], axis=2)
+                phi_S   = phi_yS  + phi_xSN
+                phi_N   = phi_yN  + phi_xSN
+
+                # W / E  (normal = x)
+                kx_n  = abs_cos * k_g;  ky_t = abs_sin * k_g
+                dPhi_xWE = 0.5*(kx_n[:,:,:-1] + kx_n[:,:,1:]) * DX_g
+                dPhi_yWE = 0.5*(ky_t[:,:-1,:] + ky_t[:,1:,:]) * DY_g
+                phi_xW  = jnp.concatenate([jnp.zeros((len(thetas),ny_g,1)),
+                                            jnp.cumsum(dPhi_xWE, axis=2)], axis=2)
+                phi_xE  = jnp.concatenate([jnp.flip(jnp.cumsum(
+                                            jnp.flip(dPhi_xWE, axis=2), axis=2), axis=2),
+                                            jnp.zeros((len(thetas),ny_g,1))], axis=2)
+                phi_yWE = jnp.concatenate([jnp.zeros((len(thetas),1,nx_g)),
+                                            jnp.cumsum(dPhi_yWE, axis=1)], axis=1)
+                phi_W   = phi_xW + phi_yWE
+                phi_E   = phi_xE + phi_yWE
+
+                # WKB amplitude: He^{-1/4} normalised at boundary (n_theta broadcast)
+                amp_S = jnp.broadcast_to((He_g[0:1,:] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+                amp_N = jnp.broadcast_to((He_g[-1:,:] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+                amp_W = jnp.broadcast_to((He_g[:,0:1] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+                amp_E = jnp.broadcast_to((He_g[:,-1:] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+
+            out['S'][gname] = (phi_S, amp_S, kx_S, ky_S)
+            out['N'][gname] = (phi_N, amp_N, kx_N, ky_N)
+            out['W'][gname] = (phi_W, amp_W, kx_W, ky_W)
+            out['E'][gname] = (phi_E, amp_E, kx_E, ky_E)
+
+        return out  # out[dir][grid] = (phase, amp, kx, ky)  all (n_theta, ny_g, nx_g)
+
+    def compute_IT_2D(self, t, He, h_SN, h_WE, flag_tangent=True):
+        """
+        Compute 2D IT wave fields for sponge boundary conditions.
+
+        Vectorised over both omega and theta: no Python loops are unrolled in the
+        XLA graph, which dramatically reduces compile time and memory.
+
+        Parameters
+        ----------
+        t     : float   -- time in seconds
+        He    : (ny,nx) -- total equivalent depth (Heb + anomaly)
+        h_SN  : (n_omega, 2, 2, n_theta, nx) -- SSH amplitudes S/N borders [border,cos/sin,theta,x]
+        h_WE  : (n_omega, 2, 2, n_theta, ny) -- SSH amplitudes W/E borders [border,cos/sin,theta,y]
+        flag_tangent : bool -- compute tangential velocity components
+
+        Returns
+        -------
+        u_it, v_it, h_it : 2D arrays
+        """
         He_on_u = (He[:,1:] + He[:,:-1]) / 2
         He_on_v = (He[1:,:] + He[:-1,:]) / 2
 
+        # Accumulate contributions from all omega/theta (as sums of 2D arrays)
+        u_S = jnp.zeros((self.ny,   self.nx-1))
+        v_S = jnp.zeros((self.ny-1, self.nx))
+        h_S = jnp.zeros((self.ny,   self.nx))
+        u_N = jnp.zeros_like(u_S);  v_N = jnp.zeros_like(v_S);  h_N = jnp.zeros_like(h_S)
+        u_W = jnp.zeros_like(u_S);  v_W = jnp.zeros_like(v_S);  h_W = jnp.zeros_like(h_S)
+        u_E = jnp.zeros_like(u_S);  v_E = jnp.zeros_like(v_S);  h_E = jnp.zeros_like(h_S)
+
         for j, w in enumerate(self.omegas):
-            k_on_h = jnp.sqrt((w**2 - self.f**2) / (self.g * He))
-            k_on_u = jnp.sqrt((w**2 - self.f_on_u**2) / (self.g * He_on_u))
-            k_on_v = jnp.sqrt((w**2 - self.f_on_v**2) / (self.g * He_on_v))
+            # --- compute phase/amp/kx/ky for all thetas at once (no theta loop) ---
+            phases = self._wave_phases(w, He, He_on_u, He_on_v)
+            # phases[dir][grid] = (phi, amp, kx, ky)  each (n_theta, ny_g, nx_g)
 
-            for i, theta in enumerate(self.bc_theta):
+            w2f2_v = w**2 - self.f_on_v**2   # used for v formula   (ny-1, nx)
+            w2f2_u = w**2 - self.f_on_u**2   # used for u formula   (ny, nx-1)
 
-                ####################################
-                # South
-                ####################################
-                kx_on_h = jnp.sin(theta) * k_on_h
-                ky_on_h = jnp.cos(theta) * k_on_h
-                kx_on_u = jnp.sin(theta) * k_on_u
-                ky_on_u = jnp.cos(theta) * k_on_u
-                kx_on_v = jnp.sin(theta) * k_on_v
-                ky_on_v = jnp.cos(theta) * k_on_v
-                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
-                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
-                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
+            # Helpers (hc, hs already broadcast to (n_theta, ny_g, nx_g) by the caller):
+            def _h_field(phi, amp, hc, hs):
+                c = jnp.cos(w*t - phi)   # (n_theta, ny_g, nx_g)
+                s = jnp.sin(w*t - phi)
+                return jnp.sum(amp * (hc*c + hs*s), axis=0)
 
-                # h
-                h_S += self.sponge_on_h_S * (
-                    h_SN[j,0,0,i] * jnp.cos(w*t - kxy_on_h) +
-                    h_SN[j,0,1,i] * jnp.sin(w*t - kxy_on_h))
+            def _vel_field(phi, amp, kp, km, fp, hc, hs, w2f2):
+                c = jnp.cos(w*t - phi)
+                s = jnp.sin(w*t - phi)
+                return jnp.sum(
+                    amp * (self.g / w2f2) * (
+                        hc * (w*kp*c + fp*km*s) +
+                        hs * (w*kp*s - fp*km*c)
+                    ), axis=0)
 
-                # v
-                h_cos_theta_on_v_S = h_SN[j,0,0,i]
-                h_sin_theta_on_v_S = h_SN[j,0,1,i]
-                v_S += self.sponge_on_v_S * (self.g / (w**2 - self.f_on_v**2) * (
-                    h_cos_theta_on_v_S * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
-                                - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
-                    h_sin_theta_on_v_S * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
-                                + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
-                    ))
+            # ------- South -------
+            # h_SN[j, border, cs, :, :] shape: (n_theta, nx)
+            hc_nx = h_SN[j,0,0,:]   # (n_theta, nx)
+            hs_nx = h_SN[j,0,1,:]
+            # broadcast to (n_theta, 1, nx) for h/v grids (ny or ny-1, nx)
+            hc_xb = hc_nx[:, None, :]
+            hs_xb = hs_nx[:, None, :]
+            # interpolate to nx-1 for u-grid, then broadcast to (n_theta, 1, nx-1)
+            hc_ub = ((hc_nx[:, :-1] + hc_nx[:, 1:]) * 0.5)[:, None, :]
+            hs_ub = ((hs_nx[:, :-1] + hs_nx[:, 1:]) * 0.5)[:, None, :]
 
-                # u
-                if flag_tangent:
-                    h_cos_theta_on_u_S = (h_cos_theta_on_v_S[1:] + h_cos_theta_on_v_S[:-1]) * 0.5
-                    h_sin_theta_on_u_S = (h_sin_theta_on_v_S[1:] + h_sin_theta_on_v_S[:-1]) * 0.5
-                    u_S += self.sponge_on_u_S * (self.g / (w**2 - self.f_on_u**2) * (
-                        h_cos_theta_on_u_S * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
-                                    + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
-                        h_sin_theta_on_u_S * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
-                                    - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
-                        ))
+            phi_h, amp_h, kx_h, ky_h = phases['S']['h']
+            phi_v, amp_v, kx_v, ky_v = phases['S']['v']
+            h_S = h_S + self.sponge_on_h_S * _h_field(phi_h, amp_h, hc_xb, hs_xb)
+            v_S = v_S + self.sponge_on_v_S * _vel_field(
+                    phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_xb, hs_xb, w2f2_v)
+            if flag_tangent:
+                phi_u, amp_u, kx_u, ky_u = phases['S']['u']
+                u_S = u_S + self.sponge_on_u_S * _vel_field(
+                        phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_ub, hs_ub, w2f2_u)
 
-                ####################################
-                # North
-                ####################################
-                kx_on_h = +jnp.sin(theta) * k_on_h
-                ky_on_h = -jnp.cos(theta) * k_on_h
-                kx_on_u = +jnp.sin(theta) * k_on_u
-                ky_on_u = -jnp.cos(theta) * k_on_u
-                kx_on_v = +jnp.sin(theta) * k_on_v
-                ky_on_v = -jnp.cos(theta) * k_on_v
-                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
-                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
-                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
+            # ------- North -------
+            hc_nx = h_SN[j,1,0,:]
+            hs_nx = h_SN[j,1,1,:]
+            hc_xb = hc_nx[:, None, :]
+            hs_xb = hs_nx[:, None, :]
+            hc_ub = ((hc_nx[:, :-1] + hc_nx[:, 1:]) * 0.5)[:, None, :]
+            hs_ub = ((hs_nx[:, :-1] + hs_nx[:, 1:]) * 0.5)[:, None, :]
 
-                # h
-                h_N += self.sponge_on_h_N * (
-                    h_SN[j,1,0,i] * jnp.cos(w*t - kxy_on_h) +
-                    h_SN[j,1,1,i] * jnp.sin(w*t - kxy_on_h))
+            phi_h, amp_h, kx_h, ky_h = phases['N']['h']
+            phi_v, amp_v, kx_v, ky_v = phases['N']['v']
+            h_N = h_N + self.sponge_on_h_N * _h_field(phi_h, amp_h, hc_xb, hs_xb)
+            v_N = v_N + self.sponge_on_v_N * _vel_field(
+                    phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_xb, hs_xb, w2f2_v)
+            if flag_tangent:
+                phi_u, amp_u, kx_u, ky_u = phases['N']['u']
+                u_N = u_N + self.sponge_on_u_N * _vel_field(
+                        phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_ub, hs_ub, w2f2_u)
 
-                # v
-                h_cos_theta_on_v_N = h_SN[j,1,0,i]
-                h_sin_theta_on_v_N = h_SN[j,1,1,i]
-                v_N += self.sponge_on_v_N * (self.g / (w**2 - self.f_on_v**2) * (
-                    h_cos_theta_on_v_N * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
-                                - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
-                    h_sin_theta_on_v_N * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
-                                + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
-                    ))
+            # ------- West -------
+            # h_WE[j, border, cs, :, :] shape: (n_theta, ny)
+            hc_ny = h_WE[j,0,0,:]   # (n_theta, ny)
+            hs_ny = h_WE[j,0,1,:]
+            # broadcast to (n_theta, ny, 1) for h/u grids (ny, nx or nx-1)
+            hc_yb = hc_ny[:, :, None]
+            hs_yb = hs_ny[:, :, None]
+            # interpolate to ny-1 for v-grid, then broadcast to (n_theta, ny-1, 1)
+            hc_vb = ((hc_ny[:, :-1] + hc_ny[:, 1:]) * 0.5)[:, :, None]
+            hs_vb = ((hs_ny[:, :-1] + hs_ny[:, 1:]) * 0.5)[:, :, None]
 
-                # u
-                if flag_tangent:
-                    h_cos_theta_on_u_N = (h_cos_theta_on_v_N[1:] + h_cos_theta_on_v_N[:-1]) * 0.5
-                    h_sin_theta_on_u_N = (h_sin_theta_on_v_N[1:] + h_sin_theta_on_v_N[:-1]) * 0.5
-                    u_N += self.sponge_on_u_N * (self.g / (w**2 - self.f_on_u**2) * (
-                        h_cos_theta_on_u_N * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
-                                    + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
-                        h_sin_theta_on_u_N * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
-                                    - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
-                        ))
+            phi_h, amp_h, kx_h, ky_h = phases['W']['h']
+            phi_u, amp_u, kx_u, ky_u = phases['W']['u']
+            h_W = h_W + self.sponge_on_h_W * _h_field(phi_h, amp_h, hc_yb, hs_yb)
+            u_W = u_W + self.sponge_on_u_W * _vel_field(
+                    phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_yb, hs_yb, w2f2_u)
+            if flag_tangent:
+                phi_v, amp_v, kx_v, ky_v = phases['W']['v']
+                v_W = v_W + self.sponge_on_v_W * _vel_field(
+                        phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_vb, hs_vb, w2f2_v)
 
-                ####################################
-                # West
-                ####################################
-                kx_on_h = jnp.cos(theta) * k_on_h
-                ky_on_h = jnp.sin(theta) * k_on_h
-                kx_on_u = jnp.cos(theta) * k_on_u
-                ky_on_u = jnp.sin(theta) * k_on_u
-                kx_on_v = jnp.cos(theta) * k_on_v
-                ky_on_v = jnp.sin(theta) * k_on_v
-                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
-                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
-                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
+            # ------- East -------
+            hc_ny = h_WE[j,1,0,:]
+            hs_ny = h_WE[j,1,1,:]
+            hc_yb = hc_ny[:, :, None]
+            hs_yb = hs_ny[:, :, None]
+            hc_vb = ((hc_ny[:, :-1] + hc_ny[:, 1:]) * 0.5)[:, :, None]
+            hs_vb = ((hs_ny[:, :-1] + hs_ny[:, 1:]) * 0.5)[:, :, None]
 
-                # h
-                h_W += self.sponge_on_h_W * (
-                    h_WE[j,0,0,i][:,None] * jnp.cos(w*t - kxy_on_h) +
-                    h_WE[j,0,1,i][:,None] * jnp.sin(w*t - kxy_on_h))
-
-                # u
-                h_cos_theta_on_u_W = h_WE[j,0,0,i][:,None]
-                h_sin_theta_on_u_W = h_WE[j,0,1,i][:,None]
-                u_W += self.sponge_on_u_W * (self.g / (w**2 - self.f_on_u**2) * (
-                    h_cos_theta_on_u_W * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
-                                + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
-                    h_sin_theta_on_u_W * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
-                                - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
-                    ))
-
-                # v
-                if flag_tangent:
-                    h_cos_theta_on_v_W = (h_cos_theta_on_u_W[1:] + h_cos_theta_on_u_W[:-1]) * 0.5
-                    h_sin_theta_on_v_W = (h_sin_theta_on_u_W[1:] + h_sin_theta_on_u_W[:-1]) * 0.5
-                    v_W += self.sponge_on_v_W * (self.g / (w**2 - self.f_on_v**2) * (
-                        h_cos_theta_on_v_W * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
-                                    - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
-                        h_sin_theta_on_v_W * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
-                                    + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
-                        ))
-
-                ####################################
-                # East
-                ####################################
-                kx_on_h = -jnp.cos(theta) * k_on_h
-                ky_on_h = jnp.sin(theta) * k_on_h
-                kx_on_u = -jnp.cos(theta) * k_on_u
-                ky_on_u = jnp.sin(theta) * k_on_u
-                kx_on_v = -jnp.cos(theta) * k_on_v
-                ky_on_v = jnp.sin(theta) * k_on_v
-                kxy_on_h = kx_on_h * self.X + ky_on_h * self.Y
-                kxy_on_u = kx_on_u * self.Xu + ky_on_u * self.Yu
-                kxy_on_v = kx_on_v * self.Xv + ky_on_v * self.Yv
-
-                # h
-                h_E += self.sponge_on_h_E * (
-                    h_WE[j,1,0,i][:,None] * jnp.cos(w*t - kxy_on_h) +
-                    h_WE[j,1,1,i][:,None] * jnp.sin(w*t - kxy_on_h))
-
-                # u
-                h_cos_theta_on_u_E = h_WE[j,1,0,i][:,None]
-                h_sin_theta_on_u_E = h_WE[j,1,1,i][:,None]
-                u_E += self.sponge_on_u_E * (self.g / (w**2 - self.f_on_u**2) * (
-                    h_cos_theta_on_u_E * (w * kx_on_u * jnp.cos(w*t - kxy_on_u)
-                                + self.f_on_u * ky_on_u * jnp.sin(w*t - kxy_on_u)) +
-                    h_sin_theta_on_u_E * (w * kx_on_u * jnp.sin(w*t - kxy_on_u)
-                                - self.f_on_u * ky_on_u * jnp.cos(w*t - kxy_on_u))
-                    ))
-
-                # v
-                if flag_tangent:
-                    h_cos_theta_on_v_E = (h_cos_theta_on_u_E[1:] + h_cos_theta_on_u_E[:-1]) * 0.5
-                    h_sin_theta_on_v_E = (h_sin_theta_on_u_E[1:] + h_sin_theta_on_u_E[:-1]) * 0.5
-                    v_E += self.sponge_on_v_E * (self.g / (w**2 - self.f_on_v**2) * (
-                        h_cos_theta_on_v_E * (w * ky_on_v * jnp.cos(w*t - kxy_on_v)
-                                    - self.f_on_v * kx_on_v * jnp.sin(w*t - kxy_on_v)) +
-                        h_sin_theta_on_v_E * (w * ky_on_v * jnp.sin(w*t - kxy_on_v)
-                                    + self.f_on_v * kx_on_v * jnp.cos(w*t - kxy_on_v))
-                        ))
+            phi_h, amp_h, kx_h, ky_h = phases['E']['h']
+            phi_u, amp_u, kx_u, ky_u = phases['E']['u']
+            h_E = h_E + self.sponge_on_h_E * _h_field(phi_h, amp_h, hc_yb, hs_yb)
+            u_E = u_E + self.sponge_on_u_E * _vel_field(
+                    phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_yb, hs_yb, w2f2_u)
+            if flag_tangent:
+                phi_v, amp_v, kx_v, ky_v = phases['E']['v']
+                v_E = v_E + self.sponge_on_v_E * _vel_field(
+                        phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_vb, hs_vb, w2f2_v)
 
         u_it = (u_S + u_N + u_W + u_E) / self.weight_sponge_u
         v_it = (v_S + v_N + v_W + v_E) / self.weight_sponge_v

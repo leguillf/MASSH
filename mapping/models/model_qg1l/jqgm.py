@@ -7,7 +7,7 @@ from jax import jit
 from jax import jvp, vjp
 import matplotlib.pylab as plt
 import numpy as np
-from jax.lax import scan, fori_loop, dynamic_slice, dynamic_update_slice
+from jax.lax import scan, dynamic_update_slice
 from jax import vmap
 from jax.scipy.sparse.linalg import cg as jcg
 from functools import partial
@@ -542,10 +542,8 @@ class Qgm:
         q1 = +q0
     
         # Time propagation
-        #X1, _ = scan(self.one_step_for_scan_jit, init=(h1, q1, hb, qb), xs=jnp.zeros(nstep))
-        #h1, q1, hb, qb = X1
-        for _ in range(nstep):
-            h1, q1 = self.one_step_jit(h1, q1, hb, qb)
+        X1, _ = scan(self.one_step_for_scan_jit, init=(h1, q1, hb, qb), xs=jnp.zeros(nstep))
+        h1, q1, hb, qb = X1
     
         # Mask
         h1 = h1.at[self.ind0].set(jnp.nan)
@@ -1557,6 +1555,7 @@ class Qgm_trac:
                  g=9.81, f=1e-4, time_scheme='Euler', Wbc=None, Kdiffus=None, Kdiffus_trac=None,bc_trac='OBC',
                  mdt=None,
                  ageo_velocities=False,advect_pv=True,
+                 sponge_coef=0.,
                  ** kwargs):
 
         # Grid shape
@@ -1672,6 +1671,21 @@ class Qgm_trac:
 
         # BC
         self.bc_trac = bc_trac
+
+        # Tracer sponge Rayleigh-damping coefficient (per substep).
+        # Applied as a tendency: var1 += sponge_coef * Wbc * ocean * (varb - var1).
+        # Typical values 0.01-0.1; 0 disables the sponge entirely.
+        self.sponge_coef = float(sponge_coef)
+
+        # Ocean mask (1 in ocean, 0 on land) used to disable the tracer sponge on
+        # land cells.  Mirrors SW's `_c_b = c_b * masks.h`: in SW the prognostic
+        # tracer and the BC tracer are both forced to 0 over land via masks.h, so
+        # the sponge term `gamma * (c_b - c)` vanishes there.  In QG the
+        # prognostic tracer is NOT mask-aware and `varb` has NaN->0 fills on
+        # land (see Model_qg1l_jax.set_bc), so without this gate the sponge
+        # would relax coastal-interior cells toward those land zeros and
+        # produce spurious freshwater/cold intrusions near the coast.
+        self.ocean_h = (self.ind0 == False).astype('float64')
 
         # Adect PV flag
         self.advect_pv = advect_pv
@@ -1848,6 +1862,16 @@ class Qgm_trac:
                 um += uam
                 vp += vap
                 vm += vam
+
+            # Force advective velocities to zero at land/coast T-points so
+            # tracers are not transported into or out of dry cells.  Without
+            # this, geostrophic u,v from h2uv near the coast push the (NN-
+            # filled) values around and produce spurious coastal patches.
+            u_mask = self.ocean_h[1:-1,1:-1]
+            up = up * u_mask
+            um = um * u_mask
+            vp = vp * u_mask
+            vm = vm * u_mask
         
             #######################
             # Advection
@@ -1999,9 +2023,31 @@ class Qgm_trac:
                     var1 = var1.at[i,self.ind12].set(varb[i,self.ind12])
             
                 #######################
-                # Tracer Relaxation BC
+                # Tracer Sponge (Rayleigh damping toward BC field)
                 #######################
-                var1 = var1.at[i,1:-1,1:-1].set(self.Wbc[1:-1,1:-1] * varb[i,1:-1,1:-1] + (1-self.Wbc[1:-1,1:-1]) * var1[i,1:-1,1:-1])
+                # Per-substep tendency nudging:
+                #   var1 <- var1 + sponge_coef * Wbc * (varb - var1)
+                # Replaces the previous hard blend (equivalent to sponge_coef == 1),
+                # which clamped the interior to the BC field within ~one timestep and
+                # propagated land/edge extrapolation artefacts (e.g. coastal SSS
+                # intrusions) into the domain. sponge_coef=0 disables the sponge.
+                if self.sponge_coef > 0.:
+                    var1 = var1.at[i,1:-1,1:-1].add(
+                        self.sponge_coef * self.Wbc[1:-1,1:-1] *
+                        self.ocean_h[1:-1,1:-1] *
+                        (varb[i,1:-1,1:-1] - var1[i,1:-1,1:-1]))
+
+                #######################
+                # Tracer land-cell clamp
+                #######################
+                # Force prognostic tracer values at land cells to the (now
+                # nearest-neighbour-filled) BC value. QG tracer advection is
+                # not mask-aware: without this clamp, land cells would drift
+                # under advection/diffusion and leak unphysical values into
+                # adjacent coastal ocean cells the next step. Mirrors SW's
+                # behaviour where the prognostic is kept consistent on land
+                # via masks.h.
+                var1 = var1.at[i, self.ind0].set(varb[i, self.ind0])
             
         return var1
 
@@ -2087,9 +2133,16 @@ class Qgm_trac:
             cb = None
 
         # Tracer mask
+        # NOTE: previously zeroed c0/cb at land cells (self.ind0).  That
+        # undid the nearest-neighbour fill applied to tracer BCs in
+        # Model_qg1l_jax.set_bc / _apply_bc, so coastal/land cells became
+        # 0 K / 0 psu at the start of every step.  Stencils and tracer
+        # diffusion then pulled adjacent ocean cells towards 0 — the
+        # source of the spurious coastal cold/fresh patches that grew in
+        # after the first timestep.  Force the prognostic at land to
+        # match the (NN-filled) BC and leave the BC itself untouched.
         if c0 is not None:
-            c0 = c0.at[:,self.ind0].set(0)
-            cb = cb.at[:,self.ind0].set(0)
+            c0 = c0.at[:,self.ind0].set(cb[:,self.ind0])
         
         # Add MDT
         if self.mdt is not None:
@@ -2157,7 +2210,7 @@ class Msqg:
     ###########################################################################
     def __init__(self, dx=None, dy=None, dt=None, SSH=None, c=None, upwind=3,
                  g=9.81, f=1e-4, time_scheme='Euler', Wbc=None, Kdiffus=None, Kdiffus_trac=None,bc_trac='OBC',
-                 mdt=None):
+                 mdt=None, sponge_coef=0.):
 
         # Grid shape
         ny, nx, = np.shape(dx)
@@ -2268,6 +2321,12 @@ class Msqg:
 
         # BC
         self.bc_trac = bc_trac
+
+        # Tracer sponge Rayleigh-damping coefficient (per substep).
+        # Applied as a tendency: var1 += sponge_coef * Wbc * ocean * (varb - var1).
+        # See Qgm_trac.__init__ for the rationale of the ocean mask.
+        self.sponge_coef = float(sponge_coef)
+        self.ocean_h = (self.ind0 == False).astype('float64')
 
         self.ageo_velocities = None
         self.advect_pv = True
@@ -2425,6 +2484,19 @@ class Msqg:
             uam = jnp.where(ua_on_T > 0, 0, ua_on_T)
             vap = jnp.where(va_on_T < 0, 0, va_on_T)
             vam = jnp.where(va_on_T > 0, 0, va_on_T)
+
+            # Force advective velocities to zero at land/coast T-points so
+            # tracers are not transported into or out of dry cells.  See
+            # Qgm_trac.rhs for rationale.
+            u_mask = self.ocean_h[1:-1,1:-1]
+            up = up * u_mask
+            um = um * u_mask
+            vp = vp * u_mask
+            vm = vm * u_mask
+            uap = uap * u_mask
+            uam = uam * u_mask
+            vap = vap * u_mask
+            vam = vam * u_mask
             #######################
             # Advection
             #######################
@@ -2641,9 +2713,31 @@ class Msqg:
                     var1 = var1.at[i,self.ind12].set(varb[i,self.ind12])
             
                 #######################
-                # Tracer Relaxation BC
+                # Tracer Sponge (Rayleigh damping toward BC field)
                 #######################
-                var1 = var1.at[i,1:-1,1:-1].set(self.Wbc[1:-1,1:-1] * varb[i,1:-1,1:-1] + (1-self.Wbc[1:-1,1:-1]) * var1[i,1:-1,1:-1])
+                # Per-substep tendency nudging:
+                #   var1 <- var1 + sponge_coef * Wbc * (varb - var1)
+                # Replaces the previous hard blend (equivalent to sponge_coef == 1),
+                # which clamped the interior to the BC field within ~one timestep and
+                # propagated land/edge extrapolation artefacts (e.g. coastal SSS
+                # intrusions) into the domain. sponge_coef=0 disables the sponge.
+                if self.sponge_coef > 0.:
+                    var1 = var1.at[i,1:-1,1:-1].add(
+                        self.sponge_coef * self.Wbc[1:-1,1:-1] *
+                        self.ocean_h[1:-1,1:-1] *
+                        (varb[i,1:-1,1:-1] - var1[i,1:-1,1:-1]))
+
+                #######################
+                # Tracer land-cell clamp
+                #######################
+                # Force prognostic tracer values at land cells to the (now
+                # nearest-neighbour-filled) BC value. QG tracer advection is
+                # not mask-aware: without this clamp, land cells would drift
+                # under advection/diffusion and leak unphysical values into
+                # adjacent coastal ocean cells the next step. Mirrors SW's
+                # behaviour where the prognostic is kept consistent on land
+                # via masks.h.
+                var1 = var1.at[i, self.ind0].set(varb[i, self.ind0])
             
         return var1
 
@@ -2723,9 +2817,12 @@ class Msqg:
             cb = None
 
         # Tracer mask
+        # See Qgm_trac.step for rationale: zeroing tracers on land
+        # destroys the NN-filled BCs and produces coastal 0 patches
+        # after the first step.  Force the prognostic at land to the
+        # (NN-filled) BC value and leave the BC untouched.
         if c0 is not None:
-            c0 = c0.at[:,self.ind0].set(0)
-            cb = cb.at[:,self.ind0].set(0)
+            c0 = c0.at[:,self.ind0].set(cb[:,self.ind0])
         # h-->q
         q0 = self.h2pv_jit(h0, hb)
         qb = self.h2pv_jit(hb, hb)

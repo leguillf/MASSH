@@ -39,6 +39,38 @@ from .tools import gaspari_cohn
 from .exp import Config as Config
 
 
+def _fill_nan_nearest(arr):
+    """Fill NaNs in a 2D or 3D numpy array with the nearest valid value.
+
+    Used for tracer BC fields in Model_qg1l_jax.set_bc: QG tracer advection is
+    not land-mask aware, so a 0 sitting at a NaN-filled (land or coastal
+    no-data) pixel of varb would leak into adjacent ocean cells via advection
+    each step, producing spurious ~0 psu / cold patches at the coast.  This
+    nearest-neighbour fill gives varb a sensible ocean value at land/coastal
+    pixels, mirroring what SW gets for free through its land mask.
+    """
+    from scipy.ndimage import distance_transform_edt
+    out = np.asarray(arr, dtype=float).copy()
+    if out.ndim == 2:
+        slices = [out]
+    elif out.ndim == 3:
+        slices = [out[k] for k in range(out.shape[0])]
+    else:
+        out[np.isnan(out)] = 0.
+        return out
+    for s in slices:
+        nan_mask = np.isnan(s)
+        if not nan_mask.any():
+            continue
+        if nan_mask.all():
+            s[:] = 0.
+            continue
+        ind = distance_transform_edt(
+            nan_mask, return_distances=False, return_indices=True)
+        s[nan_mask] = s[tuple(ind)][nan_mask]
+    return out
+
+
 def Model(config, State, verbose=True):
     """
     NAME
@@ -656,19 +688,27 @@ class Model_qg1l_jax(M):
         self.init_from_bc = config.MOD.init_from_bc
         self.Wbc = np.zeros((State.ny,State.nx))
         if config.MOD.dist_sponge_bc is not None and State.mask is not None:
-            if config.MOD.advect_tracer and config.MOD.bc_trac=='OBC':
-                bc = False # No sponge band for open boundaries
+            # Use the same compute_sponge_components(.) machinery as Model_qgsw so that the
+            # sponge weight is built from independent west/east/north/south + coastal
+            # contributions and behaves consistently across models.
+            if getattr(config.MOD, 'use_sponge_on_coast', True):
+                mask_h = State.mask.copy()
             else:
-                bc = True
-            self.Wbc = grid.compute_weight_map(State.lon, State.lat, deepcopy(State.mask), config.MOD.dist_sponge_bc, bc=bc)
+                mask_h = np.zeros((State.ny, State.nx), dtype=bool)
+
+            wc_h, wNS_h, wWE_h = grid.compute_sponge_components(
+                State.lon, State.lat, mask_h, config.MOD.dist_sponge_bc)
+
+            self.Wbc = 1.0 - (1.0 - wc_h) * (1.0 - wNS_h) * (1.0 - wWE_h)
+
             if config.EXP.flag_plot>1:
                 plt.figure()
                 plt.pcolormesh(self.Wbc)
                 plt.colorbar()
                 plt.title('Wbc')
                 plt.show()
-
-        # Use boundary conditions as mean field (for 4Dvar only)
+        # Sponge Rayleigh-damping coefficient for tracers (like Model_bmit sponge_coef)
+        self.sponge_coef = config.MOD.sponge_coef
         if config.INV is not None and config.INV.super=='INV_4DVAR':
             self.anomaly_from_bc = config.INV.anomaly_from_bc
         else:
@@ -715,6 +755,7 @@ class Model_qg1l_jax(M):
                          tile_size=config.MOD.tile_size,
                          tile_overlap=config.MOD.tile_overlap,
                          mdt=self.mdt,
+                         sponge_coef=self.sponge_coef,
                          bathymetry_PV_term=self.bathymetry_PV_term)
 
         # Model functions initialization
@@ -801,8 +842,21 @@ class Model_qg1l_jax(M):
                 if _name_var_bc==_name_var_mod:
                     for i,t in enumerate(time_bc):
                         var_bc_t = +var_bc[_name_var_bc][i]
-                        # Remove nan
-                        var_bc_t[np.isnan(var_bc_t)] = 0.
+                        # Fill missing values.  For SSH we keep the historical
+                        # NaN->0 behaviour (SSH=0 at land is benign).  For
+                        # tracers we instead fill NaNs with the nearest valid
+                        # ocean value: QG tracer advection is not mask-aware,
+                        # so a 0 sitting at a land / coastal-no-data pixel of
+                        # varb would (i) be copied into the initial state via
+                        # init_from_bc / Wbc*bc, and (ii) leak into adjacent
+                        # ocean cells through advection each step, producing
+                        # the spurious ~0 psu / cold patches observed along
+                        # the coastline.  Nearest-ocean fill mirrors what SW
+                        # gets for free via its land mask.
+                        if _name_var_mod == 'SSH':
+                            var_bc_t[np.isnan(var_bc_t)] = 0.
+                        else:
+                            var_bc_t = _fill_nan_nearest(var_bc_t)
                         # Fill bc dictionnary
                         self.bc[_name_var_mod][t] = var_bc_t
                 elif _name_var_bc==f'{_name_var_mod}_params':
@@ -814,8 +868,18 @@ class Model_qg1l_jax(M):
         self.bc_time_jax = jnp.array(list(self.bc['SSH'].keys()))
         self.bc_time = np.array(list(self.bc['SSH'].keys()))
         self.bc_values = {t: jnp.array(self.bc['SSH'][t]) for t in self.bc['SSH']}
-        for name in var_bc:
-            self.bc_values[name] = jnp.array(list(self.bc['SSH'].values()))
+        # Per-variable JIT-ready stacks indexed by time.  The previous code
+        # populated every entry from self.bc['SSH'] regardless of `name`, so
+        # tracer BC arrays read from _apply_bc_jax were actually SSH values
+        # (with NaN->0 fills) — that is the source of the coastal ~0 psu /
+        # cold patches observed after the first model step.  Read from the
+        # dict for the matching variable name, falling back to SSH only if
+        # the variable was not provided.
+        for name in self.name_var:
+            if name in self.bc and len(self.bc[name].keys()) > 0:
+                self.bc_values[name] = jnp.array(list(self.bc[name].values()))
+            else:
+                self.bc_values[name] = jnp.array(list(self.bc['SSH'].values()))
             
     def _apply_bc(self,t0,t1):
         
@@ -856,12 +920,17 @@ class Model_qg1l_jax(M):
         Xb = self.bc_values['SSH'][idt][0]
 
         if self.advect_tracer:
+            Xb = Xb[jnp.newaxis,:,:]  # (1, ny, nx)
+            if self.ageo_velocities:
+                for name in ['U', 'V']:
+                    idt_c = jnp.where(self.bc_time_jax==t1, size=1)[0]
+                    Cb = self.bc_values[name][idt_c][0]
+                    Xb = jnp.concatenate([Xb, Cb[jnp.newaxis,:,:]], axis=0)
             for name in self.name_var:
-                if name!='SSH':
-                    idt = jnp.where(self.bc_time_jax==t1, size=1)[0]
-                    Cb = self.bc_values[name][idt][0]
-                    Xb = jnp.append(Xb[jnp.newaxis,:,:], 
-                                    Cb[jnp.newaxis,:,:], axis=0)     
+                if name not in ['SSH', 'U', 'V']:
+                    idt_c = jnp.where(self.bc_time_jax==t1, size=1)[0]
+                    Cb = self.bc_values[name][idt_c][0]
+                    Xb = jnp.concatenate([Xb, Cb[jnp.newaxis,:,:]], axis=0)
         return Xb
     
     def step(self,State,nstep=1,t=0):
@@ -899,15 +968,17 @@ class Model_qg1l_jax(M):
                              name_var=self.name_var['SSH'])
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
+                        # Tracer sponge (Rayleigh damping toward BC) is now applied
+                        # per-substep inside qgm.bc() via sponge_coef; do not double-apply here.
+                        X1_i = X1[i]
                         Fc = State.params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
                         # Add Nudging to BC 
                         if self.forcing_tracer_from_bc:
-                            State.setvar(X1[i] + nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc * (Xb[i] - X0[i]), 
-                                         name_var=self.name_var[name])
+                            X1_i = X1_i + nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc * (Xb[i] - X0[i])
                         # Only forcing flux
                         else:
-                            State.setvar(X1[i] + nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc ,
-                                        name_var=self.name_var[name])
+                            X1_i = X1_i + nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc
+                        State.setvar(X1_i, name_var=self.name_var[name])
             else:
                 X1 += nstep*self.dt/(3600*24) * Fssh
                 State.setvar(X1, name_var=self.name_var['SSH'])
@@ -921,6 +992,12 @@ class Model_qg1l_jax(M):
         X0 = State_vars[self.name_var['SSH']]
         if self.advect_tracer:
             X0 = X0[jnp.newaxis,:,:]
+            # Ageostrophic velocities (must mirror step() ordering before tracers)
+            if self.ageo_velocities:
+                U = State_vars[self.name_var['U']][jnp.newaxis,:,:]
+                V = State_vars[self.name_var['V']][jnp.newaxis,:,:]
+                X0 = jnp.append(X0, U, axis=0)
+                X0 = jnp.append(X0, V, axis=0)
             # Tracers
             for name in self.name_var:
                 if name not in ['SSH', 'U', 'V']:
@@ -941,10 +1018,17 @@ class Model_qg1l_jax(M):
                 State_vars[self.name_var['SSH']] = X1[0]
                 for i,name in enumerate(self.name_var):
                     if name!='SSH':
+                        # Tracer sponge is applied per-substep inside qgm.bc() via
+                        # sponge_coef; do not double-apply here.
+                        X1_i = X1[i]
                         Fc = State_params[self.name_var[name]] # Forcing term for tracer or ageostrophic velocities
+                        # Add Nudging to BC (consistent with step())
+                        if self.forcing_tracer_from_bc:
+                            X1_i = X1_i + nstep*self.dt/(3600*24) * (1-self.Wbc) * Fc * (Xb[i] - X0[i])
                         # Only forcing flux
-                        X1[i] += nstep*self.dt/(3600*24) * (1-self.Wbc)  * Fc 
-                        State_vars[self.name_var[name]] = X1[i]
+                        else:
+                            X1_i = X1_i + nstep*self.dt/(3600*24) * (1-self.Wbc) * Fc
+                        State_vars[self.name_var[name]] = X1_i
             else:
                 X1 += nstep*self.dt/(3600*24) * Fssh
                 State_vars[self.name_var['SSH']] = X1
@@ -1219,9 +1303,26 @@ class Model_csw1l(M):
             self.H = config.MOD.H 
         
         # Boundary angles
-        if config.MOD.Ntheta>0:
-            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
+        _ntheta = config.MOD.Ntheta
+        if _ntheta == -1:
+            # Auto: boundary tangential Nyquist criterion.
+            # A wave entering at angle theta has along-boundary wavenumber k_t = k*sin(theta).
+            # At grazing incidence k_t_max = k_max = omega_max/c_min.  With 2*Ntheta+1 angular
+            # samples covering [-k_max, k_max], the Nyquist condition on a boundary of length L
+            # gives:  Ntheta >= k_max * L / (2*pi) = L / lambda_min
+            # where lambda_min = 2*pi*c_min / omega_max and L = max boundary length.
+            _omegas = np.asarray(config.MOD.w_waves)
+            _He_bdy = np.concatenate([
+                self.Heb[0,:], self.Heb[-1,:], self.Heb[:,0], self.Heb[:,-1]])
+            _c_min = np.sqrt(self.g * np.nanmin(_He_bdy[_He_bdy > 0]))
+            _lambda_min = 2*pi * _c_min / np.max(np.abs(_omegas))
+            _L_bdy = max(
+                float(np.asarray(State.X).max() - np.asarray(State.X).min()),
+                float(np.asarray(State.Y).max() - np.asarray(State.Y).min()))
+            _ntheta = int(np.ceil(_L_bdy / _lambda_min))
+        if _ntheta > 0:
+            theta_p = np.arange(0, pi/2 + pi/2/_ntheta, pi/2/_ntheta)
+            self.bc_theta = np.append(theta_p - pi/2, theta_p[1:])
         else:
             self.bc_theta = np.array([0])
         
@@ -1483,6 +1584,9 @@ class Model_csw1l(M):
             self.swm.weight_sponge_u = self.weight_sponge_u
             self.swm.weight_sponge_v = self.weight_sponge_v
             self.swm.weight_sponge_h = self.weight_sponge_h
+
+        # IT wave-phase method for sponge BC
+        self.swm.bc_it_method = getattr(config.MOD, 'bc_it_method', 'plane_wave')
 
         # Compile jax-related functions
         self._jstep_jit = jit(self._jstep, static_argnames=['nstep'])
@@ -2628,9 +2732,24 @@ class Model_qgsw(M):
                                    config.MOD.name_var_mdt,
                                    State.lon,
                                    State.lat)
-            mdt[np.isnan(mdt)] = 0
 
-            mdu, mdv = self.ssh2uv(mdt)
+
+            
+            if 'var_u' in config.MOD.name_var_mdt and 'var_v' in config.MOD.name_var_mdt:
+                mdu = grid.interp2d(ds,
+                                   config.MOD.name_var_mdt['var_u'],
+                                   State.lon,
+                                   State.lat)
+                mdv = grid.interp2d(ds,
+                                   config.MOD.name_var_mdt['var_v'],
+                                   State.lon,
+                                   State.lat)
+            else:
+                mdu, mdv = self.ssh2uv(mdt)
+
+            mdt[np.isnan(mdt)] = 0
+            mdu[np.isnan(mdu)] = 0
+            mdv[np.isnan(mdv)] = 0
 
         
             if config.EXP.flag_plot>0:
@@ -2711,6 +2830,16 @@ class Model_qgsw(M):
                     g_prime = np.expand_dims(g_prime, axis=(0,1))
                     
             if config.MOD.H is None:
+                # self.c is interpolated onto State.lon/State.lat, so its shape
+                # must be (State.ny, State.nx). The .T below converts to (nx, ny),
+                # which is then nl-expanded to (1, nx, ny) — the layout sw.py expects.
+                # A silent (nx, ny)-vs-(ny, nx) mismatch here would feed a diagonally
+                # flipped H field to the SW core, degrading forecast skill without
+                # crashing the model. Fail loudly instead.
+                assert self.c.shape == (State.ny, State.nx), \
+                    f'self.c has shape {self.c.shape}, expected (ny, nx)=' \
+                    f'({State.ny}, {State.nx}). The .T applied below assumes ' \
+                    f'(ny, nx); a mismatch will silently transpose H.'
                 H = np.expand_dims(self.c.T**2/g_prime[0,0,0], axis=0) 
                 H0 = np.array([[[np.nanmean(self.c)**2/g_prime[0,0,0]]]])
                 H[np.isnan(H)] = 0.
@@ -2800,6 +2929,8 @@ class Model_qgsw(M):
                         State.var[self.name_var[name]] = jnp.zeros((State.ny+1,State.nx), dtype=self.dtype)
                     elif name=='SSH':
                         State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
+                    else:  # Passive tracer
+                        State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
             dsin.close()
             del dsin   
         else:
@@ -2809,6 +2940,8 @@ class Model_qgsw(M):
                 elif name=='V':
                     State.var[self.name_var[name]] = jnp.zeros((State.ny+1,State.nx), dtype=self.dtype)
                 elif name=='SSH':
+                    State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
+                else:  # Passive tracer
                     State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
 
         # For nl>1, also initialize per-layer storage in State
@@ -2929,6 +3062,7 @@ class Model_qgsw(M):
             'forcing_momentum': getattr(config.MOD, 'forcing_momentum', 'direct'),
             'H_min': getattr(config.MOD, 'H_min', None),
             'H_max': getattr(config.MOD, 'H_max', None),
+            'diff_coef_trac': getattr(config.MOD, 'diff_coef_trac', 0.),
         }
 
         self.model = model(params)
@@ -2959,6 +3093,21 @@ class Model_qgsw(M):
             self.jstep_adj_jit = self.jstep_adj
             self.jstep_core_jit = self.jstep_core
 
+        # Tracer detection — config flag takes precedence if explicitly set to False
+        self.tracer_names = [k for k in self.name_var if k not in ('U', 'V', 'SSH')]
+        _cfg_advect = getattr(config.MOD, 'advect_tracer', None)
+        self.advect_tracer = (len(self.tracer_names) > 0) if _cfg_advect is None else bool(_cfg_advect)
+        self.n_trac = len(self.tracer_names)
+
+        if self.advect_tracer:
+            if flag_compile:
+                self.jstep_core_trac_jit = jax.jit(self.jstep_core_trac, static_argnames=['nstep'])
+                self.jstep_tgl_trac_jit  = jax.jit(self.jstep_tgl_trac,  static_argnames=['nstep'])
+                self.jstep_adj_trac_jit  = jax.jit(self.jstep_adj_trac,  static_argnames=['nstep'])
+            else:
+                self.jstep_core_trac_jit = self.jstep_core_trac
+                self.jstep_tgl_trac_jit  = self.jstep_tgl_trac
+                self.jstep_adj_trac_jit  = self.jstep_adj_trac
 
         # Control parameters
         self.name_params = config.MOD.name_params if config.MOD.name_params is not None else []
@@ -3206,6 +3355,10 @@ class Model_qgsw(M):
 
         _name_var = [self.name_var['U'], self.name_var['V'], self.name_var['SSH']] if name_var is None else name_var
 
+        if name_var is None and self.advect_tracer:
+            for name in self.tracer_names:
+                _name_var.append(self.name_var[name])
+
         if 'H' in self.name_params:
             State0.var['H'] = +State.params['H'] 
             _name_var += ['H']
@@ -3242,6 +3395,14 @@ class Model_qgsw(M):
             self.bc['V'][t] = v
             self.bc['SSH'][t] = ssh_bc_t
 
+        # Tracer BCs
+        for name in self.tracer_names:
+            if name in var_bc:
+                for i, t in enumerate(time_bc):
+                    c_bc_t = +var_bc[name][i]
+                    c_bc_t[np.isnan(c_bc_t)] = 0.
+                    self.bc[name][t] = c_bc_t
+
         self.bc_time = np.asarray(time_bc)
 
     def _apply_bc(self,t0,t1):
@@ -3264,6 +3425,22 @@ class Model_qgsw(M):
         ssh_b = self.bc['SSH'][t0]
 
         return u_b, v_b, ssh_b
+    
+    def _apply_bc_tracer(self, t0, t1):
+        """Return stacked tracer BC array of shape (n_trac, ny, nx)."""
+        if not self.advect_tracer:
+            return None
+        c_b_list = []
+        for name in self.tracer_names:
+            cb_i = np.zeros((self.ny, self.nx), dtype='float32')
+            if name in self.bc and len(self.bc[name]) > 0:
+                if t0 in self.bc[name]:
+                    cb_i = self.bc[name][t0]
+                elif hasattr(self, 'bc_time') and len(self.bc_time) > 0:
+                    idx = np.argmin(np.abs(self.bc_time - t0))
+                    cb_i = self.bc[name][self.bc_time[idx]]
+            c_b_list.append(jnp.asarray(cb_i, dtype=self.dtype))
+        return jnp.stack(c_b_list, axis=0)  # (n_trac, ny, nx)
     
     def ssh2uv(self, ssh):
         """Nonlinear SSH → (u, v) model."""
@@ -3348,6 +3525,18 @@ class Model_qgsw(M):
             Fv_sw = Fv.T / (3600 * 24)
             Fh_sw = Fh.T / (3600 * 24)
 
+        # Add MDT to sponge BC target: inside model_step the state already has MDT
+        # added, so the sponge must relax toward (anomaly_BC + MDT), not anomaly_BC.
+        if self.mdt is not None:
+            if self.nl > 1:
+                u_b_sw = u_b_sw.at[0].add(self.mdu[0, 0])
+                v_b_sw = v_b_sw.at[0].add(self.mdv[0, 0])
+                h_b_sw = h_b_sw.at[0].add(self.mdt[0, 0])
+            else:
+                u_b_sw = u_b_sw + self.mdu[0, 0]
+                v_b_sw = v_b_sw + self.mdv[0, 0]
+                h_b_sw = h_b_sw + self.mdt[0, 0]
+
         # Step
         u1, v1, h1 = self.model_step(
                 u, v, h, H=H, nstep=nstep,
@@ -3370,6 +3559,95 @@ class Model_qgsw(M):
                 v1 = v1 - self.mdv
 
         return u1, v1, h1
+    
+    def jstep_core_trac(self, t, u0, v0, h0, c0, H, Fu, Fv, Fh, Fc,
+                        u_b, v_b, h_b, c_b,
+                        taux=None, tauy=None, h_wind=None, wind_strength=None, nstep=1):
+        """
+        Joint single-step for (u, v, h) + passive tracer c.
+
+        c0 : (n_trac, ny, nx)  tracers in State convention (ny, nx per tracer)
+        c_b: (n_trac, ny, nx)  tracer boundary condition
+        Fc : (n_trac, ny, nx)  per-tracer external forcing (same convention as Fh)
+        Returns (u1, v1, h1, c1) where c1 has shape (n_trac, ny, nx).
+        """
+        u, v, h = u0, v0, h0
+
+        # Add MDT (surface only for nl>1)
+        if self.mdt is not None:
+            if self.nl > 1:
+                h = h.at[:, 0:1, :, :].add(self.mdt)
+                u = u.at[:, 0:1, :, :].add(self.mdu)
+                v = v.at[:, 0:1, :, :].add(self.mdv)
+            else:
+                h = h + self.mdt
+                u = u + self.mdu
+                v = v + self.mdv
+
+        # Wind stress: State (ny, nx+1/ny+1) → SW model (nx-1, ny/ny-1)
+        _taux = taux[:, 1:-1].T if taux is not None else None
+        _tauy = tauy[1:-1, :].T if tauy is not None else None
+
+        # Convert BCs and forcing State → SW convention
+        # Tracer: (n_trac, ny, nx) → (1, n_trac, nx, ny)
+        c_sw   = jnp.expand_dims(c0.transpose(0, 2, 1), axis=0)
+        c_b_sw = jnp.expand_dims(c_b.transpose(0, 2, 1), axis=0)
+        Fc_sw  = jnp.expand_dims(Fc.transpose(0, 2, 1), axis=0) / (3600 * 24)
+
+        if self.nl > 1:
+            u_b_sw = jnp.zeros((self.nl, self.nx+1, self.ny), dtype=self.dtype).at[0].set(u_b.T)
+            v_b_sw = jnp.zeros((self.nl, self.nx, self.ny+1), dtype=self.dtype).at[0].set(v_b.T)
+            h_b_sw = jnp.zeros((self.nl, self.nx, self.ny),   dtype=self.dtype).at[0].set(h_b.T)
+            Fu_sw = jnp.zeros((self.nl, self.nx+1, self.ny), dtype=self.dtype).at[0].set(Fu.T) / (3600 * 24)
+            Fv_sw = jnp.zeros((self.nl, self.nx, self.ny+1), dtype=self.dtype).at[0].set(Fv.T) / (3600 * 24)
+            Fh_sw = jnp.zeros((self.nl, self.nx, self.ny),   dtype=self.dtype).at[0].set(Fh.T) / (3600 * 24)
+        else:
+            u_b_sw = u_b.T
+            v_b_sw = v_b.T
+            h_b_sw = h_b.T
+            Fu_sw = Fu.T / (3600 * 24)
+            Fv_sw = Fv.T / (3600 * 24)
+            Fh_sw = Fh.T / (3600 * 24)
+
+        # Add MDT to sponge BC target: inside model.step_with_tracer the state
+        # already has MDT added, so the sponge must relax toward
+        # (anomaly_BC + MDT), not anomaly_BC.
+        if self.mdt is not None:
+            if self.nl > 1:
+                u_b_sw = u_b_sw.at[0].add(self.mdu[0, 0])
+                v_b_sw = v_b_sw.at[0].add(self.mdv[0, 0])
+                h_b_sw = h_b_sw.at[0].add(self.mdt[0, 0])
+            else:
+                u_b_sw = u_b_sw + self.mdu[0, 0]
+                v_b_sw = v_b_sw + self.mdv[0, 0]
+                h_b_sw = h_b_sw + self.mdt[0, 0]
+
+        # Joint step (u, v, h, c)
+        u1, v1, h1, c1 = self.model.step_with_tracer(
+            u, v, h, c_sw,
+            H=H, nstep=nstep,
+            u_b=u_b_sw, v_b=v_b_sw, h_b=h_b_sw, c_b=c_b_sw,
+            Fu=Fu_sw, Fv=Fv_sw, Fh=Fh_sw, Fc=Fc_sw,
+            taux=_taux, tauy=_tauy,
+            h_wind=h_wind,
+            wind_strength=wind_strength,
+        )
+
+        # Remove MDT (surface only for nl>1)
+        if self.mdt is not None:
+            if self.nl > 1:
+                h1 = h1.at[:, 0:1, :, :].add(-self.mdt)
+                u1 = u1.at[:, 0:1, :, :].add(-self.mdu)
+                v1 = v1.at[:, 0:1, :, :].add(-self.mdv)
+            else:
+                h1 = h1 - self.mdt
+                u1 = u1 - self.mdu
+                v1 = v1 - self.mdv
+
+        # c1: (1, n_trac, nx, ny) → (n_trac, ny, nx)
+        c1_state = c1[0].transpose(0, 2, 1)
+
+        return u1, v1, h1, c1_state
     
     def jstep(self, t, u0, v0, h0, H, Fu, Fv, Fh, u_b, v_b, h_b,
              taux=None, tauy=None, h_wind=None, wind_strength=None, nstep=1):
@@ -3458,6 +3736,70 @@ class Model_qgsw(M):
         
         return adu0, adv0, adh0, adH, adFu, adFv, adFh, adh_wind, adwind_strength, adu_b, adv_b, adh_b
 
+    def jstep_tgl_trac(self, t, du0, dv0, dh0, dc0, dH, dFu, dFv, dFh, dFc,
+                       u0, v0, h0, c0, H, Fu, Fv, Fh, Fc,
+                       u_b, v_b, h_b, c_b,
+                       taux=None, tauy=None,
+                       h_wind=None, dh_wind=None,
+                       wind_strength=None, dwind_strength=None,
+                       du_b=None, dv_b=None, dh_b=None, dc_b=None, nstep=1):
+        """TGL for joint (u, v, h, c) step via JAX forward-mode AD."""
+        f = lambda u, v, h, c, H, Fu, Fv, Fh, Fc, hw, ws, ub, vb, hb, cb: \
+            self.jstep_core_trac_jit(
+                t, u, v, h, c, H, Fu, Fv, Fh, Fc, ub, vb, hb, cb,
+                taux=taux, tauy=tauy, h_wind=hw, wind_strength=ws, nstep=nstep)
+
+        if du_b is None: du_b = jnp.zeros_like(u_b)
+        if dv_b is None: dv_b = jnp.zeros_like(v_b)
+        if dh_b is None: dh_b = jnp.zeros_like(h_b)
+        if dc_b is None: dc_b = jnp.zeros_like(c_b)
+        if dFc is None:  dFc  = jnp.zeros_like(Fc)
+
+        (u1, v1, h1, c1), (du1, dv1, dh1, dc1) = jax.jvp(
+            f,
+            (u0, v0, h0, c0, H, Fu, Fv, Fh, Fc, h_wind, wind_strength, u_b, v_b, h_b, c_b),
+            (du0, dv0, dh0, dc0, dH, dFu, dFv, dFh, dFc, dh_wind, dwind_strength, du_b, dv_b, dh_b, dc_b),
+        )
+        return du1, dv1, dh1, dc1
+
+    def jstep_adj_trac(self, t, adu1, adv1, adh1, adc1, adH, adFu, adFv, adFh, adFc,
+                       u0, v0, h0, c0, H, Fu, Fv, Fh, Fc,
+                       u_b, v_b, h_b, c_b,
+                       taux=None, tauy=None,
+                       h_wind=None, adh_wind=None,
+                       wind_strength=None, adwind_strength=None,
+                       adu_b=None, adv_b=None, adh_b=None, adc_b=None, nstep=1):
+        """ADJ for joint (u, v, h, c) step via JAX reverse-mode AD."""
+        f = lambda u, v, h, c, H, Fu, Fv, Fh, Fc, hw, ws, ub, vb, hb, cb: \
+            self.jstep_core_trac_jit(
+                t, u, v, h, c, H, Fu, Fv, Fh, Fc, ub, vb, hb, cb,
+                taux=taux, tauy=tauy, h_wind=hw, wind_strength=ws, nstep=nstep)
+
+        (u1, v1, h1, c1), vjp_fun = jax.vjp(
+            f, u0, v0, h0, c0, H, Fu, Fv, Fh, Fc, h_wind, wind_strength, u_b, v_b, h_b, c_b)
+
+        (adu0, adv0, adh0, adc0,
+         _adH, _adFu, _adFv, _adFh, _adFc,
+         _adh_wind, _adwind_strength,
+         _adu_b, _adv_b, _adh_b, _adc_b) = vjp_fun((adu1, adv1, adh1, adc1))
+
+        if adH is not None:            adH            += _adH
+        if adFc is not None:           adFc           += _adFc
+        if adh_wind is not None:       adh_wind       += _adh_wind
+        if adwind_strength is not None: adwind_strength += _adwind_strength
+        if adu_b is not None:          adu_b          += _adu_b
+        if adv_b is not None:          adv_b          += _adv_b
+        if adh_b is not None:          adh_b          += _adh_b
+        if adc_b is not None:          adc_b          += _adc_b
+        adFu += _adFu
+        adFv += _adFv
+        adFh += _adFh
+
+        return (adu0, adv0, adh0, adc0,
+                adH, adFu, adFv, adFh, adFc,
+                adh_wind, adwind_strength,
+                adu_b, adv_b, adh_b, adc_b)
+
     def step(self,State,nstep=1,t=0):
 
         if self.nl > 1:
@@ -3500,6 +3842,15 @@ class Model_qgsw(M):
         else:
             bc_du = bc_dv = bc_dh = None
 
+        # Tracer setup
+        if self.advect_tracer:
+            c = jnp.stack(
+                [jnp.asarray(State.getvar(self.name_var[n]), dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)  # (n_trac, ny, nx)
+            Fc = jnp.stack(
+                [jnp.asarray(State.params[self.name_var[n]], dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)  # (n_trac, ny, nx)
+
         # Sub-stepping loop (limits lax.scan length for memory efficiency)
         step_done = 0
         while step_done < nstep:
@@ -3511,8 +3862,16 @@ class Model_qgsw(M):
                 v_b = v_b + bc_dv
                 h_b = h_b + bc_dh
             taux, tauy = self._get_wind_stress(t_chunk)
-            u, v, h = self.jstep_jit(t_chunk, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
-                                      taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength, nstep=n_chunk)
+            if self.advect_tracer:
+                c_b = self._apply_bc_tracer(t_chunk, int(t_chunk + n_chunk * self.dt))
+                u, v, h, c = self.jstep_core_trac_jit(
+                    t_chunk, u, v, h, c, H, Fu, Fv, Fh, Fc,
+                    u_b, v_b, h_b, c_b,
+                    taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength,
+                    nstep=n_chunk)
+            else:
+                u, v, h = self.jstep_jit(t_chunk, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                                          taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength, nstep=n_chunk)
             step_done += n_chunk
 
         if self.nl > 1:
@@ -3528,7 +3887,12 @@ class Model_qgsw(M):
             h = h[0,0].T
             State.setvar(u, name_var=self.name_var['U'])
             State.setvar(v, name_var=self.name_var['V'])
-            State.setvar(h, name_var=self.name_var['SSH'])   
+            State.setvar(h, name_var=self.name_var['SSH'])
+
+        # Write tracer fields back to State
+        if self.advect_tracer:
+            for i, name in enumerate(self.tracer_names):
+                State.setvar(c[i], name_var=self.name_var[name])
 
     def step_tgl(self,dState,State,nstep=1,t=0):
 
@@ -3590,6 +3954,21 @@ class Model_qgsw(M):
             bc_du = bc_dv = bc_dh = None
             dbc_du = dbc_dv = dbc_dh = None
         
+        # Tracer setup
+        if self.advect_tracer:
+            c = jnp.stack(
+                [jnp.asarray(State.getvar(self.name_var[n]), dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+            Fc = jnp.stack(
+                [jnp.asarray(State.params[self.name_var[n]], dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+            dc = jnp.stack(
+                [jnp.asarray(dState.getvar(self.name_var[n]), dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+            dFc = jnp.stack(
+                [jnp.asarray(dState.params[self.name_var[n]], dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+
         # Sub-stepping loop (limits lax.scan length for memory efficiency)
         step_done = 0
         while step_done < nstep:
@@ -3601,17 +3980,36 @@ class Model_qgsw(M):
                 v_b = v_b + bc_dv
                 h_b = h_b + bc_dh
             taux, tauy = self._get_wind_stress(t_chunk)
-            # Propagate tangent (JVP includes forward internally)
-            du, dv, dh = self.jstep_tgl_jit(t_chunk, du, dv, dh, dH, dFu, dFv, dFh,
-                                            u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
-                                            taux=taux, tauy=tauy,
-                                            h_wind=h_wind, dh_wind=dh_wind,
-                                            wind_strength=wind_strength, dwind_strength=dwind_strength,
-                                            du_b=dbc_du, dv_b=dbc_dv, dh_b=dbc_dh,
-                                            nstep=n_chunk)
-            # Propagate forward state for next chunk
-            u, v, h = self.jstep_jit(t_chunk, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
-                                      taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength, nstep=n_chunk)
+            if self.advect_tracer:
+                c_b = self._apply_bc_tracer(t_chunk, int(t_chunk + n_chunk * self.dt))
+                # Propagate tangent (JVP includes forward internally)
+                du, dv, dh, dc = self.jstep_tgl_trac_jit(
+                    t_chunk, du, dv, dh, dc, dH, dFu, dFv, dFh, dFc,
+                    u, v, h, c, H, Fu, Fv, Fh, Fc,
+                    u_b, v_b, h_b, c_b,
+                    taux=taux, tauy=tauy,
+                    h_wind=h_wind, dh_wind=dh_wind,
+                    wind_strength=wind_strength, dwind_strength=dwind_strength,
+                    du_b=dbc_du, dv_b=dbc_dv, dh_b=dbc_dh,
+                    nstep=n_chunk)
+                # Propagate forward state for next chunk
+                u, v, h, c = self.jstep_core_trac_jit(
+                    t_chunk, u, v, h, c, H, Fu, Fv, Fh, Fc,
+                    u_b, v_b, h_b, c_b,
+                    taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength,
+                    nstep=n_chunk)
+            else:
+                # Propagate tangent (JVP includes forward internally)
+                du, dv, dh = self.jstep_tgl_jit(t_chunk, du, dv, dh, dH, dFu, dFv, dFh,
+                                                u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                                                taux=taux, tauy=tauy,
+                                                h_wind=h_wind, dh_wind=dh_wind,
+                                                wind_strength=wind_strength, dwind_strength=dwind_strength,
+                                                du_b=dbc_du, dv_b=dbc_dv, dh_b=dbc_dh,
+                                                nstep=n_chunk)
+                # Propagate forward state for next chunk
+                u, v, h = self.jstep_jit(t_chunk, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                                          taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength, nstep=n_chunk)
             step_done += n_chunk
 
         if self.nl > 1:
@@ -3630,6 +4028,11 @@ class Model_qgsw(M):
             dState.setvar(du, name_var=self.name_var['U'])
             dState.setvar(dv, name_var=self.name_var['V'])
             dState.setvar(dh, name_var=self.name_var['SSH'])
+
+        # Write tracer perturbations back to dState
+        if self.advect_tracer:
+            for i, name in enumerate(self.tracer_names):
+                dState.setvar(dc[i], name_var=self.name_var[name])
 
     def step_adj(self,adState,State,nstep=1,t=0):
 
@@ -3722,6 +4125,22 @@ class Model_qgsw(M):
             bc_du = bc_dv = bc_dh = None
             adu_b_acc = adv_b_acc = adh_b_acc = None
 
+        # Tracer setup
+        if self.advect_tracer:
+            c = jnp.stack(
+                [jnp.asarray(State.getvar(self.name_var[n]), dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+            Fc = jnp.stack(
+                [jnp.asarray(State.params[self.name_var[n]], dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+            adc = jnp.stack(
+                [jnp.asarray(adState.getvar(self.name_var[n]), dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+            adFc = jnp.stack(
+                [jnp.asarray(adState.params[self.name_var[n]], dtype=self.dtype)
+                 for n in self.tracer_names], axis=0)
+            adc_b_acc = None  # Tracer BCs not presently optimised
+
         # Build chunk schedule
         chunks = []
         step_done = 0
@@ -3732,9 +4151,11 @@ class Model_qgsw(M):
             step_done += n_chunk
 
         # Forward pass: store boundary states at chunk boundaries
-        fwd_states = [(u, v, h)]
+        fwd_states = [(u, v, h, c)] if self.advect_tracer else [(u, v, h)]
         if len(chunks) > 1:
             u_fwd, v_fwd, h_fwd = u, v, h
+            if self.advect_tracer:
+                c_fwd = c
             for t_chunk, n_chunk in chunks[:-1]:
                 u_b, v_b, h_b = self._apply_bc(t_chunk, int(t_chunk + n_chunk * self.dt))
                 if bc_du is not None:
@@ -3742,31 +4163,56 @@ class Model_qgsw(M):
                     v_b = v_b + bc_dv
                     h_b = h_b + bc_dh
                 taux, tauy = self._get_wind_stress(t_chunk)
-                u_fwd, v_fwd, h_fwd = self.jstep_jit(
-                    t_chunk, u_fwd, v_fwd, h_fwd, H, Fu, Fv, Fh, u_b, v_b, h_b,
-                    taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength, nstep=n_chunk)
-                fwd_states.append((u_fwd, v_fwd, h_fwd))
+                if self.advect_tracer:
+                    c_b = self._apply_bc_tracer(t_chunk, int(t_chunk + n_chunk * self.dt))
+                    u_fwd, v_fwd, h_fwd, c_fwd = self.jstep_core_trac_jit(
+                        t_chunk, u_fwd, v_fwd, h_fwd, c_fwd, H, Fu, Fv, Fh, Fc,
+                        u_b, v_b, h_b, c_b,
+                        taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength,
+                        nstep=n_chunk)
+                    fwd_states.append((u_fwd, v_fwd, h_fwd, c_fwd))
+                else:
+                    u_fwd, v_fwd, h_fwd = self.jstep_jit(
+                        t_chunk, u_fwd, v_fwd, h_fwd, H, Fu, Fv, Fh, u_b, v_b, h_b,
+                        taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength, nstep=n_chunk)
+                    fwd_states.append((u_fwd, v_fwd, h_fwd))
 
         # Reverse adjoint through chunks
         for i in range(len(chunks) - 1, -1, -1):
             t_chunk, n_chunk = chunks[i]
-            u_i, v_i, h_i = fwd_states[i]
             u_b, v_b, h_b = self._apply_bc(t_chunk, int(t_chunk + n_chunk * self.dt))
             if bc_du is not None:
                 u_b = u_b + bc_du
                 v_b = v_b + bc_dv
                 h_b = h_b + bc_dh
             taux, tauy = self._get_wind_stress(t_chunk)
-            (adu, adv, adh, adH, adFu, adFv, adFh,
-             adh_wind, adwind_strength, adu_b_acc, adv_b_acc, adh_b_acc) = self.jstep_adj_jit(
-                t_chunk, adu, adv, adh, adH, adFu, adFv, adFh,
-                u_i, v_i, h_i, H, Fu, Fv, Fh,
-                u_b, v_b, h_b,
-                taux=taux, tauy=tauy,
-                h_wind=h_wind, adh_wind=adh_wind,
-                wind_strength=wind_strength, adwind_strength=adwind_strength,
-                adu_b=adu_b_acc, adv_b=adv_b_acc, adh_b=adh_b_acc,
-                nstep=n_chunk)
+            if self.advect_tracer:
+                u_i, v_i, h_i, c_i = fwd_states[i]
+                c_b = self._apply_bc_tracer(t_chunk, int(t_chunk + n_chunk * self.dt))
+                (adu, adv, adh, adc,
+                 adH, adFu, adFv, adFh, adFc,
+                 adh_wind, adwind_strength,
+                 adu_b_acc, adv_b_acc, adh_b_acc, adc_b_acc) = self.jstep_adj_trac_jit(
+                    t_chunk, adu, adv, adh, adc, adH, adFu, adFv, adFh, adFc,
+                    u_i, v_i, h_i, c_i, H, Fu, Fv, Fh, Fc,
+                    u_b, v_b, h_b, c_b,
+                    taux=taux, tauy=tauy,
+                    h_wind=h_wind, adh_wind=adh_wind,
+                    wind_strength=wind_strength, adwind_strength=adwind_strength,
+                    adu_b=adu_b_acc, adv_b=adv_b_acc, adh_b=adh_b_acc,
+                    nstep=n_chunk)
+            else:
+                u_i, v_i, h_i = fwd_states[i]
+                (adu, adv, adh, adH, adFu, adFv, adFh,
+                 adh_wind, adwind_strength, adu_b_acc, adv_b_acc, adh_b_acc) = self.jstep_adj_jit(
+                    t_chunk, adu, adv, adh, adH, adFu, adFv, adFh,
+                    u_i, v_i, h_i, H, Fu, Fv, Fh,
+                    u_b, v_b, h_b,
+                    taux=taux, tauy=tauy,
+                    h_wind=h_wind, adh_wind=adh_wind,
+                    wind_strength=wind_strength, adwind_strength=adwind_strength,
+                    adu_b=adu_b_acc, adv_b=adv_b_acc, adh_b=adh_b_acc,
+                    nstep=n_chunk)
 
         if self.nl > 1:
             # Convert back: (1, nl, nx, ny) → (nl, ny, nx)
@@ -3805,6 +4251,13 @@ class Model_qgsw(M):
         adState.params[self.name_var['U']] = adFu 
         adState.params[self.name_var['V']] = adFv 
         adState.params[self.name_var['SSH']] = adFh 
+
+        # Write tracer adjoints back to adState
+        if self.advect_tracer:
+            for i, name in enumerate(self.tracer_names):
+                adState.setvar(adc[i], name_var=self.name_var[name])
+            for i, name in enumerate(self.tracer_names):
+                adState.params[self.name_var[name]] = adFc[i]
 
     def adjoint_test_jstep(self, nstep=1, seed=42):
         """
@@ -4020,6 +4473,9 @@ class Model_bmit(M):
         # Gravity
         self.g = State.g
 
+        # Mask
+        self.mask = State.mask
+
         # Open MDT map if provided
         if config.MOD.path_mdt is not None and os.path.exists(config.MOD.path_mdt):
                       
@@ -4068,6 +4524,18 @@ class Model_bmit(M):
                                    config.MOD.name_var_c,
                                    State.lon,
                                    State.lat)
+        
+            # Remove NaNs (e.g. over land) by nearest-neighbor interpolation
+            # (since c is only used for boundary conditions, this is better than leaving NaNs or filling with a constant.)
+            c_masked = np.ma.masked_invalid(self.c)
+            c_filled = c_masked.filled(np.nan)
+            from scipy import interpolate
+            x = np.arange(self.nx)
+            y = np.arange(self.ny)
+            xx, yy = np.meshgrid(x, y)
+            points = np.array([xx[~c_masked.mask], yy[~c_masked.mask]]).T
+            values = c_filled[~c_masked.mask]
+            self.c = interpolate.griddata(points, values, (xx, yy), method='nearest')
             
             if config.MOD.cmin is not None:
                 self.c[self.c<config.MOD.cmin] = config.MOD.cmin
@@ -4109,6 +4577,17 @@ class Model_bmit(M):
                                    config.MOD.name_var_H,
                                    State.lon,
                                    State.lat)
+
+            # Remove NaNs (e.g. over land) by nearest-neighbor interpolation
+            H_masked = np.ma.masked_invalid(self.H)
+            H_filled = H_masked.filled(np.nan)
+            from scipy import interpolate
+            x = np.arange(self.nx)
+            y = np.arange(self.ny)
+            xx, yy = np.meshgrid(x, y)
+            points = np.array([xx[~H_masked.mask], yy[~H_masked.mask]]).T
+            values = H_filled[~H_masked.mask]
+            self.H = interpolate.griddata(points, values, (xx, yy), method='nearest')
             
             if config.EXP.flag_plot>0:
                 plt.figure()
@@ -4121,9 +4600,29 @@ class Model_bmit(M):
             self.H = config.MOD.H 
         
         # Boundary angles
-        if config.MOD.Ntheta>0:
-            theta_p = np.arange(0,pi/2+pi/2/config.MOD.Ntheta,pi/2/config.MOD.Ntheta)
-            self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
+        _ntheta = config.MOD.Ntheta
+        if _ntheta == -1:
+            # Auto: boundary tangential Nyquist criterion.
+            # A wave entering at angle theta has along-boundary wavenumber k_t = k*sin(theta).
+            # At grazing incidence k_t_max = k_max = omega_max/c_min.  With 2*Ntheta+1 angular
+            # samples covering [-k_max, k_max], the Nyquist condition on a boundary of length L
+            # gives:  Ntheta >= k_max * L / (2*pi) = L / lambda_min
+            # where lambda_min = 2*pi*c_min / omega_max and L = max boundary length.
+            _omegas = np.asarray(config.MOD.w_waves)
+            _He_bdy = np.concatenate([
+                self.Heb[0,:], self.Heb[-1,:], self.Heb[:,0], self.Heb[:,-1]])
+            _c_min = np.sqrt(self.g * np.nanmin(_He_bdy[_He_bdy > 0]))
+            _lambda_min = 2*pi * _c_min / np.max(np.abs(_omegas))
+            _L_bdy = max(
+                float(np.asarray(State.X).max() - np.asarray(State.X).min()),
+                float(np.asarray(State.Y).max() - np.asarray(State.Y).min()))
+            _ntheta = int(np.ceil(_L_bdy / _lambda_min))
+            print(f'  Auto Ntheta (boundary tangential Nyquist): '
+                    f'lambda_min={_lambda_min/1e3:.1f} km, '
+                    f'L_bdy={_L_bdy/1e3:.1f} km -> Ntheta={_ntheta}')
+        if _ntheta > 0:
+            theta_p = np.arange(0, pi/2 + pi/2/_ntheta, pi/2/_ntheta)
+            self.bc_theta = np.append(theta_p - pi/2, theta_p[1:])
         else:
             self.bc_theta = np.array([0])
         
@@ -4165,7 +4664,6 @@ class Model_bmit(M):
         # Initialize model state
         self.name_var = config.MOD.name_var
         self.var_to_save = [self.name_var['SSH']] # ssh
-
         if (config.GRID.super == 'GRID_FROM_FILE') and (config.MOD.name_init_var is not None):
             dsin = xr.open_dataset(config.GRID.path_init_grid)
             for name in self.name_var:
@@ -4226,14 +4724,82 @@ class Model_bmit(M):
             State.params['hbcy'] = np.zeros((self.shapehbcy))
         
 
-        # Coupling terms from vertical modes
-        self.flag_coupling_from_bm = config.MOD.flag_coupling_from_bm
-        if self.flag_coupling_from_bm:
-            if config.MOD.path_interaction_terms is not None and os.path.exists(config.MOD.path_interaction_terms):
-                self._read_interaction_terms(config, State)
-            else:
-                self._compute_coupling_coefficients(config.MOD.path_vertical_modes)
+        # ---- Background IT params (from a previous experiment) ----
+        # If a netcdf file is provided via `config.MOD.path_background_params`,
+        # load `He_mean`, `alpha_He`, `alpha_Uu`, `alpha_Up` background fields.
+        # State.params then represent ANOMALIES around these prescribed values:
+        #     He_mean_total   = State.params['He_mean']  + self.He_mean_bg
+        #     alpha_He_total  = State.params['alpha_He'] + self.alpha_He_bg
+        #     alpha_Uu_total  = State.params['alpha_Uu'] + self.alpha_Uu_bg
+        #     alpha_Up_total  = State.params['alpha_Up'] + self.alpha_Up_bg
+        # Backgrounds default to zero => default behaviour is unchanged.
+        # The combination is applied inside `_compute_He_from_bm` and
+        # `_compute_advective_terms_from_bm`, so the auto-derived TLM/ADJ
+        # treat the backgrounds as constants (no extra term).
+        self.He_mean_bg  = jnp.zeros((self.ny, self.nx))
+        self.alpha_He_bg = jnp.zeros((self.ny, self.nx))
+        self.alpha_Uu_bg = jnp.zeros((self.ny, self.nx))
+        self.alpha_Up_bg = jnp.zeros((self.ny, self.nx))
+        # Python-bool flags so JIT branches can use them as static.
+        self.has_alpha_Uu_bg = False
+        self.has_alpha_Up_bg = False
 
+        path_bg = getattr(config.MOD, 'path_background_params', None)
+        if path_bg is not None and os.path.exists(path_bg):
+            name_var_bg = getattr(config.MOD, 'name_var_background_params', None) or {}
+            ds_bg = xr.open_dataset(path_bg)
+            name_lon = name_var_bg.get('lon', 'lon')
+            name_lat = name_var_bg.get('lat', 'lat')
+            # Optional longitude convention conversion
+            if name_lon in ds_bg.coords or name_lon in ds_bg.variables:
+                lon_arr = ds_bg[name_lon]
+                if np.sign(lon_arr.data.min()) == -1 and State.lon_unit == '0_360':
+                    ds_bg = ds_bg.assign_coords({name_lon: ((name_lon, lon_arr.data % 360))})
+                    ds_bg = ds_bg.sortby(name_lon)
+                elif np.sign(lon_arr.data.min()) >= 0 and State.lon_unit == '-180_180':
+                    ds_bg = ds_bg.assign_coords({name_lon: ((name_lon, (lon_arr.data + 180) % 360 - 180))})
+                    ds_bg = ds_bg.sortby(name_lon)
+
+            def _read_bg(key, default_name):
+                vname = name_var_bg.get(key, default_name)
+                if vname not in ds_bg.variables:
+                    return None
+                arr = grid.interp2d(
+                    ds_bg,
+                    {'lon': name_lon, 'lat': name_lat, key: vname},
+                    State.lon, State.lat)
+                arr = np.asarray(arr, dtype=float)
+                arr[np.isnan(arr)] = 0.
+                return jnp.asarray(arr)
+
+            He_mean_bg  = _read_bg('He_mean',  'He_mean')
+            alpha_He_bg = _read_bg('alpha_He', 'alpha_He')
+            alpha_Uu_bg = _read_bg('alpha_Uu', 'alpha_Uu')
+            alpha_Up_bg = _read_bg('alpha_Up', 'alpha_Up')
+
+            if He_mean_bg  is not None: self.He_mean_bg  = He_mean_bg
+            if alpha_He_bg is not None: self.alpha_He_bg = alpha_He_bg
+            if alpha_Uu_bg is not None: self.alpha_Uu_bg = alpha_Uu_bg
+            if alpha_Up_bg is not None: self.alpha_Up_bg = alpha_Up_bg
+
+            self.has_alpha_Uu_bg = bool(np.any(np.asarray(self.alpha_Uu_bg) != 0))
+            self.has_alpha_Up_bg = bool(np.any(np.asarray(self.alpha_Up_bg) != 0))
+
+            ds_bg.close()
+            print('[Model_bmit] background IT params loaded from', path_bg,
+                  '- State.params now represent anomalies around these values.')
+
+            if config.EXP.flag_plot > 0:
+                _, axes = plt.subplots(1, 4, figsize=(22, 4))
+                for ax, fld, ttl in zip(
+                        axes,
+                        [self.He_mean_bg, self.alpha_He_bg, self.alpha_Uu_bg, self.alpha_Up_bg],
+                        ['He_mean_bg', 'alpha_He_bg', 'alpha_Uu_bg', 'alpha_Up_bg']):
+                    im = ax.pcolormesh(np.asarray(fld))
+                    plt.colorbar(im, ax=ax)
+                    ax.set_title(ttl)
+                plt.suptitle('Background IT params (from previous experiment)')
+                plt.show()
 
         # Sponge layer
         self.sponge_width = config.MOD.dist_sponge_bc
@@ -4346,8 +4912,14 @@ class Model_bmit(M):
                 State.mask[self.sponge_on_h_W] = True
                 State.mask[self.sponge_on_h_E] = True
         
-        self.mask = State.mask
-        
+        # Coupling terms from vertical modes
+        self.flag_coupling_from_bm = config.MOD.flag_coupling_from_bm
+        if self.flag_coupling_from_bm:
+            if config.MOD.path_interaction_terms is not None and os.path.exists(config.MOD.path_interaction_terms):
+                self._read_interaction_terms(config, State)
+            else:
+                self._compute_coupling_coefficients(config.MOD.path_vertical_modes)
+
         # Model initialization
         self.model_bm = model_bm(
             dx=State.DX,
@@ -4401,6 +4973,9 @@ class Model_bmit(M):
             self.model_it.weight_sponge_u = self.weight_sponge_u
             self.model_it.weight_sponge_v = self.weight_sponge_v
             self.model_it.weight_sponge_h = self.weight_sponge_h
+
+        # IT wave-phase method for sponge BC
+        self.model_it.bc_it_method = getattr(config.MOD, 'bc_it_method', 'plane_wave')
 
         # Compile jax-related functions
         self._jstep_jit = jit(self._jstep, static_argnames=['nstep'])
@@ -4480,6 +5055,16 @@ class Model_bmit(M):
         State.var['He_mean'] = He_mean
         State.var['alpha_He'] = alpha_He
 
+        if 'alpha_Uu' in self.name_params_it: 
+            State.var['alpha_Uu'] = State.params['alpha_Uu']
+            name_var_to_save += ['alpha_Uu']
+        if 'alpha_Up' in self.name_params_it: 
+            State.var['alpha_Up'] = State.params['alpha_Up']
+            name_var_to_save += ['alpha_Up']
+        if 'alpha_Uz' in self.name_params_it: 
+            State.var['alpha_Uz'] = State.params['alpha_Uz']
+            name_var_to_save += ['alpha_Uz']
+
         State.save_output(present_date,
                           name_var=name_var_to_save)
         
@@ -4549,7 +5134,8 @@ class Model_bmit(M):
         #########################################################################
         integrand = phi1/phi1[-1] * (phi1**2) * dz_r  # multiply by layer thickness
         U11 = (1/self.H) * integrand.sum(dim="s_rho")   # integral in z
-        self.U11 = jnp.array(U11.values)  
+        self.U11 = jnp.array(U11.values) 
+        self.U11 = jnp.where(self.U11<0, 0, self.U11)
         plt.figure()
         plt.pcolormesh(self.U11)
         plt.colorbar()
@@ -4575,6 +5161,7 @@ class Model_bmit(M):
         dz_w = dz_w.reindex(s_w=s_w, fill_value=np.nan)
         U11p = (1/self.H) * (integrand * dz_w).sum(dim="s_w")   # integral in z
         self.U11p = jnp.array(U11p.values)
+        self.U11p = jnp.where(self.U11p<0, 0, self.U11p)
         plt.figure()
         plt.pcolormesh(self.U11p)
         plt.colorbar()
@@ -4607,7 +5194,7 @@ class Model_bmit(M):
         integrand = phi1pp * A2
         dHe = (1/self.H) * (integrand * dz_r).sum("s_rho")
         self.dHe = jnp.array(dHe.values) 
-
+        self.dHe = jnp.where(self.dHe<0, 0, self.dHe)
         plt.figure()
         plt.pcolormesh(self.dHe)
         plt.colorbar()
@@ -4643,13 +5230,22 @@ class Model_bmit(M):
 
         # Read U11
         self.U11 = _read_field('U11_u', ds, name_vars, State, self.H)
-
+        self.U11 = jnp.where(self.U11<0, 0, self.U11)  # Ensure non-negativity
+        self.U11 = jnp.where(self.mask, 0, self.U11)  # Mask land points
+        self.U11 = jnp.where(jnp.isnan(self.U11), 0, self.U11)  # Ensure no NaNs
+        
         # Read U11p
         self.U11p = _read_field('U11_p', ds, name_vars, State, self.H)
-
+        self.U11p = jnp.where(self.U11p<0, 0, self.U11p)  # Ensure non-negativity
+        self.U11p = jnp.where(self.mask, 0, self.U11p)  # Mask land points
+        self.U11p = jnp.where(jnp.isnan(self.U11p), 0, self.U11p)  # Ensure no NaNs
+        
         # Read dc2 (correction to c^2) and convert to dHe = dc2 / g
         self.dHe = _read_field('dc2', ds, name_vars, State, self.H * self.g)
-
+        self.dHe = jnp.where(self.dHe<0, 0, self.dHe)  # Ensure non-negativity
+        self.dHe = jnp.where(self.mask, 0, self.dHe)  # Mask land points
+        self.dHe = jnp.where(jnp.isnan(self.dHe), 0, self.dHe)  # Ensure no NaNs
+        
         if config.EXP.flag_plot > 0:
             fig, axes = plt.subplots(1, 3, figsize=(15, 4))
             for ax, data, title in zip(axes,
@@ -4663,36 +5259,54 @@ class Model_bmit(M):
 
     def _compute_He_from_bm(self, He, alpha_He, h_bm):
         
-        """ Compute equivalent depth with coupling term
+        """ Compute equivalent depth with coupling term.
+
+        He and alpha_He are interpreted as ANOMALIES around the prescribed
+        background fields `self.He_mean_bg` and `self.alpha_He_bg` (zero by
+        default). The forward primal uses (He + bg); the auto-derived TLM/ADJ
+        treat the backgrounds as constants (zero contribution).
         --------------
         Inputs:
-        He        : IT equivalent depth control parameters (without units)
-        alpha_He  : IT coupling coefficient for He (without units)
+        He        : IT equivalent depth anomaly control parameters (without units)
+        alpha_He  : IT He coupling anomaly coefficient (without units)
         h_bm      : BM sea surface height (m) 
         --------------
         Outputs:
         He_tot    : Total equivalent depth with coupling term (m)
         """
 
+        # Add background to He_mean anomaly
         if He is not None:
-            if self.flag_coupling_from_bm and alpha_He is not None and h_bm is not None:
-                He2d =  He + (.5 + alpha_He) * self.dHe * h_bm 
-            else:
-                He2d = He
+            He_eff = He + self.He_mean_bg
         else:
-            He2d = jnp.zeros((self.ny,self.nx))
-        
+            He_eff = self.He_mean_bg
+
+        if self.flag_coupling_from_bm and h_bm is not None:
+            # Add background to alpha_He anomaly (treat None as zero)
+            alpha_He_eff = self.alpha_He_bg if alpha_He is None else (alpha_He + self.alpha_He_bg)
+            dHe_bm = self.dHe * h_bm
+            if self.flag_bc_sponge:
+                dHe_bm = dHe_bm * (1 - self.sponge_h)
+            He2d = He_eff + (.5 + alpha_He_eff) * dHe_bm
+        else:
+            He2d = He_eff
+
         He2d = jnp.where(self.mask, 0., He2d)
         
         return He2d
 
     def _compute_advective_terms_from_bm(self, alpha_Uu, alpha_Up, u_bm, v_bm):
 
-        """ Compute advective terms with coupling term
+        """ Compute advective terms with coupling term.
+
+        alpha_Uu and alpha_Up are interpreted as ANOMALIES around the prescribed
+        background fields `self.alpha_Uu_bg` and `self.alpha_Up_bg` (zero by
+        default). Forward primal uses (alpha + bg); auto TLM/ADJ treat bg as
+        constants.
         --------------
         Inputs:
-        alpha_Uu  : IT advective control parameter for U11 (without units)
-        alpha_Up  : IT advective control parameter for U11p (without units)
+        alpha_Uu  : IT advective anomaly control parameter for U11 (without units)
+        alpha_Up  : IT advective anomaly control parameter for U11p (without units)
         u_bm      : BM zonal velocity (m/s)
         v_bm      : BM meridional velocity (m/s)
         --------------
@@ -4702,15 +5316,25 @@ class Model_bmit(M):
         """
 
         if self.flag_coupling_from_bm and u_bm is not None and v_bm is not None:
-            if alpha_Uu is not None:
-                u11 = ((.5 - alpha_Uu) + (.5 + alpha_Uu) * self.U11) * u_bm 
-                v11 = ((.5 - alpha_Uu) + (.5 + alpha_Uu) * self.U11) * v_bm 
+            # alpha_Uu (anomaly + background)
+            if alpha_Uu is not None or self.has_alpha_Uu_bg:
+                aUu = self.alpha_Uu_bg if alpha_Uu is None else (alpha_Uu + self.alpha_Uu_bg)
+                u11 = ((.5 - aUu) + (.5 + aUu) * self.U11) * u_bm 
+                v11 = ((.5 - aUu) + (.5 + aUu) * self.U11) * v_bm 
+                if self.flag_bc_sponge:
+                    u11 = u11 * (1 - self.sponge_h)
+                    v11 = v11 * (1 - self.sponge_h)
             else:
                 u11 = None
                 v11 = None
-            if alpha_Up is not None:
-                u11p = ((.5 - alpha_Up) + (.5 + alpha_Up) * self.U11p) * u_bm 
-                v11p = ((.5 - alpha_Up) + (.5 + alpha_Up) * self.U11p) * v_bm 
+            # alpha_Up (anomaly + background)
+            if alpha_Up is not None or self.has_alpha_Up_bg:
+                aUp = self.alpha_Up_bg if alpha_Up is None else (alpha_Up + self.alpha_Up_bg)
+                u11p = ((.5 - aUp) + (.5 + aUp) * self.U11p) * u_bm 
+                v11p = ((.5 - aUp) + (.5 + aUp) * self.U11p) * v_bm 
+                if self.flag_bc_sponge:
+                    u11p = u11p * (1 - self.sponge_h)
+                    v11p = v11p * (1 - self.sponge_h)
             else:
                 u11p = None
                 v11p = None

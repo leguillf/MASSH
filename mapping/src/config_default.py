@@ -389,6 +389,8 @@ MOD_QG1L_JAX = dict(
 
     forcing_tracer_from_bc = False, # Whether to use BC fields to force tracer advection,
 
+    sponge_coef = 0., # Rayleigh damping coefficient applied to tracers in the sponge zone (dimensionless, per model step). Typical values: 0.01–0.2
+
     constant_c = True,
 
     constant_f = True,
@@ -456,7 +458,11 @@ MOD_CSW1L = dict(
 
     w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
 
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves.
+               # Set to -1 to auto-compute the minimum Ntheta from the boundary tangential Nyquist:
+               #   Ntheta >= L_bdy / lambda_min, where L_bdy = max boundary length and
+               #   lambda_min = 2*pi*c_min/omega_max  (c_min on the boundary).
+               # Set to 0 for normal incidence only (theta=0).
 
     # BM coupling parameters
 
@@ -499,6 +505,11 @@ MOD_CSW1L = dict(
     tangential_sponge_factor = 1., # factor [0,1] reducing sponge on tangential velocity at open boundaries (1=isotropic, 0=no tangential damping)
 
     mask_sponge_bc = True, # Whether to set the mask to True in the sponge boundary areas (i.e. to avoid assimilating observations in these areas)
+
+    bc_it_method = 'plane_wave', # Wave phase method for the sponge IT boundary conditions.
+                                 # 'plane_wave'     : original method — k(x,y)*coords (inconsistent with spatially varying He, kept for backward compatibility)
+                                 # 'plane_wave_bdy' : k evaluated at the boundary edge (true 1D plane wave, recommended for smoothly varying He)
+                                 # 'wkb'            : WKB cumulative-phase integral + He^{-1/4} amplitude correction (best for strongly varying He)
 
 )
 
@@ -544,7 +555,7 @@ MOD_QGSW = dict(
 
     bottom_drag_coef = 0.,
 
-    slip_coef = 0., # slip coefficient for the bottom drag (in m/s)
+    slip_coef = 1., # Lateral wall slip coefficient (dimensionless, in [0,1]): 1 = free-slip, 0 = no-slip, in-between = partial slip. Use 1 when use_sponge_on_coast=True so the sponge is the sole near-coast damping mechanism (no double damping).
 
     taux = 0., # wind stress in N/m^2
 
@@ -553,6 +564,10 @@ MOD_QGSW = dict(
     path_mdt = None, # path of MDT
 
     name_var_mdt = {'lon':'','lat':'','var':''}, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
+
+    name_var_mdu = {'lon':'','lat':'','var':''}, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
+
+    name_var_mdv = {'lon':'','lat':'','var':''}, # dictionary of MDT coordinates and variable {'lon':<name_lon>, 'lat':<name_lat>, 'var':<name_var>}
 
     dist_sponge_bc = None,
 
@@ -569,6 +584,10 @@ MOD_QGSW = dict(
     H_max = None, # maximum equivalent depth (in m). None means no clamping
 
     diff_coef = 0., # diffusivity coefficient for h (in m^2/s). Typical values 20–50 m²/s, 100–200 m²/s if unstable
+
+    diff_coef_trac = 0., # diffusivity coefficient for passive tracers (in m^2/s). Typical values 50–200 m²/s
+
+    advect_tracer = None, # If True/False, override automatic tracer detection from name_var. None = auto.
 
     path_wind = None, # path to NetCDF wind file containing u10/v10 (if None, no wind forcing)
 
@@ -658,7 +677,11 @@ MOD_BMIT = dict(
 
     w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
 
-    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
+    Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves.
+               # Set to -1 to auto-compute the minimum Ntheta from the boundary tangential Nyquist:
+               #   Ntheta >= L_bdy / lambda_min, where L_bdy = max boundary length and
+               #   lambda_min = 2*pi*c_min/omega_max  (c_min on the boundary).
+               # Set to 0 for normal incidence only (theta=0).
 
     g = 9.81,
 
@@ -697,6 +720,11 @@ MOD_BMIT = dict(
     tangential_sponge_factor = 1.,
 
     mask_sponge_bc = True, # Whether to set the mask to True in the sponge boundary areas (i.e. to avoid assimilating observations in these areas)
+
+    bc_it_method = 'plane_wave', # Wave phase method for the sponge IT boundary conditions.
+                                 # 'plane_wave'     : original method — k(x,y)*coords (inconsistent with spatially varying He, kept for backward compatibility)
+                                 # 'plane_wave_bdy' : k evaluated at the boundary edge (true 1D plane wave, recommended for smoothly varying He)
+                                 # 'wkb'            : WKB cumulative-phase integral + He^{-1/4} amplitude correction (best for strongly varying He)
 
 )
 
@@ -1093,6 +1121,70 @@ BASIS_GAUSS3D_JAX = dict(
 
 ) 
 
+BASIS_GAUSS2D = dict(
+
+    super = 'BASIS_GAUSS2D',
+
+    name_mod_var = '', # Name of the related model variable
+
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
+    facns = 2., # Factor for gaussian spacing in space (controls centre density relative to sigma_D)
+
+    sigma_D = 300, # Spatial scale (km): Gaussian half-width / truncation radius
+
+    sigma_Q = 0.01, # Prior standard deviation for each control coefficient
+
+    flag_variable_Q = False, # If True, read spatially varying std from *path_sad*
+
+    path_sad = None, # Path to a netcdf file with a spatially varying std field (used when flag_variable_Q=True)
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Variable names inside *path_sad*
+
+    path_background = None, # Path to a netcdf file with background control-vector values
+
+    var_background = None # Variable name inside *path_background*
+
+)
+
+BASIS_GAUSS2D_JAX = dict(
+
+    super = 'BASIS_GAUSS2D_JAX',
+
+    name_mod_var = '', # Name of the related model variable
+
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
+    facns = 2., # Factor for gaussian spacing in space (controls centre density relative to sigma_D)
+
+    sigma_D = 300, # Spatial scale (km): Gaussian half-width / truncation radius
+
+    sigma_Q = 0.01, # Prior standard deviation for each control coefficient
+
+    flag_variable_Q = False, # If True, read spatially varying std from *path_sad*
+
+    path_sad = None, # Path to a netcdf file with a spatially varying std field (used when flag_variable_Q=True)
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Variable names inside *path_sad*
+
+    path_background = None, # Path to a netcdf file with background control-vector values
+
+    var_background = None # Variable name inside *path_background*
+
+)
+
 BASIS_MIOST = dict(
 
     name_mod_var = None, # Name of the related model variable
@@ -1346,6 +1438,132 @@ BASIS_BMaux_JAX = dict(
     path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
 
     var_background = None, # name of the variable of the basis vector
+
+    norm_time = True,
+
+    file_facQaux = None,
+
+    name_var_facQaux = {'wavenumber':'', 'lon':'', 'lat':'', 'var':''}
+
+)
+
+
+# Balanced Motions with auxiliary data – self-consistent Q normalisation
+BASIS_BMaux_v2 = dict(
+
+    name_mod_var = None, # Name of the related model variable
+
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
+    flux = False,
+
+    facns = 1., #factor for wavelet spacing in space
+
+    facnlt = 2., #factor for wavelet spacing in time
+
+    npsp = 3.5, # Defines the wavelet shape
+
+    facpsp = 1.5, # factor to fix df between wavelets
+
+    file_aux = '', # Name of auxiliary file with Std and Tdec per location/wavelength
+
+    lmin = 80, # minimal wavelength (in km)
+
+    lmax = 970., # maximal wavelength (in km)
+
+    factdec = 7.5, # factor to be multiplied to the computed time of decorrelation
+
+    tdecmin = 2.5, # minimum time of decorrelation
+
+    tdecmax = 40., # maximum time of decorrelation
+
+    facQ = 1, # additional multiplicative factor on Q (on top of self-consistent normalisation)
+
+    l_largescale = 500, # wavelength threshold above which facQ_largescale is used
+
+    facQ_largescale = 1,
+
+    file_depth = None,
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''},
+
+    depth1 = 0.,
+
+    depth2 = 30.,
+
+    path_background = None,
+
+    var_background = None,
+
+    norm_time = True,
+
+    file_facQaux = None,
+
+    name_var_facQaux = {'lon':'', 'lat':'', 'var':''}
+
+)
+
+
+# Balanced Motions with auxiliary data – self-consistent Q normalisation – JAX version
+BASIS_BMaux_v2_JAX = dict(
+
+    name_mod_var = None,
+
+    c_grid_var = None,
+
+    compute_velocities = False,
+
+    name_mod_u = 'u',
+
+    name_mod_v = 'v',
+
+    flux = False,
+
+    facns = 1.,
+
+    facnlt = 2.,
+
+    npsp = 3.5,
+
+    facpsp = 1.5,
+
+    file_aux = '',
+
+    lmin = 80,
+
+    lmax = 970.,
+
+    factdec = 0.5, # JAX convention: factdec<1 → tdec already in days from file
+
+    tdecmin = 2.5,
+
+    tdecmax = 40.,
+
+    facQ = 1,
+
+    facQ_aux_path = None,
+
+    l_largescale = 500,
+
+    facQ_largescale = 1,
+
+    file_depth = None,
+
+    name_var_depth = {'lon':'', 'lat':'', 'var':''},
+
+    depth1 = 0.,
+
+    depth2 = 30.,
+
+    path_background = None,
+
+    var_background = None,
 
     norm_time = True,
 

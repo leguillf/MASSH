@@ -144,7 +144,9 @@ class Variational:
                 end = time.time()
                 time_misfit += end - start
                 l += 1
-                Jo += misfit.dot(self.R.inv(misfit))
+                # Accumulate Jo in float64: model misfit may be float32 (mixed precision)
+                _m = np.asarray(misfit, dtype=np.float64)
+                Jo += _m.dot(np.asarray(self.R.inv(misfit), dtype=np.float64))
             
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
@@ -173,13 +175,14 @@ class Variational:
             misfit = self.H.misfit(timestamp,State) # d=Hx-xobsx
             time_misfit += end - start
             l += 1
-            Jo += misfit.dot(self.R.inv(misfit))  
+            _m = np.asarray(misfit, dtype=np.float64)
+            Jo += _m.dot(np.asarray(self.R.inv(misfit), dtype=np.float64))
         
         print('misfit', l, time_misfit/l)
         print('basis', k, time_basis/k)
         print('model', j, time_model/j)
-        # Cost function 
-        J = 1/2 * (Jo + Jb)
+        # Cost function (float64 for L-BFGS-B line-search stability)
+        J = np.float64(0.5 * (Jo + Jb))
         
         if self.save_minimization:
             self.J.append(J)
@@ -244,6 +247,9 @@ class Variational:
         #adState.plot(title='adjoint variables at the end of gradient function evaluation')
         #State.plot(title='adjoint parameters at the end of gradient function evaluation',params=True)
         
+        # Cast to float64 for L-BFGS-B line-search stability
+        g = np.asarray(g, dtype=np.float64)
+
         if self.save_minimization:
             self.G.append(np.max(np.abs(g)))
 
@@ -278,6 +284,7 @@ class Variational:
         State_dict = {}
         misfit_dict = {}
         Jo = 0.
+
         for i in range(len(self.checkpoints)-1):
             
             t = self.M.T[self.checkpoints[i]]
@@ -289,7 +296,9 @@ class Variational:
                     time0 = time.time()
                 misfit = self.H.misfit(t,State) # d=Hx-xobs   
                 misfit_dict[t] = misfit
-                Jo += misfit.dot(self.R.inv(misfit))
+                # Accumulate Jo in float64 (model misfit may be float32)
+                _m = np.asarray(misfit, dtype=np.float64)
+                Jo += _m.dot(np.asarray(self.R.inv(misfit), dtype=np.float64))
                 if self.print_time:
                     cost_misfit.append(time.time()-time0)
             
@@ -320,10 +329,11 @@ class Variational:
         if self.H.is_obs_time(t):
             misfit = self.H.misfit(t,State) # d=Hx-xobsx
             misfit_dict[t] = misfit
-            Jo += misfit.dot(self.R.inv(misfit))  
+            _m = np.asarray(misfit, dtype=np.float64)
+            Jo += _m.dot(np.asarray(self.R.inv(misfit), dtype=np.float64))
         
-        # Cost function 
-        J = 1/2 * (Jo + Jb)
+        # Cost function (float64 for L-BFGS-B line-search stability)
+        J = np.float64(0.5 * (Jo + Jb))
 
 
         ########################################
@@ -394,8 +404,11 @@ class Variational:
 
         if self.prec :
             adX = np.transpose(self.B.sqr(adX)) 
-        
+
         G = adX + gb  # total gradient
+
+        # Cast to float64 for L-BFGS-B line-search stability
+        G = np.asarray(G, dtype=np.float64)
 
         return J, G  
    

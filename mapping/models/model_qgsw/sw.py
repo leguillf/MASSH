@@ -130,10 +130,12 @@ class SW:
         }
 
         # verifications
+        # NOTE: SW uses (nl, nx, ny) shape (last axis = y); see class docstring
+        # and flux operators which use dim=-1 for y and dim=-2 for x.
         assert len(param['H'].shape) >= 3, \
-            'H must be a nz x ny x nx tensor ' \
-            'with nx=1 or ny=1 if H does not vary ' \
-            f'in x or y direction, got shape {param["H"].shape}.'
+            'H must be a (nl, nx, ny) tensor ' \
+            '(use nx=1 or ny=1 to broadcast a single x- or y-column), ' \
+            f'got shape {param["H"].shape}.'
 
         # grid
         self.nx = param['nx']
@@ -237,8 +239,8 @@ class SW:
             )
 
         # Minimum layer thickness to prevent negative h_tot
-        self.h_min = param['h_min'] if 'h_min' in param.keys() else 0.1
-        self.h_min_sharpness = param['h_min_sharpness'] if 'h_min_sharpness' in param.keys() else 10.
+        self.h_min = param['h_min'] if 'h_min' in param.keys() else 0.01
+        self.h_min_sharpness = param['h_min_sharpness'] if 'h_min_sharpness' in param.keys() else 5.
 
         # Equivalent depth bounds
         self.H_min = param['H_min'] if 'H_min' in param.keys() else None
@@ -349,6 +351,7 @@ class SW:
             self.step = jit(self.step, static_argnames=['nstep'])
             self.step_tgl = jit(self.step_tgl, static_argnames=['nstep'])
             self.step_adj = jit(self.step_adj, static_argnames=['nstep'])
+            self.step_with_tracer = jit(self.step_with_tracer, static_argnames=['nstep'])
         else:
             print('  - No compilation')
 
@@ -379,6 +382,9 @@ class SW:
         self.sponge_u = jnp.zeros((1,1,self.nx+1, self.ny))
         self.sponge_v = jnp.zeros((1,1,self.nx, self.ny+1))
         self.sponge_h = jnp.zeros((1,1,self.nx, self.ny))
+
+        # Tracer diffusivity (m^2/s) — mirrors diff_coef for h
+        self.tracer_diff_coef = param.get('diff_coef_trac', 0.)
 
         # Momentum forcing mode: 'direct' uses Fu/Fv as given,
         # 'mass_consistent' derives Fu/Fv from Fh so that velocity is
@@ -467,19 +473,125 @@ class SW:
                 f'eta_sur min: {eta[:,0].min():+.5f}, ' \
                 f'max: {eta[:,0].max():.5f}'
 
+    def advection_tracer(self, U, V, c_area):
+        """
+        Advective-form RHS for a passive scalar tracer on the h-grid.
+
+        c_area: (1, n_trac, nx, ny)  tracer scaled by cell area
+                (c_area = c_phys * area — same storage convention as h)
+        U: (1, nl, nx+1, ny)  u_phys/dx  from compute_diagnostic_variables
+        V: (1, nl, nx, ny+1)  v_phys/dy  from compute_diagnostic_variables
+
+        Uses the surface velocity (layer 0) for all tracer layers, and reuses
+        the same WENO h-grid flux machinery as advection_h.
+
+        Equation form (why this differs from advection_h):
+        For mass (h), the conserved quantity is `h_phys * area` and the
+        correct SW continuity is `dt(h*area) = -div(area * u_phys * h_face)`.
+        For a *passive concentration* (°C, PSU), the conserved quantity is
+        `h * c` (not `c` itself). Using the same flux-divergence form as h,
+        i.e. `dt(c*area) = -div(area * u_phys * c_face)`, expands to
+            dt(c_phys) = -(u·∇c)  -  c_phys * div(u_phys)
+        The second term is identically zero for QG geostrophic flow
+        (div ≈ 0) but NOT for SW: it acts as a spurious source/sink at
+        velocity gradients (jets, fronts), driving c above/below its
+        initial range — e.g. negative SSS in convergence zones.
+
+        Fix (advective form): keep the WENO upwind reconstruction of
+        `c_phys` at faces (it provides monotone, non-oscillatory upwind
+        differencing) but subtract back the spurious `c · div(u_phys)`
+        term. Algebraically:
+            dt(c_area)_advective = dt(c_area)_flux_div  +  c_phys * div(area·u_phys)
+        which is the discrete analogue of `dt(c_phys) = -u·∇c`. This
+        preserves spatial constants exactly and prevents excursions
+        outside the initial [min, max] range from divergence effects.
+
+        Implementation note (float32 stability):
+        Tracer absolute values are O(30) (°C, PSU). Applying WENO to the
+        area-scaled `c_area ~ 3e9` overflows float32 inside the WENO-Z
+        smoothness weights (β² ~ 1e38). We therefore reconstruct on
+        `c_phys = c_area / area` and re-scale by face area outside the
+        reconstruction (math-identical for uniform grid spacing,
+        FV-consistent for non-uniform area). Output stays area-scaled.
+        """
+        # Surface velocity: select layer 0, broadcast over tracer axis via (1,1,...)
+        U_surf = U[:, 0:1, :, :]   # (1, 1, nx+1, ny)
+        V_surf = V[:, 0:1, :, :]   # (1, 1, nx, ny+1)
+        # Physical tracer — small magnitudes safe for WENO in float32
+        c_phys = c_area / self.area
+        # Face-averaged cell area on u- and v-faces
+        area_x = 0.5 * (self.area[1:, :] + self.area[:-1, :])   # (nx-1, ny)
+        area_y = 0.5 * (self.area[:, 1:] + self.area[:, :-1])   # (nx, ny-1)
+        # WENO upwind reconstruction of c_phys at faces times face velocity.
+        c_flux_y = area_y * self.h_flux_y(c_phys, V_surf[..., 1:-1])   # (1, n_trac, nx, ny-1)
+        c_flux_x = area_x * self.h_flux_x(c_phys, U_surf[..., 1:-1, :]) # (1, n_trac, nx-1, ny)
+        # Flux-divergence tendency (would be correct for h*c, contains
+        # spurious c*div(u) term for c alone).
+        dt_c_fluxdiv = -div_nofluxbc(c_flux_x, c_flux_y)
+        # Area-scaled velocity divergence at h-cells: area * div(u_phys).
+        # Same discrete operator as above with c_face ≡ 1.
+        vel_div_area = div_nofluxbc(area_x * U_surf[..., 1:-1, :],
+                                    area_y * V_surf[..., 1:-1])   # (1, 1, nx, ny)
+        # Cancel spurious c*div(u_phys) source -> pure advective form.
+        return (dt_c_fluxdiv + c_phys * vel_div_area) * self.masks.h
+
+    def add_tracer_diffusion(self, c_area):
+        """
+        Laplacian diffusion \u03ba\u2207\u00b2(c_phys) for passive tracers.
+        Mirrors add_h_diffusion: operates on c_phys = c_area/area so that the
+        Laplacian is correct on non-uniform grids, then converts back.
+        Returns diffusion tendency in area-scaled form.
+        """
+        if self.tracer_diff_coef is not None and self.tracer_diff_coef > 0:
+            c_phys = c_area / self.area
+            c_phys_pad = jnp.pad(c_phys, ((0,0),(0,0),(1,1),(1,1)), mode='edge')
+            lap_c_phys = (
+                (c_phys_pad[..., 2:, 1:-1] - 2*c_phys_pad[..., 1:-1, 1:-1] + c_phys_pad[..., :-2, 1:-1]) / self.dx**2
+                + (c_phys_pad[..., 1:-1, 2:] - 2*c_phys_pad[..., 1:-1, 1:-1] + c_phys_pad[..., 1:-1, :-2]) / self.dy**2
+            )
+            return self.tracer_diff_coef * lap_c_phys * self.area * self.masks.h
+        return jnp.zeros_like(c_area)
+
     def advection_h(self, U, V, h, h_ref=None):
         """
         Advection RHS for thickness perturbation h
         dt_h = - div(h_tot [u v]),  h_tot = h_ref + h
+
+        Implementation note (float32 stability):
+        h is stored area-scaled (h_phys * area). With area ~1e8 m² and
+        h_phys ~ O(1 m), h_area ~ 1e8. WENO smoothness indicators β ~
+        (Δh_area)² ~ 1e14-1e15, and the WENO-Z `smooth_abs(β1-β3)` squares
+        them again → ~1e30. Float32 does not overflow here (max 3.4e38) but
+        the dynamic range is severely compressed, hurting adjoint
+        conditioning (1/(β+ε)^k explodes when β is noisy from catastrophic
+        cancellation of two large values).
+
+        Fix (mirrors advection_tracer): apply WENO to h_tot_phys =
+        h_tot_area / area (O(1)), then re-scale the reconstructed flux by
+        face-averaged area. Math-identical for uniform grid spacing and
+        FV-consistent on non-uniform area. Output is still area-scaled
+        (d(h_area)/dt = area * d(h_phys)/dt).
         """
         _h_ref = h_ref if h_ref is not None else self.h_ref
         if self.flag_linear:
             h_tot = _h_ref * jnp.ones_like(h)
         else:
             h_tot = _h_ref + h
-            h_tot = smooth_clamp(h_tot, self.h_min * self.area, self.h_min_sharpness)
-        h_tot_flux_y = self.h_flux_y(h_tot, V[...,1:-1])
-        h_tot_flux_x = self.h_flux_x(h_tot, U[...,1:-1,:])
+        # Physical thickness — small magnitudes safe for WENO in float32.
+        # Clamp in PHYSICAL units so that h_min_sharpness has a grid-independent
+        # meaning: transition width = 1/h_min_sharpness in metres (default 10
+        # → 0.1 m).  Previously the clamp acted on the area-scaled h_tot, so
+        # for area ~1e8 the kink was effectively a hard step, producing a
+        # delta-like adjoint singularity at h_phys ≈ h_min.
+        h_tot_phys = h_tot / self.area
+        if not self.flag_linear:
+            h_tot_phys = smooth_clamp(h_tot_phys, self.h_min, self.h_min_sharpness)
+        # Face-averaged cell area on u- and v-faces
+        area_x = 0.5 * (self.area[1:, :] + self.area[:-1, :])   # (nx-1, ny)
+        area_y = 0.5 * (self.area[:, 1:] + self.area[:, :-1])   # (nx, ny-1)
+        # WENO fluxes on h_tot_phys, then re-scale by face area
+        h_tot_flux_y = area_y * self.h_flux_y(h_tot_phys, V[..., 1:-1])
+        h_tot_flux_x = area_x * self.h_flux_x(h_tot_phys, U[..., 1:-1, :])
         return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
 
     def advection_momentum(self, u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid,
@@ -702,8 +814,10 @@ class SW:
         h_ = replicate_pad(h, self.masks.h)
         h_ugrid = 0.5 * (h_[...,1:,1:-1] + h_[...,:-1,1:-1])
         h_vgrid = 0.5 * (h_[...,1:-1,1:] + h_[...,1:-1,:-1])
-        h_tot_ugrid = smooth_clamp(_h_ref_ugrid + h_ugrid, self.h_min * self.area_ugrid, self.h_min_sharpness)
-        h_tot_vgrid = smooth_clamp(_h_ref_vgrid + h_vgrid, self.h_min * self.area_vgrid, self.h_min_sharpness)
+        # Clamp in PHYSICAL units (metres): see advection_h note. h_tot_*grid stays
+        # area-scaled for downstream consumers, so we divide by area, clamp, multiply back.
+        h_tot_ugrid = smooth_clamp((_h_ref_ugrid + h_ugrid) / self.area_ugrid, self.h_min, self.h_min_sharpness) * self.area_ugrid
+        h_tot_vgrid = smooth_clamp((_h_ref_vgrid + h_vgrid) / self.area_vgrid, self.h_min, self.h_min_sharpness) * self.area_vgrid
 
         return omega, eta, p, U, V, U_m, V_m, k_energy, h_tot_ugrid, h_tot_vgrid
 
@@ -880,12 +994,14 @@ class SW:
                 h_ = replicate_pad(h, self.masks.h)
                 h_ugrid = 0.5 * (h_[..., 1:, 1:-1] + h_[..., :-1, 1:-1])
                 h_vgrid = 0.5 * (h_[..., 1:-1, 1:] + h_[..., 1:-1, :-1])
-                h_tot_u = smooth_clamp(ref_vals[1] + h_ugrid,
-                                       self.h_min * self.area_ugrid,
-                                       self.h_min_sharpness)
-                h_tot_v = smooth_clamp(ref_vals[2] + h_vgrid,
-                                       self.h_min * self.area_vgrid,
-                                       self.h_min_sharpness)
+                # Clamp in PHYSICAL units; result stays area-scaled for the
+                # mass-consistent forcing ratio u/h_tot * Fh.
+                h_tot_u = smooth_clamp((ref_vals[1] + h_ugrid) / self.area_ugrid,
+                                       self.h_min,
+                                       self.h_min_sharpness) * self.area_ugrid
+                h_tot_v = smooth_clamp((ref_vals[2] + h_vgrid) / self.area_vgrid,
+                                       self.h_min,
+                                       self.h_min_sharpness) * self.area_vgrid
                 Fh_ = replicate_pad(_Fh, self.masks.h)
                 Fh_u = 0.5 * (Fh_[..., 1:, 1:-1] + Fh_[..., :-1, 1:-1])
                 Fh_v = 0.5 * (Fh_[..., 1:-1, 1:] + Fh_[..., 1:-1, :-1])
@@ -956,6 +1072,180 @@ class SW:
         adjoints = vjp_fn(cotangents)
         return adjoints  # returns (adj_u0, adj_v0, adj_h0, adj_H, adj_h_wind)
 
+    def step_with_tracer(
+        self,
+        u0,
+        v0,
+        h0,
+        c0,
+        H=None,
+        nstep=1,
+        u_b=None,
+        v_b=None,
+        h_b=None,
+        c_b=None,
+        Fu=None,
+        Fv=None,
+        Fh=None,
+        Fc=None,
+        taux=None,
+        tauy=None,
+        h_wind=None,
+        wind_strength=None,
+    ):
+        """
+        Performs nstep time-integration for (u, v, h) *and* passive tracer c.
+
+        c0: (1, n_trac, nx, ny)  physical tracer values (e.g. °C, PSU).
+        c_b: boundary value for tracer, same shape as c0 (or None → no nudging).
+        Fc: external tracer forcing per time step (same shape as c0, or None).
+
+        Tracer c is stored internally in area-scaled form (c_area = c_phys * area)
+        consistent with the h convention.  The surface velocity (layer 0) is used
+        for advection — the physical h-grid-interpolated velocities derived from
+        the staggered (u, v).  Diagnostics (U, V) are shared between the
+        momentum and tracer tendencies within each RK3 stage to avoid redundant
+        computation.
+
+        Returns (u_phys, v_phys, h_phys, c_phys).
+        """
+
+        # Prepare (u, v, h) in scaled form
+        u, v, h = self.set_input_uvh(u0, v0, h0)
+
+        _u_b, _v_b, _h_b = self.set_input_uvh(
+            u_b if u_b is not None else u0,
+            v_b if v_b is not None else v0,
+            h_b if h_b is not None else h0,
+        )
+        _Fu, _Fv, _Fh = self.set_input_uvh(
+            Fu if Fu is not None else jnp.zeros_like(u0),
+            Fv if Fv is not None else jnp.zeros_like(v0),
+            Fh if Fh is not None else jnp.zeros_like(h0),
+        )
+
+        # Prepare tracer in area-scaled form (mirrors h = h_phys * area)
+        c = jnp.asarray(c0, dtype=self.dtype) * self.masks.h * self.area  # (1, n_trac, nx, ny)
+        _c_b = jnp.asarray(c_b, dtype=self.dtype) * self.masks.h * self.area if c_b is not None else c
+        _Fc  = jnp.asarray(Fc, dtype=self.dtype) * self.area if Fc is not None else jnp.zeros_like(c)
+
+        # Ref values
+        H_total = self.H + H if H is not None else self.H
+        if self.H_min is not None:
+            H_total = jnp.maximum(H_total, self.H_min)
+        if self.H_max is not None:
+            H_total = jnp.minimum(H_total, self.H_max)
+        ref_vals = self._compute_ref_values(H_total)
+
+        _taux = taux if taux is not None else self.taux
+        _tauy = tauy if tauy is not None else self.tauy
+
+        if h_wind is not None:
+            _h_wind = (self.h_wind + h_wind) if self.h_wind is not None else h_wind
+        else:
+            _h_wind = None
+
+        def _stage_tendencies(u, v, h, c):
+            """Compute RHS for (u, v, h, c) sharing diagnostics (U, V).
+
+            Mirrors compute_time_derivatives() exactly for (u, v, h), then
+            reuses the already-computed U, V for tracer advection to avoid a
+            second diagnostic call per RK3 stage.
+            """
+            omega, eta, p, U, V, U_m, V_m, k_energy, h_tot_ugrid, h_tot_vgrid = \
+                self.compute_diagnostic_variables(u, v, h, ref_vals[1], ref_vals[2])
+            dt_h = self.advection_h(U, V, h, ref_vals[0]) + self.add_h_diffusion(h)
+            dt_u, dt_v = self.advection_momentum(
+                u, v, omega, U_m, V_m, k_energy, p,
+                h_tot_ugrid, h_tot_vgrid,
+                ref_vals[3], ref_vals[4],
+                taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength)
+            if self.barotropic_filter:
+                dt_u, dt_v, dt_h = self.filter_barotropic_waves(
+                    dt_u, dt_v, dt_h, u, v, h_tot_ugrid, h_tot_vgrid)
+            # Tracer: reuse U, V from above — no extra diagnostic call
+            dt_c = self.advection_tracer(U, V, c) + self.add_tracer_diffusion(c)
+            return dt_u, dt_v, dt_h, dt_c
+
+        def single_step(carry, _):
+            u, v, h, c = carry
+
+            _gamma_u = (self.sponge_coef / self.dt) * self.sponge_u
+            _gamma_v = (self.sponge_coef / self.dt) * self.sponge_v
+            _gamma_h = (self.sponge_coef / self.dt) * self.sponge_h
+            _gamma_c = (self.sponge_coef / self.dt) * self.sponge_h  # tracer on h-grid
+
+            # ---- RK3-SSP stage 0 ----
+            dt0_u, dt0_v, dt0_h, dt0_c = _stage_tendencies(u, v, h, c)
+            dt0_u = dt0_u + _gamma_u * (_u_b - u)
+            dt0_v = dt0_v + _gamma_v * (_v_b - v)
+            dt0_h = dt0_h + _gamma_h * (_h_b - h)
+            dt0_c = dt0_c + _gamma_c * (_c_b - c)
+            u = u + self.dt * dt0_u
+            v = v + self.dt * dt0_v
+            h = h + self.dt * dt0_h
+            c = c + self.dt * dt0_c
+
+            # ---- RK3-SSP stage 1 ----
+            dt1_u, dt1_v, dt1_h, dt1_c = _stage_tendencies(u, v, h, c)
+            dt1_u = dt1_u + _gamma_u * (_u_b - u)
+            dt1_v = dt1_v + _gamma_v * (_v_b - v)
+            dt1_h = dt1_h + _gamma_h * (_h_b - h)
+            dt1_c = dt1_c + _gamma_c * (_c_b - c)
+            u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
+            v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
+            h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
+            c = c + (self.dt / 4.0) * (dt1_c - 3.0 * dt0_c)
+
+            # ---- RK3-SSP stage 2 ----
+            dt2_u, dt2_v, dt2_h, dt2_c = _stage_tendencies(u, v, h, c)
+            dt2_u = dt2_u + _gamma_u * (_u_b - u)
+            dt2_v = dt2_v + _gamma_v * (_v_b - v)
+            dt2_h = dt2_h + _gamma_h * (_h_b - h)
+            dt2_c = dt2_c + _gamma_c * (_c_b - c)
+            u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
+            v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
+            h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)
+            c = c + (self.dt / 12.0) * (8.0 * dt2_c - dt1_c - dt0_c)
+
+            # ---- External forcing (after RK3) ----
+            if self.forcing_momentum == 'mass_consistent':
+                h_ = replicate_pad(h, self.masks.h)
+                h_ugrid = 0.5 * (h_[..., 1:, 1:-1] + h_[..., :-1, 1:-1])
+                h_vgrid = 0.5 * (h_[..., 1:-1, 1:] + h_[..., 1:-1, :-1])
+                # Clamp in PHYSICAL units; result stays area-scaled.
+                h_tot_u = smooth_clamp((ref_vals[1] + h_ugrid) / self.area_ugrid,
+                                       self.h_min, self.h_min_sharpness) * self.area_ugrid
+                h_tot_v = smooth_clamp((ref_vals[2] + h_vgrid) / self.area_vgrid,
+                                       self.h_min, self.h_min_sharpness) * self.area_vgrid
+                Fh_ = replicate_pad(_Fh, self.masks.h)
+                Fh_u = 0.5 * (Fh_[..., 1:, 1:-1] + Fh_[..., :-1, 1:-1])
+                Fh_v = 0.5 * (Fh_[..., 1:-1, 1:] + Fh_[..., 1:-1, :-1])
+                u = u + self.dt * (-u / h_tot_u * Fh_u)
+                v = v + self.dt * (-v / h_tot_v * Fh_v)
+
+            u = u + self.dt * _Fu
+            v = v + self.dt * _Fv
+            h = h + self.dt * _Fh
+            c = c + self.dt * _Fc
+
+            return (u, v, h, c), None
+
+        single_step = jax.checkpoint(single_step)
+
+        if nstep > 0:
+            (u, v, h, c), _ = lax.scan(
+                single_step,
+                (u, v, h, c),
+                None,
+                length=nstep,
+            )
+
+        # Back to physical space
+        u_phys, v_phys, h_phys = self.get_physical_uvh(u, v, h, numpy=False)
+        c_phys = (c / self.area) * self.masks.h   # physical tracer, masked
+
+        return u_phys, v_phys, h_phys, c_phys
 
     def adjoint_test_sw(self, nstep=1, seed=42):
         """

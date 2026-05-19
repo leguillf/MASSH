@@ -57,6 +57,12 @@ def Basis(config, State, verbose=True, multi_mode=False, *args, **kwargs):
 
         elif config.BASIS.super=='BASIS_GAUSS3D_JAX':
             return Basis_gauss3d_jax(config,State,multi_mode=multi_mode)
+
+        elif config.BASIS.super=='BASIS_GAUSS2D':
+            return Basis_gauss2d(config,State,multi_mode=multi_mode)
+
+        elif config.BASIS.super=='BASIS_GAUSS2D_JAX':
+            return Basis_gauss2d_jax(config,State,multi_mode=multi_mode)
           
         elif config.BASIS.super=='BASIS_GAUSSV2':
             return Basis_gaussv2(config, State) 
@@ -69,6 +75,12 @@ def Basis(config, State, verbose=True, multi_mode=False, *args, **kwargs):
         
         elif config.BASIS.super=='BASIS_BMaux_JAX':
             return Basis_bmaux_jax(config,State,multi_mode=multi_mode)
+
+        elif config.BASIS.super=='BASIS_BMaux_v2':
+            return Basis_bmaux_v2(config,State,multi_mode=multi_mode)
+
+        elif config.BASIS.super=='BASIS_BMaux_v2_JAX':
+            return Basis_bmaux_v2_jax(config,State,multi_mode=multi_mode)
         
         elif config.BASIS.super=='BASIS_MIOST':
             return Basis_miost(config,State,multi_mode=multi_mode)
@@ -1743,7 +1755,389 @@ class Basis_gauss3d_jax(Basis_gauss3d):
                 adState[self.name_mod_v] *= 0.
         
         return adX
-    
+
+
+###############################################################################
+#                        2D Gaussian (spatial only)                           #
+###############################################################################
+
+class Basis_gauss2d:
+    """Purely spatial Gaussian radial-basis functions.
+
+    Each control coefficient multiplies one spatial Gaussian bell.
+    No time dimension — the same set of coefficients is applied at every
+    time step by ``operg``.
+    """
+
+    def __init__(self, config, State, multi_mode=False):
+
+        self.km2deg = 1. / 110
+
+        self.facns = config.BASIS.facns
+        self.sigma_D = config.BASIS.sigma_D
+        self.sigma_Q = config.BASIS.sigma_Q
+        self.name_mod_var = config.BASIS.name_mod_var
+        self.flag_variable_Q = config.BASIS.flag_variable_Q
+        self.path_sad = config.BASIS.path_sad
+        self.name_var_sad = config.BASIS.name_var_sad
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
+
+        # C-grid variable type (None, 'U', or 'V')
+        self.c_grid_var = getattr(config.BASIS, 'c_grid_var', None)
+
+        # Grid params
+        self.ny = State.ny
+        self.nx = State.nx
+        self.lon_min = State.lon_min
+        self.lon_max = State.lon_max
+        self.lat_min = State.lat_min
+        self.lat_max = State.lat_max
+
+        if self.c_grid_var == 'U':
+            self.shape_phys = (State.ny, State.nx + 1)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_u = np.zeros((State.ny, State.nx + 1))
+            lat_u = np.zeros((State.ny, State.nx + 1))
+            lon_u[:, 1:State.nx] = 0.5 * (lon_h[:, :-1] + lon_h[:, 1:])
+            lat_u[:, 1:State.nx] = 0.5 * (lat_h[:, :-1] + lat_h[:, 1:])
+            lon_u[:, 0] = lon_h[:, 0] - 0.5 * (lon_h[:, 1] - lon_h[:, 0])
+            lat_u[:, 0] = lat_h[:, 0] - 0.5 * (lat_h[:, 1] - lat_h[:, 0])
+            lon_u[:, State.nx] = lon_h[:, -1] + 0.5 * (lon_h[:, -1] - lon_h[:, -2])
+            lat_u[:, State.nx] = lat_h[:, -1] + 0.5 * (lat_h[:, -1] - lat_h[:, -2])
+            self.lon1d = lon_u.flatten()
+            self.lat1d = lat_u.flatten()
+        elif self.c_grid_var == 'V':
+            self.shape_phys = (State.ny + 1, State.nx)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_v = np.zeros((State.ny + 1, State.nx))
+            lat_v = np.zeros((State.ny + 1, State.nx))
+            lon_v[1:State.ny, :] = 0.5 * (lon_h[:-1, :] + lon_h[1:, :])
+            lat_v[1:State.ny, :] = 0.5 * (lat_h[:-1, :] + lat_h[1:, :])
+            lon_v[0, :] = lon_h[0, :] - 0.5 * (lon_h[1, :] - lon_h[0, :])
+            lat_v[0, :] = lat_h[0, :] - 0.5 * (lat_h[1, :] - lat_h[0, :])
+            lon_v[State.ny, :] = lon_h[-1, :] + 0.5 * (lon_h[-1, :] - lon_h[-2, :])
+            lat_v[State.ny, :] = lat_h[-1, :] + 0.5 * (lat_h[-1, :] - lat_h[-2, :])
+            self.lon1d = lon_v.flatten()
+            self.lat1d = lat_v.flatten()
+        else:
+            self.shape_phys = (State.ny, State.nx)
+            self.lon1d = State.lon.flatten()
+            self.lat1d = State.lat.flatten()
+
+        self.nphys = self.lon1d.size
+
+        # Gravity
+        self.g = 9.81
+
+        # Geostrophic velocities
+        self.compute_velocities = config.BASIS.compute_velocities
+        self.name_mod_u = config.BASIS.name_mod_u
+        self.name_mod_v = config.BASIS.name_mod_v
+        pad = ((1, 0), (1, 0))
+        _f = np.pad(State.f, pad_width=pad, mode='edge')
+        self.f_on_v = 0.5 * (_f[:, 1:] + _f[:, :-1])
+        self.f_on_u = 0.5 * (_f[1:, :] + _f[:-1, :])
+
+        # Grid spacing
+        self.dx = np.pad(State.DX, pad_width=pad, mode='edge')
+        self.dy = np.pad(State.DY, pad_width=pad, mode='edge')
+        self.dx_on_v = 0.5 * (self.dx[:, 1:] + self.dx[:, :-1])
+        self.dy_on_u = 0.5 * (self.dy[1:, :] + self.dy[:-1, :])
+
+        # Mask
+        if State.mask is not None and np.any(State.mask):
+            if self.c_grid_var == 'U':
+                mask_u = np.zeros((State.ny, State.nx + 1), dtype=bool)
+                mask_u[:, 1:State.nx] = State.mask[:, :-1] | State.mask[:, 1:]
+                self.mask1d = mask_u.ravel()
+            elif self.c_grid_var == 'V':
+                mask_v = np.zeros((State.ny + 1, State.nx), dtype=bool)
+                mask_v[1:State.ny, :] = State.mask[:-1, :] | State.mask[1:, :]
+                self.mask1d = mask_v.ravel()
+            else:
+                self.mask1d = State.mask.ravel()
+        else:
+            self.mask1d = None
+
+        # Longitude unit
+        self.lon_unit = State.lon_unit
+
+        # For multi-basis
+        self.multi_mode = multi_mode
+
+    def set_basis(self, time, return_q=False, **kwargs):
+
+        LON_MIN = self.lon_min
+        LON_MAX = self.lon_max
+        LAT_MIN = self.lat_min
+        LAT_MAX = self.lat_max
+        if LON_MAX < LON_MIN:
+            LON_MAX = LON_MAX + 360.
+
+        # Spatial Gaussian centres
+        dlat = self.sigma_D / self.facns * self.km2deg
+        lat0 = LAT_MIN - LAT_MIN % dlat - self.sigma_D * (1 - 1. / self.facns) * self.km2deg
+        lat1 = LAT_MAX + 1.5 * dlat
+        ENSLAT1 = np.arange(lat0, lat1, dlat)
+        ENSLAT = []
+        ENSLON = []
+        for I in range(len(ENSLAT1)):
+            dlon = self.sigma_D / self.facns / np.cos(ENSLAT1[I] * np.pi / 180.) * self.km2deg
+            lon0 = LON_MIN - LON_MIN % dlon - self.sigma_D * (1 - 1. / self.facns) / np.cos(ENSLAT1[I] * np.pi / 180.) * self.km2deg
+            lon1 = LON_MAX + dlon * 1.5
+            ENSLON1 = np.arange(lon0, lon1, dlon)
+            ENSLAT = np.concatenate(([ENSLAT, np.repeat(ENSLAT1[I], len(ENSLON1))]))
+            ENSLON = np.concatenate(([ENSLON, ENSLON1]))
+        self.ENSLAT = ENSLAT
+        self.ENSLON = ENSLON
+
+        self.nbasis = ENSLAT.size
+
+        if self.c_grid_var == 'U':
+            self.shape_phys = [self.ny, self.nx + 1]
+        elif self.c_grid_var == 'V':
+            self.shape_phys = [self.ny + 1, self.nx]
+        else:
+            self.shape_phys = [self.ny, self.nx]
+
+        # Fill Q matrix
+        if self.flag_variable_Q:
+            Q = []
+            sad = xr.open_dataset(self.path_sad)[self.name_var_sad['var']]
+            if np.sign(sad[self.name_var_sad['lon']].data.min()) == -1 and self.lon_unit == '0_360':
+                sad = sad.assign_coords({self.name_var_sad['lon']: ((self.name_var_sad['lon'], sad[self.name_var_sad['lon']].data % 360))})
+            elif (np.sign(sad[self.name_var_sad['lon']].data.min()) >= 0 or sad[self.name_var_sad['lon']].data.max() > 180) and self.lon_unit == '-180_180':
+                sad = sad.assign_coords({self.name_var_sad['lon']: ((self.name_var_sad['lon'], (sad[self.name_var_sad['lon']].data + 180) % 360 - 180))})
+            sad = sad.sortby(sad[self.name_var_sad['lon']])
+            for (lon, lat) in zip(ENSLON, ENSLAT):
+                dlon_h = .5 * self.sigma_D / np.cos(lat * np.pi / 180.)
+                dlat_h = .5 * self.sigma_D
+                elon = np.linspace(lon - dlon_h, lon + dlon_h, 10)
+                elat = np.linspace(lat - dlat_h, lat + dlat_h, 10)
+                elon2, elat2 = np.meshgrid(elon, elat)
+                std_tmp_values = sad.interp({self.name_var_sad['lon']: elon2.ravel(),
+                                             self.name_var_sad['lat']: elat2.ravel()}).values
+                std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10
+                Q.append(std_tmp / self.facns**.5)
+            Q = np.array(Q)
+        else:
+            Q = self.sigma_Q / self.facns**.5 * np.ones((self.nbasis,))
+
+        Xb = np.zeros_like(Q)
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values[:len(Xb)]
+
+        print(f'sigma_D={self.sigma_D:.1E}',
+              f'nlocs={ENSLAT.size:.1E}',
+              f'Q={np.mean(Q):.1E}')
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n'
+              f' reduced factor: {int(time.size * self.nphys / self.nbasis)}')
+
+        # Compute spatial basis matrix
+        self.Gauss_xy = self._compute_component_space()
+
+        if return_q:
+            return Xb, Q
+
+    def _compute_component_space(self):
+        """Gaussian functions in space."""
+
+        data = np.empty((self.ENSLAT.size * self.lon1d.size,))
+        indices = np.empty((self.ENSLAT.size * self.lon1d.size,), dtype=int)
+        sizes = np.zeros((self.ENSLAT.size,), dtype=int)
+        ind_tmp = 0
+        for i, (lat0, lon0) in enumerate(zip(self.ENSLAT, self.ENSLON)):
+            indphys = np.where(
+                (np.abs((np.mod(self.lon1d - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.sigma_D) &
+                (np.abs((self.lat1d - lat0) / self.km2deg) <= self.sigma_D)
+            )[0]
+            xx = (np.mod(self.lon1d[indphys] - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)
+            yy = (self.lat1d[indphys] - lat0) / self.km2deg
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
+            sizes[i] = indphys.size
+            indices[ind_tmp:ind_tmp + indphys.size] = indphys
+            data[ind_tmp:ind_tmp + indphys.size] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
+            ind_tmp += indphys.size
+        indptr = np.zeros((i + 2,), dtype=int)
+        indptr[1:] = np.cumsum(sizes)
+        return csc_matrix((data, indices, indptr), shape=(self.lon1d.size, self.ENSLAT.size))
+
+    def _ssh2uv(self, ssh):
+        _ssh = np.pad(ssh, pad_width=((1, 0), (1, 0)), mode='edge')
+        _u = -self.g / self.f_on_u * (_ssh[1:, :] - _ssh[:-1, :]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:, 1:] - _ssh[:, :-1]) / self.dx_on_v
+        return _u, _v
+
+    def _ssh2uv_adj(self, adu, adv):
+        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+        _adssh[1:, :]  += -self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:-1, :] +=  self.g / self.f_on_u * adu / self.dy_on_u
+        _adssh[:, 1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
+        _adssh[:, :-1] += -self.g / self.f_on_v * adv / self.dx_on_v
+        adssh = _adssh[1:, 1:].copy()
+        adssh[0, :] += _adssh[0, 1:]
+        adssh[:, 0] += _adssh[1:, 0]
+        adssh[0, 0] += _adssh[0, 0]
+        return adssh
+
+    def operg(self, t, X, State=None):
+        """Project control vector to physical space."""
+
+        phi = self.Gauss_xy.dot(X).reshape(self.shape_phys)
+
+        if self.compute_velocities:
+            u, v = self._ssh2uv(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
+
+        if State is not None:
+            if not self.multi_mode:
+                State[self.name_mod_var] = phi
+            else:
+                State[self.name_mod_var] += phi
+        else:
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
+
+    def operg_transpose(self, t, adState):
+        """Project adjoint physical-space field to control space."""
+
+        if adState[self.name_mod_var] is None:
+            adState[self.name_mod_var] = np.zeros((self.nphys,))
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros_like(adState[self.name_mod_var])
+            adState[self.name_mod_v] = np.zeros_like(adState[self.name_mod_var])
+
+        adparams = adState[self.name_mod_var].ravel()
+        if self.compute_velocities:
+            adparams = adparams + self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v]).ravel()
+
+        adX = self.Gauss_xy.T.dot(adparams)
+
+        if not self.multi_mode:
+            adState[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
+
+        return adX
+
+
+class Basis_gauss2d_jax(Basis_gauss2d):
+    """JAX-differentiable version of :class:`Basis_gauss2d`."""
+
+    def __init__(self, config, State, multi_mode=False):
+        super().__init__(config, State, multi_mode=multi_mode)
+        self._operg_jit = jit(self._operg)
+        self._operg_reduced_jit = jit(self._operg_reduced)
+
+    def set_basis(self, time, return_q=False, **kwargs):
+        res = super().set_basis(time, return_q=return_q, **kwargs)
+        self.zero_basis = jnp.zeros((self.nbasis,))
+        self.zero_phys = jnp.zeros((self.nphys,))
+        return res
+
+    def _compute_component_space(self):
+        """Gaussian functions in space (JAX sparse CSR)."""
+
+        Gauss_2d = np.zeros((self.ENSLAT.size, self.lon1d.size))
+        for i, (lat0, lon0) in enumerate(zip(self.ENSLAT, self.ENSLON)):
+            indphys = np.where(
+                (np.abs((np.mod(self.lon1d - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.sigma_D) &
+                (np.abs((self.lat1d - lat0) / self.km2deg) <= self.sigma_D)
+            )[0]
+            xx = (np.mod(self.lon1d[indphys] - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)
+            yy = (self.lat1d[indphys] - lat0) / self.km2deg
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
+            Gauss_2d[i, indphys] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
+        return sparse.CSR.fromdense(jnp.array(Gauss_2d).T)
+
+    def _ssh2uv(self, ssh):
+        _ssh = jnp.pad(ssh, pad_width=((1, 0), (1, 0)), mode='edge')
+        _u = -self.g / self.f_on_u * (_ssh[1:, :] - _ssh[:-1, :]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:, 1:] - _ssh[:, :-1]) / self.dx_on_v
+        return _u, _v
+
+    def _operg(self, X):
+        """Forward projection (JAX traceable)."""
+        return (self.Gauss_xy @ X).reshape(self.shape_phys)
+
+    def _operg_reduced(self, phi_2d):
+        """Reverse-mode projection via VJP (JAX traceable)."""
+        _, vjp_func = jax.vjp(self._operg_jit, self.zero_basis)
+        X_reduced, = vjp_func(phi_2d)
+        return X_reduced
+
+    def operg(self, t, X, State=None):
+        """Project control vector to physical space."""
+
+        phi = self._operg_jit(X)
+
+        if self.compute_velocities:
+            u, v = self._ssh2uv(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
+
+        if State is not None:
+            if not self.multi_mode:
+                State[self.name_mod_var] = phi
+            else:
+                State[self.name_mod_var] += phi
+        else:
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
+
+    def operg_transpose(self, t, adState):
+        """Project adjoint physical-space field to control space."""
+
+        if adState[self.name_mod_var] is None:
+            adState[self.name_mod_var] = self.zero_phys
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = self.zero_phys
+            adState[self.name_mod_v] = self.zero_phys
+
+        adparams = adState[self.name_mod_var]
+        if self.compute_velocities:
+            adparams = adparams + self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+
+        adX = self._operg_reduced_jit(adparams)
+
+        if not self.multi_mode:
+            adState[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
+
+        return adX
+
+
 class Basis_bmaux:
    
     def __init__(self,config,State,multi_mode=False):
@@ -1955,8 +2349,17 @@ class Basis_bmaux:
         elif (np.sign(aux['lon'].data.min())>=0 or aux['lon'].data.max()>180) and self.lon_unit=='-180_180':
             aux = aux.assign_coords({'lon':(('lon', (aux['lon'].data + 180) % 360 - 180 ))})
         aux = aux.sortby(aux['lon'])    
-        daTdec = aux['Tdec']
         daStd = aux['Std']
+        if 'tdec' in daStd.dims:
+            _multi_scale = True
+            _tdec_bins_file = aux['tdec'].values.astype(float)
+            _n_tdec_bins = len(_tdec_bins_file)
+            daTdec = None
+        else:
+            _multi_scale = False
+            _n_tdec_bins = 1
+            _tdec_bins_file = None
+            daTdec = aux['Tdec']
 
         # Auxiliary for Q
         if self.file_facQaux is not None:
@@ -1971,9 +2374,6 @@ class Basis_bmaux:
         # Wavelet space-time coordinates
         ENSLON = [None]*nf # Ensemble of longitudes of the center of each wavelets
         ENSLAT = [None]*nf # Ensemble of latitudes of the center of each wavelets
-        enst = [None]*nf #  Ensemble of times of the center of each wavelets
-        tdec = [None]*nf # Ensemble of equivalent decorrelation times. Used to define enst.
-        norm_fact = [None]*nf # integral of the time component (for normalization)
         
         DX = 1./ff*self.npsp * 0.5 # wavelet extension
         #DXG = DX / self.facns # distance (km) between the wavelets grid in space
@@ -2023,53 +2423,76 @@ class Basis_bmaux:
                 ENSLON[iff] = np.concatenate(([ENSLON[iff],_ENSLON1]))
             NP[iff] = len(ENSLON[iff])
 
-            # Time decorrelation
-            tdec[iff] = [None]*NP[iff]
-            enst[iff] = [None]*NP[iff]
-            norm_fact[iff] = [None]*NP[iff]
-            for P in range(NP[iff]):
-                dlon = DX[iff]*self.km2deg/np.cos(ENSLAT[iff][P] * np.pi / 180.)
-                dlat = DX[iff]*self.km2deg
-                elon = np.linspace(ENSLON[iff][P]-dlon,ENSLON[iff][P]+dlon,10)
-                elat = np.linspace(ENSLAT[iff][P]-dlat,ENSLAT[iff][P]+dlat,10)
-                elon2,elat2 = np.meshgrid(elon,elat)
-                tdec_tmp = daTdec.interp(f=ff[iff],lon=elon2.flatten(),lat=elat2.flatten()).values
-                if np.all(np.isnan(tdec_tmp)):
-                    tdec[iff][P] = 0
+        # ---- Multi-scale expansion: replicate each spatial band per tdec bin ----
+        if _multi_scale:
+            nf_eff = nf * _n_tdec_bins
+            ENSLON_eff = [ENSLON[ieff // _n_tdec_bins] for ieff in range(nf_eff)]
+            ENSLAT_eff = [ENSLAT[ieff // _n_tdec_bins] for ieff in range(nf_eff)]
+            NP_eff = np.array([NP[ieff // _n_tdec_bins] for ieff in range(nf_eff)], dtype='int64')
+            DX_eff = np.array([DX[ieff // _n_tdec_bins] for ieff in range(nf_eff)])
+            ff_eff = np.array([ff[ieff // _n_tdec_bins] for ieff in range(nf_eff)])
+        else:
+            nf_eff = nf
+            ENSLON_eff = ENSLON
+            ENSLAT_eff = ENSLAT
+            NP_eff = NP
+            DX_eff = DX
+            ff_eff = ff
+
+        # ---- Temporal setup for each effective band -------------------------
+        enst = [None] * nf_eff
+        tdec = [None] * nf_eff
+        norm_fact = [None] * nf_eff
+        for ieff in range(nf_eff):
+            iff_o = ieff // _n_tdec_bins if _multi_scale else ieff
+            k_o   = ieff %  _n_tdec_bins if _multi_scale else 0
+            NP_i = int(NP_eff[ieff])
+            tdec[ieff] = [None] * NP_i
+            enst[ieff] = [None] * NP_i
+            norm_fact[ieff] = [None] * NP_i
+            for P in range(NP_i):
+                dlon = DX_eff[ieff]*self.km2deg/np.cos(ENSLAT_eff[ieff][P] * np.pi / 180.)
+                dlat = DX_eff[ieff]*self.km2deg
+                elon = np.linspace(ENSLON_eff[ieff][P]-dlon, ENSLON_eff[ieff][P]+dlon, 10)
+                elat = np.linspace(ENSLAT_eff[ieff][P]-dlat, ENSLAT_eff[ieff][P]+dlat, 10)
+                elon2, elat2 = np.meshgrid(elon, elat)
+                if _multi_scale:
+                    tdec_val = float(_tdec_bins_file[k_o]) * self.factdec
                 else:
-                    tdec[iff][P] = np.nanmean(tdec_tmp)
-                tdec[iff][P] *= self.factdec
-                if tdec[iff][P]<self.tdecmin:
-                        tdec[iff][P] = self.tdecmin
-                if tdec[iff][P]>self.tdecmax:
-                    tdec[iff][P] = self.tdecmax 
-                # Compute time integral for each frequency for normalization
+                    tdec_tmp = daTdec.interp(f=ff_eff[ieff], lon=elon2.flatten(), lat=elat2.flatten()).values
+                    tdec_val = float(np.nanmean(tdec_tmp)) if not np.all(np.isnan(tdec_tmp)) else 0.0
+                    tdec_val *= self.factdec
+                if tdec_val < self.tdecmin:
+                    tdec_val = self.tdecmin
+                if tdec_val > self.tdecmax:
+                    tdec_val = self.tdecmax
+                tdec[ieff][P] = tdec_val
+                # Compute time integral for normalization
                 if self.norm_time:
-                    tt = np.linspace(-tdec[iff][P],tdec[iff][P])
+                    tt = np.linspace(-tdec_val, tdec_val)
                     tmp = np.zeros_like(tt)
                     for i in range(tt.size-1):
-                        tmp[i+1] = tmp[i] + self.window(tt[i]/tdec[iff][P])*(tt[i+1]-tt[i])
-                    norm_fact[iff][P] = tmp.max()
+                        tmp[i+1] = tmp[i] + self.window(tt[i]/tdec_val)*(tt[i+1]-tt[i])
+                    norm_fact[ieff][P] = tmp.max()
                 else:
-                    norm_fact[iff][P] = 1
-                # Time decorrelation
-                t0 = -self.delta_time_ref % tdec[iff][P] # To start at a fix time
-                enst[iff][P] = np.arange(t0 - tdec[iff][P]/self.facnlt, deltat+tdec[iff][P]/self.facnlt , tdec[iff][P]/self.facnlt)
+                    norm_fact[ieff][P] = 1
+                t0 = -self.delta_time_ref % tdec_val
+                enst[ieff][P] = np.arange(t0 - tdec_val/self.facnlt, deltat+tdec_val/self.facnlt, tdec_val/self.facnlt)
                 
         # Harmonize the wavelet time center dimensions for all point by adding NaN if needed 
         # (we must do that for the time operator Gt to be independent from the space operator Gx)
-        enst_same_dim = [None]*nf
-        for iff in range(nf):
-            max_number_enst_iff = np.max([enst[iff][P].size for P in range(NP[iff])])
-            enst_same_dim[iff] = np.zeros((NP[iff], max_number_enst_iff)) * np.nan
-            for P in range(NP[iff]):
-                enst_same_dim[iff][P, :enst[iff][P].size] = enst[iff][P]
+        enst_same_dim = [None]*nf_eff
+        for ieff in range(nf_eff):
+            max_number_enst_ieff = np.max([enst[ieff][P].size for P in range(NP_eff[ieff])])
+            enst_same_dim[ieff] = np.zeros((NP_eff[ieff], max_number_enst_ieff)) * np.nan
+            for P in range(NP_eff[ieff]):
+                enst_same_dim[ieff][P, :enst[ieff][P].size] = enst[ieff][P]
         
         # Fill the Q diagonal matrix (expected variance for each wavelet)   
         print('Computing Q')  
 
         iwave = 0
-        self.iff_wavebounds = [None]*(nf+1)
+        self.iff_wavebounds = [None]*(nf_eff+1)
         Q = np.array([])
         facQ = self.facQ  # Move outside the loop for efficiency
         facQ_largescale = self.facQ_largescale 
@@ -2078,55 +2501,65 @@ class Basis_bmaux:
         std = []
         facQaux = []
         facQaux = []
-        for iff in range(nf):
+        for ieff in range(nf_eff):
+            iff_o = ieff // _n_tdec_bins if _multi_scale else ieff
+            k_o   = ieff %  _n_tdec_bins if _multi_scale else 0
             std.append([])
-            std[iff] = []
+            std[ieff] = []
             if self.file_facQaux is not None:
                 facQaux.append([])
-                facQaux[iff] = []
-            for P in range(NP[iff]):
+                facQaux[ieff] = []
+            for P in range(NP_eff[ieff]):
                 
-                dlon = DX[iff] * self.km2deg / np.cos(ENSLAT[iff][P] * np.pi / 180.0)
-                dlat = DX[iff] * self.km2deg
+                dlon = DX_eff[ieff] * self.km2deg / np.cos(ENSLAT_eff[ieff][P] * np.pi / 180.0)
+                dlat = DX_eff[ieff] * self.km2deg
 
                 # Precompute interpolation grid once
-                elon = np.linspace(ENSLON[iff][P] - dlon, ENSLON[iff][P] + dlon, 10)
-                elat = np.linspace(ENSLAT[iff][P] - dlat, ENSLAT[iff][P] + dlat, 10)
+                elon = np.linspace(ENSLON_eff[ieff][P] - dlon, ENSLON_eff[ieff][P] + dlon, 10)
+                elat = np.linspace(ENSLAT_eff[ieff][P] - dlat, ENSLAT_eff[ieff][P] + dlat, 10)
                 elon2, elat2 = np.meshgrid(elon, elat)
 
-                std_tmp_values = daStd.interp(f=ff[iff], lon=elon2.ravel(), lat=elat2.ravel()).values
+                if _multi_scale:
+                    std_tmp_values = daStd.interp(
+                        f=float(ff[iff_o]),
+                        tdec=float(_tdec_bins_file[k_o]),
+                        lon=elon2.ravel(),
+                        lat=elat2.ravel(),
+                    ).values
+                else:
+                    std_tmp_values = daStd.interp(f=ff_eff[ieff], lon=elon2.ravel(), lat=elat2.ravel()).values
                 std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10 
-                std[iff].append(std_tmp) 
+                std[ieff].append(std_tmp) 
 
                 if self.file_facQaux is not None:
-                    facQaux_tmp_values = daFacQ.interp({self.name_var_facQaux['wavenumber']:ff[iff], 
+                    facQaux_tmp_values = daFacQ.interp({self.name_var_facQaux['wavenumber']:ff_eff[ieff], 
                                                         self.name_var_facQaux['lon']:elon2.ravel(), 
                                                         self.name_var_facQaux['lat']:elat2.ravel()}).values
                     facQaux_tmp = np.nanmean(facQaux_tmp_values) if not np.all(np.isnan(facQaux_tmp_values)) else 1.0
-                    facQaux[iff].append(facQaux_tmp)
+                    facQaux[ieff].append(facQaux_tmp)
 
-        for iff in range(nf):
+        for ieff in range(nf_eff):
 
-            self.iff_wavebounds[iff] = iwave
+            self.iff_wavebounds[ieff] = iwave
             _nwavef = 0
             Qf_list = []  # Use a list instead of np.concatenate in loops
 
-            enst_data = enst_same_dim[iff]  # Store reference to avoid repeated access
+            enst_data = enst_same_dim[ieff]  # Store reference to avoid repeated access
             num_it = enst_data.shape[1]
 
             for it in range(num_it):
-                for P in range(NP[iff]):
+                for P in range(NP_eff[ieff]):
                     enst_value = enst_data[P, it]
                     if np.isnan(enst_value):
                         Q_tmp = 10**-10  # Small nonzero value to avoid division errors
                     else:
-                        Q_tmp = +std[iff][P]
+                        Q_tmp = self._Q_from_std(std[ieff][P], tdec[ieff][P])
 
                     Q_tmp *= facQ   # Multiply after NaN check
 
                     # Include facQaux if available
                     if self.file_facQaux is not None:
-                        Q_tmp *= np.sqrt(facQaux[iff][P])
+                        Q_tmp *= np.sqrt(facQaux[ieff][P])
 
                     # Store Q_tmp values in list for later concatenation
                     Qf_list.append(Q_tmp * np.ones(2 * ntheta))
@@ -2139,10 +2572,10 @@ class Basis_bmaux:
 
             iwave += _nwavef
 
-            print(f'lambda={1/ff[iff]:.1E}',
-                f'nlocs={NP[iff]:.1E}',
-                f'tdec={np.mean(tdec[iff]):.1E}',
-                f'Q={np.mean(Q[self.iff_wavebounds[iff]:iwave]):.1E}')
+            print(f'lambda={1/ff_eff[ieff]:.1E}',
+                f'nlocs={NP_eff[ieff]:.1E}',
+                f'tdec={np.mean(tdec[ieff]):.1E}',
+                f'Q={np.mean(Q[self.iff_wavebounds[ieff]:iwave]):.1E}')
 
         self.iff_wavebounds[-1] = iwave
 
@@ -2157,19 +2590,19 @@ class Basis_bmaux:
 
             
 
-        self.DX=DX
-        self.ENSLON=ENSLON
-        self.ENSLAT=ENSLAT
-        self.NP=NP
+        self.DX=DX_eff
+        self.ENSLON=ENSLON_eff
+        self.ENSLAT=ENSLAT_eff
+        self.NP=NP_eff
         self.tdec=tdec
         self.norm_fact = norm_fact
         self.enst=enst_same_dim
         self.nbasis=Q.size
-        self.nf=nf
+        self.nf=nf_eff
         self.theta=theta
         self.ntheta=ntheta
-        self.ff=ff
-        self.k = 2 * np.pi * ff
+        self.ff=ff_eff
+        self.k = 2 * np.pi * ff_eff
 
         # Compute basis components
         print('Computing Spatial components')
@@ -2181,6 +2614,14 @@ class Basis_bmaux:
             
         if return_q:
             return Xb, Q
+
+    def _Q_from_std(self, std_val: float, tdec_val: float) -> float:
+        """Convert calibrated Std to prior variance Q.
+
+        Legacy convention (default): Q = Std.
+        Override in subclasses for self-consistent normalisation.
+        """
+        return float(std_val)
         
     def _compute_component_space(self):
 
@@ -2638,7 +3079,56 @@ class Basis_bmaux_jax(Basis_bmaux):
                 adState[self.name_mod_v] *= 0.
     
         return adX
- 
+
+
+###############################################################################
+#          Balanced-Motions aux – self-consistent Q normalisation             #
+###############################################################################
+
+class Basis_bmaux_v2(Basis_bmaux):
+    """Basis_bmaux with self-consistent Q normalisation.
+
+    The calibrator (``_project_field_to_bmaux`` / ``calibrate_bmaux``) stores
+
+        Std_file = sqrt( Var_t(Cc) / 2 )
+
+    where ``Cc(t) ≈ sqrt(2) * Σ_tw alpha_tw * T_tw(t)`` is the spatial
+    projection onto the matched wavelet, and each time component is
+
+        T_tw(t) = window((t-tw)/tdec) / norm_fact,    norm_fact = tdec.
+
+    For i.i.d. wavelet coefficients with prior variance Q and window-spacing
+    DT = tdec/facnlt the temporal variance works out to
+
+        Var_t(Cc) = 2Q * (facnlt/tdec) * ∫ T_0² dt
+                  = 2Q * (facnlt/tdec) * (3/4)/tdec        [∫cos⁴=3/4]
+                  = 3 Q facnlt / (2 tdec²)
+
+    so  Std_file² = 3 Q facnlt / (4 tdec²)  ⟹  Q = 4 Std² tdec² / (3 facnlt).
+
+    ``Basis_bmaux`` (legacy) uses Q = Std directly, which is dimensionally
+    inconsistent and causes a systematic ~40 % amplitude underestimation.
+    This subclass overrides only ``_Q_from_std``; everything else is inherited.
+    """
+
+    def _Q_from_std(self, std_val: float, tdec_val: float) -> float:
+        """Q = 4 * Std² * tdec² / (3 * facnlt) — self-consistent normalisation."""
+        return float(std_val) ** 2 * 4.0 * float(tdec_val) ** 2 / (3.0 * self.facnlt)
+
+
+class Basis_bmaux_v2_jax(Basis_bmaux_v2, Basis_bmaux_jax):
+    """JAX-differentiable version of :class:`Basis_bmaux_v2`.
+
+    Python MRO:  Basis_bmaux_v2_jax → Basis_bmaux_v2 → Basis_bmaux_jax → Basis_bmaux
+
+    * ``_Q_from_std`` is resolved from :class:`Basis_bmaux_v2` (corrected formula).
+    * All JAX operators (``_compute_component_space``, ``_compute_component_time``,
+      ``operg``, ``operg_transpose``) come from :class:`Basis_bmaux_jax`.
+    * No additional code is required — MRO handles dispatch automatically.
+    """
+    pass
+
+
 class Basis_miost:
    
     def __init__(self, config, State, multi_mode=False):
@@ -4005,20 +4495,24 @@ class Basis_hbc_jax:
                 Q = np.zeros((self.nbasis,)) # Initializing
                 for name in self.slice_params.keys() :
 
+                    # Normalise so that physical prior variance ≈ sigma_B_bc²:
+                    # - sqrt(facns)  : ~facns overlapping spatial Gaussians sum at each point
+                    # - sqrt(facnlt) : ~facnlt overlapping time Gaussians (only when time_dependant)
+                    # - sqrt(Ntheta) : compute_IT_2D sums over Ntheta angles
+                    _norm = (self.facns * (self.facnlt if self.time_dependant else 1) * self.Ntheta) ** 0.5
                     if hasattr(self.sigma_B_bc,'__len__'):
                         if len(self.sigma_B_bc)==self.Nwaves:
                             # Different background values for each frequency
                             nw = self.nbc//self.Nwaves
                             for iw in range(self.Nwaves):
                                 slicew = slice(iw*nw,(iw+1)*nw)
-                                Q[self.slice_params[name]][slicew]=self.sigma_B_bc[iw]/(self.facnlt*self.facns)**.5
+                                Q[self.slice_params[name]][slicew]=self.sigma_B_bc[iw]/_norm
                         else:
                             # Not the right number of frequency prescribed in the config file 
                             # --> we use only the first one
-                            Q[self.slice_params[name]]=self.sigma_B_bc[0]/(self.facnlt*self.facns)**.5
+                            Q[self.slice_params[name]]=self.sigma_B_bc[0]/_norm
                     else:
-                        # Q[self.slice_params[name]]=self.sigma_B_bc
-                        Q[self.slice_params[name]]=self.sigma_B_bc/(self.facnlt*self.facns)**.5
+                        Q[self.slice_params[name]]=self.sigma_B_bc/_norm
 
             else:
                 Q = None
