@@ -26,6 +26,7 @@ NUM_ARRAY=${SLURM_ARRAY_TASK_COUNT:-$NUM_GPUS}
 JOB_ID=${SLURM_ARRAY_JOB_ID:-${SLURM_JOB_ID:-$$}}
 
 # -------------------- USER SETTINGS (edit for each experiment) --------------------
+MASH_DIR=""          # REQUIRED: absolute path to the MASSH repo root (e.g. /work/scratch/data/leguilf/MASSH)
 DIR_SAVE_PICKLE=""   # REQUIRED: root directory for all pickle/output files
 
 PATH_CONFIG=""          # REQUIRED: path to main MASSH config .py
@@ -95,9 +96,9 @@ FORCE_MERGE_ARG=""
 $FORCE_MERGE && FORCE_MERGE_ARG="--force"
 
 # Validate required settings
-if [ -z "$DIR_SAVE_PICKLE" ] || [ -z "$PATH_CONFIG" ] || [ -z "$PATH_CONFIG_EQ" ] || \
-   [ -z "$INIT_DATE" ] || [ -z "$FINAL_DATE" ]; then
-    echo "ERROR: One or more required USER SETTINGS are not set (DIR_SAVE_PICKLE, PATH_CONFIG, PATH_CONFIG_EQ, INIT_DATE, FINAL_DATE). Edit the USER SETTINGS block before submitting." >&2
+if [ -z "$MASH_DIR" ] || [ -z "$DIR_SAVE_PICKLE" ] || [ -z "$PATH_CONFIG" ] || \
+   [ -z "$PATH_CONFIG_EQ" ] || [ -z "$INIT_DATE" ] || [ -z "$FINAL_DATE" ]; then
+    echo "ERROR: One or more required USER SETTINGS are not set (MASH_DIR, DIR_SAVE_PICKLE, PATH_CONFIG, PATH_CONFIG_EQ, INIT_DATE, FINAL_DATE). Edit the USER SETTINGS block before submitting." >&2
     exit 1
 fi
 
@@ -144,10 +145,11 @@ PREPARE_ARGS="\
 # -------------------- ENVIRONMENT --------------------
 source /home/il/${USER}/.bashrc
 conda activate MASSHv2
-# Resolve paths relative to this script's location (slurm/run/ → slurm/src/ and mapping/)
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
-SRC_DIR="${SCRIPT_DIR}/../src"
-export MASSH_PATH="$(cd "${SCRIPT_DIR}/../../mapping" && pwd)"
+# Derive source and library paths from MASH_DIR (set in USER SETTINGS above).
+# readlink -f "$0" is intentionally avoided: SLURM copies the script to
+# /var/spool/slurmd/jobXXX/slurm_script before execution, making $0 useless.
+SRC_DIR="${MASH_DIR}/slurm/src"
+export MASSH_PATH="${MASH_DIR}/mapping"
 
 # -------------------- LOG --------------------
 LOGDIR="./logs/${EXP_NAME}_job-${JOB_ID}"

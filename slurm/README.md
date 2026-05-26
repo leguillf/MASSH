@@ -55,6 +55,7 @@ Example SLURM submission script — copy and edit the **USER SETTINGS** block fo
 
 | Variable | Description |
 |---|---|
+| `MASH_DIR` | **Absolute path to the MASSH repo root** — required because SLURM copies the script to a spool directory before execution, making `$0`-relative paths unreliable |
 | `NUM_GPUS` | Number of GPU array tasks (also update `#SBATCH --array`) |
 | `DIR_SAVE_PICKLE` | Root directory for all pickle/output files |
 | `PATH_CONFIG` | Path to the main MASSH config `.py` |
