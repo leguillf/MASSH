@@ -2748,12 +2748,22 @@ class Model_qgsw(M):
                 # mask/fill treatment, then stagger to the u/v grids using the
                 # same padding convention as f_on_u / f_on_v so that the stored
                 # arrays have shapes (ny, nx+1) and (ny+1, nx) respectively.
+                _name_vars_u = {
+                    'lon': config.MOD.name_var_mdt['lon'],
+                    'lat': config.MOD.name_var_mdt['lat'],
+                    'var': config.MOD.name_var_mdt['var_u'],
+                }
+                _name_vars_v = {
+                    'lon': config.MOD.name_var_mdt['lon'],
+                    'lat': config.MOD.name_var_mdt['lat'],
+                    'var': config.MOD.name_var_mdt['var_v'],
+                }
                 mdu = grid.interp2d(ds,
-                                   config.MOD.name_var_mdt['var_u'],
+                                   _name_vars_u,
                                    State.lon,
                                    State.lat)
                 mdv = grid.interp2d(ds,
-                                   config.MOD.name_var_mdt['var_v'],
+                                   _name_vars_v,
                                    State.lon,
                                    State.lat)
                 mdu[State.mask] = np.nan
