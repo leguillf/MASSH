@@ -552,6 +552,15 @@ class Basis_bm:
         else:
             self.mask1d = None
 
+        # Coastal face masks for C-grid geostrophic velocity masking
+        if State.mask is not None and np.any(State.mask):
+            _mask_pad = np.pad(State.mask.astype(bool), pad_width=((1,0),(1,0)), mode='edge')
+            self.u_coast_mask = _mask_pad[1:, :] | _mask_pad[:-1, :]  # (ny, nx+1)
+            self.v_coast_mask = _mask_pad[:, 1:] | _mask_pad[:, :-1]  # (ny+1, nx)
+        else:
+            self.u_coast_mask = None
+            self.v_coast_mask = None
+
         # Depth data
         if config.BASIS.file_depth is not None:
             ds = xr.open_dataset(config.BASIS.file_depth)
@@ -848,6 +857,10 @@ class Basis_bm:
         _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
         _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
 
+        if self.u_coast_mask is not None:
+            _u = np.where(self.u_coast_mask, 0., _u)
+            _v = np.where(self.v_coast_mask, 0., _v)
+
         return _u, _v
     
     def _ssh2uv_adj(self, adu, adv):
@@ -855,6 +868,10 @@ class Basis_bm:
         """
         Adjoint of geostrophic velocity computation.
         """
+
+        if self.u_coast_mask is not None:
+            adu = np.where(self.u_coast_mask, 0., adu)
+            adv = np.where(self.v_coast_mask, 0., adv)
 
         # _adssh lives on padded grid: (ny+1, nx+1)
         _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
@@ -1286,6 +1303,15 @@ class Basis_gauss3d:
         else:
             self.mask1d = None
 
+        # Coastal face masks for C-grid geostrophic velocity masking
+        if State.mask is not None and np.any(State.mask):
+            _mask_pad = np.pad(State.mask.astype(bool), pad_width=((1,0),(1,0)), mode='edge')
+            self.u_coast_mask = _mask_pad[1:, :] | _mask_pad[:-1, :]  # (ny, nx+1)
+            self.v_coast_mask = _mask_pad[:, 1:] | _mask_pad[:, :-1]  # (ny+1, nx)
+        else:
+            self.u_coast_mask = None
+            self.v_coast_mask = None
+
         # Time window
         if self.flux:
             self.window = mywindow_flux
@@ -1474,6 +1500,10 @@ class Basis_gauss3d:
         _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
         _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
 
+        if self.u_coast_mask is not None:
+            _u = np.where(self.u_coast_mask, 0., _u)
+            _v = np.where(self.v_coast_mask, 0., _v)
+
         return _u, _v
     
     def _ssh2uv_adj(self, adu, adv):
@@ -1481,6 +1511,10 @@ class Basis_gauss3d:
         """
         Adjoint of geostrophic velocity computation.
         """
+
+        if self.u_coast_mask is not None:
+            adu = np.where(self.u_coast_mask, 0., adu)
+            adv = np.where(self.v_coast_mask, 0., adv)
 
         # _adssh lives on padded grid: (ny+1, nx+1)
         _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
@@ -1644,6 +1678,10 @@ class Basis_gauss3d_jax(Basis_gauss3d):
 
         _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
         _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        if self.u_coast_mask is not None:
+            _u = jnp.where(self.u_coast_mask, 0., _u)
+            _v = jnp.where(self.v_coast_mask, 0., _v)
 
         return _u, _v
     
@@ -1862,6 +1900,15 @@ class Basis_gauss2d:
         else:
             self.mask1d = None
 
+        # Coastal face masks for C-grid geostrophic velocity masking
+        if State.mask is not None and np.any(State.mask):
+            _mask_pad = np.pad(State.mask.astype(bool), pad_width=((1,0),(1,0)), mode='edge')
+            self.u_coast_mask = _mask_pad[1:, :] | _mask_pad[:-1, :]  # (ny, nx+1)
+            self.v_coast_mask = _mask_pad[:, 1:] | _mask_pad[:, :-1]  # (ny+1, nx)
+        else:
+            self.u_coast_mask = None
+            self.v_coast_mask = None
+
         # Longitude unit
         self.lon_unit = State.lon_unit
 
@@ -1975,9 +2022,15 @@ class Basis_gauss2d:
         _ssh = np.pad(ssh, pad_width=((1, 0), (1, 0)), mode='edge')
         _u = -self.g / self.f_on_u * (_ssh[1:, :] - _ssh[:-1, :]) / self.dy_on_u
         _v = self.g / self.f_on_v * (_ssh[:, 1:] - _ssh[:, :-1]) / self.dx_on_v
+        if self.u_coast_mask is not None:
+            _u = np.where(self.u_coast_mask, 0., _u)
+            _v = np.where(self.v_coast_mask, 0., _v)
         return _u, _v
 
     def _ssh2uv_adj(self, adu, adv):
+        if self.u_coast_mask is not None:
+            adu = np.where(self.u_coast_mask, 0., adu)
+            adv = np.where(self.v_coast_mask, 0., adv)
         _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
         _adssh[1:, :]  += -self.g / self.f_on_u * adu / self.dy_on_u
         _adssh[:-1, :] +=  self.g / self.f_on_u * adu / self.dy_on_u
@@ -2076,6 +2129,9 @@ class Basis_gauss2d_jax(Basis_gauss2d):
         _ssh = jnp.pad(ssh, pad_width=((1, 0), (1, 0)), mode='edge')
         _u = -self.g / self.f_on_u * (_ssh[1:, :] - _ssh[:-1, :]) / self.dy_on_u
         _v = self.g / self.f_on_v * (_ssh[:, 1:] - _ssh[:, :-1]) / self.dx_on_v
+        if self.u_coast_mask is not None:
+            _u = jnp.where(self.u_coast_mask, 0., _u)
+            _v = jnp.where(self.v_coast_mask, 0., _v)
         return _u, _v
 
     def _operg(self, X):
@@ -2246,6 +2302,15 @@ class Basis_bmaux:
                 self.mask1d = State.mask.ravel()
         else:
             self.mask1d = None
+
+        # Coastal face masks for C-grid geostrophic velocity masking
+        if State.mask is not None and np.any(State.mask):
+            _mask_pad = np.pad(State.mask.astype(bool), pad_width=((1,0),(1,0)), mode='edge')
+            self.u_coast_mask = _mask_pad[1:, :] | _mask_pad[:-1, :]  # (ny, nx+1)
+            self.v_coast_mask = _mask_pad[:, 1:] | _mask_pad[:, :-1]  # (ny+1, nx)
+        else:
+            self.u_coast_mask = None
+            self.v_coast_mask = None
 
         # Depth data
         if config.BASIS.file_depth is not None:
@@ -2732,6 +2797,10 @@ class Basis_bmaux:
         _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
         _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
 
+        if self.u_coast_mask is not None:
+            _u = np.where(self.u_coast_mask, 0., _u)
+            _v = np.where(self.v_coast_mask, 0., _v)
+
         return _u, _v
     
     def _ssh2uv_adj(self, adu, adv):
@@ -2739,6 +2808,10 @@ class Basis_bmaux:
         """
         Adjoint of geostrophic velocity computation.
         """
+
+        if self.u_coast_mask is not None:
+            adu = np.where(self.u_coast_mask, 0., adu)
+            adv = np.where(self.v_coast_mask, 0., adv)
 
         # _adssh lives on padded grid: (ny+1, nx+1)
         _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
@@ -2962,6 +3035,10 @@ class Basis_bmaux_jax(Basis_bmaux):
 
         _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
         _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        if self.u_coast_mask is not None:
+            _u = jnp.where(self.u_coast_mask, 0., _u)
+            _v = jnp.where(self.v_coast_mask, 0., _v)
 
         return _u, _v
 
