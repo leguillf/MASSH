@@ -131,3 +131,6 @@ dmypy.json
 # Data files
 *.nc
 *.out
+
+# Auxiliary files shipped with the package
+!mapping/aux/aux_first_baroclinic_speed.nc
