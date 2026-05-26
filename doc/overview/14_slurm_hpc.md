@@ -20,10 +20,10 @@ final task-0-only step merges all time windows into the full output.
 
 | File | Role |
 |------|------|
-| `VarDyn_GLO.sh` | Example SLURM array job script — copy & edit the **USER SETTINGS** block per experiment |
-| `prepare_VarDyn.py` | Reads MASSH config(s) and writes the pickle tree under `DIR_SAVE_PICKLE/<EXP_NAME>/` |
-| `run_tile.py` | Loads one `subwindow_<space>` pickle dir and runs the full MASSH assimilation; writes `Xres.nc` |
-| `merge_outputs.py` | Two-stage merge: (1) spatial — Gaussian-tapered blend of overlapping tiles, distributed over ranks; (2) time-window — concat across all windows (task 0 only) |
+| `run/VarDyn_GLO.sh` | Example SLURM array job script — copy & edit the **USER SETTINGS** block per experiment |
+| `src/prepare_VarDyn.py` | Reads MASSH config(s) and writes the pickle tree under `DIR_SAVE_PICKLE/<EXP_NAME>/` |
+| `src/run_tile.py` | Loads one `subwindow_<space>` pickle dir and runs the full MASSH assimilation; writes `Xres.nc` |
+| `src/merge_outputs.py` | Two-stage merge: (1) spatial — Gaussian-tapered blend of overlapping tiles, distributed over ranks; (2) time-window — concat across all windows (task 0 only) |
 
 ## Workflow
 
@@ -50,8 +50,8 @@ Lustre/GPFS) — no NFS locking is required.
 ## Submission
 
 ```bash
-sbatch VarDyn_GLO.sh [--skip-prepare] [--restart] [--force-merge] \
-                     [--merge-only] [--name_exp <name>]
+sbatch slurm/run/VarDyn_GLO.sh [--skip-prepare] [--restart] [--force-merge] \
+                               [--merge-only] [--name_exp <name>]
 ```
 
 | Flag | Effect |

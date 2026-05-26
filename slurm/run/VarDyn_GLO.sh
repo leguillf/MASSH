@@ -144,8 +144,10 @@ PREPARE_ARGS="\
 # -------------------- ENVIRONMENT --------------------
 source /home/il/${USER}/.bashrc
 conda activate MASSHv2
-# Resolve MASSH_PATH relative to this script's location (slurm/ → mapping/)
-export MASSH_PATH="$(cd "$(dirname "$(readlink -f "$0")")" && cd ../mapping && pwd)"
+# Resolve paths relative to this script's location (slurm/run/ → slurm/src/ and mapping/)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+SRC_DIR="${SCRIPT_DIR}/../src"
+export MASSH_PATH="$(cd "${SCRIPT_DIR}/../../mapping" && pwd)"
 
 # -------------------- LOG --------------------
 LOGDIR="./logs/${EXP_NAME}_job-${JOB_ID}"
@@ -188,7 +190,7 @@ if [ $ARRAY_ID -eq 0 ]; then
         echo "$(date '+%F %T') | Skipping preparation (--skip-prepare, pickles exist)"
     else
         echo "$(date '+%F %T') | Preparing subwindows and saving pickles"
-        MPLBACKEND=Agg python -u prepare_VarDyn.py "$PATH_CONFIG" "$PATH_CONFIG_EQ" $PREPARE_ARGS
+        MPLBACKEND=Agg python -u "${SRC_DIR}/prepare_VarDyn.py" "$PATH_CONFIG" "$PATH_CONFIG_EQ" $PREPARE_ARGS
         if [ $? -ne 0 ]; then
             echo "$(date '+%F %T') | ERROR: Preparation failed!"
             touch "${BARRIER_DIR}/prepare_failed"
@@ -253,7 +255,7 @@ run_single_tile() {
     local TILE_LOG="${LOG_SUBDIR}/${TILE_BASENAME}_gpu${ARRAY_ID}.log"
 
     echo "$(date '+%F %T') | GPU ${ARRAY_ID} | START tile ${TILE}" >> "$TILE_LOG"
-    OMP_NUM_THREADS=1 python run_tile.py "$TILE" $RESTART >> "$TILE_LOG" 2>&1
+    OMP_NUM_THREADS=1 python "${SRC_DIR}/run_tile.py" "$TILE" $RESTART >> "$TILE_LOG" 2>&1
     local status=$?
     if [ $status -eq 0 ]; then
         echo "$(date '+%F %T') | GPU ${ARRAY_ID} | DONE  tile ${TILE}" >> "$TILE_LOG"
@@ -311,7 +313,7 @@ for TIME_DIR in $TIME_WINDOWS; do
 
     # Spatial merge: every array task processes its share of dates
     echo "$(date '+%F %T') | GPU ${ARRAY_ID} | Spatial merge for time window ${IW} (rank ${ARRAY_ID}/${NUM_ARRAY})"
-    python -u merge_outputs.py "$CONFIG_PATH" \
+    python -u "${SRC_DIR}/merge_outputs.py" "$CONFIG_PATH" \
         --dir_save_pickle "$DIR_SAVE_PICKLE" \
         --name_var_save "$NAME_VAR" \
         --num_workers "$NUM_MERGE_WORKERS" \
@@ -331,7 +333,7 @@ done
 # Final: merge all time windows (task 0 only)
 if [ $ARRAY_ID -eq 0 ]; then
     echo "$(date '+%F %T') | Merging all time windows"
-    python -u merge_outputs.py "$CONFIG_PATH" \
+    python -u "${SRC_DIR}/merge_outputs.py" "$CONFIG_PATH" \
         --dir_save_pickle "$DIR_SAVE_PICKLE" \
         --name_var_save "$NAME_VAR" \
         --num_workers "$NUM_MERGE_WORKERS" \

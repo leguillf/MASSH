@@ -11,17 +11,19 @@ Large-scale SSH mapping with MASSH (e.g. global VarDyn runs) is parallelised ove
 Each SLURM array task (one GPU) processes a dynamic subset of tiles, then participates in a distributed spatial merge. A final task-0-only step merges all time windows into the full output.
 
 ```
-sbatch VarDyn_GLO.sh [--skip-prepare] [--restart] [--force-merge] [--name_exp <name>]
+sbatch slurm/run/VarDyn_GLO.sh [--skip-prepare] [--restart] [--force-merge] [--name_exp <name>]
 ```
 
 ## Repository structure
 
 ```
 slurm/
-├── VarDyn_GLO.sh               # Example SLURM array job script (copy & edit per experiment)
-├── prepare_VarDyn.py           # Prepare spatial/temporal subwindows and save pickles
-├── run_tile.py                 # Run one assimilation tile (called per-GPU in parallel)
-└── merge_outputs.py            # Merge spatial tiles and time windows into final output
+├── run/
+│   └── VarDyn_GLO.sh       # Example SLURM array job script (copy & edit per experiment)
+└── src/
+    ├── prepare_VarDyn.py   # Prepare spatial/temporal subwindows and save pickles
+    ├── run_tile.py         # Run one assimilation tile (called per-GPU in parallel)
+    └── merge_outputs.py    # Merge spatial tiles and time windows into final output
 ```
 
 > Config files (`.py`) live in a sibling `configs/` directory and are not part of this repo.
