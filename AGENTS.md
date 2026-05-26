@@ -28,6 +28,7 @@ from [doc/overview/](doc/overview/):
 | Helper modules (`tools.py`, `switchvar.py`, …) | [doc/overview/11_auxiliary_helpers.md](doc/overview/11_auxiliary_helpers.md) |
 | End-to-end usage example | [doc/overview/12_end_to_end_flow.md](doc/overview/12_end_to_end_flow.md) |
 | Future work, tracer how-tos, adjoint tests | [doc/overview/13_notes_future_work.md](doc/overview/13_notes_future_work.md) |
+| SLURM HPC execution (`slurm/`) | [doc/overview/14_slurm_hpc.md](doc/overview/14_slurm_hpc.md) |
 
 ## Source layout
 
@@ -37,6 +38,7 @@ mapping/models/       # Dynamical model cores (sw.py, jqgm.py, …)
 mapping/examples/     # Runnable experiments / config files
 mapping/aux/          # Auxiliary fields (bathymetry, BM stats, …)
 doc/overview/         # Per-section documentation (see table above)
+slurm/                # SLURM HPC scripts for large-scale GPU-parallel runs
 ```
 
 ## Key conventions

@@ -1,0 +1,22 @@
+# Logs
+logs/
+*.log
+gpu*.txt
+ls.txt
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Pickle / output data (large, experiment-specific)
+*.pkl
+*.nc
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp

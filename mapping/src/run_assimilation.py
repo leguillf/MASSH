@@ -277,6 +277,8 @@ def prepare_process(config, config_eq, State,
                     _lat1 = config.GRID.lat_max
                     _ny_band = max(1, int(ny_proc * (_lat1 - _lat0) / space_window_size_proc_y))
                 lat_bands.append((_lat0, _lat1, _ny_band, nx_proc, space_window_size_proc_x, False))
+                if _lat1 >= config.GRID.lat_max:
+                    break
                 _n += 1
     else:
         lat_bands = [(config.GRID.lat_min, config.GRID.lat_max, ny_proc, nx_proc, space_window_size_proc_x, False)]
