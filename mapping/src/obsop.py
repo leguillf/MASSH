@@ -136,13 +136,17 @@ class Obsop_interp:
         self.coords_geo = np.column_stack((lon.ravel(), lat.ravel()))
         self.coords_car = grid.geo2cart(self.coords_geo)
 
-        # Mask land
+        # Mask land and sponge zones.
+        # State.mask  : land / coast (always excluded from obs).
+        # State.sponge_mask : sponge footprint set by Model_qgsw when
+        #                     mask_sponge_bc=True.  Kept separate so that
+        #                     other models sharing State are unaffected.
+        _obs_mask = np.zeros((State.ny, State.nx), dtype=bool)
         if State.mask is not None:
-            # Flattened indices (matching the ravel order of self.coords_geo)
-            # so they can be compared against ind_closest from cdist.
-            self.ind_mask = set(np.flatnonzero(State.mask.ravel()).tolist())
-        else:
-            self.ind_mask = set()
+            _obs_mask |= State.mask
+        if getattr(State, 'sponge_mask', None) is not None:
+            _obs_mask |= State.sponge_mask
+        self.ind_mask = set(np.flatnonzero(_obs_mask.ravel()).tolist())
         
         # Mask boundary pixels
         self.ind_borders = []

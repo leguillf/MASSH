@@ -547,6 +547,9 @@ MOD_QGSW = dict(
 
     H = None, # mean layer depth(s) in meters.  Scalar or list, e.g. H=[500., 2500.] for nl=2
 
+    constant_H = False, # if True and H is None (nl=1), use the spatial mean of c to derive a
+                        # spatially constant H = mean(c)^2 / g_prime instead of the full 2-D field
+
     g_prime = None, # reduced gravity(ies).  Scalar or list, e.g. g_prime=[9.81, 0.02] for nl=2
 
     init_from_bc = True,
@@ -576,6 +579,8 @@ MOD_QGSW = dict(
     sponge_coef = 0.,
 
     tangential_sponge_factor = 1., # factor [0,1] reducing sponge on tangential velocity at open boundaries (1=isotropic, 0=no tangential damping)
+
+    mask_sponge_bc = False, # Whether to set the mask to True in the sponge boundary areas (i.e. to avoid assimilating observations in these areas). Defaults to False for backward compatibility with existing Model_qgsw experiments.
 
     visc_coef = 0., # viscosity coefficient (in m^2/s). Typical values 10–30 m²/s, 50–100 m²/s if unstable
 

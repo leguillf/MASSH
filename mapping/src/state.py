@@ -59,6 +59,7 @@ class State:
         if first:
             self.geo_grid = False
             self.mask = None
+            self.sponge_mask = None  # sponge footprint for obs exclusion (set by Model_qgsw)
             if config.GRID.super == 'GRID_GEO':
                 self.ini_geo_grid(config.GRID)
             elif config.GRID.super == 'GRID_CAR':
@@ -145,8 +146,14 @@ class State:
                 config (module): configuration module
         """
         self.geo_grid = True
-        lon = np.arange(config.lon_min, config.lon_max + config.dlon, config.dlon) 
-        lat = np.arange(config.lat_min, config.lat_max + config.dlat, config.dlat) 
+        # Use linspace instead of arange: float-step arange accumulates rounding
+        # error that can produce an extra point beyond lat_max/lon_max, which
+        # shifts the taper reference used in compute_weights_map and breaks the
+        # smootherstep identity S(t)+S(1-t)=1, causing weight sums != 1.
+        n_lon = round((config.lon_max - config.lon_min) / config.dlon) + 1
+        n_lat = round((config.lat_max - config.lat_min) / config.dlat) + 1
+        lon = np.linspace(config.lon_min, config.lon_max, n_lon)
+        lat = np.linspace(config.lat_min, config.lat_max, n_lat)
         lon,lat = np.meshgrid(lon,lat)
         self.lon = lon
         self.lat = lat
@@ -559,6 +566,7 @@ class State:
         other.dy = self.dy
         other.f = self.f
         other.mask = self.mask
+        other.sponge_mask = self.sponge_mask
         other.lon = self.lon
         other.lat = self.lat
         other.lon_u = self.lon_u

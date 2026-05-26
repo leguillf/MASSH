@@ -152,7 +152,7 @@ def prepare_process(config, config_eq, State,
 
     Returns
     -------
-    list_processes : list of list of Process
+    list_processes : list of list of callable
         Assimilation subprocesses grouped by time window.
     list_config : list of list of Config
         Subwindow configurations grouped by time window.
@@ -184,9 +184,7 @@ def prepare_process(config, config_eq, State,
     list_lonlat = []
     list_tile_paths = []
     iproc = 0
-    n_wt = 0 
-
-    id_gpu = 0
+    n_wt = 0
 
     if dir_save_pickle is not None:
         path_save_pickle = f'{dir_save_pickle}/{config.EXP.name_experiment}'
@@ -614,15 +612,11 @@ def prepare_process(config, config_eq, State,
             if flag_assim and (flag_assim_restart
                                or not os.path.exists(f'{_config.INV.path_save_control_vectors}/Xres.nc')):
                 worker = partial(inv.Inv_4Dvar, config=_config, State=_State,
-                                 verbose=0, gpu_device=gpu_devices[id_gpu])
-                p = mp.get_context("spawn").Process(target=worker)
+                                 verbose=0)
                 if flag_init_from_previous:
-                    list_processes[i].append(p)
+                    list_processes[i].append(worker)
                 else:
-                    list_processes[0].append(p)
-                id_gpu += 1
-                if id_gpu == len(gpu_devices):
-                    id_gpu = 0
+                    list_processes[0].append(worker)
             elif i == 0:
                 if not flag_assim_restart:
                     print('Assimilation already done for this subwindow, skipping (use flag_assim_restart=True to re-run)')
@@ -1331,7 +1325,8 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
                                  name_var_save=['sla'], 
                                  flag_assim=True, flag_merge_outputs=True, flag_diag=True, flag_overwrite_outputs=True,
                                  nprocs=4, nprocs_output=None,
-                                 path_pickle=None):
+                                 path_pickle=None,
+                                 gpu_devices=None):
     
     """
     Run assimilation in a given time window using subprocesses.
@@ -1360,26 +1355,35 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
         try:
             old_stdout = sys.stdout # backup current stdout
             sys.stdout = open(os.devnull, "w") # prevent printoing outputs
-            active_processes = set()
-                
-            for process in processes[:nprocs]:  # Start initial nprocs processes
-                process.start()
-                active_processes.add(process)
+            _gpu_devices = gpu_devices if gpu_devices is not None else ['0']
+            gpu_load = {g: 0 for g in _gpu_devices}
+            active_processes = set()  # set of (process, gpu_id)
 
-            for process in processes[nprocs:]:  # Start remaining processes dynamically
+            for worker in processes[:nprocs]:  # Start initial nprocs processes
+                gpu_id = min(gpu_load, key=gpu_load.get)
+                p = mp.get_context("spawn").Process(target=worker, kwargs={'gpu_device': gpu_id})
+                p.start()
+                active_processes.add((p, gpu_id))
+                gpu_load[gpu_id] += 1
+
+            for worker in processes[nprocs:]:  # Start remaining processes dynamically
                 while len(active_processes) >= nprocs:
-                    for p in list(active_processes):
+                    for p, g in list(active_processes):
                         if not p.is_alive():
                             p.join()
-                            active_processes.remove(p)
-                            break  # Start a new process immediately after one finishes
-                    
-                process.start()
-                active_processes.add(process)
+                            active_processes.discard((p, g))
+                            gpu_load[g] -= 1
+                            break
+
+                gpu_id = min(gpu_load, key=gpu_load.get)
+                p = mp.get_context("spawn").Process(target=worker, kwargs={'gpu_device': gpu_id})
+                p.start()
+                active_processes.add((p, gpu_id))
+                gpu_load[gpu_id] += 1
 
             # Wait for remaining processes to finish
-            for process in active_processes:
-                process.join()
+            for p, g in list(active_processes):
+                p.join()
             sys.stdout = old_stdout
         except:
             sys.stdout = old_stdout
@@ -1434,7 +1438,7 @@ def run_assimilation_time_window(config, date_start, date_middle, date_end, list
             Diag.regrid_exp()
             Diag.rmse_based_scores(plot=True)
             Diag.psd_based_scores(plot=True)
-            #Diag.movie()
+            Diag.movie(framerate=12)
             Diag.Leaderboard()
         except:
             print('Unable to compute diags')

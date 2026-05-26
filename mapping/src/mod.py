@@ -2733,9 +2733,21 @@ class Model_qgsw(M):
                                    State.lon,
                                    State.lat)
 
+            # Honour the model mask on the h-grid first: griddata may extrapolate
+            # non-NaN values onto land cells, and near-coast ocean cells can be
+            # contaminated by land-NaN triangles in the Delaunay tessellation.
+            # Force land to NaN, then fill with the nearest valid ocean value so
+            # the coast–ocean transition is smooth.
+            # Convention: State.mask == True → land, False → ocean.
+            mdt[State.mask] = np.nan
+            mdt = _fill_nan_nearest(mdt)
+            # mdt is now smooth everywhere (land filled with nearest ocean value).
 
-            
             if 'var_u' in config.MOD.name_var_mdt and 'var_v' in config.MOD.name_var_mdt:
+                # Velocities are provided on the h-grid (ny, nx): apply the same
+                # mask/fill treatment, then stagger to the u/v grids using the
+                # same padding convention as f_on_u / f_on_v so that the stored
+                # arrays have shapes (ny, nx+1) and (ny+1, nx) respectively.
                 mdu = grid.interp2d(ds,
                                    config.MOD.name_var_mdt['var_u'],
                                    State.lon,
@@ -2744,12 +2756,31 @@ class Model_qgsw(M):
                                    config.MOD.name_var_mdt['var_v'],
                                    State.lon,
                                    State.lat)
+                mdu[State.mask] = np.nan
+                mdu = _fill_nan_nearest(mdu)
+                mdv[State.mask] = np.nan
+                mdv = _fill_nan_nearest(mdv)
+                # Stagger h-grid → u-grid (ny, nx+1) and v-grid (ny+1, nx)
+                _pad = ((1, 0), (1, 0))
+                _mdu = np.pad(mdu, pad_width=_pad, mode='edge')
+                mdu = 0.5 * (_mdu[1:, :] + _mdu[:-1, :])   # (ny, nx+1)
+                _mdv = np.pad(mdv, pad_width=_pad, mode='edge')
+                mdv = 0.5 * (_mdv[:, 1:] + _mdv[:, :-1])   # (ny+1, nx)
             else:
+                # Derive geostrophic velocities from the smooth filled mdt
+                # (before zeroing land) so that no artificial MDT→0 step at the
+                # coast amplifies into huge geostrophic velocities.
+                # ssh2uv returns (ny, nx+1) and (ny+1, nx) directly.
                 mdu, mdv = self.ssh2uv(mdt)
 
-            mdt[np.isnan(mdt)] = 0
-            mdu[np.isnan(mdu)] = 0
-            mdv[np.isnan(mdv)] = 0
+            # Zero land cells in mdt, and zero any staggered u/v face that
+            # borders a land h-cell (same padding convention as ssh2uv).
+            # This removes spurious velocities at coast-facing faces without
+            # affecting the interior ocean signal.
+            mdt[State.mask] = 0.
+            _mask_pad = np.pad(State.mask.astype(bool), pad_width=((1, 0), (1, 0)), mode='edge')
+            mdu[_mask_pad[1:, :] | _mask_pad[:-1, :]] = 0.  # (ny, nx+1)
+            mdv[_mask_pad[:, 1:] | _mask_pad[:, :-1]] = 0.  # (ny+1, nx)
 
         
             if config.EXP.flag_plot>0:
@@ -2849,8 +2880,9 @@ class Model_qgsw(M):
                     plt.colorbar()
                     plt.title('Equivalent Height')
                     plt.show()
-                if config.MOD.name_class.lower()=='qg':
-                    H = H0 # QG needs constant H
+                if config.MOD.name_class.lower()=='qg' or getattr(config.MOD, 'constant_H', False):
+                    H = H0 # QG needs constant H; constant_H flag forces uniform H for SW too
+                    print(f'H set to constant: H = {H0[0,0,0]:.4f} m')
             else:
                 H = H0 = config.MOD.H
                 if not hasattr(H,'shape'):
@@ -3072,6 +3104,13 @@ class Model_qgsw(M):
         self.model.sponge_u = jnp.expand_dims(jnp.asarray(self.sponge_u.T.astype(self.dtype)), axis=(0,1))
         self.model.sponge_v = jnp.expand_dims(jnp.asarray(self.sponge_v.T.astype(self.dtype)), axis=(0,1))
         self.model.sponge_h = jnp.expand_dims(jnp.asarray(self.sponge_h.T.astype(self.dtype)), axis=(0,1))
+
+        # Exclude sponge cells from observation assimilation.
+        # Written to State.sponge_mask so that State.mask (land only) is not modified:
+        # other models sharing State (e.g. Model_diffusion) must not zero sponge cells,
+        # but the OBSOP will still exclude them by combining mask + sponge_mask.
+        if getattr(config.MOD, 'mask_sponge_bc', False):
+            State.sponge_mask = (self.sponge_h > 0)
 
         # Maximum number of model steps per JIT call (limits GPU memory)
         self.max_nstep = getattr(config.MOD, 'max_nstep', 240)
