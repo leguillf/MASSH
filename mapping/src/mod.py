@@ -629,8 +629,8 @@ class Model_qg1l_jax(M):
         
         # CFL
         if config.MOD.cfl is not None:
-            grid_spacing = min(np.nanmean(State.DX), np.nanmean(State.DY)) 
-            dt = config.MOD.cfl * grid_spacing / np.nanmean(self.c)
+            grid_spacing = min(np.nanmin(State.DX), np.nanmin(State.DY)) 
+            dt = config.MOD.cfl * grid_spacing / np.nanmax(self.c)
             divisors = [i for i in range(1, 3600 + 1) if 3600 % i == 0]  # Find all divisors of one hour in seconds
             lower_divisors = [d for d in divisors if d <= dt]
             self.dt = max(lower_divisors)  # Get closest
@@ -2687,6 +2687,7 @@ class Model_qgsw(M):
             model = model_qg
         else:
             model = model_sw
+        self._is_qg_class = (config.MOD.name_class.lower() == 'qg')
 
         # Coriolis
         if config.MOD.f0 is not None and config.MOD.constant_f:
@@ -3077,12 +3078,15 @@ class Model_qgsw(M):
 
 
         # Model initialization
+        # QG spectral operators assume uniform spacing scalars; SW keeps full 2-D grids.
+        _dx_param = float(np.nanmean(State.DX)) if config.MOD.name_class.lower() == 'qg' else State.DX.T
+        _dy_param = float(np.nanmean(State.DY)) if config.MOD.name_class.lower() == 'qg' else State.DY.T
         params = {
             "nx": State.nx,
             "ny": State.ny,
             "nl": config.MOD.nl,
-            "dx": State.DX.T,
-            "dy": State.DY.T,
+            "dx": _dx_param,
+            "dy": _dy_param,
             "H": H,
             "g_prime": g_prime,
             "f": np.pad(self.f.T, ((0, 1), (0, 1)), mode='edge'),
@@ -3587,7 +3591,14 @@ class Model_qgsw(M):
                 h_b_sw = h_b_sw + self.mdt[0, 0]
 
         # Step
-        u1, v1, h1 = self.model_step(
+        if self._is_qg_class:
+            u1, v1, h1 = self.model_step(
+                u, v, h, H=H, nstep=nstep,
+                u_b=u_b_sw, v_b=v_b_sw, h_b=h_b_sw,
+                Fu=Fu_sw, Fv=Fv_sw, Fh=Fh_sw,
+            )
+        else:
+            u1, v1, h1 = self.model_step(
                 u, v, h, H=H, nstep=nstep,
                 u_b=u_b_sw, v_b=v_b_sw, h_b=h_b_sw,
                 Fu=Fu_sw, Fv=Fv_sw, Fh=Fh_sw,
@@ -3857,12 +3868,9 @@ class Model_qgsw(M):
             v = jnp.expand_dims(State.var['v_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
             h = jnp.expand_dims(State.var['h_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
         else:
-            h = State.getvar(name_var=self.name_var['SSH'])
-            u = State.getvar(name_var=self.name_var['U'])
-            v = State.getvar(name_var=self.name_var['V'])
-            u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
-            v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
-            h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
+            h = jnp.expand_dims(jnp.asarray(State.var[self.name_var['SSH']], dtype=self.dtype).T, axis=(0,1))
+            u = jnp.expand_dims(jnp.asarray(State.var[self.name_var['U']], dtype=self.dtype).T, axis=(0,1))
+            v = jnp.expand_dims(jnp.asarray(State.var[self.name_var['V']], dtype=self.dtype).T, axis=(0,1))
         
         # Get parameters (2D forcing from Basis)
         Fu = State.params[self.name_var['U']]
@@ -3894,7 +3902,7 @@ class Model_qgsw(M):
         # Tracer setup
         if self.advect_tracer:
             c = jnp.stack(
-                [jnp.asarray(State.getvar(self.name_var[n]), dtype=self.dtype)
+                [jnp.asarray(State.var[self.name_var[n]], dtype=self.dtype)
                  for n in self.tracer_names], axis=0)  # (n_trac, ny, nx)
             Fc = jnp.stack(
                 [jnp.asarray(State.params[self.name_var[n]], dtype=self.dtype)
@@ -4115,18 +4123,12 @@ class Model_qgsw(M):
             v = jnp.expand_dims(State.var['v_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
             h = jnp.expand_dims(State.var['h_layers'].astype(self.dtype).transpose(0, 2, 1), axis=0)
         else:
-            adh0 = adState.getvar(name_var=self.name_var['SSH'])
-            adu0 = adState.getvar(name_var=self.name_var['U'])
-            adv0 = adState.getvar(name_var=self.name_var['V'])
-            h = State.getvar(name_var=self.name_var['SSH'])
-            u = State.getvar(name_var=self.name_var['U'])
-            v = State.getvar(name_var=self.name_var['V'])
-            adu = jnp.expand_dims((+adu0).astype(self.dtype).T, axis=(0,1))
-            adv = jnp.expand_dims((+adv0).astype(self.dtype).T, axis=(0,1))
-            adh = jnp.expand_dims((+adh0).astype(self.dtype).T, axis=(0,1))
-            u = jnp.expand_dims(u.astype(self.dtype).T, axis=(0,1))
-            v = jnp.expand_dims(v.astype(self.dtype).T, axis=(0,1))
-            h = jnp.expand_dims(h.astype(self.dtype).T, axis=(0,1))
+            adh = jnp.expand_dims(jnp.asarray(adState.var[self.name_var['SSH']], dtype=self.dtype).T, axis=(0,1))
+            adu = jnp.expand_dims(jnp.asarray(adState.var[self.name_var['U']], dtype=self.dtype).T, axis=(0,1))
+            adv = jnp.expand_dims(jnp.asarray(adState.var[self.name_var['V']], dtype=self.dtype).T, axis=(0,1))
+            h = jnp.expand_dims(jnp.asarray(State.var[self.name_var['SSH']], dtype=self.dtype).T, axis=(0,1))
+            u = jnp.expand_dims(jnp.asarray(State.var[self.name_var['U']], dtype=self.dtype).T, axis=(0,1))
+            v = jnp.expand_dims(jnp.asarray(State.var[self.name_var['V']], dtype=self.dtype).T, axis=(0,1))
 
         # Get parameters (2D forcing)
         Fu = State.params[self.name_var['U']]
@@ -4177,13 +4179,13 @@ class Model_qgsw(M):
         # Tracer setup
         if self.advect_tracer:
             c = jnp.stack(
-                [jnp.asarray(State.getvar(self.name_var[n]), dtype=self.dtype)
+                [jnp.asarray(State.var[self.name_var[n]], dtype=self.dtype)
                  for n in self.tracer_names], axis=0)
             Fc = jnp.stack(
                 [jnp.asarray(State.params[self.name_var[n]], dtype=self.dtype)
                  for n in self.tracer_names], axis=0)
             adc = jnp.stack(
-                [jnp.asarray(adState.getvar(self.name_var[n]), dtype=self.dtype)
+                [jnp.asarray(adState.var[self.name_var[n]], dtype=self.dtype)
                  for n in self.tracer_names], axis=0)
             adFc = jnp.stack(
                 [jnp.asarray(adState.params[self.name_var[n]], dtype=self.dtype)

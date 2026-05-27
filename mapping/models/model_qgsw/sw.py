@@ -391,6 +391,20 @@ class SW:
         # conserved when mass is added:  Fu = -u/h * Fh, Fv = -v/h * Fh.
         self.forcing_momentum = param.get('forcing_momentum', 'direct')
 
+        # Adjoint checkpoint strategy for lax.scan body:
+        #   'full'       – checkpoint entire single_step (current default, low memory)
+        #   'stage'      – checkpoint only compute_time_derivatives; save RK3 stage
+        #                  states as scan residuals (~6× more memory, faster adjoint)
+        #   'custom_vjp' – explicit RK3 adjoint via custom_vjp; saves only the 3
+        #                  stage states as residuals (minimum memory + fast adjoint)
+        # checkpoint_mode is fixed to 'full' (stage/custom_vjp benched and removed)
+
+        # Set to False to disable checkpoint on the scan body (stores full trajectory
+        # in device memory). Benchmarked 2026-05-27: NOT viable for qgsw — WENO3+RK3
+        # intermediates cause OOM at nstep=72 and slower adjoint at nstep=10 due to
+        # HBM bandwidth pressure. Keep True (current default is optimal).
+        self.scan_checkpoint = True
+
     def _compute_ref_values(self, H):
         """Pure functional computation of reference values.
         Returns (h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref).
@@ -400,10 +414,24 @@ class SW:
         eta_ref = -H.sum(axis=-3) + reverse_cumsum(H, dim=-3)
         p_ref = jnp.cumsum(self.g_prime * eta_ref, axis=-3)
 
-        _h_ref_u = jnp.pad(h_ref, ((0, 0), (1, 1), (0, 0)), mode='edge')
-        h_ref_ugrid = 0.5 * (_h_ref_u[...,1:,:] + _h_ref_u[...,:-1,:])
-        _h_ref_v = jnp.pad(h_ref, ((0, 0), (0, 0), (1, 1)), mode='edge')
-        h_ref_vgrid = 0.5 * (_h_ref_v[...,1:] + _h_ref_v[...,:-1])
+        # When H is spatially uniform (nx=1, ny=1), padding the 1-element
+        # spatial axes produces wrong shapes: (nl,1,1) → (nl,3,1) → h_ref_ugrid
+        # (nl,2,1), which then fails to broadcast with h_ugrid (1,nl,nx+1,ny).
+        # For uniform H, skip the stagger and use H * area on each staggered
+        # grid directly. When dx/dy are scalars (uniform grid) this is identical
+        # to the old h_ref branch and broadcasts freely. When dx/dy are 2D
+        # (geographic grid) area has shape (nx,ny) so h_ref=(1,nx,ny) which
+        # does NOT broadcast with h_ugrid=(1,1,nx+1,ny) due to the x-size
+        # mismatch. Using area_ugrid/(nx+1,ny) and area_vgrid/(nx,ny+1) gives
+        # the correct shapes in both cases.
+        if H.shape[-2] == 1 and H.shape[-1] == 1:
+            h_ref_ugrid = H * self.area_ugrid
+            h_ref_vgrid = H * self.area_vgrid
+        else:
+            _h_ref_u = jnp.pad(h_ref, ((0, 0), (1, 1), (0, 0)), mode='edge')
+            h_ref_ugrid = 0.5 * (_h_ref_u[...,1:,:] + _h_ref_u[...,:-1,:])
+            _h_ref_v = jnp.pad(h_ref, ((0, 0), (0, 0), (1, 1)), mode='edge')
+            h_ref_vgrid = 0.5 * (_h_ref_v[...,1:] + _h_ref_v[...,:-1])
 
         # Compute reference pressure gradients per dimension independently.
         # The previous AND condition (shape[-2]!=1 AND shape[-1]!=1) missed
@@ -519,9 +547,13 @@ class SW:
         V_surf = V[:, 0:1, :, :]   # (1, 1, nx, ny+1)
         # Physical tracer — small magnitudes safe for WENO in float32
         c_phys = c_area / self.area
-        # Face-averaged cell area on u- and v-faces
-        area_x = 0.5 * (self.area[1:, :] + self.area[:-1, :])   # (nx-1, ny)
-        area_y = 0.5 * (self.area[:, 1:] + self.area[:, :-1])   # (nx, ny-1)
+        # Face-averaged cell area on u- and v-faces (guard for scalar/0-d area).
+        if self.area.ndim >= 2:
+            area_x = 0.5 * (self.area[1:, :] + self.area[:-1, :])   # (nx-1, ny)
+            area_y = 0.5 * (self.area[:, 1:] + self.area[:, :-1])   # (nx, ny-1)
+        else:
+            area_x = self.area
+            area_y = self.area
         # WENO upwind reconstruction of c_phys at faces times face velocity.
         c_flux_y = area_y * self.h_flux_y(c_phys, V_surf[..., 1:-1])   # (1, n_trac, nx, ny-1)
         c_flux_x = area_x * self.h_flux_x(c_phys, U_surf[..., 1:-1, :]) # (1, n_trac, nx-1, ny)
@@ -586,9 +618,15 @@ class SW:
         h_tot_phys = h_tot / self.area
         if not self.flag_linear:
             h_tot_phys = smooth_clamp(h_tot_phys, self.h_min, self.h_min_sharpness)
-        # Face-averaged cell area on u- and v-faces
-        area_x = 0.5 * (self.area[1:, :] + self.area[:-1, :])   # (nx-1, ny)
-        area_y = 0.5 * (self.area[:, 1:] + self.area[:, :-1])   # (nx, ny-1)
+        # Face-averaged cell area on u- and v-faces.
+        # Guard: self.area is 0-d (scalar) when dx/dy are uniform scalars (QG);
+        # slicing a 0-d array raises IndexError.  For uniform grids face area == cell area.
+        if self.area.ndim >= 2:
+            area_x = 0.5 * (self.area[1:, :] + self.area[:-1, :])   # (nx-1, ny)
+            area_y = 0.5 * (self.area[:, 1:] + self.area[:, :-1])   # (nx, ny-1)
+        else:
+            area_x = self.area
+            area_y = self.area
         # WENO fluxes on h_tot_phys, then re-scale by face area
         h_tot_flux_y = area_y * self.h_flux_y(h_tot_phys, V[..., 1:-1])
         h_tot_flux_x = area_x * self.h_flux_x(h_tot_phys, U[..., 1:-1, :])
@@ -736,21 +774,37 @@ class SW:
             # Take top layer (index 0), trim interior only when dim > 1.
             H0_u = self.h_ref_ugrid[0]   # (nx+1, ny) or (1, 1)
             H0_v = self.h_ref_vgrid[0]   # (nx, ny+1) or (1, 1)
-            if H0_u.shape[0] > 1:
+            if H0_u.ndim >= 2 and H0_u.shape[0] > 1:
                 H0_u = H0_u[1:-1, :]     # (nx-1, ny)
-            if H0_v.shape[1] > 1:
+            if H0_v.ndim >= 2 and H0_v.shape[1] > 1:
                 H0_v = H0_v[:, 1:-1]     # (nx, ny-1)
-            H_ref_u = jnp.maximum(H0_u / self.area_ugrid[1:-1, :], self.h_min)
-            H_ref_v = jnp.maximum(H0_v / self.area_vgrid[:, 1:-1], self.h_min)
+            # area_ugrid/vgrid may be 0-d scalars when dx/dy are uniform scalars
+            # (e.g. QG mode).  Skip slicing in that case — scalars broadcast fine.
+            _area_u_int = (self.area_ugrid[1:-1, :]
+                           if self.area_ugrid.ndim >= 2 and self.area_ugrid.shape[0] > 1
+                           else self.area_ugrid)
+            _area_v_int = (self.area_vgrid[:, 1:-1]
+                           if self.area_vgrid.ndim >= 2 and self.area_vgrid.shape[1] > 1
+                           else self.area_vgrid)
+            H_ref_u = jnp.maximum(H0_u / _area_u_int, self.h_min)
+            H_ref_v = jnp.maximum(H0_v / _area_v_int, self.h_min)
+
+        # dx/dy metrics on interior u/v faces — may be 0-d scalars for uniform grids
+        _dx_u_int = (self.dx_ugrid[1:-1, :]
+                     if self.dx_ugrid.ndim >= 2 and self.dx_ugrid.shape[0] > 1
+                     else self.dx_ugrid)
+        _dy_v_int = (self.dy_vgrid[:, 1:-1]
+                     if self.dy_vgrid.ndim >= 2 and self.dy_vgrid.shape[1] > 1
+                     else self.dy_vgrid)
 
         # Wind tendency: jnp.where so land points never compute tau/H (avoids inf*0=NaN)
         wind_u = jnp.where(
             mask_u[..., 0, :, :] > 0.5,
-            _taux / (self.rho_water * H_ref_u) * self.dx_ugrid[1:-1, :],
+            _taux / (self.rho_water * H_ref_u) * _dx_u_int,
             jnp.zeros_like(du[..., 0, :, :]))
         wind_v = jnp.where(
             mask_v[..., 0, :, :] > 0.5,
-            _tauy / (self.rho_water * H_ref_v) * self.dy_vgrid[:, 1:-1],
+            _tauy / (self.rho_water * H_ref_v) * _dy_v_int,
             jnp.zeros_like(dv[..., 0, :, :]))
 
         if wind_strength is not None:
@@ -1015,16 +1069,18 @@ class SW:
             return (u, v, h), None
 
         # --------------------------------------
-        # 🔥 CRITICAL: checkpoint the step
+        # Checkpoint the step (full mode: checkpoint entire single_step;
+        # minimises scan residuals — each backward step re-executes single_step)
+        # Set self.scan_checkpoint = False before first JIT call to disable.
         # --------------------------------------
-        single_step = jax.checkpoint(single_step)
+        scan_body = jax.checkpoint(single_step) if self.scan_checkpoint else single_step
 
         # --------------------------------------
         # Use scan instead of fori_loop
         # --------------------------------------
         if nstep > 0:
             (u, v, h), _ = lax.scan(
-                single_step,
+                scan_body,
                 (u, v, h),
                 None,
                 length=nstep,

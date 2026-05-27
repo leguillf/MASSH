@@ -867,31 +867,32 @@ class Basis_bm:
 
         """
         Adjoint of geostrophic velocity computation.
+        Uses jnp so that JAX device arrays are kept on-device (no GPU→CPU transfer).
         """
 
         if self.u_coast_mask is not None:
-            adu = np.where(self.u_coast_mask, 0., adu)
-            adv = np.where(self.v_coast_mask, 0., adv)
+            adu = jnp.where(self.u_coast_mask, 0., adu)
+            adv = jnp.where(self.v_coast_mask, 0., adv)
 
         # _adssh lives on padded grid: (ny+1, nx+1)
-        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+        _adssh = jnp.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
 
-        _adssh[1:,:]  += -self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:-1,:] +=  self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:,1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
-        _adssh[:,:-1] += -self.g / self.f_on_v * adv / self.dx_on_v
+        _adssh = _adssh.at[1:,:].add( -self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:-1,:].add(  self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:,1:].add(   self.g / self.f_on_v * adv / self.dx_on_v)
+        _adssh = _adssh.at[:,:-1].add( -self.g / self.f_on_v * adv / self.dx_on_v)
 
         # map padded grid back to physical ssh grid:
         # physical ssh[i,j] == _ssh[i+1,j+1]
-        adssh = _adssh[1:,1:].copy()
+        adssh = _adssh[1:,1:]
 
         # contributions from the padded first row/col (mode='edge' duplicates edge values)
         # add the padded southern row (index 0) to physical southern row (adssh[0,:])
-        adssh[0,:] += _adssh[0,1:]
+        adssh = adssh.at[0,:].add(_adssh[0,1:])
         # add the padded western column (index 0) to physical western column (adssh[:,0])
-        adssh[:,0] += _adssh[1:,0]
+        adssh = adssh.at[:,0].add(_adssh[1:,0])
         # the padded corner (0,0) was duplicated as well — add it into adssh[0,0]
-        adssh[0,0] += _adssh[0,0]
+        adssh = adssh.at[0,0].add(_adssh[0,0])
 
         return adssh
     
@@ -977,6 +978,18 @@ class Basis_bm_jax(Basis_bm):
         # JIT 
         self._operg_jit = jit(self._operg)
         self._operg_reduced_jit = jit(self._operg_reduced)
+        self._ssh2uv_adj_jit = jit(self._ssh2uv_adj)
+        self._ssh2uv_jit = jit(self._ssh2uv)
+
+    def _ssh2uv(self, ssh):
+        """Compute geostrophic velocities from SSH (JAX-compatible)."""
+        _ssh = jnp.pad(ssh, pad_width=((1, 0), (1, 0)), mode='edge')
+        _u = -self.g / self.f_on_u * (_ssh[1:, :] - _ssh[:-1, :]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:, 1:] - _ssh[:, :-1]) / self.dx_on_v
+        if self.u_coast_mask is not None:
+            _u = jnp.where(self.u_coast_mask, 0., _u)
+            _v = jnp.where(self.v_coast_mask, 0., _v)
+        return _u, _v
 
     def set_basis(self,time,return_q=False,**kwargs):
         res = super().set_basis(time,return_q=return_q,**kwargs)
@@ -1156,7 +1169,7 @@ class Basis_bm_jax(Basis_bm):
 
         # Compute geostrophic velocities
         if self.compute_velocities:
-            u, v = self._ssh2uv(ssh)
+            u, v = self._ssh2uv_jit(ssh)
             if State is not None:
                 if not self.multi_mode:
                     State[self.name_mod_u] = u
@@ -1191,7 +1204,7 @@ class Basis_bm_jax(Basis_bm):
 
         adssh = adState[self.name_mod_var]
         if self.compute_velocities:
-            adssh += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+            adssh += self._ssh2uv_adj_jit(adState[self.name_mod_u], adState[self.name_mod_v])
         adX = self._operg_reduced_jit(t, adssh)
 
         if not self.multi_mode:
@@ -1510,31 +1523,32 @@ class Basis_gauss3d:
 
         """
         Adjoint of geostrophic velocity computation.
+        Uses jnp so that JAX device arrays are kept on-device (no GPU→CPU transfer).
         """
 
         if self.u_coast_mask is not None:
-            adu = np.where(self.u_coast_mask, 0., adu)
-            adv = np.where(self.v_coast_mask, 0., adv)
+            adu = jnp.where(self.u_coast_mask, 0., adu)
+            adv = jnp.where(self.v_coast_mask, 0., adv)
 
         # _adssh lives on padded grid: (ny+1, nx+1)
-        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+        _adssh = jnp.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
 
-        _adssh[1:,:]  += -self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:-1,:] +=  self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:,1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
-        _adssh[:,:-1] += -self.g / self.f_on_v * adv / self.dx_on_v
+        _adssh = _adssh.at[1:,:].add( -self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:-1,:].add(  self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:,1:].add(   self.g / self.f_on_v * adv / self.dx_on_v)
+        _adssh = _adssh.at[:,:-1].add( -self.g / self.f_on_v * adv / self.dx_on_v)
 
         # map padded grid back to physical ssh grid:
         # physical ssh[i,j] == _ssh[i+1,j+1]
-        adssh = _adssh[1:,1:].copy()
+        adssh = _adssh[1:,1:]
 
         # contributions from the padded first row/col (mode='edge' duplicates edge values)
         # add the padded southern row (index 0) to physical southern row (adssh[0,:])
-        adssh[0,:] += _adssh[0,1:]
+        adssh = adssh.at[0,:].add(_adssh[0,1:])
         # add the padded western column (index 0) to physical western column (adssh[:,0])
-        adssh[:,0] += _adssh[1:,0]
+        adssh = adssh.at[:,0].add(_adssh[1:,0])
         # the padded corner (0,0) was duplicated as well — add it into adssh[0,0]
-        adssh[0,0] += _adssh[0,0]
+        adssh = adssh.at[0,0].add(_adssh[0,0])
 
         return adssh
     
@@ -1613,6 +1627,8 @@ class Basis_gauss3d_jax(Basis_gauss3d):
 
         self._operg_jit = jit(self._operg)
         self._operg_reduced_jit = jit(self._operg_reduced)
+        self._ssh2uv_adj_jit = jit(self._ssh2uv_adj)
+        self._ssh2uv_jit = jit(self._ssh2uv)
         
     def set_basis(self,time,return_q=False,**kwargs):
         res = super().set_basis(time,return_q=return_q,**kwargs)
@@ -1747,7 +1763,7 @@ class Basis_gauss3d_jax(Basis_gauss3d):
 
         # Compute geostrophic velocities
         if self.compute_velocities:
-            u, v = self._ssh2uv(phi)
+            u, v = self._ssh2uv_jit(phi)
             if State is not None:
                 if not self.multi_mode:
                     State[self.name_mod_u] = u
@@ -1781,9 +1797,8 @@ class Basis_gauss3d_jax(Basis_gauss3d):
             adState[self.name_mod_v] = self.zero_phys
 
         adparams = adState[self.name_mod_var]
-        adX = self._operg_reduced_jit(t, adparams)
         if self.compute_velocities:
-            adparams += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+            adparams = adparams + self._ssh2uv_adj_jit(adState[self.name_mod_u], adState[self.name_mod_v])
         adX = self._operg_reduced_jit(t, adparams)
         
         if not self.multi_mode:
@@ -2028,18 +2043,22 @@ class Basis_gauss2d:
         return _u, _v
 
     def _ssh2uv_adj(self, adu, adv):
+        """
+        Adjoint of geostrophic velocity computation.
+        Uses jnp so that JAX device arrays are kept on-device (no GPU→CPU transfer).
+        """
         if self.u_coast_mask is not None:
-            adu = np.where(self.u_coast_mask, 0., adu)
-            adv = np.where(self.v_coast_mask, 0., adv)
-        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
-        _adssh[1:, :]  += -self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:-1, :] +=  self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:, 1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
-        _adssh[:, :-1] += -self.g / self.f_on_v * adv / self.dx_on_v
-        adssh = _adssh[1:, 1:].copy()
-        adssh[0, :] += _adssh[0, 1:]
-        adssh[:, 0] += _adssh[1:, 0]
-        adssh[0, 0] += _adssh[0, 0]
+            adu = jnp.where(self.u_coast_mask, 0., adu)
+            adv = jnp.where(self.v_coast_mask, 0., adv)
+        _adssh = jnp.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+        _adssh = _adssh.at[1:, :].add( -self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:-1, :].add(  self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:, 1:].add(   self.g / self.f_on_v * adv / self.dx_on_v)
+        _adssh = _adssh.at[:, :-1].add( -self.g / self.f_on_v * adv / self.dx_on_v)
+        adssh = _adssh[1:, 1:]
+        adssh = adssh.at[0, :].add(_adssh[0, 1:])
+        adssh = adssh.at[:, 0].add(_adssh[1:, 0])
+        adssh = adssh.at[0, 0].add(_adssh[0, 0])
         return adssh
 
     def operg(self, t, X, State=None):
@@ -2099,6 +2118,8 @@ class Basis_gauss2d_jax(Basis_gauss2d):
         super().__init__(config, State, multi_mode=multi_mode)
         self._operg_jit = jit(self._operg)
         self._operg_reduced_jit = jit(self._operg_reduced)
+        self._ssh2uv_adj_jit = jit(self._ssh2uv_adj)
+        self._ssh2uv_jit = jit(self._ssh2uv)
 
     def set_basis(self, time, return_q=False, **kwargs):
         res = super().set_basis(time, return_q=return_q, **kwargs)
@@ -2150,7 +2171,7 @@ class Basis_gauss2d_jax(Basis_gauss2d):
         phi = self._operg_jit(X)
 
         if self.compute_velocities:
-            u, v = self._ssh2uv(phi)
+            u, v = self._ssh2uv_jit(phi)
             if State is not None:
                 if not self.multi_mode:
                     State[self.name_mod_u] = u
@@ -2181,7 +2202,7 @@ class Basis_gauss2d_jax(Basis_gauss2d):
 
         adparams = adState[self.name_mod_var]
         if self.compute_velocities:
-            adparams = adparams + self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+            adparams = adparams + self._ssh2uv_adj_jit(adState[self.name_mod_u], adState[self.name_mod_v])
 
         adX = self._operg_reduced_jit(adparams)
 
@@ -2807,31 +2828,32 @@ class Basis_bmaux:
 
         """
         Adjoint of geostrophic velocity computation.
+        Uses jnp so that JAX device arrays are kept on-device (no GPU→CPU transfer).
         """
 
         if self.u_coast_mask is not None:
-            adu = np.where(self.u_coast_mask, 0., adu)
-            adv = np.where(self.v_coast_mask, 0., adv)
+            adu = jnp.where(self.u_coast_mask, 0., adu)
+            adv = jnp.where(self.v_coast_mask, 0., adv)
 
         # _adssh lives on padded grid: (ny+1, nx+1)
-        _adssh = np.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+        _adssh = jnp.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
 
-        _adssh[1:,:]  += -self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:-1,:] +=  self.g / self.f_on_u * adu / self.dy_on_u
-        _adssh[:,1:]  +=  self.g / self.f_on_v * adv / self.dx_on_v
-        _adssh[:,:-1] += -self.g / self.f_on_v * adv / self.dx_on_v
+        _adssh = _adssh.at[1:,:].add( -self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:-1,:].add(  self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:,1:].add(   self.g / self.f_on_v * adv / self.dx_on_v)
+        _adssh = _adssh.at[:,:-1].add( -self.g / self.f_on_v * adv / self.dx_on_v)
 
         # map padded grid back to physical ssh grid:
         # physical ssh[i,j] == _ssh[i+1,j+1]
-        adssh = _adssh[1:,1:].copy()
+        adssh = _adssh[1:,1:]
 
         # contributions from the padded first row/col (mode='edge' duplicates edge values)
         # add the padded southern row (index 0) to physical southern row (adssh[0,:])
-        adssh[0,:] += _adssh[0,1:]
+        adssh = adssh.at[0,:].add(_adssh[0,1:])
         # add the padded western column (index 0) to physical western column (adssh[:,0])
-        adssh[:,0] += _adssh[1:,0]
+        adssh = adssh.at[:,0].add(_adssh[1:,0])
         # the padded corner (0,0) was duplicated as well — add it into adssh[0,0]
-        adssh[0,0] += _adssh[0,0]
+        adssh = adssh.at[0,0].add(_adssh[0,0])
 
         return adssh
         
@@ -2920,6 +2942,8 @@ class Basis_bmaux_jax(Basis_bmaux):
         # JIT 
         self._operg_jit = jit(self._operg)
         self._operg_reduced_jit = jit(self._operg_reduced)
+        self._ssh2uv_adj_jit = jit(self._ssh2uv_adj)
+        self._ssh2uv_jit = jit(self._ssh2uv)
 
 
     def set_basis(self,time,return_q=False,**kwargs):
@@ -3111,7 +3135,7 @@ class Basis_bmaux_jax(Basis_bmaux):
 
         # Compute geostrophic velocities
         if self.compute_velocities:
-            u, v = self._ssh2uv(ssh)
+            u, v = self._ssh2uv_jit(ssh)
             if State is not None:
                 if not self.multi_mode:
                     State[self.name_mod_u] = u
@@ -3146,7 +3170,7 @@ class Basis_bmaux_jax(Basis_bmaux):
 
         adssh = adState[self.name_mod_var]
         if self.compute_velocities:
-            adssh += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
+            adssh += self._ssh2uv_adj_jit(adState[self.name_mod_u], adState[self.name_mod_v])
         adX = self._operg_reduced_jit(t, adssh)
 
         if not self.multi_mode:

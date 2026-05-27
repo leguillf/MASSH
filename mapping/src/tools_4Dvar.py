@@ -47,7 +47,7 @@ class Cov :
 class Variational:
     
     def __init__(self, 
-                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None, nstep=None, freq_it_plot=1):
+                 config=None, M=None, H=None, State=None, R=None,B=None, Basis=None, Xb=None, checkpoints=None, nstep=None, freq_it_plot=1, print_time=False):
         
         # Objects
         self.M = M # model
@@ -86,7 +86,7 @@ class Variational:
 
         self.freq_it_plot = freq_it_plot
         self.it_plot = 0
-        self.print_time = False
+        self.print_time = print_time
         
         # Grad test
         if config.INV.compute_test:

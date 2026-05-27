@@ -575,19 +575,27 @@ class State:
         other.lat_v = self.lat_v
         other.geo_grid = self.geo_grid
 
+        def _copy_array(v):
+            # JAX arrays are immutable: each step() replaces the reference rather than
+            # mutating the buffer, so the existing reference is already a valid snapshot.
+            module = type(v).__module__
+            if module.startswith('jax') or module.startswith('jaxlib'):
+                return v
+            return np.array(v, copy=True)
+
         # (deep)Copy model variables
         for name in self.var.keys():
             if free:
                 other.var[name] = self.var[name]*0
             else:
-                other.var[name] = deepcopy(self.var[name])
+                other.var[name] = _copy_array(self.var[name])
         
         # (deep)Copy model parameters
         for name in self.params.keys():
             if free:
                 other.params[name] = self.params[name]*0
             else:
-                other.params[name] = deepcopy(self.params[name])
+                other.params[name] = _copy_array(self.params[name])
 
         return other
     
@@ -641,24 +649,31 @@ class State:
 
     def setvar(self,var,name_var=None,add=False):
 
+        def _store_value(v):
+            # JAX arrays are immutable; keep reference to avoid costly deepcopy/device copies.
+            module = type(v).__module__
+            if module.startswith('jax') or module.startswith('jaxlib'):
+                return v
+            return np.array(v, copy=True)
+
         if name_var is None:
             for i,name in enumerate(self.var):
                 if add:
                     self.var[name] += var[i]
                 else:
-                    self.var[name] = deepcopy(var[i])
+                    self.var[name] = _store_value(var[i])
         else:
             if type(name_var) in (list,np.ndarray):
                 for i,name in enumerate(name_var):
                     if add:
                         self.var[name] += var[i]
                     else:
-                        self.var[name] = deepcopy(var[i])
+                        self.var[name] = _store_value(var[i])
             else:
                 if add:
                     self.var[name_var] += var
                 else:
-                    self.var[name_var] = deepcopy(var)
+                    self.var[name_var] = _store_value(var)
     
     def scalar(self,coeff,copy=False):
         if copy:

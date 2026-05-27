@@ -184,7 +184,7 @@ class QG(SW):
         self._qb = qb        # Background PV (1,nl,nx+1,ny+1)
 
 
-    def add_wind_forcing(self, du, dv, h_tot_ugrid, h_tot_vgrid):
+    def add_wind_forcing(self, du, dv, **kwargs):
         du = du.at[..., 0,:,:].set(du[..., 0,:,:] + self.taux / self.H[0] * self.dx) 
         dv = dv.at[..., 0,:,:].set(dv[..., 0,:,:] + self.tauy / self.H[0] * self.dy) 
         return du, dv
@@ -324,16 +324,16 @@ class QG(SW):
         
         return u_a, v_a, k_energy_a, omega_a, div_a
 
-    def compute_diagnostic_variables(self, u, v, h):
-        return super().compute_diagnostic_variables(u, v, h)
+    def compute_diagnostic_variables(self, u, v, h, h_ref_ugrid=None, h_ref_vgrid=None):
+        return super().compute_diagnostic_variables(u, v, h, h_ref_ugrid, h_ref_vgrid)
     
     def compute_pv(self, omega, h):
         """Compute potential vorticity."""
         pv = self.interp_TP(omega) / self.area - self.f0 * (h / self.h_ref)
         return pv
 
-    def compute_time_derivatives(self, u, v, h):
-        dt_uvh_sw = super().compute_time_derivatives(u, v, h)
+    def compute_time_derivatives(self, u, v, h, ref_vals=None, **kwargs):
+        dt_uvh_sw = super().compute_time_derivatives(u, v, h, ref_vals, **kwargs)
         dt_uvh_qg = self.project_qg(*dt_uvh_sw)
 
         self.dt_h = dt_uvh_sw[2]

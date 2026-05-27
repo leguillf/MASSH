@@ -831,6 +831,8 @@ INV_4DVAR = dict(
 
     freq_it_plot = 10, # Frequency of iteration to plot the cost function and its gradient  
 
+    print_time = False, # Whether to print the time taken for each iteration, split by model, obs operator and gradient computation
+
     JAX_mem_fraction = None,
 
     path_init_4Dvar = None, # To restart the minimization process from a specified control vector
