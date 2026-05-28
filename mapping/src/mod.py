@@ -756,7 +756,8 @@ class Model_qg1l_jax(M):
                          tile_overlap=config.MOD.tile_overlap,
                          mdt=self.mdt,
                          sponge_coef=self.sponge_coef,
-                         bathymetry_PV_term=self.bathymetry_PV_term)
+                         bathymetry_PV_term=self.bathymetry_PV_term,
+                         formulation=config.MOD.formulation)
 
         # Model functions initialization
         self.qgm_step = self.qgm.step_jit

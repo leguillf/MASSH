@@ -335,6 +335,8 @@ MOD_QG1L_JAX = dict(
 
     name_class = 'Qgm', # Name of the model class in jqgm.py
 
+    formulation = 'ssh', # Dynamical formulation: 'ssh' (work in SSH space) or 'sf' (work in streamfunction space)
+
     name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc. and/or ageostrophic velocities U, V)
 
     name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
