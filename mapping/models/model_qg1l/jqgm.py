@@ -258,11 +258,16 @@ class Qgm:
         u = jnp.zeros((self.ny,self.nx))
         v = jnp.zeros((self.ny,self.nx))
 
-        u = u.at[1:-1,1:].set(- self.g/self.f*\
-         (h[2:,:-1]+h[2:,1:]-h[:-2,1:]-h[:-2,:-1])/(4*self.dy))
-             
-        v = v.at[1:,1:-1].set(self.g/self.f*\
-            (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx))
+        if self.formulation == 'sf':
+            u = u.at[1:-1,1:].set(- self.g/self.f[1:-1,1:]*\
+             (h[2:,:-1]+h[2:,1:]-h[:-2,1:]-h[:-2,:-1])/(4*self.dy))
+            v = v.at[1:,1:-1].set(self.g/self.f[1:,1:-1]*\
+                (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx))
+        else:
+            u = u.at[1:-1,1:].set(- self.g/self.f0*\
+             (h[2:,:-1]+h[2:,1:]-h[:-2,1:]-h[:-2,:-1])/(4*self.dy))
+            v = v.at[1:,1:-1].set(self.g/self.f0*\
+                (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx))
         
         u = jnp.where(jnp.isnan(u),0,u)
         v = jnp.where(jnp.isnan(v),0,v)
