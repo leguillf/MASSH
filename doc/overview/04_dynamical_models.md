@@ -22,14 +22,29 @@ Concrete implementations live in [mapping/models/](../../mapping/models):
 ## 4a. `MOD_QG1L_JAX` — quasi-geostrophic model with optional tracers
 
 Implemented in `Model_qg1l_jax` ([mod.py](../../mapping/src/mod.py)).
-Propagates SSH via `Qgm_trac` ([jqgm.py](../../mapping/models/model_qg1l/jqgm.py))
-and optionally one or more passive tracers (e.g. SST, SSS) by advection with
-the geostrophic velocity field.
+The core QG dynamics are implemented by `Qgm`
+([jqgm.py](../../mapping/models/model_qg1l/jqgm.py)); when tracers are present
+the dispatch switches to `Qgm_trac`, which extends `Qgm` with passive-tracer
+advection (e.g. SST, SSS).
+
+### Dynamical formulation (`formulation`)
+
+`Qgm` supports two equivalent formulations selected by `config.MOD.formulation`:
+
+| Value | State variable | `h2uv` scaling | `h2pv` Laplacian |
+|---|---|---|---|
+| `'ssh'` (default) | SSH | `g / f0` (scalar) | `g/f0 · ∇²h − (f0/c)²·h` |
+| `'sf'` | SSH (streamfunction φ = g·h/f internally) | `g / f[i,j]` (2-D, sliced) | `∇²φ − (f0/c)²·φ` |
+
+Both formulations use `lax.scan` for time integration and are fully
+AD-compatible with `jax.jvp` / `jax.vjp`.
 
 Key config parameters (`MOD_QG1L_JAX` block):
 
 | Parameter | Default | Description |
 |---|---|---|
+| `name_class` | `'Qgm'` | Model class in `jqgm.py` (`Qgm` or `Qgm_trac`) |
+| `formulation` | `'ssh'` | Dynamical formulation: `'ssh'` or `'sf'` |
 | `name_var` | `{'SSH': 'ssh'}` | Variable mapping; add tracers as extra keys |
 | `ageo_velocities` | `False` | Include ageostrophic velocities in the tracer advection |
 | `forcing_tracer_from_bc` | `False` | Add a nudging term `Fc * (Xb − X)` from BCs |
