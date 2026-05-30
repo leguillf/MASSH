@@ -198,10 +198,25 @@ class QG(SW):
         return self.G(*self.QoG_inv(self.Q(u, v, h), pb=pb, pb_i=pb_i, qb=qb))
 
     def step(self, *args, **kwargs):
-        h_b = kwargs.get('h_b', None)
+        # Extract h_b here so it is NOT forwarded into the SW scan body.
+        # The scan body no longer does per-substage state projection.
+        h_b = kwargs.pop('h_b', None)
         sponge_coef = self.sponge_coef
         self.sponge_coef = 0.0
+
+        if h_b is not None:
+            # Compute QG background once per step (constant within a step)
+            h_b_internal = jnp.asarray(h_b, dtype=self.dtype) * self.area * self.masks.h
+            pb, pb_i, qb = self._compute_qg_background(h_b_internal)
+            # Pre-project initial state onto QG manifold (replaces per-substage projections)
+            u0, v0, h0 = args[0], args[1], args[2]
+            u_qg, v_qg, h_qg = self.set_input_uvh(u0, v0, h0)
+            u_qg, v_qg, h_qg = self.project_qg(u_qg, v_qg, h_qg, pb=pb, pb_i=pb_i, qb=qb)
+            u0p, v0p, h0p = self.get_physical_uvh(u_qg, v_qg, h_qg, numpy=False)
+            args = (u0p, v0p, h0p) + args[3:]
+
         try:
+            # h_b is not passed to super: scan substages don't carry it
             u_phys, v_phys, h_phys = super().step(*args, **kwargs)
         finally:
             self.sponge_coef = sponge_coef
@@ -209,8 +224,7 @@ class QG(SW):
         if h_b is None:
             return u_phys, v_phys, h_phys
 
-        h_b_internal = jnp.asarray(h_b, dtype=self.dtype) * self.area * self.masks.h
-        pb, pb_i, qb = self._compute_qg_background(h_b_internal)
+        # Post-step projection using pre-computed background (no recompute)
         u, v, h = self.set_input_uvh(u_phys, v_phys, h_phys)
         u, v, h = self.project_qg(u, v, h, pb=pb, pb_i=pb_i, qb=qb)
         return self.get_physical_uvh(u, v, h, numpy=False)
@@ -237,16 +251,13 @@ class QG(SW):
         return pv
 
     def compute_time_derivatives(self, u, v, h, ref_vals=None, **kwargs):
-        h_b = kwargs.pop('h_b', None)
-        if h_b is not None:
-            pb, pb_i, qb = self._compute_qg_background(h_b)
-            u, v, h = self.project_qg(u, v, h, pb=pb, pb_i=pb_i, qb=qb)
+        kwargs.pop('h_b', None)  # h_b is now handled at step() level
         dt_uvh_sw = super().compute_time_derivatives(u, v, h, ref_vals, **kwargs)
         dt_uvh_qg = self.project_qg(*dt_uvh_sw)
 
         self.dt_h = dt_uvh_sw[2]
         self.P_dt_h = dt_uvh_qg[2]
-        self.P2_dt_h = self.project_qg(*dt_uvh_qg)[2]
+        # P2_dt_h removed: diagnostic-only, cost 1 Helmholtz solve per substage
 
         self.compute_ageostrophic_velocity(dt_uvh_qg, dt_uvh_sw)
 
