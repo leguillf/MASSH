@@ -916,13 +916,15 @@ class SW:
                dt_v + filt_v, \
                dt_h
 
-    def compute_time_derivatives(self, u, v, h, ref_vals=None, taux=None, tauy=None, h_wind=None, wind_strength=None):
+    def compute_time_derivatives(self, u, v, h, ref_vals=None, taux=None, tauy=None, h_wind=None, wind_strength=None, **kwargs):
         """
         Computes the state variables derivatives dt_u, dt_v, dt_h.
         ref_vals: optional tuple (h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref)
                   for pure-functional usage (needed for correct JAX AD through H).
         taux/tauy: wind stress (overrides self.taux / self.tauy if provided).
         h_wind: effective mixed-layer depth for wind-stress (scalar or 2D on h-grid).
+        Extra keyword arguments are accepted for subclasses (for example QG uses
+        h_b for boundary-aware projection) and ignored by the SW dynamics.
         """
         if ref_vals is not None:
             h_ref, h_ref_ugrid, h_ref_vgrid, dx_p_ref, dy_p_ref = ref_vals
