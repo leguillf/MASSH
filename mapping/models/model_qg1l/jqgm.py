@@ -259,10 +259,11 @@ class Qgm:
         v = jnp.zeros((self.ny,self.nx))
 
         if self.formulation == 'sf':
-            u = u.at[1:-1,1:].set(- self.g/self.f[1:-1,1:]*\
-             (h[2:,:-1]+h[2:,1:]-h[:-2,1:]-h[:-2,:-1])/(4*self.dy))
-            v = v.at[1:,1:-1].set(self.g/self.f[1:,1:-1]*\
-                (h[1:,2:]+h[:-1,2:]-h[:-1,:-2]-h[1:,:-2])/(4*self.dx))
+            phi = (self.g / self.f) * h
+            u = u.at[1:-1,1:].set(-\
+             (phi[2:,:-1]+phi[2:,1:]-phi[:-2,1:]-phi[:-2,:-1])/(4*self.dy))
+            v = v.at[1:,1:-1].set(\
+                (phi[1:,2:]+phi[:-1,2:]-phi[:-1,:-2]-phi[1:,:-2])/(4*self.dx))
         else:
             u = u.at[1:-1,1:].set(- self.g/self.f0*\
              (h[2:,:-1]+h[2:,1:]-h[:-2,1:]-h[:-2,:-1])/(4*self.dy))
@@ -378,7 +379,10 @@ class Qgm:
 
         # Bathymetry
         if self.bathymetry_PV_term is not None:
-            rhs_q += self.adv(up, vp, um, vm, self.f0 * self.bathymetry_PV_term)
+            if self.formulation == 'sf':
+                rhs_q += self.adv(up, vp, um, vm, self.f * self.bathymetry_PV_term)
+            else:
+                rhs_q += self.adv(up, vp, um, vm, self.f0 * self.bathymetry_PV_term)
 
         # Beta plane
         if self.beta is not None:

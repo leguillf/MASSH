@@ -34,7 +34,7 @@ advection (e.g. SST, SSS).
 | Value | State variable | `h2uv` scaling | `h2pv` Laplacian |
 |---|---|---|---|
 | `'ssh'` (default) | SSH | `g / f0` (scalar) | `g/f0 · ∇²h − (f0/c)²·h` |
-| `'sf'` | SSH (streamfunction φ = g·h/f internally) | `g / f[i,j]` (2-D, sliced) | `∇²φ − (f0/c)²·φ` |
+| `'sf'` | SSH (streamfunction φ = g·h/f internally) | differentiates `φ` directly | `∇²φ − (f0/c)²·φ` |
 
 Both formulations use `lax.scan` for time integration and are fully
 AD-compatible with `jax.jvp` / `jax.vjp`.
