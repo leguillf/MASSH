@@ -671,23 +671,32 @@ class SW:
             u_pad = jnp.pad(u, ((0,0), (0,0), (0,0), (1,1)), mode='edge')
             v_pad = jnp.pad(v, ((0,0), (0,0), (1,1), (0,0)), mode='edge')
 
-            # Padded metrics matching u_pad (nx+1, ny+2) and v_pad (nx+2, ny+1)
-            dx_u_ypad = jnp.pad(self.dx_ugrid, ((0,0), (1,1)), mode='edge')
-            dy_v_xpad = jnp.pad(self.dy_vgrid, ((1,1), (0,0)), mode='edge')
+            # Padded metrics matching u_pad (nx+1, ny+2) and v_pad (nx+2, ny+1).
+            # For Cartesian grids dx_ugrid/dy_vgrid are 0-d scalars: skip padding.
+            if self.dx_ugrid.ndim >= 2:
+                dx_u_ypad = jnp.pad(self.dx_ugrid, ((0,0), (1,1)), mode='edge')
+                dy_v_xpad = jnp.pad(self.dy_vgrid, ((1,1), (0,0)), mode='edge')
+                dx_u_int = self.dx_ugrid[1:-1, :]
+                dy_u_int = self.dy_ugrid[1:-1, :]
+                dx_v_int = self.dx_vgrid[:, 1:-1]
+                dy_v_int = self.dy_vgrid[:, 1:-1]
+            else:
+                dx_u_ypad = self.dx_ugrid
+                dy_v_xpad = self.dy_vgrid
+                dx_u_int = self.dx_ugrid
+                dy_u_int = self.dy_ugrid
+                dx_v_int = self.dx_vgrid
+                dy_v_int = self.dy_vgrid
 
             # u_phys = u / dx on padded grid
             u_phys = u_pad / dx_u_ypad
             v_phys = v_pad / dy_v_xpad
 
             # Laplacian at interior u-points (x: 1:-1, y: all via padding)
-            dx_u_int = self.dx_ugrid[1:-1, :]
-            dy_u_int = self.dy_ugrid[1:-1, :]
             lap_u = (u_phys[..., 2:, 1:-1] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., :-2, 1:-1]) / dx_u_int**2 \
                   + (u_phys[..., 1:-1, 2:] - 2*u_phys[..., 1:-1, 1:-1] + u_phys[..., 1:-1, :-2]) / dy_u_int**2
 
             # Laplacian at interior v-points (y: 1:-1, x: all via padding)
-            dx_v_int = self.dx_vgrid[:, 1:-1]
-            dy_v_int = self.dy_vgrid[:, 1:-1]
             lap_v = (v_phys[..., 2:, 1:-1] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., :-2, 1:-1]) / dx_v_int**2 \
                   + (v_phys[..., 1:-1, 2:] - 2*v_phys[..., 1:-1, 1:-1] + v_phys[..., 1:-1, :-2]) / dy_v_int**2
 
@@ -1017,7 +1026,7 @@ class SW:
             _gamma_h = (self.sponge_coef / self.dt) * self.sponge_h
 
             # ---- RK3-SSP with sponge damping ----
-            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength)
+            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength, h_b=_h_b if h_b is not None else None)
             dt0_u = dt0_u + _gamma_u * (_u_b - u)
             dt0_v = dt0_v + _gamma_v * (_v_b - v)
             dt0_h = dt0_h + _gamma_h * (_h_b - h)
@@ -1025,7 +1034,7 @@ class SW:
             v = v + self.dt * dt0_v
             h = h + self.dt * dt0_h
 
-            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength)
+            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength, h_b=_h_b if h_b is not None else None)
             dt1_u = dt1_u + _gamma_u * (_u_b - u)
             dt1_v = dt1_v + _gamma_v * (_v_b - v)
             dt1_h = dt1_h + _gamma_h * (_h_b - h)
@@ -1033,7 +1042,7 @@ class SW:
             v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
             h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
 
-            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength)
+            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength, h_b=_h_b if h_b is not None else None)
             dt2_u = dt2_u + _gamma_u * (_u_b - u)
             dt2_v = dt2_v + _gamma_v * (_v_b - v)
             dt2_h = dt2_h + _gamma_h * (_h_b - h)

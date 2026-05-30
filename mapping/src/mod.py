@@ -3004,7 +3004,7 @@ class Model_qgsw(M):
 
         # Sponge layer
         self.sponge_width = config.MOD.dist_sponge_bc  # km
-        self.sponge_coef = config.MOD.sponge_coef
+        self.sponge_coef = 0.0 if self._is_qg_class else config.MOD.sponge_coef
 
         if self.sponge_width is not None and self.sponge_width>0:
             lon_h = State.lon
@@ -3399,6 +3399,14 @@ class Model_qgsw(M):
                 if t0 in self.bc[name]:
                      State.setvar(self.bc[name][t0], self.name_var[name])
 
+        # In QG mode the velocity field must be geostrophically balanced with SSH.
+        # BC files typically only contain SSH, so u/v would otherwise be zero.
+        if self._is_qg_class:
+            ssh = State.getvar(name_var=self.name_var['SSH'])
+            u0, v0 = self.ssh2uv(ssh)
+            State.setvar(u0, self.name_var['U'])
+            State.setvar(v0, self.name_var['V'])
+
         # For nl>1, project surface fields into per-layer arrays
         if self.nl > 1:
             self._sync_layers_from_surface(State)
@@ -3497,14 +3505,37 @@ class Model_qgsw(M):
         return jnp.stack(c_b_list, axis=0)  # (n_trac, ny, nx)
     
     def ssh2uv(self, ssh):
-        """Nonlinear SSH → (u, v) model."""
-
-        _ssh = np.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
-
-        _u = -self.g / self.f_on_u * np.diff(_ssh, axis=0) / self.dy_on_u
-        _v = self.g / self.f_on_v * np.diff(_ssh, axis=1) / self.dx_on_v
-
-        return _u, _v
+        """Geostrophic SSH → (u, v) model."""
+        if self._is_qg_class:
+            # Delegate to the model's G operator so that the same geostrophic
+            # balance formula, f0, dx/dy scalars, and ocean masks are used.
+            # Fill NaN (land), convert to SW (1, 1, nx, ny); g_prime (nl,1,1)
+            # broadcasts to (1, nl, nx, ny).
+            ssh_sw = jnp.array(
+                np.where(np.isnan(ssh), 0.0, ssh).T
+            )[np.newaxis, np.newaxis]
+            p_i = self.model.g_prime.astype(self.model.dtype) * ssh_sw
+            p   = self.model.hgrid_pressure_to_wgrid(p_i)
+            u_sw, v_sw, _ = self.model.G(p, p_i=p_i)
+            # G returns u_stored = u_phys * dx_ugrid, v_stored = v_phys * dy_vgrid
+            # (same internal convention as set_input_uvh / get_physical_uvh).
+            # Divide to recover physical velocities for State convention.
+            u_phys = u_sw / self.model.dx_ugrid
+            v_phys = v_sw / self.model.dy_vgrid
+            # Keep tangential velocities zero on the remaining outer edges.
+            u_phys = u_phys.at[..., :, -1].set(0.0)   # north tangential
+            v_phys = v_phys.at[..., -1, :].set(0.0)   # east  tangential
+            # Convert SW (1, nl, nx+1, ny) → State (ny, nx+1), likewise v.
+            return np.array(u_phys[0, 0].T), np.array(v_phys[0, 0].T)
+        else:
+            # SW mode: finite-difference geostrophy with ocean mask.
+            _ssh = np.where(np.isnan(ssh), 0.0, ssh)
+            _ssh = np.pad(_ssh, pad_width=((1,0),(1,0)), mode='edge')
+            _u = -self.g / self.f_on_u * np.diff(_ssh, axis=0) / self.dy_on_u
+            _v = self.g / self.f_on_v * np.diff(_ssh, axis=1) / self.dx_on_v
+            _u = np.where(self.model.masks.u[0, 0].T, _u, 0.0)
+            _v = np.where(self.model.masks.v[0, 0].T, _v, 0.0)
+            return _u, _v
 
     def ssh2uv_tgl(self, ssh, dssh):
         """Tangent-linear model using JAX forward-mode differentiation."""
@@ -3931,6 +3962,8 @@ class Model_qgsw(M):
                 u, v, h = self.jstep_jit(t_chunk, u, v, h, H, Fu, Fv, Fh, u_b, v_b, h_b,
                                           taux=taux, tauy=tauy, h_wind=h_wind, wind_strength=wind_strength, nstep=n_chunk)
             step_done += n_chunk
+
+
 
         if self.nl > 1:
             # Convert back: (1, nl, nx, ny) → (nl, ny, nx)

@@ -14,8 +14,6 @@ from sw import SW, inv_reverse_cumsum
 from jax import jit
 from jax import numpy as jnp
 
-import matplotlib.pylab as plt 
-
 class QG(SW):
     """Multilayer quasi-geostrophic model as projected SW."""
 
@@ -30,16 +28,7 @@ class QG(SW):
         self.compute_auxillary_matrices()
 
         # precompile functions
-        self.grad_perp = grad_perp#torch.jit.trace(grad_perp, (self.p,))
-
-        self.plot = True
-        # Optional background field handling (mimicking jqgm boundary treatment)
-        # When set via set_boundary_ssh, we subtract background PV during inversion
-        # and add background SSH back afterward: qin = q - qb; solve; h += hb
-        self._ssh_b = None         # Background SSH on T-grid (1,1,nx,ny)
-        self._pb = None            # Background pressure on W-grid (1,nl,nx+1,ny+1)
-        self._pb_i = None          # Background pressure on T-grid (1,nl,nx,ny)
-        self._qb = None            # Background PV (1,nl,nx+1,ny+1)
+        self.grad_perp = grad_perp
 
 
     def compute_auxillary_matrices(self):
@@ -97,92 +86,19 @@ class QG(SW):
         self.homsol_hgrid = self.interp_TP(self.homsol_wgrid)
         self.homsol_hgrid_mean = self.homsol_hgrid.mean((-1,-2), keepdims=True)
 
-    def set_boundary_ssh(self, ssh_b):
-        """
-        Define a background boundary SSH field that will be used to compute
-        a background PV field. During inversion, we subtract this background PV
-        from the interior, solve with homogeneous boundaries, then add the SSH back.
-        This mimics the jqgm.pv2h approach: qin = q - qb, solve, h += hb.
+    def hgrid_pressure_to_wgrid(self, p_i):
+        """Build a W-grid pressure from h-grid pressure without edge shrinkage."""
+        pad_width = ((0, 0),) * (p_i.ndim - 2) + ((1, 0), (1, 0))
+        return jnp.pad(p_i, pad_width, mode='edge')
 
-        Parameters
-        ssh_b: array-like (nx, ny) or (1, nl, nx, ny)
-            Background SSH field used as boundary condition.
-        """
-        # Normalize input to T-grid shape (1,1,nx,ny)
-        ssh_b = jnp.array(ssh_b, dtype=self.dtype)
-        if ssh_b.ndim == 2:
-            if ssh_b.shape == (self.nx, self.ny):
-                ssh_T = ssh_b[None, None, ...]
-            elif ssh_b.shape == (self.nx+1, self.ny+1):
-                ssh_T = self.interp_TP(ssh_b[None, None, ...])
-            else:
-                raise ValueError(f"set_boundary_ssh: unexpected 2D shape {ssh_b.shape}")
-        elif ssh_b.ndim == 3:
-            if ssh_b.shape[-2:] == (self.nx, self.ny):
-                ssh_T = ssh_b[None, ...]  # -> (1,1,nx,ny)
-            elif ssh_b.shape[-2:] == (self.nx+1, self.ny+1):
-                ssh_T = self.interp_TP(ssh_b[None, ...])
-            else:
-                raise ValueError(f"set_boundary_ssh: unexpected 3D shape {ssh_b.shape}")
-        elif ssh_b.ndim == 4:
-            if ssh_b.shape[-2:] == (self.nx, self.ny):
-                ssh_T = ssh_b
-            elif ssh_b.shape[-2:] == (self.nx+1, self.ny+1):
-                ssh_T = self.interp_TP(ssh_b)
-            else:
-                raise ValueError(f"set_boundary_ssh: unexpected 4D shape {ssh_b.shape}")
-        else:
-            raise ValueError(f"set_boundary_ssh: unsupported ndim={ssh_b.ndim}")
-
-        # Clean NaNs and apply ocean mask
-        ssh_T = jnp.where(jnp.isfinite(ssh_T), ssh_T, 0.0) * self.masks.h
-
-        # Convert SSH to pressure on T-grid: p_i = g' * ssh_T  
-        # g_prime (nl,1,1) x ssh_T (1,1,nx,ny) => (1,nl,nx,ny)
-        pb_i = (self.g_prime.astype(self.dtype)) * ssh_T
-        
-        # Map to W-grid for reconstruction
-        pb = self.interp_TP_inv(pb_i) #* self.masks.psi
-
-        # Compute the full background u,v,h fields
-        ub, vb, hb = self.G(pb, p_i=pb_i)
-        
-        # Compute the background PV field WITHOUT boundary conditions
-        # (to avoid recursion during setup)
-        f0, H, area = self.f0, self.H, self.area
-        omega = jnp.diff(vb[...,1:-1], axis=-2) - jnp.diff(ub[...,1:-1,:], axis=-1)
-        qb_interior = (omega[0,0] - f0 * ssh_b / H.squeeze()) * (f0 / area)
-        plt.figure()
-        plt.pcolormesh(qb_interior)
-        plt.show()
-        
-        # Create full W-grid qb with boundary conditions applied
-        qb = jnp.zeros_like(self.masks.psi)  # Full W-grid shape
-        qb = qb.at[..., 1:-1, 1:-1].set(qb_interior)  # Fill interior
-        
-        # Apply boundary PV following jqgm: q[ind12] = -g*f/c^2 * hb[ind12]
-        # This is BEFORE the (f0/area) scaling applied in the Q operator
-        # Apply boundary PV following Q function formula: (- f0 * ssh_b / H) * (f0 / area)
-        boundary_mask = self.masks.not_psi[0, 0, :, :].astype(bool)  # (nx+1, ny+1)
-        ssh_b_W = self.interp_TP_inv(ssh_T)[0, 0, :, :]  # (nx+1, ny+1)
-        boundary_pv = (- f0 * ssh_b_W / self.H[0, 0, 0]) * (f0 / self.area)
-        
-        #qb = qb.at[0, 0, :, :].set(
-        #    jnp.where(boundary_mask, boundary_pv, qb[0, 0, :, :])
-        #)
-        
-        # Zero out land points
-        #land_mask = ~self.masks.psi[0, 0, :, :].astype(bool)
-        #qb = qb.at[0, 0, :, :].set(
-        #    jnp.where(land_mask, 0.0, qb[0, 0, :, :])
-        #)
-
-        # Cache the background fields
-        self._ssh_b = ssh_T  # Background SSH on T-grid (1,1,nx,ny)
-        self._pb = pb        # Background pressure on W-grid (1,nl,nx+1,ny+1)
-        self._pb_i = pb_i    # Background pressure on T-grid (1,nl,nx,ny)
-        self._qb = qb        # Background PV (1,nl,nx+1,ny+1)
-
+    def _compute_qg_background(self, h_b):
+        """Derive background pressure and interior PV from area-scaled h_b."""
+        ssh_b = h_b / self.area
+        pb_i = self.g_prime.astype(self.dtype) * ssh_b
+        pb = self.hgrid_pressure_to_wgrid(pb_i)
+        u_b, v_b, h_b_G = self.G(pb, p_i=pb_i)
+        qb = self.Q(u_b, v_b, h_b_G)
+        return pb, pb_i, qb
 
     def add_wind_forcing(self, du, dv, **kwargs):
         du = du.at[..., 0,:,:].set(du[..., 0,:,:] + self.taux / self.H[0] * self.dx) 
@@ -209,9 +125,9 @@ class QG(SW):
         v = jnp.where(jnp.isnan(v), 0, v)
 
         u = u.at[..., :, 0].set(0)
-        #u = u.at[..., :, -1].set(0)
+        u = u.at[..., :, -1].set(0)
         v = v.at[..., 0, :].set(0)
-        #v = v.at[..., -1, :].set(0)
+        v = v.at[..., -1, :].set(0)
     
         h = self.H * jnp.einsum('lm,...mxy->...lxy', self.A, p_i) * self.area * self.masks.h
         h = jnp.where(jnp.isnan(h), 0, h)
@@ -219,82 +135,52 @@ class QG(SW):
         return u, v, h
 
 
-    def QoG_inv(self, elliptic_rhs):
-        """(Q o G)^{-1} operator: solve elliptic equation following jqgm.py approach.
-        
-        Following jqgm.pv2h exactly: 
-        1. Create full W-grid PV with boundary conditions applied
-        2. Subtract background PV from interior: qin = q[interior] - qb[interior]
-        3. Solve elliptic equation with homogeneous boundaries
-        4. Add background SSH back: h += hb
+    def QoG_inv(self, elliptic_rhs, pb=None, pb_i=None, qb=None):
+        """(Q o G)^{-1}: Helmholtz solve with optional background correction.
+
+        Mirrors Qgm.pv2h(q, hb, qb):
+          qin          = elliptic_rhs - qb        (background subtraction)
+          p_interior   = Helmholtz_solve(qin)     (homogeneous W-grid BC)
+          p_full       = zeros
+          p_full[interior] = p_interior
+          p_full      += pb                       (restore background)
+
+        Parameters
+        ----------
+        elliptic_rhs : (1, nl, nx-1, ny-1)  interior PV from Q operator
+        pb           : (1, nl, nx+1, ny+1)  background W-grid pressure, or None
+        qb           : (1, nl, nx-1, ny-1)  background interior PV, or None
         """
-        # If boundary conditions are set, follow jqgm approach exactly
-        if hasattr(self, '_qb') and self._qb is not None:
-            # elliptic_rhs is (nl, nx-1, ny-1), need to create full W-grid PV 
-            # First ensure we have the right shape for the interior assignment
-            if elliptic_rhs.ndim == 3:
-                # Shape is (nl, nx-1, ny-1), need (1, nl, nx-1, ny-1)
-                elliptic_rhs = elliptic_rhs[None, ...]
-            
-            # Create full W-grid PV with boundary conditions
-            full_elliptic_rhs = jnp.zeros_like(self.masks.psi)  # Shape: (1, nl, nx+1, ny+1)
-            full_elliptic_rhs = full_elliptic_rhs.at[..., 1:-1, 1:-1].set(elliptic_rhs)
-            
-            # Apply boundary conditions from background PV at boundary points
-            # Following jqgm: q[ind12] = -g*f/c^2 * hb[ind12] (before f0/area scaling)
-            boundary_mask = self.masks.not_psi[0, 0, :, :].astype(bool)
-            ssh_b_W = self.interp_TP_inv(self._ssh_b)[0, 0, :, :]
-            f0 = self.f0
-            boundary_pv = (- f0 * ssh_b_W / self.H.squeeze()) * (f0 / self.area) #-g_prime_f0 * ssh_b_W
-            
-            full_elliptic_rhs = full_elliptic_rhs.at[0, 0, :, :].set(
-                jnp.where(boundary_mask, boundary_pv, full_elliptic_rhs[0, 0, :, :])
-            )
-            
-            # Zero out land points
-            land_mask = ~self.masks.psi[0, 0, :, :].astype(bool)
-            full_elliptic_rhs = full_elliptic_rhs.at[0, 0, :, :].set(
-                jnp.where(land_mask, 0.0, full_elliptic_rhs[0, 0, :, :])
-            )
-            
-            # Subtract background PV from full field (jqgm: qin = q - qb)
-            elliptic_rhs_corrected = full_elliptic_rhs - self._qb
-            # Extract interior for helmholtz solver
-            helmholtz_rhs_input = elliptic_rhs_corrected[..., 1:-1, 1:-1]
-        else:
-            # No boundary conditions: elliptic_rhs is already interior-only
-            helmholtz_rhs_input = elliptic_rhs
-        
-        # Convert elliptic RHS to modal space
+        # Background subtraction (mirrors Qgm: qin = q[interior] - qb[interior])
+        helmholtz_rhs_input = elliptic_rhs - qb if qb is not None else elliptic_rhs
+
+        # Layer-to-mode transform
         helmholtz_rhs = jnp.einsum('lm,...mxy->...lxy', self.Cl2m, helmholtz_rhs_input)
-        
-        # Solve Helmholtz equation (with homogeneous boundaries due to background subtraction)
+
+        # Helmholtz solve (homogeneous Dirichlet on W-grid boundary)
         if self.cap_matrices is not None:
             p_modes = solve_helmholtz_dstI_cmm(
-                    helmholtz_rhs*self.masks.psi[...,1:-1,1:-1],
-                    self.helmholtz_dstI, self.cap_matrices,
-                    self.masks.psi_irrbound_xids,
-                    self.masks.psi_irrbound_yids,
-                    self.masks.psi)
+                helmholtz_rhs * self.masks.psi[..., 1:-1, 1:-1],
+                self.helmholtz_dstI, self.cap_matrices,
+                self.masks.psi_irrbound_xids,
+                self.masks.psi_irrbound_yids,
+                self.masks.psi)
         else:
             p_modes = solve_helmholtz_dstI(helmholtz_rhs, self.helmholtz_dstI)
 
-        # Apply homogeneous correction for mass conservation only if no background
-        if not hasattr(self, '_qb') or self._qb is None:
-            alpha = -p_modes.mean((-1,-2), keepdims=True) / self.homsol_wgrid_mean
-            p_modes += alpha * self.homsol_wgrid
+        # Mass correction only when no background (free-surface uniqueness)
+        if qb is None:
+            alpha = -p_modes.mean((-1, -2), keepdims=True) / self.homsol_wgrid_mean
+            p_modes = p_modes + alpha * self.homsol_wgrid
 
-        # Convert back to physical space
-        p_qg = jnp.einsum('lm,...mxy->...lxy', self.Cm2l, p_modes)
-        
-        # Add background SSH back (jqgm: h += hb)
-        if hasattr(self, '_pb') and self._pb is not None:
-            p_qg = p_qg + self._pb
-            
-        # Apply mask and interpolate to T-grid
-        #p_qg = p_qg * self.masks.psi
-        p_qg_i = self.interp_TP(p_qg)
+        # Mode-to-layer: full W-grid (1, nl, nx+1, ny+1)
+        # (solve_helmholtz_dstI already pads interior solution to full W-grid)
+        p_wgrid = jnp.einsum('lm,...mxy->...lxy', self.Cm2l, p_modes)
 
+        # Add background on full W-grid (mirrors Qgm: h+=hb)
+        p_qg = (pb + p_wgrid) if pb is not None else p_wgrid
+
+        p_qg_i = pb_i + self.interp_TP(p_wgrid) if pb_i is not None else self.interp_TP(p_qg)
         return p_qg, p_qg_i
 
     def Q(self, u, v, h):
@@ -307,9 +193,27 @@ class QG(SW):
         # Boundary conditions are handled in the QoG_inv method via background subtraction
         return elliptic_rhs_interior
 
-    def project_qg(self, u, v, h):
+    def project_qg(self, u, v, h, pb=None, pb_i=None, qb=None):
         """ QG projector P = G o (Q o G)^{-1} o Q """
-        return self.G(*self.QoG_inv(self.Q(u, v, h)))
+        return self.G(*self.QoG_inv(self.Q(u, v, h), pb=pb, pb_i=pb_i, qb=qb))
+
+    def step(self, *args, **kwargs):
+        h_b = kwargs.get('h_b', None)
+        sponge_coef = self.sponge_coef
+        self.sponge_coef = 0.0
+        try:
+            u_phys, v_phys, h_phys = super().step(*args, **kwargs)
+        finally:
+            self.sponge_coef = sponge_coef
+
+        if h_b is None:
+            return u_phys, v_phys, h_phys
+
+        h_b_internal = jnp.asarray(h_b, dtype=self.dtype) * self.area * self.masks.h
+        pb, pb_i, qb = self._compute_qg_background(h_b_internal)
+        u, v, h = self.set_input_uvh(u_phys, v_phys, h_phys)
+        u, v, h = self.project_qg(u, v, h, pb=pb, pb_i=pb_i, qb=qb)
+        return self.get_physical_uvh(u, v, h, numpy=False)
 
     def compute_ageostrophic_velocity(self, dt_uvh_qg, dt_uvh_sw):
         u_a = -(dt_uvh_qg[1] - dt_uvh_sw[1]) / self.f0 / self.dy
@@ -333,6 +237,10 @@ class QG(SW):
         return pv
 
     def compute_time_derivatives(self, u, v, h, ref_vals=None, **kwargs):
+        h_b = kwargs.pop('h_b', None)
+        if h_b is not None:
+            pb, pb_i, qb = self._compute_qg_background(h_b)
+            u, v, h = self.project_qg(u, v, h, pb=pb, pb_i=pb_i, qb=qb)
         dt_uvh_sw = super().compute_time_derivatives(u, v, h, ref_vals, **kwargs)
         dt_uvh_qg = self.project_qg(*dt_uvh_sw)
 
