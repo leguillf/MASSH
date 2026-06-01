@@ -251,6 +251,9 @@ class SW:
         # Both are critical for adjoint stability with WENO advection.
         self.visc_coef = param['visc_coef'] if 'visc_coef' in param.keys() else 0.
         self.diff_coef = param['diff_coef'] if 'diff_coef' in param.keys() else 0.
+        self.time_scheme    = param.get('time_scheme',    'rk3')   # 'rk3' | 'rk2' | 'rk2_ssp'
+        self.h_adv_scheme   = param.get('h_adv_scheme',   'weno')  # 'weno' | 'upwind3'
+        self.mom_adv_scheme = param.get('mom_adv_scheme', 'weno')  # 'weno' | 'upwind3'
 
         # time
         self.dt = param['dt']
@@ -627,10 +630,55 @@ class SW:
         else:
             area_x = self.area
             area_y = self.area
+        if self.h_adv_scheme == 'upwind3':
+            return self._advection_h_upwind3(h_tot_phys, U, V)
         # WENO fluxes on h_tot_phys, then re-scale by face area
         h_tot_flux_y = area_y * self.h_flux_y(h_tot_phys, V[..., 1:-1])
         h_tot_flux_x = area_x * self.h_flux_x(h_tot_phys, U[..., 1:-1, :])
         return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
+
+    def _advection_h_upwind3(self, h_tot_phys, U, V):
+        """
+        3rd-order upwind h-advection in advective form (mirrors Qgm.adv()).
+        Applied only at interior cells [..., 2:-2, 2:-2]; boundary ring is zero.
+
+        U = u_phys/dx  (diagnostic velocity, shape (1,nl,nx+1,ny))
+        V = v_phys/dy  (diagnostic velocity, shape (1,nl,nx,ny+1))
+        h_tot_phys     in metres, shape (1,nl,nx,ny)
+
+        Returns d(h_area)/dt  [same units as advection_h].
+
+        Unit note: u_c = 0.5*(U[:-1]+U[1:]) = u_phys/dx, so
+          u_c * stencil/6  =  (u_phys/dx) * Δh  =  u_phys * ∂h/∂x
+        and multiplying by area = dx*dy gives d(h_area)/dt in m³/s. ✓
+        """
+        # Cell-centred velocity = average of adjacent face values (U=u_phys/dx)
+        u_c = 0.5 * (U[..., :-1, :] + U[..., 1:, :])   # (1,nl,nx,ny)
+        v_c = 0.5 * (V[..., :, :-1] + V[..., :, 1:])   # (1,nl,nx,ny)
+        up = jnp.where(u_c > 0.,  u_c, 0.)
+        um = jnp.where(u_c <= 0., u_c, 0.)
+        vp = jnp.where(v_c > 0.,  v_c, 0.)
+        vm = jnp.where(v_c <= 0., v_c, 0.)
+
+        # Upwind-3 advective tendency; zero outside [2:-2, 2:-2]
+        dt_h_phys = jnp.zeros_like(h_tot_phys)
+        dt_h_phys = dt_h_phys.at[..., 2:-2, 2:-2].set(
+            # x-direction (dim=-2): positive u → left-biased stencil
+            - up[..., 2:-2, 2:-2] / 6. * (
+                2.*h_tot_phys[..., 3:-1, 2:-2] + 3.*h_tot_phys[..., 2:-2, 2:-2]
+                - 6.*h_tot_phys[..., 1:-3, 2:-2] + h_tot_phys[..., :-4, 2:-2])
+            + um[..., 2:-2, 2:-2] / 6. * (
+                h_tot_phys[..., 4:, 2:-2] - 6.*h_tot_phys[..., 3:-1, 2:-2]
+                + 3.*h_tot_phys[..., 2:-2, 2:-2] + 2.*h_tot_phys[..., 1:-3, 2:-2])
+            # y-direction (dim=-1): positive v → left-biased stencil
+            - vp[..., 2:-2, 2:-2] / 6. * (
+                2.*h_tot_phys[..., 2:-2, 3:-1] + 3.*h_tot_phys[..., 2:-2, 2:-2]
+                - 6.*h_tot_phys[..., 2:-2, 1:-3] + h_tot_phys[..., 2:-2, :-4])
+            + vm[..., 2:-2, 2:-2] / 6. * (
+                h_tot_phys[..., 2:-2, 4:] - 6.*h_tot_phys[..., 2:-2, 3:-1]
+                + 3.*h_tot_phys[..., 2:-2, 2:-2] + 2.*h_tot_phys[..., 2:-2, 1:-3])
+        )
+        return dt_h_phys * self.area * self.masks.h
 
     def advection_momentum(self, u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid,
                            dx_p_ref=None, dy_p_ref=None, taux=None, tauy=None, h_wind=None, wind_strength=None):
@@ -641,8 +689,11 @@ class SW:
         _dy_p_ref = dy_p_ref if dy_p_ref is not None else self.dy_p_ref
 
         # Vortex-force + Coriolis
-        omega_Vm = self.w_flux_y(omega[...,1:-1,:], V_m)
-        omega_Um = self.w_flux_x(omega[...,1:-1], U_m)
+        if self.mom_adv_scheme == 'upwind3':
+            omega_Vm, omega_Um = self._omega_adv_upwind3(omega, U_m, V_m)
+        else:
+            omega_Vm = self.w_flux_y(omega[...,1:-1,:], V_m)
+            omega_Um = self.w_flux_x(omega[...,1:-1], U_m)
 
         dt_u = omega_Vm + self.fstar_ugrid[...,1:-1,:] * V_m
         dt_v = -(omega_Um + self.fstar_vgrid[...,1:-1] * U_m)
@@ -659,7 +710,49 @@ class SW:
 
         return jnp.pad(dt_u, ((0,0), (0,0), (1, 1), (0, 0)))*self.masks.u, \
                jnp.pad(dt_v, ((0,0), (0,0), (0, 0), (1, 1)))*self.masks.v
-    
+
+    def _omega_adv_upwind3(self, omega, U_m, V_m):
+        """
+        3rd-order upwind face reconstruction of vorticity for the vortex-force term.
+        Replaces w_flux_y / w_flux_x when mom_adv_scheme='upwind3'.
+
+        omega  shape (1, nl, nx+1, ny+1)  — on corners
+        U_m    shape (1, nl, nx,   ny-1)  — interp_TP(U), u at v-grid interior
+        V_m    shape (1, nl, nx-1, ny  )  — interp_TP(V), v at u-grid interior
+
+        Returns (omega_Vm, omega_Um) with the same shapes as the WENO version:
+          omega_Vm  (1, nl, nx-1, ny)
+          omega_Um  (1, nl, nx,   ny-1)
+
+        Reconstruction at face j+1/2 between omega[j] and omega[j+1]:
+          vel > 0: omega_face = (-omega[j-1] + 5*omega[j]   + 2*omega[j+1]) / 6
+          vel < 0: omega_face = ( 2*omega[j] + 5*omega[j+1] -   omega[j+2]) / 6
+        Interior faces only (1-cell ring zeroed at boundaries).
+        """
+        # ---- y-direction (omega_Vm): omega[...,1:-1,:] on (nx-1, ny+1) ----
+        omega_w = omega[..., 1:-1, :]   # (1, nl, nx-1, ny+1)
+        Vp = jnp.where(V_m > 0.,  V_m, 0.)
+        Vn = jnp.where(V_m <= 0., V_m, 0.)
+        omega_Vm = jnp.zeros_like(V_m)
+        # Interior y-faces: j=1,...,ny-2  (index 1:-1 in V_m, size ny)
+        omega_Vm = omega_Vm.at[..., 1:-1].set(
+            Vp[..., 1:-1] * (-omega_w[..., :-3] + 5.*omega_w[..., 1:-2] + 2.*omega_w[..., 2:-1]) / 6.
+          + Vn[..., 1:-1] * ( 2.*omega_w[..., 1:-2] + 5.*omega_w[..., 2:-1] - omega_w[..., 3:]) / 6.
+        )
+
+        # ---- x-direction (omega_Um): omega[...,1:-1] on (nx+1, ny-1) ----
+        omega_w2 = omega[..., 1:-1]     # (1, nl, nx+1, ny-1)
+        Up = jnp.where(U_m > 0.,  U_m, 0.)
+        Un = jnp.where(U_m <= 0., U_m, 0.)
+        omega_Um = jnp.zeros_like(U_m)
+        # Interior x-faces: i=1,...,nx-2  (index 1:-1 in U_m dim=-2, size nx)
+        omega_Um = omega_Um.at[..., 1:-1, :].set(
+            Up[..., 1:-1, :] * (-omega_w2[..., :-3, :] + 5.*omega_w2[..., 1:-2, :] + 2.*omega_w2[..., 2:-1, :]) / 6.
+          + Un[..., 1:-1, :] * ( 2.*omega_w2[..., 1:-2, :] + 5.*omega_w2[..., 2:-1, :] - omega_w2[..., 3:, :]) / 6.
+        )
+
+        return omega_Vm, omega_Um
+
     def add_diffusion(self, du, dv, u, v):
         """
         Add Laplacian diffusion ν∇²(u_phys) to velocity derivatives.
@@ -1016,41 +1109,66 @@ class SW:
             _h_wind = None  # falls back to self.h_wind inside add_wind_forcing
 
         # ----------------------------
-        # Single RK3 step
+        # Single time step (scheme chosen at construction time → specialised by JIT)
         # ----------------------------
         def single_step(carry, _):
             u, v, h = carry
 
-            # Sponge as Rayleigh damping integrated within RK3 substages.
+            # Sponge as Rayleigh damping integrated within RK substages.
             # Rate γ = sponge_coef / dt  so that ∫₀ᵈᵗ γ ds ≈ sponge_coef.
             _gamma_u = (self.sponge_coef / self.dt) * self.sponge_u
             _gamma_v = (self.sponge_coef / self.dt) * self.sponge_v
             _gamma_h = (self.sponge_coef / self.dt) * self.sponge_h
 
-            # ---- RK3-SSP with sponge damping ----
-            dt0_u, dt0_v, dt0_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength, h_b=_h_b if h_b is not None else None)
-            dt0_u = dt0_u + _gamma_u * (_u_b - u)
-            dt0_v = dt0_v + _gamma_v * (_v_b - v)
-            dt0_h = dt0_h + _gamma_h * (_h_b - h)
-            u = u + self.dt * dt0_u
-            v = v + self.dt * dt0_v
-            h = h + self.dt * dt0_h
+            def _f(u_, v_, h_):
+                """Tendency + sponge at current state."""
+                dtu, dtv, dth = self.compute_time_derivatives(
+                    u_, v_, h_, ref_vals, taux=_taux, tauy=_tauy,
+                    h_wind=_h_wind, wind_strength=wind_strength,
+                    h_b=_h_b if h_b is not None else None)
+                dtu = dtu + _gamma_u * (_u_b - u_)
+                dtv = dtv + _gamma_v * (_v_b - v_)
+                dth = dth + _gamma_h * (_h_b - h_)
+                return dtu, dtv, dth
 
-            dt1_u, dt1_v, dt1_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength, h_b=_h_b if h_b is not None else None)
-            dt1_u = dt1_u + _gamma_u * (_u_b - u)
-            dt1_v = dt1_v + _gamma_v * (_v_b - v)
-            dt1_h = dt1_h + _gamma_h * (_h_b - h)
-            u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
-            v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
-            h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
+            if self.time_scheme == 'rk2':
+                # ---- Explicit midpoint (matches Qgm rk2) ----
+                dt0_u, dt0_v, dt0_h = _f(u, v, h)
+                u_mid = u + (self.dt * 0.5) * dt0_u
+                v_mid = v + (self.dt * 0.5) * dt0_v
+                h_mid = h + (self.dt * 0.5) * dt0_h
+                dt1_u, dt1_v, dt1_h = _f(u_mid, v_mid, h_mid)
+                u = u + self.dt * dt1_u
+                v = v + self.dt * dt1_v
+                h = h + self.dt * dt1_h
 
-            dt2_u, dt2_v, dt2_h = self.compute_time_derivatives(u, v, h, ref_vals, taux=_taux, tauy=_tauy, h_wind=_h_wind, wind_strength=wind_strength, h_b=_h_b if h_b is not None else None)
-            dt2_u = dt2_u + _gamma_u * (_u_b - u)
-            dt2_v = dt2_v + _gamma_v * (_v_b - v)
-            dt2_h = dt2_h + _gamma_h * (_h_b - h)
-            u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
-            v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
-            h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)
+            elif self.time_scheme == 'rk2_ssp':
+                # ---- Heun / SSP-RK2 ----
+                dt0_u, dt0_v, dt0_h = _f(u, v, h)
+                u1 = u + self.dt * dt0_u
+                v1 = v + self.dt * dt0_v
+                h1 = h + self.dt * dt0_h
+                dt1_u, dt1_v, dt1_h = _f(u1, v1, h1)
+                u = u + (self.dt * 0.5) * (dt0_u + dt1_u)
+                v = v + (self.dt * 0.5) * (dt0_v + dt1_v)
+                h = h + (self.dt * 0.5) * (dt0_h + dt1_h)
+
+            else:
+                # ---- RK3-SSP (Shu-Osher) — default ----
+                dt0_u, dt0_v, dt0_h = _f(u, v, h)
+                u = u + self.dt * dt0_u
+                v = v + self.dt * dt0_v
+                h = h + self.dt * dt0_h
+
+                dt1_u, dt1_v, dt1_h = _f(u, v, h)
+                u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
+                v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
+                h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
+
+                dt2_u, dt2_v, dt2_h = _f(u, v, h)
+                u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
+                v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
+                h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)
 
             # ---- External forcing ----
             if self.forcing_momentum == 'mass_consistent':
@@ -1242,40 +1360,64 @@ class SW:
             _gamma_h = (self.sponge_coef / self.dt) * self.sponge_h
             _gamma_c = (self.sponge_coef / self.dt) * self.sponge_h  # tracer on h-grid
 
-            # ---- RK3-SSP stage 0 ----
-            dt0_u, dt0_v, dt0_h, dt0_c = _stage_tendencies(u, v, h, c)
-            dt0_u = dt0_u + _gamma_u * (_u_b - u)
-            dt0_v = dt0_v + _gamma_v * (_v_b - v)
-            dt0_h = dt0_h + _gamma_h * (_h_b - h)
-            dt0_c = dt0_c + _gamma_c * (_c_b - c)
-            u = u + self.dt * dt0_u
-            v = v + self.dt * dt0_v
-            h = h + self.dt * dt0_h
-            c = c + self.dt * dt0_c
+            def _f(u_, v_, h_, c_):
+                """Tendency + sponge at current state."""
+                dtu, dtv, dth, dtc = _stage_tendencies(u_, v_, h_, c_)
+                dtu = dtu + _gamma_u * (_u_b - u_)
+                dtv = dtv + _gamma_v * (_v_b - v_)
+                dth = dth + _gamma_h * (_h_b - h_)
+                dtc = dtc + _gamma_c * (_c_b - c_)
+                return dtu, dtv, dth, dtc
 
-            # ---- RK3-SSP stage 1 ----
-            dt1_u, dt1_v, dt1_h, dt1_c = _stage_tendencies(u, v, h, c)
-            dt1_u = dt1_u + _gamma_u * (_u_b - u)
-            dt1_v = dt1_v + _gamma_v * (_v_b - v)
-            dt1_h = dt1_h + _gamma_h * (_h_b - h)
-            dt1_c = dt1_c + _gamma_c * (_c_b - c)
-            u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
-            v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
-            h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
-            c = c + (self.dt / 4.0) * (dt1_c - 3.0 * dt0_c)
+            if self.time_scheme == 'rk2':
+                # ---- Explicit midpoint ----
+                dt0_u, dt0_v, dt0_h, dt0_c = _f(u, v, h, c)
+                u_m = u + (self.dt * 0.5) * dt0_u
+                v_m = v + (self.dt * 0.5) * dt0_v
+                h_m = h + (self.dt * 0.5) * dt0_h
+                c_m = c + (self.dt * 0.5) * dt0_c
+                dt1_u, dt1_v, dt1_h, dt1_c = _f(u_m, v_m, h_m, c_m)
+                u = u + self.dt * dt1_u
+                v = v + self.dt * dt1_v
+                h = h + self.dt * dt1_h
+                c = c + self.dt * dt1_c
 
-            # ---- RK3-SSP stage 2 ----
-            dt2_u, dt2_v, dt2_h, dt2_c = _stage_tendencies(u, v, h, c)
-            dt2_u = dt2_u + _gamma_u * (_u_b - u)
-            dt2_v = dt2_v + _gamma_v * (_v_b - v)
-            dt2_h = dt2_h + _gamma_h * (_h_b - h)
-            dt2_c = dt2_c + _gamma_c * (_c_b - c)
-            u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
-            v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
-            h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)
-            c = c + (self.dt / 12.0) * (8.0 * dt2_c - dt1_c - dt0_c)
+            elif self.time_scheme == 'rk2_ssp':
+                # ---- Heun / SSP-RK2 ----
+                dt0_u, dt0_v, dt0_h, dt0_c = _f(u, v, h, c)
+                u1 = u + self.dt * dt0_u
+                v1 = v + self.dt * dt0_v
+                h1 = h + self.dt * dt0_h
+                c1 = c + self.dt * dt0_c
+                dt1_u, dt1_v, dt1_h, dt1_c = _f(u1, v1, h1, c1)
+                u = u + (self.dt * 0.5) * (dt0_u + dt1_u)
+                v = v + (self.dt * 0.5) * (dt0_v + dt1_v)
+                h = h + (self.dt * 0.5) * (dt0_h + dt1_h)
+                c = c + (self.dt * 0.5) * (dt0_c + dt1_c)
 
-            # ---- External forcing (after RK3) ----
+            else:
+                # ---- RK3-SSP stage 0 ----
+                dt0_u, dt0_v, dt0_h, dt0_c = _f(u, v, h, c)
+                u = u + self.dt * dt0_u
+                v = v + self.dt * dt0_v
+                h = h + self.dt * dt0_h
+                c = c + self.dt * dt0_c
+
+                # ---- RK3-SSP stage 1 ----
+                dt1_u, dt1_v, dt1_h, dt1_c = _f(u, v, h, c)
+                u = u + (self.dt / 4.0) * (dt1_u - 3.0 * dt0_u)
+                v = v + (self.dt / 4.0) * (dt1_v - 3.0 * dt0_v)
+                h = h + (self.dt / 4.0) * (dt1_h - 3.0 * dt0_h)
+                c = c + (self.dt / 4.0) * (dt1_c - 3.0 * dt0_c)
+
+                # ---- RK3-SSP stage 2 ----
+                dt2_u, dt2_v, dt2_h, dt2_c = _f(u, v, h, c)
+                u = u + (self.dt / 12.0) * (8.0 * dt2_u - dt1_u - dt0_u)
+                v = v + (self.dt / 12.0) * (8.0 * dt2_v - dt1_v - dt0_v)
+                h = h + (self.dt / 12.0) * (8.0 * dt2_h - dt1_h - dt0_h)
+                c = c + (self.dt / 12.0) * (8.0 * dt2_c - dt1_c - dt0_c)
+
+            # ---- External forcing (after RK stages) ----
             if self.forcing_momentum == 'mass_consistent':
                 h_ = replicate_pad(h, self.masks.h)
                 h_ugrid = 0.5 * (h_[..., 1:, 1:-1] + h_[..., :-1, 1:-1])

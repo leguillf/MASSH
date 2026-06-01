@@ -594,6 +594,11 @@ MOD_QGSW = dict(
 
     diff_coef_trac = 0., # diffusivity coefficient for passive tracers (in m^2/s). Typical values 50–200 m²/s
 
+    time_scheme = 'rk3',      # temporal scheme: 'rk3' (SSP-RK3, default) | 'rk2' (explicit midpoint, matches Qgm) | 'rk2_ssp' (Heun)
+    h_adv_scheme = 'weno',    # h-advection scheme: 'weno' (WENO-6, default) | 'upwind3' (3rd-order upwind, matches Qgm)
+    mom_adv_scheme = 'weno',  # momentum-advection scheme: 'weno' (WENO-6, default) | 'upwind3' (3rd-order upwind face reconstruction)
+    solver = 'dst_cmm',       # elliptic solver: 'dst_cmm' (DST + capacitance-matrix for irregular boundaries, default) | 'dst' (plain DST, matches inverse_elliptic_dst in Qgm)
+
     advect_tracer = None, # If True/False, override automatic tracer detection from name_var. None = auto.
 
     path_wind = None, # path to NetCDF wind file containing u10/v10 (if None, no wind forcing)

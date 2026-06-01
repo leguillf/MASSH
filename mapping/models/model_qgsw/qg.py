@@ -10,6 +10,7 @@ from helmholtz import compute_laplace_dstI, solve_helmholtz_dstI, dstI2D,\
                       solve_helmholtz_dstI_cmm, compute_capacitance_matrices
 from finite_diff import grad_perp
 from sw import SW, inv_reverse_cumsum
+from tools import avg_pool2d
 
 from jax import jit
 from jax import numpy as jnp
@@ -23,6 +24,10 @@ class QG(SW):
                 'H must me constant in space for ' \
                 'qg approximation, i.e. have shape (...,1,1)' \
                 f'got shape shape {self.H.shape}'
+
+        # Elliptic solver: 'dst_cmm' (default, capacitance-matrix correction for irregular
+        # boundaries) or 'dst' (simple DST only, matching inverse_elliptic_dst in Qgm)
+        self.solver = param.get('solver', 'dst_cmm')
 
         # init matrices for elliptic equation
         self.compute_auxillary_matrices()
@@ -51,9 +56,16 @@ class QG(SW):
         lambd_r, R = jnp.linalg.eig(self.A)
         lambd_l, L = jnp.linalg.eig(self.A.T)
         self.lambd = lambd_r.real.reshape((1, self.nl, 1, 1))
-        with np.printoptions(precision=1):
-            print('  - Rossby deformation Radii (km): ',
-                1e-3 / np.sqrt(self.f0**2*self.lambd).squeeze())
+        _H   = np.array(H).ravel()
+        _gp  = np.array(g_prime).ravel()
+        _c   = np.sqrt(_gp * _H)
+        _Rd  = 1e-3 / np.sqrt(float(self.f0)**2 * np.array(self.lambd).squeeze())
+        with np.printoptions(precision=4):
+            print(f'  - f\u2080 (s\u207b\u00b9):                    {float(self.f0):.4e}')
+            print( '  - H  (equivalent depth, m):     ', _H)
+            print( '  - g\' (reduced gravity, m/s\u00b2):  ', _gp)
+            print( '  - c  = sqrt(g\'\u00b7H) (m/s):      ', _c)
+            print( '  - Rd = c/|f\u2080| (km):            ', np.atleast_1d(_Rd))
         R, L = R.real, L.real
         self.Cl2m = jnp.diag(1./jnp.diag(L.T @ R)) @ L.T
         self.Cm2l = R
@@ -66,8 +78,15 @@ class QG(SW):
                 axis=0)
         self.helmholtz_dstI =  laplace_dstI - self.f0**2 * self.lambd
 
+        self.qg_pv_bc_mask = (
+            (self.masks.psi > 0)
+            & (avg_pool2d(
+                self.masks.not_psi, (5, 5), stride=(1, 1),
+                padding=(2, 2), divisor_override=1) > 0)
+        )[..., 1:-1, 1:-1]
+
         cst_wgrid = jnp.ones((1, nl, nx+1, ny+1), **self.arr_kwargs)
-        if len(self.masks.psi_irrbound_xids) > 0:
+        if self.solver == 'dst_cmm' and len(self.masks.psi_irrbound_xids) > 0:
             self.cap_matrices = compute_capacitance_matrices(
                 self.helmholtz_dstI, self.masks.psi_irrbound_xids,
                 self.masks.psi_irrbound_yids)
@@ -79,7 +98,9 @@ class QG(SW):
                     self.masks.psi)
         else:
             self.cap_matrices = None
-            sol_wgrid = solve_helmholtz_dstI(cst_wgrid[...,1:-1,1:-1], self.helmholtz_dstI)
+            sol_wgrid = self.masks.psi * solve_helmholtz_dstI(
+                (cst_wgrid * self.masks.psi)[..., 1:-1, 1:-1],
+                self.helmholtz_dstI)
 
         self.homsol_wgrid = cst_wgrid + sol_wgrid * self.f0**2 * self.lambd
         self.homsol_wgrid_mean = self.homsol_wgrid.mean((-1,-2), keepdims=True)
@@ -151,6 +172,11 @@ class QG(SW):
         pb           : (1, nl, nx+1, ny+1)  background W-grid pressure, or None
         qb           : (1, nl, nx-1, ny-1)  background interior PV, or None
         """
+        if qb is not None:
+            elliptic_rhs = jnp.where(self.qg_pv_bc_mask, qb, elliptic_rhs)
+        else:
+            elliptic_rhs = jnp.where(self.qg_pv_bc_mask, 0, elliptic_rhs)
+
         # Background subtraction (mirrors Qgm: qin = q[interior] - qb[interior])
         helmholtz_rhs_input = elliptic_rhs - qb if qb is not None else elliptic_rhs
 
@@ -166,7 +192,9 @@ class QG(SW):
                 self.masks.psi_irrbound_yids,
                 self.masks.psi)
         else:
-            p_modes = solve_helmholtz_dstI(helmholtz_rhs, self.helmholtz_dstI)
+            p_modes = self.masks.psi * solve_helmholtz_dstI(
+                helmholtz_rhs * self.masks.psi[..., 1:-1, 1:-1],
+                self.helmholtz_dstI)
 
         # Mass correction only when no background (free-surface uniqueness)
         if qb is None:
