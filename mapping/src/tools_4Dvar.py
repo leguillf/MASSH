@@ -315,17 +315,17 @@ class Variational:
             #     print(f"Min He at {t} : ",State.params["He2"].min())
                 State.plot(title=f'State variables at {i}')
 
-                # fig,ax = plt.subplots(2,2,figsize=(8,8))
+                # fig,ax = plt.subplots(2,2,figsize=(10,8))
                 # for i,_ax in enumerate(ax.flatten()):
-                #     _ax.set_title(f"ITG{i} M2")
-                #     plot=_ax.pcolormesh(State.params["itg2"][0,i,:,:])
+                #     _ax.set_title(f"ITG {i} M2")
+                #     plot=_ax.pcolormesh(State.params["itg"][0,i,:,:])
                 #     fig.colorbar(plot,ax=_ax)
                 # plt.show()
 
-                # fig,ax = plt.subplots(2,2,figsize=(8,8))
+                # fig,ax = plt.subplots(2,2,figsize=(10,8))
                 # for i,_ax in enumerate(ax.flatten()):
-                #     _ax.set_title(f"ITG{i} N2")
-                #     plot=_ax.pcolormesh(State.params["itg2"][1,i,:,:])
+                #     _ax.set_title(f"ITG {i} S2")
+                #     plot=_ax.pcolormesh(State.params["itg"][1,i,:,:])
                 #     fig.colorbar(plot,ax=_ax)
                 # plt.show()
 
@@ -336,11 +336,11 @@ class Variational:
                 #     fig.colorbar(plot,ax=_ax)
                 # plt.show()
 
-            #     plt.figure()
-            #     plt.title("He1")
-            #     plt.pcolormesh(State.params["He1"])
-            #     plt.colorbar()
-            #     plt.show()
+                # plt.figure()
+                # plt.title("He")
+                # plt.pcolormesh(State.params["He"])
+                # plt.colorbar()
+                # plt.show()
 
 
             #     plt.figure()

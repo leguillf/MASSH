@@ -16,30 +16,27 @@ import time
 
 import jax
 
+from scipy.ndimage import gaussian_filter
+
 class Swm: 
     
     ###########################################################################
     #                             Initialization                              #
     ###########################################################################
     
-    def __init__(self,Model,State):
+    def __init__(self,X=None,Y=None,dx=None,dy=None,dt=None,time_scheme='rk4',bc_kind='1d',bc_island = "radiative",g=9.81,f=1e-4,Heb=0.7,grad_bathymetry_x=None,grad_bathymetry_y=None,generation=None,omegas=None,omega_names=None, bc_theta=None,idxcoast = None,nparams=None,name_params=None,slice_params=None,shape_params=None,tidal_Ua=None,tidal_Va=None,tidal_Ug=None,tidal_Vg=None,freq=None,phase_astr=None,jc_T0=None,day_offset=None,phase_inform=False,**arr_kwargs):
         
         ###############
         # COORDINATES #
         ###############
-        
-        self.X = State.X # X coordinates
-        self.Y = State.Y # Y coordinates
+        self.X = X
+        self.Y = Y
+        self.dx = dx
+        self.dy = dy
         self.Xu = self.rho_on_u(self.X) # X coordinates on the u grid 
         self.Yu = self.rho_on_u(self.Y) # Y coordinates on the u grid
         self.Xv = self.rho_on_v(self.X) # X coordinates on the v grid
         self.Yv = self.rho_on_v(self.Y) # Y coordinates on the v grid
-
-        ########
-        # TIME #
-        ########
-
-        self.init_date_offset = State.init_date_offset
 
         ########
         # DATA #
@@ -47,30 +44,33 @@ class Swm:
 
         # Bathymetry gradient # 
 
-        self.grad_bathymetry_x = Model.grad_bathymetry_x
-        self.grad_bathymetry_y = Model.grad_bathymetry_y
-
-        # Tidal Velocity # 
-
-        self.tidal_U = Model.tidal_U
-        self.tidal_U_phi = Model.tidal_U_phi        
-        self.tidal_V = Model.tidal_V
-        self.tidal_V_phi = Model.tidal_V_phi
-
-        self.phi_ray = Model.phi_ray
+        self.grad_bathymetry_x = grad_bathymetry_x
+        self.grad_bathymetry_y = grad_bathymetry_y
 
         # Generation # 
 
-        self.generation = Model.generation
+        self.generation = generation
+
+        # Barotropic tide # 
+        self.tidal_Ua=tidal_Ua
+        self.tidal_Va=tidal_Va
+        self.tidal_Ug=tidal_Ug
+        self.tidal_Vg=tidal_Vg
+
+        self.freq = freq
+        self.phase_astr = phase_astr
+        self.jc_T0 = jc_T0
+        self.day_offset = day_offset
+        self.phase_inform = phase_inform
 
         ##############
         # PARAMETERS #
         ##############
         
-        self.g = Model.g
-        self.dt = Model.dt 
-        self.omegas = Model.omegas
-        self.omega_names = Model.omega_names
+        self.g = g
+        self.dt = dt 
+        self.omegas = omegas
+        self.omega_names = omega_names
 
         self.ny,self.nx = self.X.shape
  
@@ -80,35 +80,35 @@ class Swm:
 
         self.nHe = self.nh
         self.nBc = 2*(self.ny + self.nx)
-        self.nparams = Model.nparams # Number of parameters of the model 
+        self.nparams = nparams # Number of parameters of the model 
 
-        if "HBCX" in Model.name_params and "HBCY" in Model.name_params : 
-            self.bc_theta = Model.bc_theta
+        if "HBCX" in name_params and "HBCY" in name_params : 
+            self.bc_theta = bc_theta
 
-        if hasattr(Model.f, "__len__") and Model.f.shape==self.X.shape:
-            self.f = Model.f
+        if hasattr(f, "__len__") and f.shape==self.X.shape:
+            self.f = f
         else: 
-            self.f = Model.f * jnp.ones_like(self.X)
+            self.f = f * jnp.ones_like(self.X)
         
-        if hasattr(Model.Heb, "__len__") and Model.f.shape==self.X.shape:
-            self.Heb = Model.Heb
+        if hasattr(Heb, "__len__") and f.shape==self.X.shape:
+            self.Heb = Heb
         else: 
-            self.Heb = Model.Heb * jnp.ones_like(self.X)
+            self.Heb = Heb * jnp.ones_like(self.X)
 
         #########################
         # FUNCTIONAL PARAMETERS #
         ######################### 
 
-        self.bc_kind = Model.bc_kind
-        self.time_scheme = Model.time_scheme 
-        self.bc_island = Model.bc_island # Boundary condition type on the island coast 
+        self.bc_kind = bc_kind
+        self.time_scheme = time_scheme 
+        self.bc_island = bc_island # Boundary condition type on the island coast 
 
         #############
         # VARIABLES # 
         #############
         
         # -- Coastal indexes #
-        self.idxcoast = Model.idxcoast 
+        self.idxcoast = idxcoast 
         
         # -- Coastal auxiliary variables #
         interval = 0
@@ -131,17 +131,14 @@ class Swm:
                        self.idxcoast["uW"][0].size + self.idxcoast["hW"][0].size + \
                        self.idxcoast["uE"][0].size + self.idxcoast["hE"][0].size
 
-        self.name_var = Model.name_var 
-        self.name_params = Model.name_params # list of all parameters name
-        self.slice_params = Model.slice_params # dictionary containing slices of all parameters 
-        self.shape_params = Model.shape_params # dictionary containing shapes of all parameters
+        self.name_params = name_params # list of all parameters name
+        self.slice_params = slice_params # dictionary containing slices of all parameters 
+        self.shape_params = shape_params # dictionary containing shapes of all parameters
         
         self.shapeu = self.Xu.shape
         self.shapev = self.Xv.shape
         self.shapeh = self.X.shape
 
-        self.mask = Model.mask # mask for integration 
-        
         #################
         # JAX FUNCTIONS #
         #################
@@ -152,7 +149,7 @@ class Swm:
         self.rhs_v_jit = jit(self.rhs_v)
         self.rhs_h_jit = jit(self.rhs_h)
         self.obcs_jit = jit(self.obcs)
-        self._compute_w1_IT_jit = jit(self._compute_w1_IT_new)
+        self._compute_w1_IT_jit = jit(self._compute_w1_IT)
 
         self.coastbcs_jit = jit(self.coastbcs)
         self.coastN_jit = jit(self.coastN,static_argnums=[0,1])
@@ -165,8 +162,8 @@ class Swm:
         self.step_jit = jit(self.step, static_argnums=1)
         self.one_step_jit = jit(self.one_step)
         self.one_step_for_scan_jit = jit(self.one_step_for_scan)
-        self.step_tgl_jit = jit(self.step_tgl, static_argnums=2)
-        self.step_adj_jit = jit(self.step_adj, static_argnums=2)
+        self.step_tgl_jit = jit(self.step_tgl, static_argnums=4)
+        self.step_adj_jit = jit(self.step_adj, static_argnums=4)
         
     ###########################################################################
     #                           Spatial scheme                                #
@@ -311,120 +308,6 @@ class Swm:
     ###########################################################################
 
     def _compute_w1_IT(self,t,He,h_SN,h_WE):
-        """
-        Compute first characteristic variable w1 for internal tides from external 
-        data
-
-        Parameters
-        ----------
-        t : float 
-            time in seconds
-        He : 2D array
-        h_SN : ND array
-            amplitude of SSH for southern/northern borders
-        h_WE : ND array
-            amplitude of SSH for western/eastern borders
-
-        Returns
-        -------
-        w1ext: 1D array
-            flattened  first characteristic variable (South/North/West/East)
-        """
-        
-        # South
-        HeS = (He[0,:]+He[1,:])/2
-        fS = (self.f[0,:]+self.f[1,:])/2
-        w1S = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fS**2)/(self.g*HeS))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = jnp.cos(theta) * k
-                kxy = kx*self.Xv[0,:] + ky*self.Yv[0,:]
-                
-                h = h_SN[j,0,0,i]* jnp.cos(w*t-kxy)  +\
-                        h_SN[j,0,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fS**2)*( \
-                    h_SN[j,0,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fS*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,0,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fS*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                
-                w1S += v + jnp.sqrt(self.g/HeS) * h
-        
-        # North
-        fN = (self.f[-1,:]+self.f[-2,:])/2
-        HeN = (He[-1,:]+He[-2,:])/2
-        w1N = jnp.zeros(self.nx)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fN**2)/(self.g*HeN))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.sin(theta) * k
-                ky = -jnp.cos(theta) * k
-                kxy = kx*self.Xv[-1,:] + ky*self.Yv[-1,:]
-                h = h_SN[j,1,0,i]* jnp.cos(w*t-kxy)+\
-                        h_SN[j,1,1,i]* jnp.sin(w*t-kxy) 
-                v = self.g/(w**2-fN**2)*(\
-                    h_SN[j,1,0,i]* (w*ky*jnp.cos(w*t-kxy) \
-                                - fN*kx*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_SN[j,1,1,i]* (w*ky*jnp.sin(w*t-kxy) \
-                                + fN*kx*jnp.cos(w*t-kxy)
-                                    )
-                        )
-                w1N += v - jnp.sqrt(self.g/HeN) * h
-
-        # West
-        fW = (self.f[:,0]+self.f[:,1])/2
-        HeW = (He[:,0]+He[:,1])/2
-        w1W = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fW**2)/(self.g*HeW))
-            for i,theta in enumerate(self.bc_theta):
-                kx = jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.Xu[:,0] + ky*self.Yu[:,0]
-                h = h_WE[j,0,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,0,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fW**2)*(\
-                    h_WE[j,0,0,i]*(w*kx*jnp.cos(w*t-kxy) \
-                              + fW*ky*jnp.sin(w*t-kxy)
-                                  ) +\
-                    h_WE[j,0,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fW*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1W += u + jnp.sqrt(self.g/HeW) * h
-
-        
-        # East
-        HeE = (He[:,-1]+He[:,-2])/2
-        fE = (self.f[:,-1]+self.f[:,-2])/2
-        w1E = jnp.zeros(self.ny)
-        for j,w in enumerate(self.omegas):
-            k = jnp.sqrt((w**2-fE**2)/(self.g*HeE))
-            for i,theta in enumerate(self.bc_theta):
-                kx = -jnp.cos(theta)* k
-                ky = jnp.sin(theta)* k
-                kxy = kx*self.Xu[:,-1] + ky*self.Yu[:,-1]
-                h = h_WE[j,1,0,i]*jnp.cos(w*t-kxy) +\
-                        h_WE[j,1,1,i]*jnp.sin(w*t-kxy)
-                u = self.g/(w**2-fE**2)*(\
-                    h_WE[j,1,0,i]* (w*kx*jnp.cos(w*t-kxy) \
-                                + fE*ky*jnp.sin(w*t-kxy)
-                                    ) +\
-                    h_WE[j,1,1,i]*(w*kx*jnp.sin(w*t-kxy) \
-                              - fE*ky*jnp.cos(w*t-kxy)
-                                  )
-                        )
-                w1E += u - jnp.sqrt(self.g/HeE) * h
-        
-        return w1S,w1N,w1W,w1E     
-
-    def _compute_w1_IT_new(self,t,He,h_SN,h_WE):
         """
         Compute first characteristic variable w1 for internal tides from external 
         data
@@ -825,276 +708,6 @@ class Swm:
 
         return u,v,h
 
-    # def obcs(self,u,v,h,u0,v0,h0,He,w1ext):
-        
-    #     g = self.g
-                
-    #     #######################################################################
-    #     # South
-    #     #######################################################################
-
-    #     timings = {}
-
-    #     start_time = time.time()
-    #     HeS = (He[0,:]+He[1,:])/2
-    #     cS = jnp.sqrt(g*HeS)
-    #     if self.bc_kind=='1d':
-    #         cS *= self.dt/(self.Y[1,:]-self.Y[0,:])
-    #     debug.print("OBCS South HeS & cS : {x}",x=time.time() - start_time)
-
-    #     # 1. w1
-    #     start_time = time.time()
-    #     w1extS = +w1ext[0]
-        
-    #     if self.bc_kind=='1d':
-    #         w1S = w1extS
-    #     elif self.bc_kind=='2d':
-    #         # dw1dy0
-    #         w10  = v0[0,:] + jnp.sqrt(g/HeS)* (h0[0,:]+h0[1,:])/2
-    #         w10_ = (v0[0,:]+v0[1,:])/2 + jnp.sqrt(g/HeS)* h0[1,:]
-    #         _w10 = w1extS
-    #         dw1dy0 = (w10_ - _w10)/self.dy
-    #         # dudx0
-    #         dudx0 = jnp.zeros(self.nx)
-    #         dudx0[1:-1] = ((u0[0,1:] + u0[1,1:] - u0[0,:-1] - u0[1,:-1])/2)/self.dx
-    #         dudx0[0] = dudx0[1]
-    #         dudx0[-1] = dudx0[-2]
-    #         # w1S
-    #         w1S = w10 - self.dt*cS* (dw1dy0 + dudx0)
-    #     debug.print("OBCS South w1 Calculation : {x}",x=time.time() - start_time)
-        
-    #     # 2. w2
-    #     start_time = time.time()
-    #     w20 = (u0[0,:] + u0[1,:])/2
-    #     if self.bc_kind=='1d':
-    #         w2S = w20
-    #     elif self.bc_kind=='2d':
-    #         dhdx0 = ((h0[0,1:]+h0[1,1:]-h0[0,:-1]-h0[1,:-1])/2)/self.dx
-    #         w2S = w20 - self.dt*g* dhdx0 
-    #     debug.print("OBCS South w2 Calculation : {x}",x=time.time() - start_time)
-                
-    #     # 3. w3
-    #     start_time = time.time()
-    #     if self.bc_kind=='1d':
-    #         _vS = (1-3/2*cS)* v0[0,:] + cS/2* (4*v0[1,:] - v0[2,:])
-    #         _hS = (1/2+cS)* h0[1,:] + (1/2-cS)* h0[0,:]
-    #         w3S = _vS - jnp.sqrt(g/HeS) * _hS
-    #     elif self.bc_kind=='2d':
-    #         w30   = v0[0,:] - jnp.sqrt(g/HeS)* (h0[0,:]+h0[1,:])/2
-    #         w30_  = (v0[0,:]+v0[1,:])/2  - jnp.sqrt(g/HeS)* h0[1,:]
-    #         w30__ = v0[1,:] - jnp.sqrt(g/HeS)* (h0[1,:]+h0[2,:])/2
-    #         dw3dy0 =  -(3*w30 - 4*w30_ + w30__)/(self.dy/2)
-    #         w3S = w30 + self.dt*cS* (dw3dy0 + dudx0) 
-    #     debug.print("OBCS South w3 Calculation : {x}",x=time.time() - start_time)
-
-    #     # 4. Values on BC
-    #     start_time = time.time()
-    #     uS = w2S
-    #     vS = (w1S + w3S)/2
-    #     hS = jnp.sqrt(HeS/g) *(w1S - w3S)/2
-    #     debug.print("OBCS Compute South BC : {x}",x=time.time() - start_time)
-        
-    #     #######################################################################
-    #     # North
-    #     #######################################################################
-    #     HeN = (He[-1,:]+He[-2,:])/2
-    #     cN = jnp.sqrt(g*HeN)
-    #     if self.bc_kind=='1d':
-    #         cN *= self.dt/(self.Y[-1,:]-self.Y[-2,:])
-
-    #     # 1. w1
-    #     w1extN = +w1ext[1]
-        
-    #     if self.bc_kind=='1d':
-    #         w1N = w1extN
-    #     elif self.bc_kind=='2d':
-    #         w10  = v0[-1,:] - jnp.sqrt(g/HeN)* (h0[-1,:]+h0[-2,:])/2
-    #         w10_ = (v0[-1,:]+v0[-2,:])/2 - jnp.sqrt(g/HeN)* h0[-2,:]
-    #         _w10 = w1extN
-    #         dw1dy0 = (_w10 - w10_)/self.dy
-    #         dudx0 = jnp.zeros(self.nx)
-    #         dudx0[1:-1] = ((u0[-1,1:] + u0[-2,1:] - u0[-1,:-1] - u0[-2,:-1])/2)/self.dx
-    #         dudx0[0] = dudx0[1]
-    #         dudx0[-1] = dudx0[-2]
-    #         w1N = w10 + self.dt*cN* (dw1dy0 + dudx0) 
-            
-    #     # 2. w2
-    #     w20 = (u0[-1,:] + u0[-2,:])/2
-    #     if self.bc_kind=='1d':   
-    #         w2N = w20
-    #     elif self.bc_kind=='2d':
-    #         dhdx0 = ((h0[-1,1:]+h0[-2,1:]-h0[-1,:-1]-h0[-2,:-1])/2)/self.dx
-    #         w2N = w20 - self.dt*g*dhdx0 
-    #     # 3. w3
-    #     if self.bc_kind=='1d':   
-    #         _vN = (1-3/2*cN)* v0[-1,:] + cN/2* (4*v0[-2,:] - v0[-3,:])
-    #         _hN = (1/2+cN)* h0[-2,:] + (1/2-cN)* h0[-1,:]
-    #         w3N = _vN + jnp.sqrt(g/HeN) * _hN
-    #     elif self.bc_kind=='2d':
-    #         w30   = v0[-1,:] + jnp.sqrt(g/HeN)* (h0[-1,:]+h0[-2,:])/2
-    #         w30_  = (v0[-1,:]+v0[-2,:])/2 + jnp.sqrt(g/HeN)* h0[-2,:]
-    #         w30__ = v0[-2,:] + jnp.sqrt(g/HeN)* (h0[-2,:]+h0[-3,:])/2
-    #         dw3dy0 =  (3*w30 - 4*w30_ + w30__)/(self.dy/2)
-    #         w3N = w30 - self.dt*cN* (dw3dy0 + dudx0) 
-        
-    #     # 4. Values on BC
-    #     uN = w2N
-    #     vN = (w1N + w3N)/2 
-    #     hN = jnp.sqrt(HeN/g) *(w3N - w1N)/2
-        
-    #     #######################################################################
-    #     # West
-    #     #######################################################################
-    #     HeW = (He[:,0]+He[:,1])/2
-    #     cW = jnp.sqrt(g*HeW)
-    #     if self.bc_kind=='1d':
-    #         cW *= self.dt/(self.X[:,1]-self.X[:,0])
-        
-    #     # 1. w1
-    #     w1extW = +w1ext[2]
-        
-    #     if self.bc_kind=='1d':   
-    #         w1W = w1extW
-    #     elif self.bc_kind=='2d':
-    #         w10  = u0[:,0] + jnp.sqrt(g/HeW)* (h0[:,0]+h0[:,1])/2
-    #         w10_ = (u0[:,0]+u0[:,1])/2 + jnp.sqrt(g/HeW)* h0[:,1]
-    #         _w10 = w1extW
-    #         dw1dx0 = (w10_ - _w10)/self.dx
-    #         dvdy0 = jnp.zeros(self.ny)
-    #         dvdy0[1:-1] = ((v0[1:,0] + v0[1:,1] - v0[:-1,0] - v0[:-1,1])/2)/self.dy
-    #         dvdy0[0] = dvdy0[1]
-    #         dvdy0[-1] = dvdy0[-2]
-    #         w1W = w10 - self.dt*cW* (dw1dx0 + dvdy0) 
-            
-    #     # 2. w2
-    #     w20 = (v0[:,0] + v0[:,1])/2
-    #     if self.bc_kind=='1d':   
-    #         w2W = w20
-    #     elif self.bc_kind=='2d':
-    #         dhdy0 = ((h0[1:,0]+h0[1:,1]-h0[:-1,0]-h0[:-1,1])/2)/self.dy
-    #         w2W = w20 - self.dt*g * dhdy0 
-                
-    #     # 3. w3
-    #     if self.bc_kind=='1d':   
-    #         _uW = (1-3/2*cW)* u0[:,0] + cW/2* (4*u0[:,1]-u0[:,2]) 
-    #         _hW = (1/2+cW)*h0[:,1] + (1/2-cW)*h0[:,0]
-    #         w3W = _uW - jnp.sqrt(g/HeW)* _hW
-    #     elif self.bc_kind=='2d':
-    #         w30   = u0[:,0] - jnp.sqrt(g/HeW)* (h0[:,0]+h0[:,1])/2
-    #         w30_  = (u0[:,0]+u0[:,1])/2 - jnp.sqrt(g/HeW)* h0[:,1]
-    #         w30__ = u0[:,1] - jnp.sqrt(g/HeW)* (h0[:,1]+h0[:,2])/2
-    #         dw3dx0 = -(3*w30 - 4*w30_ + w30__)/(self.dx/2)
-    #         w3W = w30 + self.dt*cW* (dw3dx0 + dvdy0)
-            
-    #     # 4. Values on BC
-    #     uW = (w1W + w3W)/2 
-    #     vW = w2W
-    #     hW = jnp.sqrt(HeW/g)*(w1W - w3W)/2
-        
-    #     #######################################################################
-    #     # East
-    #     #######################################################################
-    #     HeE = (He[:,-1]+He[:,-2])/2
-    #     cE = jnp.sqrt(g*HeE)
-    #     if self.bc_kind=='1d':
-    #         cE *= self.dt/(self.X[:,-1]-self.X[:,-2])
-        
-    #     # 1. w1
-    #     w1extE = +w1ext[3]
-        
-    #     if self.bc_kind=='1d':   
-    #         w1E = w1extE
-    #     elif self.bc_kind=='2d':
-    #         w10  = u0[:,-1] - jnp.sqrt(g/HeE)* (h0[:,-1]+h0[:,-2])/2
-    #         w10_ = (u0[:,-1]+u0[:,-2])/2 - jnp.sqrt(g/HeE)* h0[:,-2]
-    #         _w10 = w1extE
-    #         dw1dx0 = (_w10 - w10_)/self.dx
-    #         dvdy0 = jnp.zeros(self.ny)
-    #         dvdy0[1:-1] = ((v0[1:,-1] + v0[1:,-2] - v0[:-1,-1] - v0[:-1,-2])/2)/self.dy
-    #         dvdy0[0] = dvdy0[1]
-    #         dvdy0[-1] = dvdy0[-2]
-    #         w1E = w10 + self.dt*cE* (dw1dx0 + dvdy0) 
-    #     # 2. w2
-    #     w20 = (v0[:,-1] + v0[:,-2])/2
-    #     if  self.bc_kind=='1d':   
-    #         w2E = w20
-    #     elif self.bc_kind=='2d':
-    #         w20 = (v0[:,-1] + v0[:,-2])/2
-    #         dhdy0 = ((h0[1:,-1]+h0[1:,-2]-h0[:-1,-1]-h0[:-1,-2])/2)/self.dy
-    #         w2E = w20 - self.dt*g * dhdy0 
-    #     # 3. w3
-    #     if self.bc_kind=='1d':   
-    #         _uE = (1-3/2*cE)* u0[:,-1] + cE/2* (4*u0[:,-2]-u0[:,-3])
-    #         _hE = ((1/2+cE)*h0[:,-2] + (1/2-cE)*h0[:,-1])
-    #         w3E = _uE + jnp.sqrt(g/HeE)* _hE 
-    #     elif self.bc_kind=='2d':
-    #         w30   = u0[:,-1] + jnp.sqrt(g/HeE)* (h0[:,-1]+h0[:,-2])/2
-    #         w30_  = (u0[:,-1]+u0[:,-2])/2 + jnp.sqrt(g/HeE)* h0[:,-2]
-    #         w30__ = u0[:,-2] + jnp.sqrt(g/HeE)* (h0[:,-2]+h0[:,-3])/2
-    #         dw3dx0 =  (3*w30 - 4*w30_ + w30__)/(self.dx/2)
-    #         w3E = w30 - self.dt*cE* (dw3dx0 + dvdy0) 
-            
-    #     # 4. Values on BC
-    #     uE = (w1E + w3E)/2 
-    #     vE = w2E
-    #     hE = jnp.sqrt(HeE/g)*(w3E - w1E)/2
-        
-    #     #######################################################################
-    #     # Update border pixels 
-    #     #######################################################################
-    #     # South
-    #     # uS = jnp.ones_like(uS)
-    #     # vS = jnp.ones_like(vS)
-    #     # hS = jnp.ones_like(hS)
-    #     start_time = time.time()
-    #     u = u.at[0,1:-1].set(2* uS[1:-1] - u[1,1:-1])
-    #     v = v.at[0,1:-1].set(vS[1:-1])
-    #     h = h.at[0,1:-1].set(2* hS[1:-1] - h[1,1:-1])
-    #     debug.print("type of uS : {x}",x=type(uS))
-    #     debug.print("type of vS : {x}",x=type(vS))
-    #     debug.print("type of hS : {x}",x=type(hS))
-    #     debug.print("type of u : {x}",x=type(u))
-    #     debug.print("type of v : {x}",x=type(v))
-    #     debug.print("type of h : {x}",x=type(h))
-    #     debug.print("OBCS Update South BC : {x}",x=time.time() - start_time)
-    #     # North
-    #     u = u.at[-1,1:-1].set(2* uN[1:-1] - u[-2,1:-1])
-    #     v = v.at[-1,1:-1].set(vN[1:-1])
-    #     h = h.at[-1,1:-1].set(2* hN[1:-1] - h[-2,1:-1])
-    #     # West
-    #     u = u.at[1:-1,0].set(uW[1:-1])
-    #     v = v.at[1:-1,0].set(2* vW[1:-1] - v[1:-1,1])
-    #     h = h.at[1:-1,0].set(2* hW[1:-1] - h[1:-1,1])
-    #     # East
-    #     u = u.at[1:-1,-1].set(uE[1:-1])
-    #     v = v.at[1:-1,-1].set(2* vE[1:-1] - v[1:-1,-2])
-    #     h = h.at[1:-1,-1].set(2* hE[1:-1] - h[1:-1,-2])
-    #     # South-West
-    #     u = u.at[0,0].set((uS[0] + uW[0])/2)
-    #     v = v.at[0,0].set((vS[0] + vW[0])/2)
-    #     h = h.at[0,0].set((hS[0] + hW[0])/2)
-    #     # South-East
-    #     u = u.at[0,-1].set((uS[-1] + uE[0])/2)
-    #     v = v.at[0,-1].set((vS[-1] + vE[0])/2)
-    #     h = h.at[0,-1].set((hS[-1] + hE[0])/2)
-    #     # North-West
-    #     u = u.at[-1,0].set((uN[0] + uW[-1])/2)
-    #     v = v.at[-1,0].set((vN[0] + vW[-1])/2)
-    #     h = h.at[-1,0].set((hN[0] + hW[-1])/2)
-    #     # North-East
-    #     u = u.at[-1,-1].set((uN[-1] + uE[-1])/2)
-    #     v = v.at[-1,-1].set((vN[-1] + vE[-1])/2)
-    #     h = h.at[-1,-1].set((hN[-1] + hE[-1])/2)
-
-    #     # print("Timing report obcs:")
-    #     # for block, duration in reversed(timings.items()):
-    #     #     # print(f"{block}: {duration:.6f} seconds")
-    #     #     debug.print("{block}: ",block=block)
-    #     #     debug.print("{duration:.6f} seconds",duration = duration)
-            
-
-    #     return u,v,h
-
     def coastN(self,i_h,j_h,i_v,j_v,vN,hN,h,v0,h0,He):
         
         HeN = He[i_h-1,j_h]
@@ -1263,7 +876,7 @@ class Swm:
                                                                                                                      uE,hE)]).T
         return _vN, _hN, _vS, _hS, _uW, _hW, _uE, _hE
 
-    def one_step(self, X0):
+    def one_step(self, X0, u_bar, v_bar):
         
         ########################## 
         ###   INITIALIZATION   ###
@@ -1311,35 +924,91 @@ class Swm:
         if 'HE_OFFSET' in self.name_params:
             He += params[self.slice_params['HE_OFFSET']].reshape(self.shape_params['HE_OFFSET']) 
 
-        # - ITG : Internal Tide Generation - # 
+        # - ITG : Internal Tide Generation - #
+
+        # INITIAL VERSION OF ITG --> CONTROL OF PHASE FOR X AND Y DIRECTIONS 
+        # ------------------------------------------------------------------
+        # if 'ITG' in self.name_params:
+            
+        #     rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
+
+        #     # Initial version of ITG with control 
+        #     itg = params[self.slice_params['ITG']].reshape(self.shape_params['ITG']) # parameters for itg forcing 
+        #     for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
+
+        #         rhs_itg+=self.grad_bathymetry_x*self.tidal_Ua[i]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
+        #         rhs_itg+=self.grad_bathymetry_y*self.tidal_Va[i]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
+
+        # VERSION OF ITG WITH SINGLE CONTROL OF PHASE FOR THE GENERATION 
+        # ------------------------------------------------------------------
+        # if 'ITG' in self.name_params:
+            
+        #     rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
+
+        #     # Initial version of ITG with control 
+        #     itg = params[self.slice_params['ITG']].reshape(self.shape_params['ITG']) # parameters for itg forcing 
+        #     for (i,(_freq,_phase_astr)) in enumerate(zip(self.freq,self.phase_astr)) : 
+
+        #         _u0 = self.tidal_Ua[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Ug[i]-_phase_astr) )
+        #         _v0 = self.tidal_Va[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
+
+        #         _rhs_itg = (- self.generation * (_u0*self.grad_bathymetry_x+_v0*self.grad_bathymetry_y)) 
+
+        #         _u0_quad = self.tidal_Ua[i] * jnp.sin( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Ug[i]-_phase_astr) )
+        #         _v0_quad = self.tidal_Va[i] * jnp.sin( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
+            
+        #         _rhs_itg_quad = (- self.generation * (_u0_quad*self.grad_bathymetry_x+_v0_quad*self.grad_bathymetry_y)) 
+
+        #         rhs_itg+=itg[i,0,:]*_rhs_itg+itg[i,1,:]*_rhs_itg_quad
         if 'ITG' in self.name_params:
             
             rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing 
 
             # Initial version of ITG with control 
-            # itg = params[self.slice_params['ITG']].reshape(self.shape_params['ITG']) # parameters for itg forcing 
-            # for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
+            itg = params[self.slice_params['ITG']].reshape(self.shape_params['ITG']) # parameters for itg forcing 
 
-            #     rhs_itg+=self.grad_bathymetry_x*self.tidal_U[i]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
-            #     rhs_itg+=self.grad_bathymetry_y*self.tidal_V[i]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
+            if self.phase_inform:
+                for (i,(_freq,_phase_astr)) in enumerate(zip(self.freq,self.phase_astr)) : 
 
-            # Version of ITG informed by mode decomposition 
-            t_day = self.init_date_offset+t/86400
-            for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) :
+                    _u0 = self.tidal_Ua[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Ug[i]-_phase_astr) )
+                    _v0 = self.tidal_Va[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
 
-                A1_u=self.tidal_U[i,:,:]*np.cos(np.deg2rad(self.tidal_U_phi[i,:,:]))
-                A2_u=-self.tidal_U[i,:,:]*np.sin(np.deg2rad(self.tidal_U_phi[i,:,:]))
+                    _u0_quad = self.tidal_Ua[i] * jnp.sin( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Ug[i]-_phase_astr) )
+                    _v0_quad = self.tidal_Va[i] * jnp.sin( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
+                
+                    rhs_itg+= - self.generation * \
+                        (self.grad_bathymetry_x*(itg[i,0,:]*_u0+itg[i,1,:]*_u0_quad)+\
+                        self.grad_bathymetry_y*(itg[i,2,:]*_v0+itg[i,3,:]*_v0_quad))
+                    
+            else:
+                for (_w_name,(i,_omega)) in zip(self.omega_names,enumerate(self.omegas)) : 
 
-                A1_v=self.tidal_V[i,:,:]*np.cos(np.deg2rad(self.tidal_V_phi[i,:,:]))
-                A2_v=-self.tidal_V[i,:,:]*np.sin(np.deg2rad(self.tidal_V_phi[i,:,:]))
+                    rhs_itg+=self.grad_bathymetry_x*self.tidal_Ua[i]*(itg[i,0,:]*jnp.cos(_omega*jnp.array(t))+itg[i,1,:]*jnp.sin(_omega*jnp.array(t))) # component for x gradient
+                    rhs_itg+=self.grad_bathymetry_y*self.tidal_Va[i]*(itg[i,2,:]*jnp.cos(_omega*jnp.array(t))+itg[i,3,:]*jnp.sin(_omega*jnp.array(t))) # component for y gradient
 
-                u0_bar =  A1_u*jnp.cos(_omega*(t_day-15340)+self.phi_ray[i])+A2_u*jnp.sin(_omega*(t_day-15340)+self.phi_ray[i])
-                v0_bar =  A1_v*jnp.cos(_omega*(t_day-15340)+self.phi_ray[i])+A2_v*jnp.sin(_omega*(t_day-15340)+self.phi_ray[i])
+        elif 'ITG_COEFF' in self.name_params:
 
-                u_grad_H_x = u0_bar*self.grad_bathymetry_x
-                u_grad_H_y = v0_bar*self.grad_bathymetry_y
+            rhs_itg = np.zeros_like(self.X) # term on the right hand side of the equation, for itg forcing
 
-                rhs_itg += self.generation * (u_grad_H_x+u_grad_H_y)
+            itg_coeff = params[self.slice_params['ITG_COEFF']].reshape(self.shape_params['ITG_COEFF'])
+
+            if u_bar is not None and v_bar is not None:
+
+                u_grad_H_x = u_bar*self.grad_bathymetry_x
+                u_grad_H_y = v_bar*self.grad_bathymetry_y
+
+                rhs_itg = (- self.generation * (u_grad_H_x+u_grad_H_y)) * jnp.where(itg_coeff<0,0,itg_coeff)
+            else:
+                for (i,(_freq,_phase_astr)) in enumerate(zip(self.freq,self.phase_astr)) : 
+
+                    _u0 = self.tidal_Ua[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Ug[i]-_phase_astr) )
+                    _v0 = self.tidal_Va[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
+                    
+                    u_grad_H_x = _u0*self.grad_bathymetry_x
+                    u_grad_H_y = _v0*self.grad_bathymetry_y
+
+                    rhs_itg += (- self.generation * (u_grad_H_x+u_grad_H_y)) * jnp.where(itg_coeff<0,0,itg_coeff)
+
 
         else : 
             rhs_itg = np.zeros_like(self.X)
@@ -1381,16 +1050,6 @@ class Swm:
             w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
             u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
 
-        #debug.print("u {x} : ",x=u)
-        #debug.print("v {x} : ",x=v)
-        #debug.print("h {x} : ",x=h)
-
-        # -- Coastal values -- # 
-        #if np.any(self.idxcoast["hN"]) == True or np.any(self.idxcoast["hS"]) == True \
-        #    or np.any(self.idxcoast["hW"]) == True or np.any(self.idxcoast["hE"]) == True :
-        # if self.bc_island == "radiative" : 
-        #     vN, hN, vS, hS, uW, hW, uE, hE = self.coastbcs_jit(h,u0,v0,h0,vN,hN,vS,hS,uW,hW,uE,hE,He)
-
         ########################
         ###   OUTPUT ARRAY   ###
         ########################
@@ -1403,114 +1062,6 @@ class Swm:
         _X1 = jnp.append(jnp.array(t+self.dt),_X1)
         
         return _X1
-
-    # def one_step(self, X0):
-    #     timings = {}
-
-    #     # Initialization
-    #     start_time = time.time()
-    #     t, X1 = X0[0], jnp.asarray(+X0[1:])
-    #     debug.print("initialization : {x}",x=time.time() - start_time)
-
-    #     # State variables
-    #     start_time = time.time()
-    #     u0 = X1[self.sliceu].reshape(self.shapeu)
-    #     v0 = X1[self.slicev].reshape(self.shapev)
-    #     h0 = X1[self.sliceh].reshape(self.shapeh)
-    #     debug.print("State variables : {x}",x=time.time() - start_time)
-
-    #     # Auxiliary variables
-    #     start_time = time.time()
-    #     vN, hN = X1[self.slicevN], X1[self.slicehN]
-    #     vS, hS = X1[self.slicevS], X1[self.slicehS]
-    #     uW, hW = X1[self.sliceuW], X1[self.slicehW]
-    #     uE, hE = X1[self.sliceuE], X1[self.slicehE]
-    #     debug.print("Auxiliary variables : {x}",x=time.time() - start_time)
-
-    #     # Control Parameters
-    #     start_time = time.time()
-    #     params = X1[self.nstates:]
-    #     He = self.Heb
-    #     if 'He' in self.name_params:
-    #         He += params[self.slice_params['He']].reshape(self.shape_params['He'])
-    #     if 'He_offset' in self.name_params:
-    #         He += params[self.slice_params['He_offset']].reshape(self.shape_params['He_offset'])
-    #     debug.print("Control Parameters : {x}",x=time.time() - start_time)
-
-    #     # ITG: Internal Tide Generation
-    #     start_time = time.time()
-    #     if 'itg' in self.name_params:
-    #         itg = params[self.slice_params['itg']].reshape(self.shape_params['itg'])
-    #         rhs_itg = np.zeros_like(self.X)
-    #         for (_w_name, (i, _omega)) in zip(self.omega_names, enumerate(self.omegas)):
-    #             rhs_itg += self.grad_bathymetry_x * self.tidal_U[i] * (
-    #                 itg[i, 0, :] * jnp.cos(_omega * jnp.array(t)) + itg[i, 1, :] * jnp.sin(_omega * jnp.array(t))
-    #             )
-    #             rhs_itg += self.grad_bathymetry_y * self.tidal_V[i] * (
-    #                 itg[i, 2, :] * jnp.cos(_omega * jnp.array(t)) + itg[i, 3, :] * jnp.sin(_omega * jnp.array(t))
-    #             )
-    #     else:
-    #         rhs_itg = jnp.zeros((self.ny, self.nx))
-    #     debug.print("ITG : {x}",x=time.time() - start_time)
-
-    #     # SSH Boundary Condition
-    #     start_time = time.time()
-    #     if 'hbcx' in self.name_params and 'hbcy' in self.name_params:
-    #         hbcx = params[self.slice_params['hbcx']].reshape(self.shape_params['hbcx'])
-    #         hbcy = params[self.slice_params['hbcy']].reshape(self.shape_params['hbcy'])
-    #         tbc = t + self.dt if self.bc_kind == '1d' else t
-    #         w1S, w1N, w1W, w1E = self._compute_w1_IT_jit(tbc, He, hbcx, hbcy)
-    #         # debug.print("w1S : {w1S}",w1S = w1S)
-    #         # debug.print("w1N : {w1N}",w1N = w1N)
-    #         # debug.print("w1W : {w1W}",w1W = w1W)
-    #         # debug.print("w1E : {w1E}",w1E = w1E)
-    #         # jax.block_until_ready(w1S)
-    #         # jax.block_until_ready(w1N)
-    #         # jax.block_until_ready(w1W)
-    #         # jax.block_until_ready(w1E)
-            
-    #     debug.print("SSH Boundary Condition : {x}",x=time.time() - start_time)
-
-    #     # Integration
-    #     start_time = time.time()
-    #     if self.time_scheme == 'Euler':
-    #         u, v, h = self.euler_jit(u0, v0, h0, vN, hN, vS, hS, uW, hW, uE, hE, rhs_itg, He)
-    #     elif self.time_scheme == 'rk4':
-    #         u, v, h = self.rk4_jit(u0, v0, h0, vN, hN, vS, hS, uW, hW, uE, hE, rhs_itg, He)
-    #     debug.print("Integration : {x}",x=time.time() - start_time)
-
-    #     # Boundary Conditions
-    #     start_time = time.time()
-    #     if 'hbcx' in self.name_params and 'hbcy' in self.name_params:
-    #         u, v, h = self.obcs_jit(u, v, h, u0, v0, h0, He, w1ext=(w1S, w1N, w1W, w1E))
-    #     elif 'itg' in self.name_params:
-    #         w1S, w1N, w1W, w1E = jnp.zeros(self.nx), jnp.zeros(self.nx), jnp.zeros(self.ny), jnp.zeros(self.ny)
-    #         u, v, h = self.obcs_jit(u, v, h, u0, v0, h0, He, w1ext=(w1S, w1N, w1W, w1E))
-    #     debug.print("Boundary Conditions : {x}",x=time.time() - start_time)
-
-    #     # Coastal Values
-    #     start_time = time.time()
-    #     if self.bc_island == "radiative":
-    #         vN, hN, vS, hS, uW, hW, uE, hE = self.coastbcs_jit(h, u0, v0, h0, vN, hN, vS, hS, uW, hW, uE, hE, He)
-    #     debug.print("Coastal Values : {x}",x=time.time() - start_time)
-
-    #     # Output Array
-    #     start_time = time.time()
-    #     _X1 = jnp.concatenate((u.flatten(), v.flatten(), h.flatten(), vN, hN, vS, hS, uW, hW, uE, hE))
-    #     if X1.size == (self.nstates + self.nparams):
-    #         _X1 = jnp.concatenate((_X1, params))
-    #     _X1 = jnp.append(jnp.array(t + self.dt), _X1)
-    #     debug.print("Output Array : {x}",x=time.time() - start_time)
-
-    #     #Print the timing report
-    #     # print("Timing report:")
-    #     # for block, duration in reversed(timings.items()):
-    #     #     # print(f"{block}: {duration:.6f} seconds")
-    #     #     debug.print("{duration:.6f} seconds",duration = duration)
-    #     #     debug.print("{block}: ",block=block)
-            
-
-    #     return _X1
     
     def one_step_for_scan(self,X0,X1):
 
@@ -1579,22 +1130,20 @@ class Swm:
         
         return u,v,h
 
-    def step_tgl(self, dX0, X0, nstep=1):
+    def step_tgl(self, dX0, X0, u_bar, v_bar, nstep=1):
 
-        # _, dX1 = jvp(partial(self.step_jit, nstep=nstep), (X0,), (dX0,))
-
-        _,dX1 = jvp(self.one_step_jit, (X0,), (dX0,))
+        # u_bar / v_bar are constants of the linearization, not control variables
+        fwd = lambda X: self.one_step_jit(X, u_bar, v_bar)
+        _, dX1 = jvp(fwd, (X0,), (dX0,))
 
         return dX1
-    
-    def step_adj(self,adX0,X0,nstep=1):
-        
-        # _, adf = vjp(partial(self.step_jit,nstep=nstep), X0)
 
-        _, adf = vjp(self.one_step_jit, X0)
-        
-        
-        return adf(adX0)[0]        
+    def step_adj(self, adX0, X0, u_bar, v_bar, nstep=1):
+
+        fwd = lambda X: self.one_step_jit(X, u_bar, v_bar)
+        _, adf = vjp(fwd, X0)
+
+        return adf(adX0)[0]
 
 # import jax.numpy as jnp 
 # from jax import jit

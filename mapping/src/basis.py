@@ -1091,6 +1091,7 @@ class Basis_gauss_itg():
         # self.sigma_T = config.BASIS.sigma_T
         self.sigma_Q = config.BASIS.sigma_Q
         self.name_mod_var = config.BASIS.name_mod_var
+        self.background = config.BASIS.background
 
         # Grid params
         self.shape_phys = State.params[self.name_mod_var].shape
@@ -1165,6 +1166,13 @@ class Basis_gauss_itg():
         
         # Fill Q matrix
         Q = self.sigma_Q / (self.facns)  * np.ones((self.nbasis))
+
+        if True:
+            Xb = np.zeros(self.shape_basis)
+            Xb[:,0,:]=1*self.background
+            Xb[:,2,:]=1*self.background
+            Xb = Xb.flatten()
+            return Xb, Q
 
         if return_q:
             return np.zeros_like(Q), Q
@@ -4073,6 +4081,7 @@ class Basis_offset:
         self.ny = State.ny
         self.nx = State.nx
         self.sigma_B = config.BASIS.sigma_B
+        self.background = config.BASIS.background
         
         if self.sigma_B == None : 
             print("Warning, please prescribe sigma_B for Basis Offset") 
@@ -4084,8 +4093,13 @@ class Basis_offset:
         # Fill Q matrix
         Q = self.sigma_B * np.ones((self.nbasis))
 
+        if self.background is not None:
+            Xb = self.background*np.ones_like(Q)
+        else:
+            Xb = np.zeros_like(Q)
+
         if return_q:
-            return np.zeros_like(Q), Q
+            return Xb, Q
 
     def operg(self,t,X,State=None):
 

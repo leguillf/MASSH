@@ -11,10 +11,10 @@ import numpy as np
 from src import grid as grid
 import pickle
 import matplotlib.pylab as plt
-from scipy.interpolate import griddata, RegularGridInterpolator
+from scipy.interpolate import griddata, RegularGridInterpolator, LinearNDInterpolator, CloughTocher2DInterpolator
 from scipy.sparse import csc_matrix
 from scipy.spatial.distance import cdist
-from scipy.spatial import KDTree
+from scipy.spatial import KDTree, Delaunay
 import pandas as pd
 from jax.experimental import sparse
 import jax.numpy as jnp 
@@ -1090,6 +1090,7 @@ class _Obsop_interp_l4(Obsop_interp):
         self.varobs = {}
         self.errobs = {}
 
+
         #############################
         # Loop on observation dates #
         #############################
@@ -1434,8 +1435,125 @@ class Obsop_interp_l4(Obsop_interp):
         self.name_coord_corr = config.OBSOP.name_coord_corr
         self.init_date = config.EXP.init_date
 
+    def _interp_var_err(self, coords_obs, var_obs, err_obs, method):
+        # Build the Delaunay / KDTree once and reuse it for both var and err.
+        # Numerics match scipy.griddata exactly (same underlying classes).
+        if method == 'hybrid':
+            tri = Delaunay(coords_obs)
+            tree = KDTree(coords_obs)
+            _, idx_nn = tree.query(self.coords_geo)
+            var_out = var_obs[idx_nn].astype(float, copy=True)
+            err_out = err_obs[idx_nn].astype(float, copy=True)
+            var_lin = LinearNDInterpolator(tri, var_obs)(self.coords_geo)
+            err_lin = LinearNDInterpolator(tri, err_obs)(self.coords_geo)
+            m = ~np.isnan(var_lin); var_out[m] = var_lin[m]
+            m = ~np.isnan(err_lin); err_out[m] = err_lin[m]
+            var_cub = CloughTocher2DInterpolator(tri, var_obs)(self.coords_geo)
+            err_cub = CloughTocher2DInterpolator(tri, err_obs)(self.coords_geo)
+            # Mirrors original code: where cubic is finite, fall back to *linear* (not cubic).
+            m = ~np.isnan(var_cub); var_out[m] = var_lin[m]
+            m = ~np.isnan(err_cub); err_out[m] = err_lin[m]
+            return var_out, err_out
+        if method == 'linear':
+            tri = Delaunay(coords_obs)
+            return (LinearNDInterpolator(tri, var_obs)(self.coords_geo),
+                    LinearNDInterpolator(tri, err_obs)(self.coords_geo))
+        if method == 'cubic':
+            tri = Delaunay(coords_obs)
+            return (CloughTocher2DInterpolator(tri, var_obs)(self.coords_geo),
+                    CloughTocher2DInterpolator(tri, err_obs)(self.coords_geo))
+        if method == 'nearest':
+            tree = KDTree(coords_obs)
+            _, idx = tree.query(self.coords_geo)
+            return var_obs[idx], err_obs[idx]
+        return (griddata(coords_obs, var_obs, self.coords_geo, method=method),
+                griddata(coords_obs, err_obs, self.coords_geo, method=method))
+
+    def _process_one_date_l4(self, i, date, t, var_bc):
+
+        sat_info_list = self.dict_obs[date]['attributes']
+        obs_file_list = self.dict_obs[date]['obs_path']
+        obs_name_list = self.dict_obs[date]['obs_name']
+
+        lon_obs = []
+        lat_obs = []
+        var_obs = []
+        err_obs = []
+
+        for sat_info, obs_file, obs_name in zip(sat_info_list, obs_file_list, obs_name_list):
+
+            if obs_name not in self.name_obs:
+                continue
+
+            with xr.open_dataset(obs_file) as ncin:
+
+                lon = ncin[sat_info['name_lon']].values
+                lat = ncin[sat_info['name_lat']].values
+
+                if self.name_var not in ncin:
+                    continue
+
+                var = ncin[self.name_var].values
+
+                if lon.size != var.size and len(lon.shape) == 1:
+                    lon, lat = np.meshgrid(lon, lat)
+
+                name_err = self.name_var + '_err'
+                if name_err in ncin:
+                    err = ncin[name_err].values
+                elif sat_info['sigma_noise'] is not None:
+                    err = sat_info['sigma_noise'] * np.ones_like(var)
+                else:
+                    err = np.ones_like(var)
+                err[np.isnan(var)] = np.nan
+
+                dx, dy = grid.lonlat2dxdy(lon, lat)
+                _err_res = np.nanmean(dx * dy) / np.nanmean(self.DX * self.DY)
+                if _err_res > 1:
+                    err *= _err_res
+
+                var_obs.append(var.flatten())
+                err_obs.append(err.flatten())
+                lon_obs.append(lon.flatten())
+                lat_obs.append(lat.flatten())
+
+        var_obs = np.concatenate(var_obs)
+        err_obs = np.concatenate(err_obs)
+        lon_obs = np.concatenate(lon_obs)
+        lat_obs = np.concatenate(lat_obs)
+
+        file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{date.strftime('%Y%m%d_%H%M')}.pic"
+        if not self.compute_op and self.write_op and os.path.exists(file_L4):
+            with open(file_L4, "rb") as f:
+                var_obs_interp, err_obs_interp = pickle.load(f)
+        else:
+            _coords_obs = np.column_stack((lon_obs, lat_obs))
+            _var_flat, _err_flat = self._interp_var_err(_coords_obs, var_obs, err_obs, self.interp_method)
+            var_obs_interp = _var_flat.reshape(self.shape_grid)
+            err_obs_interp = _err_flat.reshape(self.shape_grid)
+
+            if self.write_op:
+                with open(file_L4, "wb") as f:
+                    pickle.dump((var_obs_interp, err_obs_interp), f)
+
+        if var_bc is not None and self.name_var in var_bc:
+            var_obs_interp -= var_bc[self.name_var][i].flatten()
+
+        if self.gradients:
+            var_obs_interp_grady = np.zeros_like(var_obs_interp) * np.nan
+            var_obs_interp_gradx = np.zeros_like(var_obs_interp) * np.nan
+            var_obs_interp_grady[1:-1, 1:-1] = (var_obs_interp[2:, 1:-1] - var_obs_interp[:-2, 1:-1]) / (2 * self.DY[1:-1, 1:-1])
+            var_obs_interp_gradx[1:-1, 1:-1] = (var_obs_interp[1:-1, 2:] - var_obs_interp[1:-1, :-2]) / (2 * self.DX[1:-1, 1:-1])
+
+            self.varobs_grady[i] = var_obs_interp_grady.flatten()
+            self.varobs_gradx[i] = var_obs_interp_gradx.flatten()
+            self.errobs[i] = (.5 * err_obs_interp / (self.DY[np.newaxis, :, :]**2 + self.DX[np.newaxis, :, :]**2)**.5).flatten()
+        else:
+            self.varobs[i] = var_obs_interp.flatten()
+            self.errobs[i] = err_obs_interp.flatten()
+
     def process_obs(self, var_bc=None):
-        
+
         # Initialize dictionnaries
         if self.gradients:
             self.varobs_grady = np.zeros((self.t_obs.size, self.DX.size))
@@ -1444,126 +1562,8 @@ class Obsop_interp_l4(Obsop_interp):
             self.varobs = np.zeros((self.t_obs.size, self.DX.size))
         self.errobs = np.zeros((self.t_obs.size, self.DX.size))
 
-        #############################
-        # Loop on observation dates #
-        #############################
-        for i,(date,t) in enumerate(zip(self.date_obs,self.t_obs)):
-
-            sat_info_list = self.dict_obs[date]['attributes']
-            obs_file_list = self.dict_obs[date]['obs_path']
-            obs_name_list = self.dict_obs[date]['obs_name']
-
-            # Concatenate obs from different sensors
-            lon_obs = []
-            lat_obs = []
-            var_obs = []
-            err_obs = []
-
-            ####################
-            # Merge observations
-            ####################
-            for sat_info, obs_file, obs_name in zip(sat_info_list, obs_file_list, obs_name_list):
-
-                if obs_name not in self.name_obs:
-                    continue
-                
-                with xr.open_dataset(obs_file) as ncin:
-
-                    lon = ncin[sat_info['name_lon']].values
-                    lat = ncin[sat_info['name_lat']].values
-
-                    # Check if this observation class is wanted
-                    if self.name_var not in ncin :
-                        continue
-
-                    # Observed variable
-                    var = ncin[self.name_var].values
-
-                    if lon.size != var.size and len(lon.shape)==1: # 2D regular grid
-                        lon, lat = np.meshgrid(lon, lat)
-
-                    # Observed error
-                    name_err = self.name_var + '_err'
-                    if name_err in ncin:
-                        err = ncin[name_err].values
-                    elif sat_info['sigma_noise'] is not None:
-                        err = sat_info['sigma_noise'] * np.ones_like(var)
-                    else:
-                        err = np.ones_like(var)
-                    err[np.isnan(var)] = np.nan
-
-                    # Add error due to interpolation (resolutions ratio)
-                    dx, dy = grid.lonlat2dxdy(lon,lat)
-                    _err_res = np.nanmean(dx * dy) / np.nanmean(self.DX * self.DY)
-                    if _err_res>1:
-                        err *= _err_res
-                                    
-                    # Append to lists
-                    var_obs.append(+var.flatten())
-                    err_obs.append(+err.flatten())
-                    lon_obs.append(+lon.flatten())
-                    lat_obs.append(+lat.flatten())
-
-            # Concatenations of lists
-            var_obs = np.concatenate(var_obs)
-            err_obs = np.concatenate(err_obs)
-            lon_obs = np.concatenate(lon_obs)
-            lat_obs = np.concatenate(lat_obs) 
-            
-            ################
-            # Process L4 obs
-            ################
-            file_L4 = f"{self.path_save}/{self.name_H}_{'_'.join(self.name_obs)}_{date.strftime('%Y%m%d_%H%M')}.pic"
-            # Check if spatial interpolations have already been performed
-            if not self.compute_op and self.write_op and os.path.exists(file_L4):
-                with open(file_L4, "rb") as f:
-                    var_obs_interp, err_obs_interp = pickle.load(f)
-            else:
-                # Grid interpolation: performing spatial interpolation now
-                # Loop on different obs for this date and this variable name
-                _coords_obs = np.column_stack((lon_obs, lat_obs))
-                if self.interp_method=='hybrid':
-                    # We perform first nearest, then linear, and then cubic interpolations
-                    _var_obs_interp = griddata(_coords_obs, var_obs, self.coords_geo, method='nearest')
-                    _err_obs_interp = griddata(_coords_obs, err_obs, self.coords_geo, method='nearest')
-                    _var_obs_interp_linear = griddata(_coords_obs, var_obs, self.coords_geo, method='linear')
-                    _err_obs_interp_linear = griddata(_coords_obs, err_obs, self.coords_geo, method='linear')
-                    _var_obs_interp[~np.isnan(_var_obs_interp_linear)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_linear)]
-                    _err_obs_interp[~np.isnan(_err_obs_interp_linear)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_linear)]
-                    _var_obs_interp_cubic = griddata(_coords_obs, var_obs, self.coords_geo, method='cubic')
-                    _err_obs_interp_cubic = griddata(_coords_obs, err_obs, self.coords_geo, method='cubic')
-                    _var_obs_interp[~np.isnan(_var_obs_interp_cubic)] = _var_obs_interp_linear[~np.isnan(_var_obs_interp_cubic)]
-                    _err_obs_interp[~np.isnan(_err_obs_interp_cubic)] = _err_obs_interp_linear[~np.isnan(_err_obs_interp_cubic)]
-                else:
-                    _var_obs_interp = griddata(_coords_obs, var_obs, self.coords_geo, method=self.interp_method)
-                    _err_obs_interp = griddata(_coords_obs, err_obs, self.coords_geo, method=self.interp_method)
-                var_obs_interp = _var_obs_interp.reshape(self.shape_grid)
-                err_obs_interp = _err_obs_interp.reshape(self.shape_grid)
-                
-                # Save operator if asked
-                if self.write_op:
-                    with open(file_L4, "wb") as f:
-                        pickle.dump((var_obs_interp,err_obs_interp), f)
-
-            if var_bc is not None and self.name_var in var_bc:
-                var_obs_interp -= var_bc[self.name_var][i].flatten()
-            
-            if self.gradients:
-                    # Compute gradients
-                var_obs_interp_grady = np.zeros_like(var_obs_interp)*np.nan
-                var_obs_interp_gradx = np.zeros_like(var_obs_interp)*np.nan
-                var_obs_interp_grady[1:-1,1:-1] = (var_obs_interp[2:,1:-1] - var_obs_interp[:-2,1:-1]) / (2 * self.DY[1:-1,1:-1])
-                var_obs_interp_gradx[1:-1,1:-1] = (var_obs_interp[1:-1,2:] - var_obs_interp[1:-1,:-2]) / (2 * self.DX[1:-1,1:-1])
-
-                # Fill dictionnaries
-                self.varobs_grady[i] = var_obs_interp_grady.flatten()
-                self.varobs_gradx[i] = var_obs_interp_gradx.flatten()
-                self.errobs[i] = (.5* err_obs_interp /  (self.DY[np.newaxis,:,:]**2 + self.DX[np.newaxis,:,:]**2)**.5).flatten()
-
-            else:
-                # Fill dictionnaries
-                self.varobs[i] = var_obs_interp.flatten()
-                self.errobs[i] = err_obs_interp.flatten()
+        for i, (date, t) in enumerate(zip(self.date_obs, self.t_obs)):
+            self._process_one_date_l4(i, date, t, var_bc)
         
         ### CORRECTING THE OBS ### 
         if self.file_corr is not None:

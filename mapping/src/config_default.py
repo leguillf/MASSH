@@ -480,7 +480,19 @@ MOD_SW1L_JAX = dict(
 
     w_names = ["m2"], # tidal components name (according to FES filenames)
 
-    path_tidal_velocity = None, # path to read tidal velocity netcdf file, for SW model with IT generation, Use FES files
+    # BAROTROPIC TIDE VELOCITY #
+
+    path_tidal_model = None, # path to read tidal velocity model
+
+    name_var_tidal_model = None, # name of variables in path_tidal_model
+
+    compute_pyfes = True, # True if tidal velocities should be computed with pyFES
+
+    path_tidal_velocity = None,  # path to read tidal velocity fields, if provided by model outputs for instance
+
+    name_var_tidal_velocity = None, # name of variables in path_tidal_velocity
+
+    # BATHYMETRY #
 
     path_bathymetry = None, # path to read bathymetry netcdf file.   
 
@@ -510,7 +522,11 @@ MOD_SW1L_JAX = dict(
 
     Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves,
 
-    g = 9.81
+    g = 9.81,
+
+    phase_inform = False, # DEV as to wether phase is informed from FES
+
+    no_generation = False, # DEV, not inform teh genration term in the ITG coeff 
 
 )
 
@@ -1228,6 +1244,8 @@ BASIS_GAUSS_ITG = dict(
 
     Nwaves = 1,
 
+    background = 0
+
 )
 
 BASIS_BM_JAX = dict(
@@ -1539,6 +1557,8 @@ BASIS_OFFSET = dict(
     name_mod_var = None,
 
     sigma_B = None, 
+
+    background = None,
 
 )
 

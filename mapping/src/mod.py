@@ -43,8 +43,12 @@ import functools
 import scipy
 from scipy.signal import convolve2d
 from scipy.special import factorial
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter 
 
 import pickle
+
+import pyfes
 
 def Model(config, State, verbose=True):
     """
@@ -876,7 +880,7 @@ class Model_qg1l_jax(M):
 
         super().__init__(config,State)
 
-        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+        # os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
         # Model specific libraries
         if config.MOD.dir_model is None:
@@ -1690,7 +1694,7 @@ class Model_sw1l_jax(M):
 
         super().__init__(config,State)
 
-        os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
+        # os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
         self.config = config
 
@@ -1726,6 +1730,8 @@ class Model_sw1l_jax(M):
 
         # Bathymetry field 
         self.init_bathy(config,State)
+
+        self.phase_inform = config.MOD.phase_inform
 
         # Generation term 
         self.init_generation(config,State)
@@ -1768,8 +1774,38 @@ class Model_sw1l_jax(M):
                                 dir_model + "/jswm.py").load_module()
 
         # Model initialization
-        self.swm = swm.Swm(Model = self,
-                           State = State) 
+        self.swm = swm.Swm(X=State.X,
+                           Y=State.Y,
+                           dx=State.dx,
+                           dy=State.dy,
+                           dt=self.dt,
+                           time_scheme=self.time_scheme,
+                           bc_kind=self.bc_kind,
+                           bc_island = self.bc_island,
+                           g=self.g,
+                           f=self.f,
+                           Heb=self.Heb,
+                           grad_bathymetry_x=self.grad_bathymetry_x,
+                           grad_bathymetry_y=self.grad_bathymetry_y,
+                           generation=self.generation,
+                           omegas=self.omegas,
+                           omega_names=self.omega_names,
+                           bc_theta=self.bc_theta,
+                           idxcoast = self.idxcoast,
+                           nparams=self.nparams,
+                           name_params=self.name_params,
+                           slice_params=self.slice_params,
+                           shape_params=self.shape_params,
+                           tidal_Ua=getattr(self, 'tidal_Ua', None),
+                           tidal_Va=getattr(self, 'tidal_Va', None),
+                           tidal_Ug=getattr(self, 'tidal_Ug', None),
+                           tidal_Vg=getattr(self, 'tidal_Vg', None),
+                           freq=getattr(self, 'freq', None),
+                           phase_astr=getattr(self, 'phase_astr', None),
+                           jc_T0=getattr(self, 'jc_T0', None),
+                           day_offset=getattr(self, 'day_offset', None), 
+                           phase_inform = self.phase_inform
+                           )
 
         # Model functions initialization
         if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
@@ -1782,16 +1818,16 @@ class Model_sw1l_jax(M):
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            print('Tangest test is commented.')
-            # tangent_test(self,State,nstep=100)
+            # print('Tangest test is commented.')
+            tangent_test(self,State,nstep=100)
             print('Adjoint test:')
-            print('Tangest test is commented.')
-            # adjoint_test(self,State,nstep=100)
+            # print('Tangest test is commented.')
+            adjoint_test(self,State,nstep=100)
 
     def init (self,State,t0=0):
 
         return
-
+    
     def init_tidal_velocity(self,config,State):
         """
         NAME
@@ -1801,52 +1837,311 @@ class Model_sw1l_jax(M):
             Reads tidal velocity file, interpolate it to the grid
         """
 
-        # Read tidal velocities
-        if config.MOD.path_tidal_velocity is not None and os.path.exists(config.MOD.path_tidal_velocity): 
-            
-            # Variables
-            
-            self.tidal_U = np.zeros((len(self.omega_names), # Number of tidal components
+        # Prescribe tidal model and compute with pyFES
+        if config.MOD.path_tidal_model is not None and config.MOD.compute_pyfes == True:
+
+            # Write pyFES config files 
+            os.makedirs(config.EXP.tmp_DA_path, exist_ok=True)
+            for comp, key in (('eastward', 'U'), ('northward', 'V')):
+                yaml_path = os.path.join(config.EXP.tmp_DA_path,
+                                         f'tide_{comp}.yaml')
+                with open(yaml_path, 'w') as f:
+                    f.write('engine: darwin\n')
+                    f.write('tide:\n')
+                    f.write('  cartesian:\n')
+                    f.write('    paths:\n')
+                    for name, path in config.MOD.path_tidal_model[key].items():
+                        f.write(f'      {name}: {path}\n')
+                setattr(self, f'path_tide_{comp}', yaml_path)
+
+            # Load pyFES config files
+            config_eastward = pyfes.config.load(os.path.join(config.EXP.tmp_DA_path,
+                                         f'tide_eastward.yaml'))
+            config_northward = pyfes.config.load(os.path.join(config.EXP.tmp_DA_path,
+                                         f'tide_northward.yaml'))
+
+            lon2d,lat2d = State.lon,State.lat
+            lon = State.lon[0,:]
+            lat = State.lon[:,0]
+            dates = np.array([np.datetime64(i) for i in self.timestamps])
+
+            array_dates = np.broadcast_to(dates[:, None, None], (len(dates), len(lat), len(lon)))
+            array_lon = np.broadcast_to(lon2d[None, :, :], (len(dates), len(lat), len(lon)))
+            array_lat = np.broadcast_to(lat2d[None, :, :], (len(dates), len(lat), len(lon)))
+
+            tide_eastward, lp_eastward, flags_eastward = pyfes.evaluate_tide(
+            config_eastward.models['tide'], array_dates.ravel(), array_lon.ravel(), array_lat.ravel(),
+            settings=config_eastward.settings,
+            )
+            u0_pyfes = 1e-2*(tide_eastward) # + lp_eastward )
+            u0_pyfes=u0_pyfes.reshape(array_lon.shape)
+
+            tide_northward, lp_northward, flags_northward = pyfes.evaluate_tide(
+            config_northward.models['tide'], array_dates.ravel(), array_lon.ravel(), array_lat.ravel(),
+            settings=config_northward.settings,
+            )
+            v0_pyfes = 1e-2*(tide_northward)# + lp_northward)
+            v0_pyfes=v0_pyfes.reshape(array_lon.shape)
+
+            self.u_bar_data = {t: u0_pyfes[i] for i, t in enumerate(self.T)}
+            self.v_bar_data = {t: v0_pyfes[i] for i, t in enumerate(self.T)}
+
+
+        # Prescribe tidal model
+        elif config.MOD.path_tidal_model is not None:
+
+            self.tidal_Ua = np.zeros((len(self.omega_names), # Number of tidal components
                                      State.lat[:,0].size, # Number of latitude grid points 
                                      State.lon[0,:].size, # Number of longitude grid points 
                                      ))
-            self.tidal_U_phi = np.zeros((len(self.omega_names), # Number of tidal components
+            self.tidal_Ug = np.zeros((len(self.omega_names), # Number of tidal components
                                      State.lat[:,0].size, # Number of latitude grid points 
                                      State.lon[0,:].size, # Number of longitude grid points 
                                      ))
             
-            self.tidal_V = np.zeros((len(self.omega_names), # Number of tidal components
+            self.tidal_Va = np.zeros((len(self.omega_names), # Number of tidal components
                                      State.lat[:,0].size, # Number of latitude grid points
                                      State.lon[0,:].size, # Number of longitude grid points  
                                      ))
-            self.tidal_V_phi = np.zeros((len(self.omega_names), # Number of tidal components
+            self.tidal_Vg = np.zeros((len(self.omega_names), # Number of tidal components
                                      State.lat[:,0].size, # Number of latitude grid points
                                      State.lon[0,:].size, # Number of longitude grid points  
                                      ))
             
-            for (i,name) in enumerate(self.omega_names):
-                self.tidal_U[i,:,:], self.tidal_U_phi[i,:,:]= self.open_interpolate(config,name,"U",State)
-                self.tidal_V[i,:,:], self.tidal_V_phi[i,:,:] = self.open_interpolate(config,name,"V",State)
-        
-        else: # No tidal velocity file prescripted
-            warnings.warn("No tidal velocity field prescribed. This is not suitable if Internal Tide generation ('itg') is being controlled.")
-            return None 
-        
-        if config.MOD.path_file_data_astr is not None and os.path.exists(config.MOD.path_file_data_astr): 
-            data_astr = pickle.load( open( config.MOD.path_file_data_astr, "rb" ) )
-
-            self.phi_ray = np.zeros(len(self.omega_names)) # Number of tidal components
-            self.omegas = np.zeros(len(self.omega_names)) # Redifining omegas
+            def _read_units(path, var_name):
+                # path may be a list/glob or a single file; open one file to read attrs
+                p = path[0] if isinstance(path, (list, tuple)) else path
+                with xr.open_dataset(p) as _ds:
+                    return _ds[var_name].attrs.get('units', '')
 
             for (i,name) in enumerate(self.omega_names):
-                finterpDP = scipy.interpolate.interp1d(data_astr['time_jd'], np.mod(data_astr[name]['phi_astr']-data_astr[name]['phi_astr'][0]+np.pi, 2*np.pi)-np.pi)
+                path_u = config.MOD.path_tidal_model["U"][name]
+                path_v = config.MOD.path_tidal_model["V"][name]
+                name_var_u = config.MOD.name_var_tidal_model["U"]
+                name_var_v = config.MOD.name_var_tidal_model["V"]
+                amp_u_var = name_var_u["amplitude"]
+                phase_u_var = name_var_u["phase"]
+                amp_v_var = name_var_v["amplitude"]
+                phase_v_var = name_var_v["phase"]
 
-                jd = 15340
-                Phi_astr = finterpDP(jd) + data_astr[name]['phi_astr'][0]
-                w=data_astr[name]['freq'] *86400
-                self.phi_ray[i] = Phi_astr + w*15340.          
-                self.omegas[i] = w
+                # One spatial interpolation per (U/V), shared between amplitude and phase
+                ua_data, ug_data = self.open_interpolate(State, path_u, name_var_u, ["amplitude", "phase"])
+                va_data, vg_data = self.open_interpolate(State, path_v, name_var_v, ["amplitude", "phase"])
+
+                # Unit conversion: amplitude cm/s -> m/s, phase degrees -> rad
+                if _read_units(path_u, amp_u_var) == 'cm/s':
+                    ua_data = ua_data * 1e-2
+                if _read_units(path_v, amp_v_var) == 'cm/s':
+                    va_data = va_data * 1e-2
+                if _read_units(path_u, phase_u_var).lower() in ('degrees', 'degree', 'deg'):
+                    ug_data = np.deg2rad(ug_data)
+                if _read_units(path_v, phase_v_var).lower() in ('degrees', 'degree', 'deg'):
+                    vg_data = np.deg2rad(vg_data)
+
+                self.tidal_Ua[i,:,:] = ua_data
+                self.tidal_Ug[i,:,:] = ug_data
+                self.tidal_Va[i,:,:] = va_data
+                self.tidal_Vg[i,:,:] = vg_data        
+            
+            # Specifying the tidal amplitude and phase 
+            self.get_freq_and_phase(config)
+
+        # Prescribe tidal velocity
+        elif config.MOD.path_tidal_velocity is not None:
         
+            u_bar,time = self.open_interpolate(State = State,path = config.MOD.path_tidal_velocity["U"],
+                                          name_var = config.MOD.name_var_tidal_velocity,comp = "U")
+            v_bar,time = self.open_interpolate(State = State,path = config.MOD.path_tidal_velocity["V"],
+                                          name_var = config.MOD.name_var_tidal_velocity,comp = "V")  
+        
+            # Build xarray for time interpolation
+            ds_bar = xr.Dataset({
+                'u': (['time', 'y', 'x'], u_bar),
+                'v':   (['time', 'y', 'x'], v_bar),
+            }, coords={'time': time})
+            ds_bar = ds_bar.interp(time=self.timestamps, method='linear',kwargs={"fill_value": "extrapolate"})
+
+            # Store per-timestep fields. After ds_bar.interp(time=self.timestamps),
+            # ds_bar is ordered by self.timestamps, so a single bulk .values + numpy
+            # slicing is much faster than 1 .sel(time=date).values per step.
+            u_arr = ds_bar['u'].values.astype(np.float32, copy=False)  # (nt, ny, nx)
+            v_arr = ds_bar['v'].values.astype(np.float32, copy=False)
+
+            # Same Gaussian smoothing as applied to grad_bathymetry_x/y and generation.
+            # gaussian_filter is separable; passing sigma=0 along the time axis skips
+            # filtering there and scipy vectorises over all timesteps in one call.
+            if config.MOD.smooth_wavelength is not None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0:
+                N_pixel_x = config.MOD.smooth_wavelength/State.dx
+                N_pixel_y = config.MOD.smooth_wavelength/State.dy
+                u_arr = gaussian_filter(u_arr, sigma=(0, N_pixel_y, N_pixel_x))
+                v_arr = gaussian_filter(v_arr, sigma=(0, N_pixel_y, N_pixel_x))
+
+            self.u_bar_data = {t: u_arr[i] for i, t in enumerate(self.T)}
+            self.v_bar_data = {t: v_arr[i] for i, t in enumerate(self.T)}
+            
+            fig, (ax1,ax2) = plt.subplots(1,2,figsize=(14,5))
+            im1 = ax1.pcolormesh(self.u_bar_data[0])
+            plt.colorbar(im1, ax=ax1)
+            ax1.set_title('U BAR at t=0s')
+            im2 = ax2.pcolormesh(self.v_bar_data[0])
+            plt.colorbar(im2, ax=ax2)
+            ax2.set_title('V BAR at t=0s')
+            plt.show()  
+
+    def open_interpolate(self,State,path,name_var,comp):
+        """
+        NAME
+            open_interpolate
+
+        DESCRIPTION
+            Opens and interpolates the tidal velocity files.
+
+            comp may be a single key in name_var (str) or a list/tuple of keys.
+            With a single key, returns (data, time) if the file has a time
+            dimension, else just data. With a list of keys, the spatial
+            interpolation is shared across variables and a tuple of arrays is
+            returned (in the order of comp); time is appended only when the
+            file has a time dimension.
+        """
+
+        multi = isinstance(comp, (list, tuple))
+        comps = list(comp) if multi else [comp]
+        var_names = [name_var[c] for c in comps]
+
+        # Detect single vs multi-file input. A list/tuple or glob pattern means
+        # multiple files (one per time step); a plain path string is a single file.
+        is_multi_file = isinstance(path, (list, tuple)) or (isinstance(path, str) and any(c in path for c in '*?[]'))
+
+        if is_multi_file:
+            ds = xr.open_mfdataset(path, chunks={'time': 1}, parallel=False)
+        else:
+            ds = xr.open_dataset(path)
+
+        name_lon = name_var['lon']
+        name_lat = name_var['lat']
+
+        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+
+        has_time = 'time' in ds.dims
+
+        # 0) Time subset covering self.timestamps (with 1-step margin)
+        if has_time:
+            time_full = ds['time'].values
+            t_min = np.datetime64(self.timestamps.min())
+            t_max = np.datetime64(self.timestamps.max())
+            idx = np.where((time_full >= t_min) & (time_full <= t_max))[0]
+            if len(idx) > 0:
+                i0 = max(idx[0] - 1, 0)
+                i1 = min(idx[-1] + 1, len(time_full) - 1)
+                ds = ds.isel(time=slice(i0, i1 + 1))
+            # Refresh `time` from the (possibly subset) dataset so it matches
+            # the time length of the interpolated data arrays.
+            time = ds['time'].values
+
+        # 1) Spatial interpolation onto model grid (shared across all vars)
+        lon = ds[name_lon]
+        if len(lon.shape) == 1:
+            # 1D coords: boolean mask on lon/lat (works regardless of order), then
+            # sortby + fillna + interp on the small subset.
+            margin = 0.5
+            lon_min, lon_max = float(State.lon.min()) - margin, float(State.lon.max()) + margin
+            lat_min, lat_max = float(State.lat.min()) - margin, float(State.lat.max()) + margin
+            lon_arr = ds[name_lon].data
+            lat_arr = ds[name_lat].data
+            lon_sel = (lon_arr >= lon_min) & (lon_arr <= lon_max)
+            lat_sel = (lat_arr >= lat_min) & (lat_arr <= lat_max)
+            ds = ds.isel({name_lon: np.where(lon_sel)[0],
+                          name_lat: np.where(lat_sel)[0]})
+            ds = ds.sortby(ds[name_lon])
+            ds = ds.sortby(ds[name_lat])
+            ds = ds.fillna(0)
+            ds = ds.interp({name_lon: State.lon[0, :],
+                                 name_lat: State.lat[:, 0]},
+                                method='linear')
+            data_list = [ds[v].values for v in var_names]  # (nt, ny, nx) or (ny, nx)
+        else:
+            # 2D coordinates: use scipy griddata directly
+            lon_2d = ds[name_lon].values
+            lat_2d = ds[name_lat].values
+            if len(lon_2d.shape) == 1:
+                lon_2d, lat_2d = np.meshgrid(lon_2d, lat_2d)
+            if has_time:
+                nt = ds.sizes['time']
+                data_list = [np.full((nt, self.ny, self.nx), np.nan) for _ in var_names]
+                for it in range(nt):
+                    for k, v in enumerate(var_names):
+                        var_vals = ds[v].isel(time=it).values
+                        valid = ~np.isnan(var_vals) & ~np.isnan(lon_2d) & ~np.isnan(lat_2d)
+                        if not valid.any():
+                            continue
+                        data_list[k][it] = griddata(
+                            (lon_2d[valid], lat_2d[valid]),
+                            var_vals[valid],
+                            (State.lon, State.lat),
+                            method='linear').reshape(self.ny, self.nx)
+            else:
+                data_list = []
+                for v in var_names:
+                    var_vals = ds[v].values
+                    valid = ~np.isnan(var_vals) & ~np.isnan(lon_2d) & ~np.isnan(lat_2d)
+                    if valid.any():
+                        arr = griddata(
+                            (lon_2d[valid], lat_2d[valid]),
+                            var_vals[valid],
+                            (State.lon, State.lat),
+                            method='linear').reshape(self.ny, self.nx)
+                    else:
+                        arr = np.full((self.ny, self.nx), np.nan)
+                    data_list.append(arr)
+
+        if multi:
+            if has_time:
+                return tuple(data_list), time
+            return tuple(data_list)
+        else:
+            if has_time:
+                return data_list[0], time
+            return data_list[0]
+
+    def get_freq_and_phase(self,config):
+        """
+        Returns the frequency and phase of the specified tidal constituent. 
+        The frequency and phase comes from a table by M. Tchilibou.  
+        """
+        names = ['M2','S2','N2','K1','O1','P1']
+        freq = [1.9322736168,2.0,1.895981969,1.002737909,0.929535705,0.997262091] # in cycles per day
+        phase_astr = [1.7319,0.0,6.050618023,0.172994524,1.558431243,-0.172984130] # at jc_T0 in radians
+        
+        # - DATE REF - # 
+        self.jc_T0 = 15340 # date ref= (1992, 1, 1, 0, 0, 0)
+        # - FREQUENCY - # 
+        self.freq = np.zeros(len(self.omega_names))
+        # - ASTR PHASE - # 
+        self.phase_astr = np.zeros(len(self.omega_names))
+
+        for (i,name) in enumerate(self.omega_names):
+            try:
+                self.freq[i] = freq[names.index(name)]
+                self.phase_astr[i] = phase_astr[names.index(name)]
+            except:
+                print(f"Error: {name} tidal constituent does not exist in the table.")
+        
+        self.day_offset = (np.datetime64(config.EXP.init_date)-np.datetime64('1950-01-01 00:00:00'))/np.timedelta64(1, 'D')
+
+    def compute_tidal_velocity(self,t):
+
+        u0 = np.zeros_like(self.tidal_Ua[0])
+        v0 = np.zeros_like(self.tidal_Va[0])
+
+        for (i,(_freq,_phase_astr)) in enumerate(zip(self.freq,self.phase_astr)) : 
+            u0 += self.tidal_Ua[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Ug[i]-_phase_astr) )
+            v0 += self.tidal_Va[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
+
+        return u0,v0
+
     def init_generation(self,config,State):
         """
         NAME
@@ -1862,30 +2157,58 @@ class Model_sw1l_jax(M):
             name_lat = config.MOD.name_var_generation['lat']
             name_generation = config.MOD.name_var_generation['var']
 
-        else: # No geenration file prescripted
+        else: # No generation file prescripted
             warnings.warn("No generation field prescribed.")
             return None 
 
-        # Convert longitudes
+        # Convert longitudes to State convention (only updates the 1D lon coord).
+        # After conversion lon may be non-monotonic, so we boolean-mask subset
+        # BEFORE sortby + interp — this avoids sorting/interp on the full file.
         if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
             ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
         elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
             ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
-        ds = ds.sortby(ds[name_lon])   
 
+        # Native grid spacing from a sorted copy of the 1D coords so the
+        # wrap-around discontinuity does not pollute the diff.
+        lon_arr = ds[name_lon].data
+        lat_arr = ds[name_lat].data
+        dlon = np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
+        dlat = np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
+        dlon += np.nanmax(np.diff(np.sort(lon_arr)))
+        dlat += np.nanmax(np.diff(np.sort(lat_arr)))
 
-        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
-        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
-        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
-        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
+        # Boolean mask on 1D coords (works regardless of order).
+        lon_mask = (lon_arr >= State.lon_min - dlon) & (lon_arr <= State.lon_max + dlon)
+        lat_mask = (lat_arr >= State.lat_min - dlat) & (lat_arr <= State.lat_max + dlat)
+        ds = ds.isel({name_lon: np.where(lon_mask)[0],
+                      name_lat: np.where(lat_mask)[0]})
 
-        ds = ds.sel(
-            {name_lon:slice(State.lon_min-dlon,State.lon_max+dlon),
-                name_lat:slice(State.lat_min-dlat,State.lat_max+dlat)})
+        # sortby on the (small) subset so .interp gets a monotonic index.
+        ds = ds.sortby(ds[name_lon])
+        ds = ds.sortby(ds[name_lat])
 
-        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
+        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='linear')
 
         self.generation = ds[name_generation].values
+        # NOT INFORM GENERATION
+        if config.MOD.no_generation:
+            self.generation = np.ones_like(self.generation)#*np.mean(self.generation)
+
+        # Applying bathymetry smoothing if prescribed 
+        if config.MOD.smooth_wavelength != None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0 :
+            N_pixel_x = config.MOD.smooth_wavelength/State.dx
+            N_pixel_y = config.MOD.smooth_wavelength/State.dy
+            print(f"Smoothing generation with a gaussian kernel of {N_pixel_x} pixels along x and {N_pixel_y} pixels along y ... ")
+            self.generation = gaussian_filter(self.generation,sigma=(N_pixel_y,N_pixel_x))
+
+        fig, (ax1) = plt.subplots(1,1,figsize=(7,5))
+        n_min = np.min(self.generation)
+        n_max = np.max(self.generation)
+        im1 = ax1.pcolormesh(self.generation,vmin=n_min,vmax=+n_max,cmap='viridis')
+        plt.colorbar(im1, ax=ax1)
+        ax1.set_title('generation term')
+        plt.show()
 
     def init_bathy(self,config,State):
 
@@ -1908,26 +2231,38 @@ class Model_sw1l_jax(M):
             warnings.warn("No bathymetry field prescribed.")
             return None 
 
-        # Convert longitudes
+        # Convert longitudes to State convention (only updates the 1D lon coord — cheap).
+        # After conversion the lon array may be non-monotonic (e.g. a global file wrapped
+        # at the dateline), so we cannot use .sel(slice(...)) yet. Subset by boolean mask
+        # first, then sortby on the small subset, then interp — this avoids sorting the
+        # full global elevation field, which dominated the previous runtime.
         if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
             ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
         elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
             ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
-        ds = ds.sortby(ds[name_lon])   
 
+        # Native grid spacing from a sorted copy of the 1D coords so the wrap-around
+        # discontinuity (after the modulo conversion above) does not pollute the diff.
+        lon_arr = ds[name_lon].data
+        lat_arr = ds[name_lat].data
+        dlon = np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
+        dlat = np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
+        dlon += np.nanmax(np.diff(np.sort(lon_arr)))
+        dlat += np.nanmax(np.diff(np.sort(lat_arr)))
 
-        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
-        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
-        dlon +=  np.nanmax(ds[name_lon].data[1:] - ds[name_lon].data[:-1])
-        dlat +=  np.nanmax(ds[name_lat].data[1:] - ds[name_lat].data[:-1])
+        # Boolean masking on 1D coords works regardless of order.
+        lon_mask = (lon_arr >= State.lon_min - dlon) & (lon_arr <= State.lon_max + dlon)
+        lat_mask = (lat_arr >= State.lat_min - dlat) & (lat_arr <= State.lat_max + dlat)
+        ds = ds.isel({name_lon: np.where(lon_mask)[0],
+                      name_lat: np.where(lat_mask)[0]})
 
-        ds = ds.sel(
-            {name_lon:slice(State.lon_min-dlon,State.lon_max+dlon),
-                name_lat:slice(State.lat_min-dlat,State.lat_max+dlat)})
+        # Now sortby on the (small) subset so .interp gets a monotonic index.
+        ds = ds.sortby(ds[name_lon])
+        ds = ds.sortby(ds[name_lat])
 
-        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='cubic')
+        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='linear')
 
-        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0 
+        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0
 
         self.bathymetry = ds[name_elevation].values
 
@@ -1945,60 +2280,32 @@ class Model_sw1l_jax(M):
         grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(State.Y[-1,:]-State.Y[-2,:])
 
         # Applying bathymetry smoothing if prescribed 
-        if config.MOD.smooth_wavelength != None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0 : 
-            N_pixel = np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32)
-            array_pascal = factorial(N_pixel-1)/(factorial(np.ones((1,N_pixel))*(N_pixel-1)-np.arange(0,N_pixel).reshape((1,N_pixel)))*factorial(np.arange(0,N_pixel).reshape((1,N_pixel))))
-            gaussian_kernel = (1/array_pascal.sum()**2)*array_pascal.T*array_pascal
-            grad_x = convolve2d(grad_x,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
-            grad_y = convolve2d(grad_y,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+        if config.MOD.smooth_wavelength != None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0 :
+            N_pixel_x = config.MOD.smooth_wavelength/State.dx
+            N_pixel_y = config.MOD.smooth_wavelength/State.dy
+            print(f"Smoothing bathy with a gaussian kernel of {N_pixel_x} pixels along x and {N_pixel_y} pixels along y ... ")
+            grad_x = gaussian_filter(grad_x,sigma=(N_pixel_y,N_pixel_x))
+            grad_y = gaussian_filter(grad_y,sigma=(N_pixel_y,N_pixel_x))
+            
+            # N_pixel = np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32)
+            # array_pascal = factorial(N_pixel-1)/(factorial(np.ones((1,N_pixel))*(N_pixel-1)-np.arange(0,N_pixel).reshape((1,N_pixel)))*factorial(np.arange(0,N_pixel).reshape((1,N_pixel))))
+            # gaussian_kernel = (1/array_pascal.sum()**2)*array_pascal.T*array_pascal
+            # grad_x = convolve2d(grad_x,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
+            # grad_y = convolve2d(grad_y,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
         
         self.grad_bathymetry_x = grad_x
         self.grad_bathymetry_y = grad_y
 
-    def open_interpolate(self,config,name,direction,State):
-        """
-        NAME
-            open_interpolate
-
-        DESCRIPTION
-            Opens and interpolates the tidal velocity files 
-
-        ARGUMENT 
-            - config : config python file 
-            - name (str) : name of the tidal component 
-            - direction (str) :  velocity direction, either "U" or "V"
-        """
-
-        if direction == "U":
-            ds = xr.open_dataset(os.path.join(config.MOD.path_tidal_velocity,"eastward_velocity",name+".nc")).squeeze()
-        elif direction == "V":
-            ds = xr.open_dataset(os.path.join(config.MOD.path_tidal_velocity,"northward_velocity",name+".nc")).squeeze()
-        
-        # Convert longitudes
-        if np.sign(ds["lon"].data.min())==-1 and State.lon_unit=='0_360':
-            ds = ds.assign_coords({"lon":(("lon", ds["lon"].data % 360))})
-        elif np.sign(ds["lon"].data.min())==1 and State.lon_unit=='-180_180':
-            ds = ds.assign_coords({"lon":(("lon", (ds["lon"].data + 180) % 360 - 180))})
-        ds = ds.sortby(ds["lon"])   
-
-
-        dlon =  np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
-        dlat =  np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
-        dlon +=  np.nanmax(ds["lon"].data[1:] - ds["lon"].data[:-1])
-        dlat +=  np.nanmax(ds["lat"].data[1:] - ds["lat"].data[:-1])
-
-        ds = ds.sel(
-            {"lon":slice(State.lon_min-dlon,State.lon_max+dlon),
-                "lat":slice(State.lat_min-dlat,State.lat_max+dlat)})
-
-        ds =ds.fillna(0)
-
-        ds = ds.interp(coords={"lon":State.lon[0,:],"lat":State.lat[:,0]},method='cubic')
-        
-        if direction == "U":
-            return ds["Ua"].values*1E-2, np.deg2rad(ds["Ug"]) # Converting velocity into m/s and phase into rad
-        elif direction == "V":
-            return ds["Va"].values*1E-2, np.deg2rad(ds["Vg"]) # Converting velocity into m/s and phase into rad
+        fig, (ax1,ax2) = plt.subplots(1,2,figsize=(14,5))
+        n_max_abs = np.max(np.abs(self.grad_bathymetry_x))
+        im1 = ax1.pcolormesh(self.grad_bathymetry_x,vmin=-n_max_abs,vmax=+n_max_abs,cmap='RdBu')
+        plt.colorbar(im1, ax=ax1)
+        ax1.set_title('X GRAD BATHY')
+        n_max_abs = np.max(np.abs(self.grad_bathymetry_y))
+        im2 = ax2.pcolormesh(self.grad_bathymetry_y,vmin=-n_max_abs,vmax=+n_max_abs,cmap='RdBu')
+        plt.colorbar(im2, ax=ax2)
+        ax2.set_title('Y GRAD BATHY')
+        plt.show()
 
     def init_variables(self,config,State) : 
 
@@ -2118,17 +2425,34 @@ class Model_sw1l_jax(M):
 
             ds = xr.open_dataset(config.MOD.filec_aux)
             name_lon = config.MOD.name_var_c['lon']
+            name_lat = config.MOD.name_var_c['lat']
             lon = ds[name_lon]
-            # Convert longitude 
+            # Convert longitude (cheap: only updates the 1D lon coord). After this
+            # lon may be non-monotonic, so we boolean-mask subset BEFORE sortby +
+            # interpolate_na — those run on the full global file otherwise.
             if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
                 ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
-                ds = ds.sortby(name_lon)    
             elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
                 ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
-                ds = ds.sortby(name_lon)   
 
-            # interpolating nans  
-            ds = ds.interpolate_na(dim = name_lon)
+            # Spatial subset BEFORE the heavy ops, when lon/lat are 1D coords.
+            lon_arr = ds[name_lon].data
+            lat_arr = ds[name_lat].data
+            if lon_arr.ndim == 1 and lat_arr.ndim == 1:
+                margin = 0.5
+                lon_sel = (lon_arr >= State.lon_min - margin) & (lon_arr <= State.lon_max + margin)
+                lat_sel = (lat_arr >= State.lat_min - margin) & (lat_arr <= State.lat_max + margin)
+                ds = ds.isel({name_lon: np.where(lon_sel)[0],
+                              name_lat: np.where(lat_sel)[0]})
+                ds = ds.sortby(name_lon)
+                ds = ds.sortby(name_lat)
+            else:
+                # 2D coord fallback: keep the original sortby (grid.interp2d does the
+                # spatial subset via .where(drop=True) for 2D coords).
+                ds = ds.sortby(name_lon)
+
+            # interpolating nans on the small subset
+            ds = ds.interpolate_na(dim=name_lon)
 
             self.c = grid.interp2d(ds,
                                    config.MOD.name_var_c,
@@ -2177,6 +2501,8 @@ class Model_sw1l_jax(M):
                 self.bc_theta = np.append(theta_p-pi/2,theta_p[1:]) 
             else:
                 self.bc_theta = np.array([0])
+        else:
+            self.bc_theta = None
 
         ###############################
         ### - INITIALIZING SHAPES - ###
@@ -2185,8 +2511,8 @@ class Model_sw1l_jax(M):
         for param in self.name_params : 
 
             # If the parameter is not implemented 
-            if param not in ['HE','HE_OFFSET','HBCX','HBCY','ITG'] : 
-                sys.exit(param+" not implemented. Please choose parameters among ['HE','HE_OFFSET','HBCX','HBCY','ITG'].")
+            if param not in ['HE','HE_OFFSET','HBCX','HBCY','ITG','ITG_COEFF'] : 
+                sys.exit(param+" not implemented. Please choose parameters among ['HE','HE_OFFSET','HBCX','HBCY','ITG','ITG_COEFF'].")
 
             # - Equivalent Height : He 
             elif param =='HE' : 
@@ -2219,7 +2545,11 @@ class Model_sw1l_jax(M):
                 self.shape_params['ITG'] = [len(self.omegas),       # - Number of tidal frequency components 
                                             4,                      # - Number of estimated parameter (cos and sin for x and y axis)
                                             State.ny,               # - Number of grid points along y axis.
-                                            State.nx]               # - Number of grid points along x axis.      
+                                            State.nx]               # - Number of grid points along x axis.
+
+            elif param == 'ITG_COEFF' :
+                self.shape_params['ITG_COEFF'] = [State.ny,               # - Number of grid points along y axis.
+                                                  State.nx]      
 
         #####################################################
         ### - INITIALIZING SLICE AND NUMBER INFORMATION - ###
@@ -2312,6 +2642,13 @@ class Model_sw1l_jax(M):
 
         X0 = self.init_array(State,t)
 
+        if getattr(self, 'u_bar_data', None) is not None and getattr(self, 'v_bar_data', None) is not None:
+            u_bar = self.u_bar_data[t]
+            v_bar = self.v_bar_data[t]
+        else:
+            u_bar = None
+            v_bar = None
+
         #############################
         ###   TIME PROPAGATION   ####
         #############################
@@ -2320,7 +2657,7 @@ class Model_sw1l_jax(M):
         # Init
         X1 = +X0
         for _ in range(nstep):
-            X1 = self.swm.one_step_jit(X1)
+            X1 = self.swm.one_step_jit(X1,u_bar,v_bar)
         
         # Remove time in output array
         X1 = X1[1:]
@@ -2333,13 +2670,20 @@ class Model_sw1l_jax(M):
     
 
     def step_tgl(self,dState,State,nstep=1,t=0):
-        
+
         ############################
         ###   INITIALIZATION    ####
         ############################
 
         X0 = self.init_array(State,t)
         dX0 = self.init_array(dState,t)
+
+        if getattr(self, 'u_bar_data', None) is not None and getattr(self, 'v_bar_data', None) is not None:
+            u_bar = self.u_bar_data[t]
+            v_bar = self.v_bar_data[t]
+        else:
+            u_bar = None
+            v_bar = None
 
         #############################
         ###   TIME PROPAGATION   ####
@@ -2351,9 +2695,9 @@ class Model_sw1l_jax(M):
         X1 = +X0
         for i in range(nstep):
             # One timestep
-            dX1 = self.swm.step_tgl_jit(dX1,X1)
+            dX1 = self.swm.step_tgl_jit(dX1, X1, u_bar, v_bar)
             if i<nstep-1:
-                X1 = self.swm.one_step_jit(X1)
+                X1 = self.swm.one_step_jit(X1, u_bar, v_bar)
 
         # Convert to numpy and reshape
         dX1 = np.array(dX1).astype('float64')
@@ -2369,7 +2713,7 @@ class Model_sw1l_jax(M):
 
         # return 
 
-    def step_adj(self,adState,State,nstep=1,t=0): 
+    def step_adj(self,adState,State,nstep=1,t=0):
 
         ############################
         ###   INITIALIZATION    ####
@@ -2377,6 +2721,13 @@ class Model_sw1l_jax(M):
 
         X0 = self.init_array(State,t)
         adX0 = self.init_array(adState,t)
+
+        if getattr(self, 'u_bar_data', None) is not None and getattr(self, 'v_bar_data', None) is not None:
+            u_bar = self.u_bar_data[t]
+            v_bar = self.v_bar_data[t]
+        else:
+            u_bar = None
+            v_bar = None
 
         #############################
         ###   TIME PROPAGATION   ####
@@ -2389,15 +2740,15 @@ class Model_sw1l_jax(M):
         X1 = +X0
 
         # adX1 = adX1[1:]
-        
+
         traj = [X1]
         if nstep>1:
             for i in range(nstep):
                 # One timestep
-                X1 = self.swm.one_step_jit(X1)
+                X1 = self.swm.one_step_jit(X1, u_bar, v_bar)
                 if i<nstep-1:
                     traj.append(+X1)
-            
+
         # Reversed time propagation
         # Add time in control vector (for JAX)
         # adX1 = np.append(traj[-1][0],adX1)
@@ -2405,7 +2756,7 @@ class Model_sw1l_jax(M):
         for i in reversed(range(nstep)):
             X1 = traj[i]
             # One timestep
-            adX1 = self.swm.step_adj_jit(adX1,X1)
+            adX1 = self.swm.step_adj_jit(adX1, X1, u_bar, v_bar)
 
         # Convert to numpy and reshape
         adX1 = np.array(adX1).astype('float64')
@@ -3775,11 +4126,11 @@ class Model_sw1l_jax_flo(M):
         
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('Tangent test:')
-            print('Tangest test is commented.')
-            # tangent_test(self,State,nstep=10)
+            # print('Tangest test is commented.')
+            tangent_test(self,State,nstep=10)
             print('Adjoint test:')
-            print('Tangest test is commented.')
-            # adjoint_test(self,State,nstep=10)
+            # print('Tangest test is commented.')
+            adjoint_test(self,State,nstep=10)
 
     
     def step(self,State,nstep=1,t=0):

@@ -47,7 +47,7 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None,X=
         return Inv_bfn(config, State=State, Model=Model, dict_obs=dict_obs, Bc=Bc)
     
     elif config.INV.super=='INV_4DVAR':
-        return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
+        return Inv_4Dvar(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc, X=X)
     
     elif config.INV.super=='INV_4DVAR_JAX':
         return Inv_4Dvar_jax(config, State=State, Model=Model, dict_obs=dict_obs, Obsop=Obsop, Basis=Basis, Bc=Bc)
@@ -335,8 +335,8 @@ def Inv_forward(config,State,Model,Basis,X,Bc,Obsop,ssh_truth=None):
         
         # if t%int(config.INV.timestep_checkpoint.total_seconds())==0:
 
-        #     # Reduced basis
-        #     Basis.operg(t/3600/24,Xa,State=State0)
+        # Reduced basis
+        Basis.operg(t/3600/24,Xa,State=State0)
 
         # Save
         if config.EXP.saveoutputs:
@@ -349,6 +349,7 @@ def Inv_forward(config,State,Model,Basis,X,Bc,Obsop,ssh_truth=None):
 
         if t%(15*24*3600)==0: # plotting everyn 15 days 
             State0.plot(present_date)
+            print(np.unique(State0.params["itg_coeff"]))
 
         #####################################################
         # Calculating rmse with truth ssh - TEST for BM dev #
@@ -797,7 +798,7 @@ def Inv_bfn(config,State,Model,dict_obs=None,Bc=None,*args, **kwargs):
     return
 
 
-def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,gpu_device=None) : 
+def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=None,Bc=None,verbose=True,gpu_device=None,X=None) : 
     '''
     Run a 4Dvar analysis
     '''
@@ -920,8 +921,11 @@ def Inv_4Dvar(config=None,State=None,Model=None,dict_obs=None,Obsop=None,Basis=N
     var = Variational(
         config=config, M=Model, H=Obsop, State=State, B=B, R=R, Basis=Basis, Xb=Xb, checkpoints=checkpoints, nstep=nstep_check, freq_it_plot=config.INV.freq_it_plot)
     
-    # Initial Control vector 
-    if config.INV.path_init_4Dvar is None:
+    # Initial Control vector
+    if X is not None : 
+        print("Prescribed control parameter vector with X will be used to start the integration.")
+        Xopt = X 
+    elif config.INV.path_init_4Dvar is None:
         if config.INV.flag_full_jax:
             Xopt = jnp.zeros((Xb.size,))
         else:
