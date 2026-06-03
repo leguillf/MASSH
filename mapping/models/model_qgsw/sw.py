@@ -16,7 +16,7 @@ from finite_diff import interp_TP, interp_TP_inv, comp_ke, div_nofluxbc
 from flux import flux
 from helmholtz import HelmholtzNeumannSolver
 from masks import Masks
-from reconstruction import linear2_centered, wenoz4_left, wenoz6_left
+from reconstruction import linear2_centered, linear4_left, linear6_left, smooth_abs, wenoz4_left, wenoz6_left
 from tools import avg_pool2d
 
 jax.config.update("jax_enable_x64", USE_FLOAT64)
@@ -252,8 +252,8 @@ class SW:
         self.visc_coef = param['visc_coef'] if 'visc_coef' in param.keys() else 0.
         self.diff_coef = param['diff_coef'] if 'diff_coef' in param.keys() else 0.
         self.time_scheme    = param.get('time_scheme',    'rk3')   # 'rk3' | 'rk2' | 'rk2_ssp'
-        self.h_adv_scheme   = param.get('h_adv_scheme',   'weno')  # 'weno' | 'upwind3'
-        self.mom_adv_scheme = param.get('mom_adv_scheme', 'weno')  # 'weno' | 'upwind3'
+        self.h_adv_scheme   = param.get('h_adv_scheme',   'weno')  # 'weno' | 'linear_upwind3' | 'linear_upwind5' | 'rusanov1'/'upwind1'
+        self.mom_adv_scheme = param.get('mom_adv_scheme', 'weno')  # 'weno' | 'upwind3' | 'upwind5'
 
         # time
         self.dt = param['dt']
@@ -630,55 +630,62 @@ class SW:
         else:
             area_x = self.area
             area_y = self.area
-        if self.h_adv_scheme == 'upwind3':
-            return self._advection_h_upwind3(h_tot_phys, U, V)
+        if self.h_adv_scheme in ('rusanov1', 'upwind1'):
+            h_tot_flux_y = area_y * self._h_flux_rusanov1(h_tot_phys, V[..., 1:-1], dim=-1)
+            h_tot_flux_x = area_x * self._h_flux_rusanov1(h_tot_phys, U[..., 1:-1, :], dim=-2)
+            return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
+        if self.h_adv_scheme in ('linear_upwind3', 'linear3'):
+            h_tot_flux_y = area_y * flux(
+                h_tot_phys, V[..., 1:-1], dim=-1, n_points=4,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.v_sten_hy_eq2[..., 1:-1],
+                mask_4=self.masks.v_sten_hy_eq4[..., 1:-1],
+                mask_6=self.masks.v_sten_hy_gt6[..., 1:-1])
+            h_tot_flux_x = area_x * flux(
+                h_tot_phys, U[..., 1:-1, :], dim=-2, n_points=4,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.u_sten_hx_eq2[..., 1:-1, :],
+                mask_4=self.masks.u_sten_hx_eq4[..., 1:-1, :],
+                mask_6=self.masks.u_sten_hx_gt6[..., 1:-1, :])
+            return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
+        if self.h_adv_scheme in ('linear_upwind5', 'linear5'):
+            h_tot_flux_y = area_y * flux(
+                h_tot_phys, V[..., 1:-1], dim=-1, n_points=6,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.v_sten_hy_eq2[..., 1:-1],
+                mask_4=self.masks.v_sten_hy_eq4[..., 1:-1],
+                mask_6=self.masks.v_sten_hy_gt6[..., 1:-1])
+            h_tot_flux_x = area_x * flux(
+                h_tot_phys, U[..., 1:-1, :], dim=-2, n_points=6,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.u_sten_hx_eq2[..., 1:-1, :],
+                mask_4=self.masks.u_sten_hx_eq4[..., 1:-1, :],
+                mask_6=self.masks.u_sten_hx_gt6[..., 1:-1, :])
+            return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
         # WENO fluxes on h_tot_phys, then re-scale by face area
         h_tot_flux_y = area_y * self.h_flux_y(h_tot_phys, V[..., 1:-1])
         h_tot_flux_x = area_x * self.h_flux_x(h_tot_phys, U[..., 1:-1, :])
         return -div_nofluxbc(h_tot_flux_x, h_tot_flux_y) * self.masks.h
 
-    def _advection_h_upwind3(self, h_tot_phys, U, V):
+    def _h_flux_rusanov1(self, h_tot_phys, velocity, dim):
         """
-        3rd-order upwind h-advection in advective form (mirrors Qgm.adv()).
-        Applied only at interior cells [..., 2:-2, 2:-2]; boundary ring is zero.
+        First-order conservative upwind/Rusanov flux for h-continuity.
 
-        U = u_phys/dx  (diagnostic velocity, shape (1,nl,nx+1,ny))
-        V = v_phys/dy  (diagnostic velocity, shape (1,nl,nx,ny+1))
-        h_tot_phys     in metres, shape (1,nl,nx,ny)
-
-        Returns d(h_area)/dt  [same units as advection_h].
-
-        Unit note: u_c = 0.5*(U[:-1]+U[1:]) = u_phys/dx, so
-          u_c * stencil/6  =  (u_phys/dx) * Δh  =  u_phys * ∂h/∂x
-        and multiplying by area = dx*dy gives d(h_area)/dt in m³/s. ✓
+        This is more diffusive than WENO, but the flux is monotone and avoids
+        WENO's nonlinear smoothness weights, which can make adjoints fragile.
+        `smooth_abs` keeps the local wave speed differentiable at zero velocity.
         """
-        # Cell-centred velocity = average of adjacent face values (U=u_phys/dx)
-        u_c = 0.5 * (U[..., :-1, :] + U[..., 1:, :])   # (1,nl,nx,ny)
-        v_c = 0.5 * (V[..., :, :-1] + V[..., :, 1:])   # (1,nl,nx,ny)
-        up = jnp.where(u_c > 0.,  u_c, 0.)
-        um = jnp.where(u_c <= 0., u_c, 0.)
-        vp = jnp.where(v_c > 0.,  v_c, 0.)
-        vm = jnp.where(v_c <= 0., v_c, 0.)
-
-        # Upwind-3 advective tendency; zero outside [2:-2, 2:-2]
-        dt_h_phys = jnp.zeros_like(h_tot_phys)
-        dt_h_phys = dt_h_phys.at[..., 2:-2, 2:-2].set(
-            # x-direction (dim=-2): positive u → left-biased stencil
-            - up[..., 2:-2, 2:-2] / 6. * (
-                2.*h_tot_phys[..., 3:-1, 2:-2] + 3.*h_tot_phys[..., 2:-2, 2:-2]
-                - 6.*h_tot_phys[..., 1:-3, 2:-2] + h_tot_phys[..., :-4, 2:-2])
-            + um[..., 2:-2, 2:-2] / 6. * (
-                h_tot_phys[..., 4:, 2:-2] - 6.*h_tot_phys[..., 3:-1, 2:-2]
-                + 3.*h_tot_phys[..., 2:-2, 2:-2] + 2.*h_tot_phys[..., 1:-3, 2:-2])
-            # y-direction (dim=-1): positive v → left-biased stencil
-            - vp[..., 2:-2, 2:-2] / 6. * (
-                2.*h_tot_phys[..., 2:-2, 3:-1] + 3.*h_tot_phys[..., 2:-2, 2:-2]
-                - 6.*h_tot_phys[..., 2:-2, 1:-3] + h_tot_phys[..., 2:-2, :-4])
-            + vm[..., 2:-2, 2:-2] / 6. * (
-                h_tot_phys[..., 2:-2, 4:] - 6.*h_tot_phys[..., 2:-2, 3:-1]
-                + 3.*h_tot_phys[..., 2:-2, 2:-2] + 2.*h_tot_phys[..., 2:-2, 1:-3])
+        h_left, h_right = (
+            (h_tot_phys[..., :, :-1], h_tot_phys[..., :, 1:])
+            if dim == -1 else
+            (h_tot_phys[..., :-1, :], h_tot_phys[..., 1:, :])
         )
-        return dt_h_phys * self.area * self.masks.h
+        speed = smooth_abs(velocity)
+        return 0.5 * velocity * (h_left + h_right) - 0.5 * speed * (h_right - h_left)
 
     def advection_momentum(self, u, v, omega, U_m, V_m, k_energy, p, h_tot_ugrid, h_tot_vgrid,
                            dx_p_ref=None, dy_p_ref=None, taux=None, tauy=None, h_wind=None, wind_strength=None):
@@ -689,7 +696,9 @@ class SW:
         _dy_p_ref = dy_p_ref if dy_p_ref is not None else self.dy_p_ref
 
         # Vortex-force + Coriolis
-        if self.mom_adv_scheme == 'upwind3':
+        if self.mom_adv_scheme in ('upwind5', 'linear_upwind5', 'linear5'):
+            omega_Vm, omega_Um = self._omega_adv_upwind5(omega, U_m, V_m)
+        elif self.mom_adv_scheme == 'upwind3':
             omega_Vm, omega_Um = self._omega_adv_upwind3(omega, U_m, V_m)
         else:
             omega_Vm = self.w_flux_y(omega[...,1:-1,:], V_m)
@@ -710,6 +719,36 @@ class SW:
 
         return jnp.pad(dt_u, ((0,0), (0,0), (1, 1), (0, 0)))*self.masks.u, \
                jnp.pad(dt_v, ((0,0), (0,0), (0, 0), (1, 1)))*self.masks.v
+
+    def _omega_adv_upwind5(self, omega, U_m, V_m):
+        """
+        5th-order fixed-linear upwind face reconstruction of vorticity.
+
+        Uses the same conservative velocity-biased flux machinery as WENO, but
+        replaces nonlinear WENO weights by fixed linear stencils for a smoother
+        adjoint. Existing masks downgrade to 2-/4-point stencils near coasts.
+        """
+        omega_Vm = flux(
+            omega[..., 1:-1, :], V_m,
+            dim=-1,
+            n_points=6,
+            rec_func_2=linear2_centered,
+            rec_func_4=linear4_left,
+            rec_func_6=linear6_left,
+            mask_2=self.masks.u_sten_wy_eq2[..., 1:-1, :],
+            mask_4=self.masks.u_sten_wy_eq4[..., 1:-1, :],
+            mask_6=self.masks.u_sten_wy_gt6[..., 1:-1, :])
+        omega_Um = flux(
+            omega[..., 1:-1], U_m,
+            dim=-2,
+            n_points=6,
+            rec_func_2=linear2_centered,
+            rec_func_4=linear4_left,
+            rec_func_6=linear6_left,
+            mask_2=self.masks.v_sten_wx_eq2[..., 1:-1],
+            mask_4=self.masks.v_sten_wx_eq4[..., 1:-1],
+            mask_6=self.masks.v_sten_wx_gt6[..., 1:-1])
+        return omega_Vm, omega_Um
 
     def _omega_adv_upwind3(self, omega, U_m, V_m):
         """

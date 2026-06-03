@@ -157,6 +157,14 @@ class Qgm:
         else:
             self.c = c.astype(self.dtype)
 
+        # Diagnostics
+        _c0 = float(self.c)
+        _f0 = float(self.f0)
+        _Rd = _c0 / abs(_f0) / 1e3
+        print(f'  - f\u2080 (s\u207b\u00b9):             {_f0:.4e}')
+        print(f'  - c  (m/s):              {_c0:.4f}')
+        print(f'  - Rd = c/|f\u2080| (km):   {_Rd:.1f}')
+
         # MDT
         self.mdt = mdt
 
