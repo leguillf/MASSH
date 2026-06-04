@@ -2794,6 +2794,20 @@ class Model_qgsw(M):
             mdu[_mask_pad[1:, :] | _mask_pad[:-1, :]] = 0.  # (ny, nx+1)
             mdv[_mask_pad[:, 1:] | _mask_pad[:, :-1]] = 0.  # (ny+1, nx)
 
+            # Safety: interpolation/extrapolation of external MDT/current files can
+            # still leave non-finite values (NaN/Inf). Enforce finite targets before
+            # they are injected into the model state and sponge relaxation.
+            _nbad_mdt = int(np.size(mdt) - np.count_nonzero(np.isfinite(mdt)))
+            _nbad_mdu = int(np.size(mdu) - np.count_nonzero(np.isfinite(mdu)))
+            _nbad_mdv = int(np.size(mdv) - np.count_nonzero(np.isfinite(mdv)))
+            if (_nbad_mdt + _nbad_mdu + _nbad_mdv) > 0:
+                print('Warning: non-finite MDT background values found '
+                      f'(mdt={_nbad_mdt}, mdu={_nbad_mdu}, mdv={_nbad_mdv}); '
+                      'replacing with 0.')
+            mdt = np.nan_to_num(mdt, nan=0.0, posinf=0.0, neginf=0.0)
+            mdu = np.nan_to_num(mdu, nan=0.0, posinf=0.0, neginf=0.0)
+            mdv = np.nan_to_num(mdv, nan=0.0, posinf=0.0, neginf=0.0)
+
         
             if config.EXP.flag_plot>0:
                 fig, (ax1,ax2,ax3) = plt.subplots(1, 3, figsize=(15, 5))
@@ -3123,6 +3137,9 @@ class Model_qgsw(M):
         self.model = model(params)
 
         if self.mdt is not None:
+            self.mdu = jnp.nan_to_num(self.mdu, nan=0.0, posinf=0.0, neginf=0.0)
+            self.mdv = jnp.nan_to_num(self.mdv, nan=0.0, posinf=0.0, neginf=0.0)
+            self.mdt = jnp.nan_to_num(self.mdt, nan=0.0, posinf=0.0, neginf=0.0)
             self.mdu = jnp.where(self.model.masks.u > 0.5, self.mdu, 0.0)
             self.mdv = jnp.where(self.model.masks.v > 0.5, self.mdv, 0.0)
             self.mdt = jnp.where(self.model.masks.h > 0.5, self.mdt, 0.0)
