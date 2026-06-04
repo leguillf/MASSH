@@ -3122,11 +3122,28 @@ class Model_qgsw(M):
 
         self.model = model(params)
 
+        if self.mdt is not None:
+            self.mdu = jnp.where(self.model.masks.u > 0.5, self.mdu, 0.0)
+            self.mdv = jnp.where(self.model.masks.v > 0.5, self.mdv, 0.0)
+            self.mdt = jnp.where(self.model.masks.h > 0.5, self.mdt, 0.0)
+
         # Sponge masks: (1, 1, nx, ny) — broadcasts across all layers.
         # Layer 0 is nudged toward surface BC; deep layers toward zero (their BC is 0).
-        self.model.sponge_u = jnp.expand_dims(jnp.asarray(self.sponge_u.T.astype(self.dtype)), axis=(0,1))
-        self.model.sponge_v = jnp.expand_dims(jnp.asarray(self.sponge_v.T.astype(self.dtype)), axis=(0,1))
-        self.model.sponge_h = jnp.expand_dims(jnp.asarray(self.sponge_h.T.astype(self.dtype)), axis=(0,1))
+        self.model.sponge_u = jnp.where(
+            self.model.masks.u > 0.5,
+            jnp.expand_dims(jnp.asarray(self.sponge_u.T.astype(self.dtype)), axis=(0,1)),
+            0.0,
+        )
+        self.model.sponge_v = jnp.where(
+            self.model.masks.v > 0.5,
+            jnp.expand_dims(jnp.asarray(self.sponge_v.T.astype(self.dtype)), axis=(0,1)),
+            0.0,
+        )
+        self.model.sponge_h = jnp.where(
+            self.model.masks.h > 0.5,
+            jnp.expand_dims(jnp.asarray(self.sponge_h.T.astype(self.dtype)), axis=(0,1)),
+            0.0,
+        )
 
         # Exclude sponge cells from observation assimilation.
         # Written to State.sponge_mask so that State.mask (land only) is not modified:

@@ -476,9 +476,9 @@ class SW:
         v_ = jnp.array(v_phys) if isinstance(v_phys, np.ndarray) else v_phys
         h_ = jnp.array(h_phys) if isinstance(h_phys, np.ndarray) else h_phys
 
-        u_ = u_ * self.masks.u
-        v_ = v_ * self.masks.v
-        h_ = h_ * self.masks.h 
+        u_ = jnp.where(self.masks.u > 0.5, u_, 0.0)
+        v_ = jnp.where(self.masks.v > 0.5, v_, 0.0)
+        h_ = jnp.where(self.masks.h > 0.5, h_, 0.0)
 
         u = u_.astype(self.dtype) * self.dx_ugrid
         v = v_.astype(self.dtype) * self.dy_vgrid
