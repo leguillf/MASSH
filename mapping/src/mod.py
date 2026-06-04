@@ -3033,9 +3033,13 @@ class Model_qgsw(M):
             if config.MOD.use_sponge_on_coast:
                 mask_h = State.mask.copy()
                 mask_u = np.zeros((State.ny, State.nx+1), dtype=bool)
-                mask_u[:, 1:State.nx] = mask_h[:, :-1] & mask_h[:, 1:]
+                mask_u[:, 1:State.nx] = mask_h[:, :-1] | mask_h[:, 1:]
+                mask_u[:, 0] = mask_h[:, 0]
+                mask_u[:, State.nx] = mask_h[:, -1]
                 mask_v = np.zeros((State.ny+1, State.nx), dtype=bool)
-                mask_v[1:State.ny, :] = mask_h[:-1, :] & mask_h[1:, :]
+                mask_v[1:State.ny, :] = mask_h[:-1, :] | mask_h[1:, :]
+                mask_v[0, :] = mask_h[0, :]
+                mask_v[State.ny, :] = mask_h[-1, :]
                 
             else:
                 mask_h = np.zeros((State.ny, State.nx), dtype=bool)
