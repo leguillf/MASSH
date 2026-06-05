@@ -359,7 +359,7 @@ MOD_QG1L_JAX = dict(
 
     cfl = None, # If not None, dtmodel is set such as dtmodel=cfl*dx/c
 
-    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk2,rk4)
+    time_scheme = 'Euler', # Time scheme of the model (e.g. Euler,rk2,rk3)
 
     c0 = 2.7, # If not None, fixed value for phase velocity 
 

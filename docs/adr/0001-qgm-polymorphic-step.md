@@ -1,0 +1,3 @@
+# Use A Single Polymorphic Qgm Step
+
+QG1L now uses one merged `Qgm` class for both SSH-only and SSH+tracer runs, with behavior selected by the shape of `X0` at runtime. We chose this over a separate `step_with_tracer` API to preserve existing `mod.py` wiring (`step_jit`/`step_tgl_jit`/`step_adj_jit` with stacked state dispatch), keep one shared PV/elliptic core, and remove the broken split where `Qgm_trac` diverged from maintained `Qgm` features.

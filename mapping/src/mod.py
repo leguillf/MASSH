@@ -922,11 +922,9 @@ class Model_qg1l_jax(M):
 
         if self.advect_tracer:
             Xb = Xb[jnp.newaxis,:,:]  # (1, ny, nx)
-            if self.ageo_velocities:
-                for name in ['U', 'V']:
-                    idt_c = jnp.where(self.bc_time_jax==t1, size=1)[0]
-                    Cb = self.bc_values[name][idt_c][0]
-                    Xb = jnp.concatenate([Xb, Cb[jnp.newaxis,:,:]], axis=0)
+            # Keep Xb layout consistent with _apply_bc() and Qgm.step():
+            #   Xb = [SSH_bc, tracer_bc...]
+            # Ageostrophic U/V are carried in X0 and are not part of tracer BC stack.
             for name in self.name_var:
                 if name not in ['SSH', 'U', 'V']:
                     idt_c = jnp.where(self.bc_time_jax==t1, size=1)[0]

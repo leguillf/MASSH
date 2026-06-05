@@ -8,6 +8,9 @@ MApping SSH
 - dask
 - netcdf4
 
+## Testing
+- General testing guide: [doc/notes/testing_guide.md](doc/notes/testing_guide.md)
+
 
 ## Examples
 ### 1. BFN-QG with SWOT & Nadir data
