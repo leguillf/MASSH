@@ -152,111 +152,154 @@ class Bc_ext:
             
     def _interp_3D(self,time):
         """
-        Interpolate boundary conditions on the model grid. It works only if the boundary conditions grid is regular
+        Interpolate boundary conditions on the model grid. It works only if the boundary conditions grid is regular.
+
+        Strategy for time-varying sources (large global datasets): interpolate
+        linearly in time first (cheap weighted sum of the two bracketing source
+        slices, with edge clipping), then run a 2D bivariate spatial interpolation
+        per output timestep. This avoids building (nx,ny,nt) target arrays and
+        avoids running gauss_seidel on the full 3D source cube.
         """
 
-        # Select timestamps
-        if self.time_bc is not None and self.time_bc.size>1:
-            dtbc = self.time_bc[1] - self.time_bc[0]
-            time0 = time[0] - dtbc
-            time1 = time[-1] + dtbc
-            time_bc = self.time_bc[(self.time_bc>=time0) & (self.time_bc<=time1)]
-            
-        # Define source grid
+        has_time = self.time_bc is not None and self.time_bc.size > 1
+
+        # Source spatial axes (shared by all variables)
         x_source_axis = pyinterp.Axis(self.lon_bc, is_circle=True)
         y_source_axis = pyinterp.Axis(self.lat_bc)
-        if self.time_bc is not None and self.time_bc.size>1:
-            z_source_axis = pyinterp.TemporalAxis(time_bc)
 
-        # Define target grid
-        if self.time_bc is not None and self.time_bc.size>1:
-            time_target = z_source_axis.safe_cast(time)
-            nt = len(time_target)
-        else:
-            nt = 1
+        # Precompute time-interpolation weights (linear, with edge clipping)
+        if has_time:
+            tbc = self.time_bc
+            # Bracketing indices i0, i0+1 such that tbc[i0] <= time <= tbc[i0+1]
+            i0 = np.clip(np.searchsorted(tbc, time, side='right') - 1, 0, len(tbc) - 2)
+            i1 = i0 + 1
+            t0f = tbc[i0].astype('datetime64[ns]').astype(np.float64)
+            t1f = tbc[i1].astype('datetime64[ns]').astype(np.float64)
+            ttf = time.astype('datetime64[ns]').astype(np.float64)
+            denom = np.where(t1f > t0f, t1f - t0f, 1.0)
+            w1 = (ttf - t0f) / denom
+            # Edge clipping: replicate nearest source slice
+            below = time < tbc[0]
+            above = time > tbc[-1]
+            w1 = np.where(below, 0.0, w1)
+            w1 = np.where(above, 1.0, w1)
+            w0 = 1.0 - w1
+            needed = np.unique(np.concatenate([i0, i1]))
+            pos = {int(k): n for n, k in enumerate(needed)}
 
         # Interpolation
         var_interp = {}
         for name in self.var:
-            if not self.c_grid or (name!='U' and name!='V'):
-                x_target = np.repeat(self.lon.transpose()[:,:,np.newaxis],nt,axis=2)
-                y_target = np.repeat(self.lat.transpose()[:,:,np.newaxis],nt,axis=2)
-                if self.time_bc is not None and self.time_bc.size>1:
-                    z_target = np.tile(time_target,(self.lon.shape[1],self.lat.shape[0],1))
-            elif self.c_grid and name=='U':
-                lon_u = np.zeros((self.lon.shape[0], self.lon.shape[1]+1))
-                lat_u = np.zeros((self.lat.shape[0], self.lat.shape[1]+1))
-                lon_u[:,1:-1] = (self.lon[:,1:] + self.lon[:,:-1])/2. 
-                lon_u[:,0] = self.lon[:,0] - (self.lon[:,1]-self.lon[:,0])/2.
-                lon_u[:,-1] = self.lon[:,-1] + (self.lon[:,-1]-self.lon[:,-2])/2.
-                lat_u[:,1:-1] = (self.lat[:,1:] + self.lat[:,:-1])/2. 
-                lat_u[:,0] = self.lat[:,0] - (self.lat[:,1]-self.lat[:,0])/2.
-                lat_u[:,-1] = self.lat[:,-1] + (self.lat[:,-1]-self.lat[:,-2])/2.
-                x_target = np.repeat(lon_u.transpose()[:,:,np.newaxis],nt,axis=2)
-                y_target = np.repeat(lat_u.transpose()[:,:,np.newaxis],nt,axis=2)
-                if self.time_bc is not None and self.time_bc.size>1:
-                    z_target = np.tile(time_target,(lon_u.shape[1],lat_u.shape[0],1))
-            elif self.c_grid and name=='V':
-                lon_v = np.zeros((self.lat.shape[0]+1, self.lat.shape[1]))
-                lat_v = np.zeros((self.lat.shape[0]+1, self.lat.shape[1]))
-                lon_v[1:-1,:] = (self.lon[1:,:] + self.lon[:-1,:])/2. 
-                lon_v[0,:] = self.lon[0,:] - (self.lon[1,:]-self.lon[0,:])/2.
-                lon_v[-1,:] = self.lon[-1,:] + (self.lon[-1,:]-self.lon[-2,:])/2.
-                lat_v[1:-1,:] = (self.lat[1:,:] + self.lat[:-1,:])/2. 
-                lat_v[0,:] = self.lat[0,:] - (self.lat[1,:]-self.lat[0,:])/2.
-                lat_v[-1,:] = self.lat[-1,:] + (self.lat[-1,:]-self.lat[-2,:])/2.
-                x_target = np.repeat(lon_v.transpose()[:,:,np.newaxis],nt,axis=2)
-                y_target = np.repeat(lat_v.transpose()[:,:,np.newaxis],nt,axis=2)
-                if self.time_bc is not None and self.time_bc.size>1:
-                    z_target = np.tile(time_target,(lon_v.shape[1],lat_v.shape[0],1))
+            # Build target (lon_t, lat_t, mask_t) for this variable
+            if not self.c_grid or name not in ('U', 'V'):
+                lon_t = self.lon
+                lat_t = self.lat
+                mask_t = self.mask
+            elif name == 'U':
+                lon_t = np.zeros((self.lon.shape[0], self.lon.shape[1] + 1))
+                lat_t = np.zeros((self.lat.shape[0], self.lat.shape[1] + 1))
+                lon_t[:, 1:-1] = (self.lon[:, 1:] + self.lon[:, :-1]) / 2.
+                lon_t[:, 0]    = self.lon[:, 0]  - (self.lon[:, 1]  - self.lon[:, 0])  / 2.
+                lon_t[:, -1]   = self.lon[:, -1] + (self.lon[:, -1] - self.lon[:, -2]) / 2.
+                lat_t[:, 1:-1] = (self.lat[:, 1:] + self.lat[:, :-1]) / 2.
+                lat_t[:, 0]    = self.lat[:, 0]  - (self.lat[:, 1]  - self.lat[:, 0])  / 2.
+                lat_t[:, -1]   = self.lat[:, -1] + (self.lat[:, -1] - self.lat[:, -2]) / 2.
+                mask_t = np.zeros((self.mask.shape[0], self.mask.shape[1] + 1), dtype=bool)
+                mask_t[:, 1:-1] = self.mask[:, :-1] | self.mask[:, 1:]
+                mask_t[:, 0]    = self.mask[:, 0]
+                mask_t[:, -1]   = self.mask[:, -1]
+            else:  # 'V'
+                lon_t = np.zeros((self.lat.shape[0] + 1, self.lat.shape[1]))
+                lat_t = np.zeros((self.lat.shape[0] + 1, self.lat.shape[1]))
+                lon_t[1:-1, :] = (self.lon[1:, :] + self.lon[:-1, :]) / 2.
+                lon_t[0, :]    = self.lon[0, :]  - (self.lon[1, :]  - self.lon[0, :])  / 2.
+                lon_t[-1, :]   = self.lon[-1, :] + (self.lon[-1, :] - self.lon[-2, :]) / 2.
+                lat_t[1:-1, :] = (self.lat[1:, :] + self.lat[:-1, :]) / 2.
+                lat_t[0, :]    = self.lat[0, :]  - (self.lat[1, :]  - self.lat[0, :])  / 2.
+                lat_t[-1, :]   = self.lat[-1, :] + (self.lat[-1, :] - self.lat[-2, :]) / 2.
+                mask_t = np.zeros((self.mask.shape[0] + 1, self.mask.shape[1]), dtype=bool)
+                mask_t[1:-1, :] = self.mask[:-1, :] | self.mask[1:, :]
+                mask_t[0, :]    = self.mask[0, :]
+                mask_t[-1, :]   = self.mask[-1, :]
 
-            if self.time_bc is not None and self.time_bc.size>1:
-                var = +self.var[name].sel({self.name_time_bc:slice(time0,time1)}).squeeze()
-                grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var.T)
-                # Remove NaN
-                if np.isnan(var).any():
-                    _, var = pyinterp.fill.gauss_seidel(grid_source)
-                    grid_source = pyinterp.Grid3D(x_source_axis, y_source_axis, z_source_axis, var)
-                # Interpolate
-                _var_interp = pyinterp.trivariate(grid_source,
-                                            x_target.flatten(),
-                                            y_target.flatten(),
-                                            z_target.flatten(),
-                                            bounds_error=False).reshape(x_target.shape).T
-                
-                for t in range(len(time)):
-                    if not self.c_grid or name not in ['U', 'V']:
-                        _var_interp[t][self.mask] = np.nan
-                    elif name == 'U':
-                        mask_u = np.zeros((self.mask.shape[0], self.mask.shape[1]+1), dtype=bool)
-                        mask_u[:, 1:-1] = self.mask[:, :-1] | self.mask[:, 1:]
-                        mask_u[:, 0] = self.mask[:, 0]
-                        mask_u[:, -1] = self.mask[:, -1]
-                        _var_interp[t][mask_u] = np.nan
-                    elif name == 'V':
-                        mask_v = np.zeros((self.mask.shape[0]+1, self.mask.shape[1]), dtype=bool)
-                        mask_v[1:-1, :] = self.mask[:-1, :] | self.mask[1:, :]
-                        mask_v[0, :] = self.mask[0, :]
-                        mask_v[-1, :] = self.mask[-1, :]
-                        _var_interp[t][mask_v] = np.nan
-                    if time[t]<self.time_bc[0]:
-                        ind_t = np.argmin(np.abs(time-self.time_bc[0]))
-                        _var_interp[t] = _var_interp[ind_t]
-                    if time[t]>self.time_bc[-1]:
-                        ind_t = np.argmin(np.abs(time-self.time_bc[-1]))
-                        _var_interp[t] = _var_interp[ind_t]
+            # Flat target coords (computed once per variable, shared across all t)
+            out_shape = lon_t.shape  # (ny_t, nx_t)
+            x_flat = lon_t.T.ravel()
+            y_flat = lat_t.T.ravel()
+
+            if not has_time:
+                grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis,
+                                              np.asarray(self.var[name]).T)
+                _slice = pyinterp.bivariate(grid_source, x_flat, y_flat,
+                                            bounds_error=False).reshape(out_shape[::-1]).T
+                _slice[mask_t] = np.nan
+                var_interp[name] = np.repeat(_slice[np.newaxis, :, :], len(time), axis=0)
+                continue
+
+            # Time-varying: load only the source slices we actually need
+            da = self.var[name].squeeze()
+            src = np.asarray(da.isel({self.name_time_bc: needed}).values, dtype=np.float64)
+            if src.ndim == 2:
+                src = src[np.newaxis]
+            # src shape: (n_needed, ny_src, nx_src)
+
+            # Fill NaN once per unique source slice (cheap 2D gauss_seidel)
+            filled = np.empty_like(src)
+            for k in range(src.shape[0]):
+                sl = src[k]
+                if np.isnan(sl).any():
+                    g2 = pyinterp.Grid2D(x_source_axis, y_source_axis, sl.T.copy())
+                    _, sl_filled = pyinterp.fill.gauss_seidel(g2)
+                    filled[k] = sl_filled.T
+                else:
+                    filled[k] = sl
+
+            nt_out = len(time)
+            n_needed = src.shape[0]
+            result = np.empty((nt_out,) + out_shape, dtype=np.float64)
+
+            if nt_out > n_needed:
+                # Cheaper: spatially interpolate each unique source slice ONCE,
+                # then linearly blend in time on the target grid (pure NumPy).
+                spatial = np.empty((n_needed,) + out_shape, dtype=np.float64)
+                for k in range(n_needed):
+                    g2 = pyinterp.Grid2D(x_source_axis, y_source_axis,
+                                         np.ascontiguousarray(filled[k].T))
+                    spatial[k] = pyinterp.bivariate(
+                        g2, x_flat, y_flat, bounds_error=False
+                    ).reshape(out_shape[::-1]).T
+                for t in range(nt_out):
+                    k0 = pos[int(i0[t])]
+                    k1 = pos[int(i1[t])]
+                    if k0 == k1 or w1[t] == 0.0:
+                        result[t] = spatial[k0]
+                    elif w1[t] == 1.0:
+                        result[t] = spatial[k1]
+                    else:
+                        result[t] = w0[t] * spatial[k0] + w1[t] * spatial[k1]
+                    result[t][mask_t] = np.nan
             else:
-                grid_source = pyinterp.Grid2D(x_source_axis, y_source_axis, self.var[name].T)
-                _var_interp = pyinterp.bivariate(grid_source,
-                                                x_target[:,:,0].flatten(),
-                                                y_target[:,:,0].flatten(),
-                                                bounds_error=False).reshape(x_target[:,:,0].shape).T
+                # Fewer output timesteps than unique source slices: blend in time
+                # first (smaller source grid), then one bivariate per output step.
+                for t in range(nt_out):
+                    k0 = pos[int(i0[t])]
+                    k1 = pos[int(i1[t])]
+                    if k0 == k1 or w1[t] == 0.0:
+                        blend = filled[k0]
+                    elif w1[t] == 1.0:
+                        blend = filled[k1]
+                    else:
+                        blend = w0[t] * filled[k0] + w1[t] * filled[k1]
+                    g2 = pyinterp.Grid2D(x_source_axis, y_source_axis,
+                                         np.ascontiguousarray(blend.T))
+                    interp = pyinterp.bivariate(
+                        g2, x_flat, y_flat, bounds_error=False
+                    ).reshape(out_shape[::-1]).T
+                    interp[mask_t] = np.nan
+                    result[t] = interp
 
-                _var_interp = _var_interp[np.newaxis,:,:].repeat(len(time),axis=0) 
-                _var_interp[self.mask] = np.nan
-            #_var_interp[np.isnan(_var_interp)] = 0.
-            var_interp[name] = _var_interp
-        
+            var_interp[name] = result
+
         return var_interp
     
     def _interp_1D(self, time):
