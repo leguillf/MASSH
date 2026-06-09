@@ -823,11 +823,19 @@ class Obsop_interp_l4(Obsop_interp):
                             err = np.ones_like(var)
                         err[np.isnan(var)] = np.nan
 
-                        # Add error due to interpolation (resolutions ratio)
+                        # Representativeness inflation when obs pixels are
+                        # finer than the model grid (averaging ~_err_res
+                        # independent samples per cell -> sqrt(N) reduction
+                        # cancels into a sqrt(_err_res) inflation of the
+                        # per-cell error under the i.i.d. assumption).
+                        # Skip when obs are coarser than the grid: the same
+                        # obs is reused across neighbouring cells, so the
+                        # per-cell noise stays at the sensor noise (spatial
+                        # correlation between cells is not represented here).
                         dx, dy = grid.lonlat2dxdy(lon,lat)
                         _err_res = np.nanmean(dx * dy) / np.nanmean(self.DX * self.DY)
                         if _err_res>1:
-                            err *= _err_res
+                            err *= np.sqrt(_err_res)
                                         
                         # Append to lists
                         var_obs.append(+var.flatten())
