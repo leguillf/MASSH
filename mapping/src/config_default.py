@@ -584,6 +584,8 @@ MOD_QGSW = dict(
 
     mask_sponge_bc = False, # Whether to set the mask to True in the sponge boundary areas (i.e. to avoid assimilating observations in these areas). Defaults to False for backward compatibility with existing Model_qgsw experiments.
 
+    qg_balanced_sponge_bc = False, # (SW mode only) Whether to use a QG-projected, dynamically-balanced sponge target instead of the raw external boundary field. Requires an active sponge (sponge_coef > 0, dist_sponge_bc set). Incompatible with the 'bc' control parameter.
+
     visc_coef = 0., # viscosity coefficient (in m^2/s). Typical values 10–30 m²/s, 50–100 m²/s if unstable
 
     H_min = None, # minimum equivalent depth (in m). None means no clamping

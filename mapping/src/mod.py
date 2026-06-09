@@ -3134,6 +3134,49 @@ class Model_qgsw(M):
 
         self.model = model(params)
 
+        # Build auxiliary QG projector for QG-balanced sponge target (SW mode only)
+        self.model_proj = None
+        self.qg_balanced_sponge_bc = False
+        if not self._is_qg_class and getattr(config.MOD, 'qg_balanced_sponge_bc', False):
+            # Validate preconditions
+            _name_params = config.MOD.name_params if config.MOD.name_params is not None else []
+            if 'bc' in _name_params:
+                raise ValueError(
+                    'qg_balanced_sponge_bc is not compatible with the "bc" control parameter. '
+                    'Use external boundary conditions only when using QG-projected sponge targets.'
+                )
+            if config.MOD.dist_sponge_bc is None or config.MOD.dist_sponge_bc <= 0 or config.MOD.sponge_coef == 0:
+                print('Warning: qg_balanced_sponge_bc=True but sponge is inactive '
+                      '(dist_sponge_bc=None/≤0 or sponge_coef==0); disabling QG-projected sponge targets.')
+            else:
+                # Build auxiliary QG projector by cloning the SW params and
+                # overriding only what the QG elliptic solver needs.
+                qg_projector_params = dict(params)
+                qg_projector_params['H'] = self.H0  # spatially constant H for QG solver
+                # QG spectral solver assumes uniform spacing — collapse 2-D
+                # dx/dy to their domain mean if needed.
+                qg_projector_params['dx'] = float(np.nanmean(State.DX))
+                qg_projector_params['dy'] = float(np.nanmean(State.DY))
+                # The sponge projector only builds a balanced target. In domains
+                # with land, the capacitance-matrix irregular-boundary correction
+                # can become ill-conditioned and seed NaNs into the target, so use
+                # the robust masked DST solve for this auxiliary projection.
+                qg_projector_params['solver'] = 'dst'
+                qg_projector_params['compile'] = False
+                qg_projector_params['sponge_coef'] = 0.0  # projector is not a time-stepper
+                qg_projector_params['visc_coef'] = 0.0
+                qg_projector_params['diff_coef'] = 0.0
+                qg_projector_params['diff_coef_trac'] = 0.0
+                try:
+                    self.model_proj = model_qg(qg_projector_params)
+                    self.qg_balanced_sponge_bc = True
+                    print('Initialized auxiliary QG projector for balanced sponge targets')
+                except Exception as e:
+                    print(f'Warning: failed to initialize QG projector: {e}; '
+                          'falling back to external boundary field sponge targets.')
+                    self.model_proj = None
+                    self.qg_balanced_sponge_bc = False
+
         if self.mdt is not None:
             self.mdu = jnp.nan_to_num(self.mdu, nan=0.0, posinf=0.0, neginf=0.0)
             self.mdv = jnp.nan_to_num(self.mdv, nan=0.0, posinf=0.0, neginf=0.0)
@@ -3603,6 +3646,58 @@ class Model_qgsw(M):
         _h = jnp.pad(h, pad_width=pad, mode='edge')
         h_on_v = 0.5*(_h[:,1:] + _h[:,:-1])
         return h_on_v
+
+    def _qg_balanced_sponge_target(self, u, v, h, u_b_sw, v_b_sw, h_b_sw):
+        """Return physical sponge targets from the auxiliary QG projector."""
+        mp = self.model_proj
+
+        if self.nl == 1:
+            u_b_phys = jnp.expand_dims(u_b_sw, axis=(0, 1))
+            v_b_phys = jnp.expand_dims(v_b_sw, axis=(0, 1))
+            h_b_phys = jnp.expand_dims(h_b_sw, axis=(0, 1))
+        else:
+            u_b_phys = jnp.expand_dims(u_b_sw, axis=0)
+            v_b_phys = jnp.expand_dims(v_b_sw, axis=0)
+            h_b_phys = jnp.expand_dims(h_b_sw, axis=0)
+
+        u_clean = jnp.nan_to_num(u, nan=0.0, posinf=0.0, neginf=0.0)
+        v_clean = jnp.nan_to_num(v, nan=0.0, posinf=0.0, neginf=0.0)
+        h_clean = jnp.nan_to_num(h, nan=0.0, posinf=0.0, neginf=0.0)
+        u_b_phys = jnp.nan_to_num(u_b_phys, nan=0.0, posinf=0.0, neginf=0.0)
+        v_b_phys = jnp.nan_to_num(v_b_phys, nan=0.0, posinf=0.0, neginf=0.0)
+        h_b_phys = jnp.nan_to_num(h_b_phys, nan=0.0, posinf=0.0, neginf=0.0)
+
+        # Use the projector's standard input path so land/coast masks are applied
+        # before Q(u, v, h) forms coastal finite differences.
+        u_in, v_in, h_in = mp.set_input_uvh(u_clean, v_clean, h_clean)
+        _, _, h_b_in = mp.set_input_uvh(u_b_phys, v_b_phys, h_b_phys)
+
+        pb, pb_i, qb = mp._compute_qg_background(h_b_in)
+        u_proj, v_proj, h_proj = mp.project_qg(
+            u_in, v_in, h_in, pb=pb, pb_i=pb_i, qb=qb,
+        )
+        u_proj_phys, v_proj_phys, h_proj_phys = mp.get_physical_uvh(
+            u_proj, v_proj, h_proj, numpy=False,
+        )
+
+        max_factor = 2.0
+        u_scale = jnp.maximum(jnp.maximum(jnp.max(jnp.abs(u_clean)), jnp.max(jnp.abs(u_b_phys))), 1.0)
+        v_scale = jnp.maximum(jnp.maximum(jnp.max(jnp.abs(v_clean)), jnp.max(jnp.abs(v_b_phys))), 1.0)
+        h_scale = jnp.maximum(jnp.maximum(jnp.max(jnp.abs(h_clean)), jnp.max(jnp.abs(h_b_phys))), 1.0)
+
+        u_ok = jnp.isfinite(u_proj_phys) & (jnp.abs(u_proj_phys) <= max_factor * u_scale)
+        v_ok = jnp.isfinite(v_proj_phys) & (jnp.abs(v_proj_phys) <= max_factor * v_scale)
+        h_ok = jnp.isfinite(h_proj_phys) & (jnp.abs(h_proj_phys) <= max_factor * h_scale)
+        u_proj_phys = jnp.nan_to_num(u_proj_phys, nan=0.0, posinf=0.0, neginf=0.0)
+        v_proj_phys = jnp.nan_to_num(v_proj_phys, nan=0.0, posinf=0.0, neginf=0.0)
+        h_proj_phys = jnp.nan_to_num(h_proj_phys, nan=0.0, posinf=0.0, neginf=0.0)
+        u_target = jnp.where(u_ok, u_proj_phys, u_b_phys)
+        v_target = jnp.where(v_ok, v_proj_phys, v_b_phys)
+        h_target = jnp.where(h_ok, h_proj_phys, h_b_phys)
+
+        if self.nl == 1:
+            return u_target[0, 0], v_target[0, 0], h_target[0, 0]
+        return u_target[0], v_target[0], h_target[0]
     
     def jstep_core(self, t, u0, v0, h0, H, Fu, Fv, Fh, u_b, v_b, h_b,
                 taux=None, tauy=None, h_wind=None, wind_strength=None, nstep=1):
@@ -3661,6 +3756,13 @@ class Model_qgsw(M):
                 u_b_sw = u_b_sw + self.mdu[0, 0]
                 v_b_sw = v_b_sw + self.mdv[0, 0]
                 h_b_sw = h_b_sw + self.mdt[0, 0]
+
+        # QG-balanced sponge target: replace the external sponge target with a
+        # masked, QG-projected field from the current MDT-included state.
+        if self.qg_balanced_sponge_bc and self.model_proj is not None:
+            u_b_sw, v_b_sw, h_b_sw = self._qg_balanced_sponge_target(
+                u, v, h, u_b_sw, v_b_sw, h_b_sw,
+            )
 
         # Step
         if self._is_qg_class:
@@ -3753,6 +3855,12 @@ class Model_qgsw(M):
                 u_b_sw = u_b_sw + self.mdu[0, 0]
                 v_b_sw = v_b_sw + self.mdv[0, 0]
                 h_b_sw = h_b_sw + self.mdt[0, 0]
+
+        # QG-balanced sponge target — same logic as in jstep_core.
+        if self.qg_balanced_sponge_bc and self.model_proj is not None:
+            u_b_sw, v_b_sw, h_b_sw = self._qg_balanced_sponge_target(
+                u, v, h, u_b_sw, v_b_sw, h_b_sw,
+            )
 
         # Joint step (u, v, h, c)
         u1, v1, h1, c1 = self.model.step_with_tracer(
