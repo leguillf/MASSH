@@ -1725,17 +1725,6 @@ class Model_sw1l_jax(M):
         self.omegas = np.asarray(config.MOD.w_waves)
         self.omega_names = config.MOD.w_names
 
-        # Tidal velocities 
-        self.init_tidal_velocity(config,State)
-
-        # Bathymetry field 
-        self.init_bathy(config,State)
-
-        self.phase_inform = config.MOD.phase_inform
-
-        # Generation term 
-        self.init_generation(config,State)
-
         ####################################
         ### INITIALIZING MODEL VARIABLES ###
         ####################################
@@ -1758,6 +1747,17 @@ class Model_sw1l_jax(M):
                 
         # Initializing model params
         self.init_params(config,State)
+
+        # Tidal velocities 
+        self.init_tidal_velocity(config,State)
+
+        # Bathymetry field 
+        self.init_bathy(config,State)
+
+        self.phase_inform = config.MOD.phase_inform
+
+        # Generation term 
+        self.init_generation(config,State)
 
         #################################
         ### LOADING MODEL PYTHON FILE ### 
@@ -1875,6 +1875,7 @@ class Model_sw1l_jax(M):
             )
             u0_pyfes = 1e-2*(tide_eastward) # + lp_eastward )
             u0_pyfes=u0_pyfes.reshape(array_lon.shape)
+            u0_pyfes = np.nan_to_num(u0_pyfes, nan=0.0)
 
             tide_northward, lp_northward, flags_northward = pyfes.evaluate_tide(
             config_northward.models['tide'], array_dates.ravel(), array_lon.ravel(), array_lat.ravel(),
@@ -1882,6 +1883,7 @@ class Model_sw1l_jax(M):
             )
             v0_pyfes = 1e-2*(tide_northward)# + lp_northward)
             v0_pyfes=v0_pyfes.reshape(array_lon.shape)
+            v0_pyfes = np.nan_to_num(v0_pyfes, nan=0.0)
 
             self.u_bar_data = {t: u0_pyfes[i] for i, t in enumerate(self.T)}
             self.v_bar_data = {t: v0_pyfes[i] for i, t in enumerate(self.T)}
@@ -2190,7 +2192,12 @@ class Model_sw1l_jax(M):
 
         ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='linear')
 
-        self.generation = ds[name_generation].values
+        # self.generation = ds[name_generation].values
+
+        ds[name_generation] = ds[name_generation].fillna(0)
+
+        self.generation = -(self.c**2/(-self.bathymetry))*ds[name_generation].values
+        
         # NOT INFORM GENERATION
         if config.MOD.no_generation:
             self.generation = np.ones_like(self.generation)#*np.mean(self.generation)
@@ -2225,24 +2232,36 @@ class Model_sw1l_jax(M):
             ds = xr.open_dataset(config.MOD.path_bathymetry).squeeze()
             name_lon = config.MOD.name_var_bathy['lon']
             name_lat = config.MOD.name_var_bathy['lat']
-            name_elevation = config.MOD.name_var_bathy['var']
+            if config.MOD.name_var_bathy.get('var','') != '':
+                name_var = config.MOD.name_var_bathy['var']
+            else : 
+                name_var = None
+            if config.MOD.name_var_bathy.get('H','') != '':
+                name_H = config.MOD.name_var_bathy['H']
+            else:
+                name_H = None
+            if config.MOD.name_var_bathy.get('dvar_dx','') != '' and config.MOD.name_var_bathy.get('dvar_dy','') != '':
+                name_dvar_dx = config.MOD.name_var_bathy['dvar_dx']
+                name_dvar_dy = config.MOD.name_var_bathy['dvar_dy']
+            else:
+                name_dvar_dx = None
+                name_dvar_dy = None
+            if config.MOD.name_var_bathy.get('dH_dx','') != '' and config.MOD.name_var_bathy.get('dH_dy','') != '':
+                name_dH_dx = config.MOD.name_var_bathy['dH_dx']
+                name_dH_dy = config.MOD.name_var_bathy['dH_dy']
+            else:
+                name_dH_dx = None
+                name_dH_dy = None
 
         else: # No bathymetry file prescripted
             warnings.warn("No bathymetry field prescribed.")
             return None 
 
-        # Convert longitudes to State convention (only updates the 1D lon coord — cheap).
-        # After conversion the lon array may be non-monotonic (e.g. a global file wrapped
-        # at the dateline), so we cannot use .sel(slice(...)) yet. Subset by boolean mask
-        # first, then sortby on the small subset, then interp — this avoids sorting the
-        # full global elevation field, which dominated the previous runtime.
         if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
             ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
         elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
             ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
 
-        # Native grid spacing from a sorted copy of the 1D coords so the wrap-around
-        # discontinuity (after the modulo conversion above) does not pollute the diff.
         lon_arr = ds[name_lon].data
         lat_arr = ds[name_lat].data
         dlon = np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
@@ -2250,52 +2269,81 @@ class Model_sw1l_jax(M):
         dlon += np.nanmax(np.diff(np.sort(lon_arr)))
         dlat += np.nanmax(np.diff(np.sort(lat_arr)))
 
-        # Boolean masking on 1D coords works regardless of order.
         lon_mask = (lon_arr >= State.lon_min - dlon) & (lon_arr <= State.lon_max + dlon)
         lat_mask = (lat_arr >= State.lat_min - dlat) & (lat_arr <= State.lat_max + dlat)
         ds = ds.isel({name_lon: np.where(lon_mask)[0],
                       name_lat: np.where(lat_mask)[0]})
 
-        # Now sortby on the (small) subset so .interp gets a monotonic index.
         ds = ds.sortby(ds[name_lon])
         ds = ds.sortby(ds[name_lat])
 
         ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='linear')
 
-        ds = ds.where(ds.elevation<0,0) # replacing the continents (where ds.elevation>0) with 0
+        ds = ds.interpolate_na(dim=name_lon)
 
-        self.bathymetry = ds[name_elevation].values
-
-        # Calculating bathymetry gradient 
-        # X component of gradient
-        grad_x = np.zeros(State.X.shape)
-        grad_x[:,1:-1] = (self.bathymetry[:,2:]-self.bathymetry[:,0:-2])/(State.X[:,2:]-State.X[:,0:-2]) # inner part of gradient 
-        grad_x[:,0] = (self.bathymetry[:,1]-self.bathymetry[:,0])/(State.X[:,1]-State.X[:,0])
-        grad_x[:,-1] = (self.bathymetry[:,-1]-self.bathymetry[:,-2])/(State.X[:,-1]-State.X[:,-2])
+        # Replacing continents by 0 values and setting class attributes
+        if name_var is not None:
+            ds = ds.where(ds[name_var]<0,0)
+            self.bathymetry = ds[name_var].values
+            self.H = -self.bathymetry
         
-        # Y component of gradient
-        grad_y = np.zeros(State.Y.shape)
-        grad_y[1:-1,:] = (self.bathymetry[2:,:]-self.bathymetry[0:-2,:])/(State.Y[2:,:]-State.Y[0:-2,:])
-        grad_y[0,:] = (self.bathymetry[1,:]-self.bathymetry[0,:])/(State.Y[1,:]-State.Y[0,:])
-        grad_y[-1,:] = (self.bathymetry[-1,:]-self.bathymetry[-2,:])/(State.Y[-1,:]-State.Y[-2,:])
+        if name_H  is not None:
+            ds = ds.where(ds[name_H]>0,0) 
+            self.H = ds[name_H].values
+            if name_var is None:
+                self.bathymetry = -self.H
+
+        if name_var is None and name_H  is None:
+            print("Warning, neither 'var' nor 'H' were prescribed.")
+
+        # Sanity check on the signs, once the continents have been masked:
+        # bathymetry must be defined negative (ocean depth, <=0 on continents)
+        # and H must be defined positive (water column thickness, >=0 on continents).
+        if name_var is not None or name_H is not None:
+            assert np.all(self.bathymetry <= 0), \
+                "self.bathymetry must be defined negative (<=0) after masking the continents."
+            assert np.all(self.H >= 0), \
+                "self.H must be defined positive (>=0) after masking the continents."
+
+        def compute_grad(field):
+            grad_x = np.zeros(State.X.shape)
+            grad_x[:,1:-1] = (field[:,2:]-field[:,0:-2])/(State.X[:,2:]-State.X[:,0:-2]) # inner part of gradient 
+            grad_x[:,0] = (field[:,1]-field[:,0])/(State.X[:,1]-State.X[:,0])
+            grad_x[:,-1] = (field[:,-1]-field[:,-2])/(State.X[:,-1]-State.X[:,-2])
+            
+            # Y component of gradient
+            grad_y = np.zeros(State.Y.shape)
+            grad_y[1:-1,:] = (field[2:,:]-field[0:-2,:])/(State.Y[2:,:]-State.Y[0:-2,:])
+            grad_y[0,:] = (field[1,:]-field[0,:])/(State.Y[1,:]-State.Y[0,:])
+            grad_y[-1,:] = (field[-1,:]-field[-2,:])/(State.Y[-1,:]-State.Y[-2,:])
+
+            return grad_x,grad_y
+
+
+        if (name_dvar_dx is not None) and (name_dvar_dy is not None): # Bathymetry gradient is specified 
+            self.grad_bathymetry_x = ds[name_dvar_dx].values
+            self.grad_bathymetry_y = ds[name_dvar_dy].values
+        else :
+            self.grad_bathymetry_x,self.grad_bathymetry_y = compute_grad(self.bathymetry)
+
+        if (name_dH_dx is not None) and (name_dH_dy is not None): # Topography gradient is specified 
+            self.grad_H_x = ds[name_dH_dx].values
+            self.grad_H_y = ds[name_dH_dy].values
+        else :
+            self.grad_H_x,self.grad_H_y = compute_grad(self.H)
 
         # Applying bathymetry smoothing if prescribed 
         if config.MOD.smooth_wavelength != None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0 :
             N_pixel_x = config.MOD.smooth_wavelength/State.dx
             N_pixel_y = config.MOD.smooth_wavelength/State.dy
             print(f"Smoothing bathy with a gaussian kernel of {N_pixel_x} pixels along x and {N_pixel_y} pixels along y ... ")
-            grad_x = gaussian_filter(grad_x,sigma=(N_pixel_y,N_pixel_x))
-            grad_y = gaussian_filter(grad_y,sigma=(N_pixel_y,N_pixel_x))
+            self.bathymetry = gaussian_filter(self.bathymetry,sigma=(N_pixel_y,N_pixel_x))
+            self.H = gaussian_filter(self.H,sigma=(N_pixel_y,N_pixel_x))
+            self.grad_bathymetry_x = gaussian_filter(self.grad_bathymetry_x,sigma=(N_pixel_y,N_pixel_x))
+            self.grad_bathymetry_y = gaussian_filter(self.grad_bathymetry_y,sigma=(N_pixel_y,N_pixel_x))
+            self.grad_H_x = gaussian_filter(self.grad_H_x,sigma=(N_pixel_y,N_pixel_x))
+            self.grad_H_y = gaussian_filter(self.grad_H_y,sigma=(N_pixel_y,N_pixel_x))
             
-            # N_pixel = np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32)
-            # array_pascal = factorial(N_pixel-1)/(factorial(np.ones((1,N_pixel))*(N_pixel-1)-np.arange(0,N_pixel).reshape((1,N_pixel)))*factorial(np.arange(0,N_pixel).reshape((1,N_pixel))))
-            # gaussian_kernel = (1/array_pascal.sum()**2)*array_pascal.T*array_pascal
-            # grad_x = convolve2d(grad_x,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
-            # grad_y = convolve2d(grad_y,gaussian_kernel,mode='same', boundary='fill', fillvalue=0)
-        
-        self.grad_bathymetry_x = grad_x
-        self.grad_bathymetry_y = grad_y
-
         fig, (ax1,ax2) = plt.subplots(1,2,figsize=(14,5))
         n_max_abs = np.max(np.abs(self.grad_bathymetry_x))
         im1 = ax1.pcolormesh(self.grad_bathymetry_x,vmin=-n_max_abs,vmax=+n_max_abs,cmap='RdBu')
@@ -2884,6 +2932,25 @@ class Model_sw1l_jax(M):
         params = X1[self.swm.nstates:]
         for param in self.name_params :    
             State.params[self.name_params[param]] = params[self.slice_params[param]].reshape(self.shape_params[param])
+
+    def save_output(self,State,present_date,name_var=None,t=None):
+
+        name_var_to_save = [self.name_var['SSH'], 
+                            self.name_var['U']+'_interp', 
+                            self.name_var['V']+'_interp']
+        
+        u = +State.getvar(name_var=self.name_var['U'])[:,0:-1]
+        v = +State.getvar(name_var=self.name_var['V'])[0:-1,:]
+        u_to_save = np.zeros((State.ny,State.nx))
+        v_to_save = np.zeros((State.ny,State.nx))
+        u_to_save[:,1:-1] = (u[:,1:] + u[:,:-1]) * .5
+        v_to_save[1:-1,:] = (v[1:,:] + v[:-1,:]) * .5
+        State.var[self.name_var['U']+'_interp'] = u_to_save
+        State.var[self.name_var['V']+'_interp'] = v_to_save
+
+        State.save_output(present_date,
+                          name_var=name_var_to_save)
+
 
 class Model_sw1l_jax_flo(M):
     def __init__(self,config,State):

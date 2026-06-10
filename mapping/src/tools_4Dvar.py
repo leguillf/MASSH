@@ -336,12 +336,17 @@ class Variational:
                 #     fig.colorbar(plot,ax=_ax)
                 # plt.show()
 
-                # plt.figure()
-                # plt.title("He")
-                # plt.pcolormesh(State.params["He"])
-                # plt.colorbar()
-                # plt.show()
+                plt.figure()
+                plt.title("ITG coeff")
+                plt.pcolormesh(State.params["itg_coeff"])
+                plt.colorbar()
+                plt.show()
 
+                plt.figure()
+                plt.title("He")
+                plt.pcolormesh(State.params["He"])
+                plt.colorbar()
+                plt.show()
 
             #     plt.figure()
             #     plt.title("He_offset1")

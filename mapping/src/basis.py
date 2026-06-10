@@ -33,7 +33,7 @@ import datetime
 
 from .tools import gaspari_cohn 
 
-def Basis(config, State, verbose=True, *args, **kwargs):
+def Basis(config, State, verbose=True,multi_mode=False, *args, **kwargs):
     """
     NAME
         Basis
@@ -62,10 +62,16 @@ def Basis(config, State, verbose=True, *args, **kwargs):
             return Basis_geocur(config,State)
 
         elif config.BASIS.super=='BASIS_GAUSS3D':
-            return Basis_gauss3d(config,State)
+            return Basis_gauss3d(config,State,multi_mode=multi_mode)
 
         elif config.BASIS.super=='BASIS_GAUSS3D_JAX':
-            return Basis_gauss3d_jax(config,State)
+            return Basis_gauss3d_jax(config,State,multi_mode=multi_mode)
+
+        elif config.BASIS.super=='BASIS_GAUSS2D':
+            return Basis_gauss2d(config,State,multi_mode=multi_mode)
+
+        elif config.BASIS.super=='BASIS_GAUSS2D_JAX':
+            return Basis_gauss2d_jax(config,State,multi_mode=multi_mode)
 
         elif config.BASIS.super=='BASIS_GAUSS_ITG':
             return Basis_gauss_itg(config,State) 
@@ -1268,7 +1274,7 @@ class Basis_gauss_itg():
 
 class Basis_gauss3d:
    
-    def __init__(self, config, State):
+    def __init__(self, config, State, multi_mode=False):
 
         self.km2deg = 1./110
 
@@ -1285,28 +1291,103 @@ class Basis_gauss3d:
         self.flag_variable_Q = config.BASIS.flag_variable_Q
         self.path_sad = config.BASIS.path_sad
         self.name_var_sad = config.BASIS.name_var_sad
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
+
+        # C-grid variable type (None, 'U', or 'V')
+        self.c_grid_var = getattr(config.BASIS, 'c_grid_var', None)
 
         # Grid params
-        self.nphys= State.lon.size
-        self.shape_phys = (State.ny,State.nx)
         self.ny = State.ny
         self.nx = State.nx
         self.lon_min = State.lon_min
         self.lon_max = State.lon_max
         self.lat_min = State.lat_min
         self.lat_max = State.lat_max
-        self.lon1d = State.lon.flatten()
-        self.lat1d = State.lat.flatten()
+
+        if self.c_grid_var == 'U':
+            self.shape_phys = (State.ny, State.nx + 1)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_u = np.zeros((State.ny, State.nx + 1))
+            lat_u = np.zeros((State.ny, State.nx + 1))
+            lon_u[:, 1:State.nx] = 0.5 * (lon_h[:, :-1] + lon_h[:, 1:])
+            lat_u[:, 1:State.nx] = 0.5 * (lat_h[:, :-1] + lat_h[:, 1:])
+            lon_u[:, 0] = lon_h[:, 0] - 0.5 * (lon_h[:, 1] - lon_h[:, 0])
+            lat_u[:, 0] = lat_h[:, 0] - 0.5 * (lat_h[:, 1] - lat_h[:, 0])
+            lon_u[:, State.nx] = lon_h[:, -1] + 0.5 * (lon_h[:, -1] - lon_h[:, -2])
+            lat_u[:, State.nx] = lat_h[:, -1] + 0.5 * (lat_h[:, -1] - lat_h[:, -2])
+            self.lon1d = lon_u.flatten()
+            self.lat1d = lat_u.flatten()
+        elif self.c_grid_var == 'V':
+            self.shape_phys = (State.ny + 1, State.nx)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_v = np.zeros((State.ny + 1, State.nx))
+            lat_v = np.zeros((State.ny + 1, State.nx))
+            lon_v[1:State.ny, :] = 0.5 * (lon_h[:-1, :] + lon_h[1:, :])
+            lat_v[1:State.ny, :] = 0.5 * (lat_h[:-1, :] + lat_h[1:, :])
+            lon_v[0, :] = lon_h[0, :] - 0.5 * (lon_h[1, :] - lon_h[0, :])
+            lat_v[0, :] = lat_h[0, :] - 0.5 * (lat_h[1, :] - lat_h[0, :])
+            lon_v[State.ny, :] = lon_h[-1, :] + 0.5 * (lon_h[-1, :] - lon_h[-2, :])
+            lat_v[State.ny, :] = lat_h[-1, :] + 0.5 * (lat_h[-1, :] - lat_h[-2, :])
+            self.lon1d = lon_v.flatten()
+            self.lat1d = lat_v.flatten()
+        else:
+            self.shape_phys = (State.ny, State.nx)
+            self.lon1d = State.lon.flatten()
+            self.lat1d = State.lat.flatten()
+
+        self.nphys = self.lon1d.size
+
+        # Gravity 
+        self.g = 9.81
+
+        # Compute geostrophic velocoties
+        self.compute_velocities = config.BASIS.compute_velocities
+        self.name_mod_u = config.BASIS.name_mod_u
+        self.name_mod_v = config.BASIS.name_mod_v
+        pad = ((1,0),(1,0))
+        _f = np.pad(State.f, pad_width=pad, mode='edge')
+        self.f_on_v = 0.5*(_f[:,1:] + _f[:,:-1])
+        self.f_on_u = 0.5*(_f[1:,:] + _f[:-1,:])
+
+        # Grid spacing
+        self.dx = np.pad(State.DX, pad_width=pad, mode='edge')
+        self.dy = np.pad(State.DY, pad_width=pad, mode='edge')
+        self.dx_on_v = 0.5*(self.dx[:,1:] + self.dx[:,:-1])
+        self.dy_on_u = 0.5*(self.dy[1:,:] + self.dy[:-1,:])
+
+        # Mask
+        if State.mask is not None and np.any(State.mask):
+            if self.c_grid_var == 'U':
+                mask_u = np.zeros((State.ny, State.nx + 1), dtype=bool)
+                mask_u[:, 1:State.nx] = State.mask[:, :-1] | State.mask[:, 1:]
+                self.mask1d = mask_u.ravel()
+            elif self.c_grid_var == 'V':
+                mask_v = np.zeros((State.ny + 1, State.nx), dtype=bool)
+                mask_v[1:State.ny, :] = State.mask[:-1, :] | State.mask[1:, :]
+                self.mask1d = mask_v.ravel()
+            else:
+                self.mask1d = State.mask.ravel()
+        else:
+            self.mask1d = None
+
+        # Coastal face masks for C-grid geostrophic velocity masking
+        if State.mask is not None and np.any(State.mask):
+            _mask_pad = np.pad(State.mask.astype(bool), pad_width=((1,0),(1,0)), mode='edge')
+            self.u_coast_mask = _mask_pad[1:, :] | _mask_pad[:-1, :]  # (ny, nx+1)
+            self.v_coast_mask = _mask_pad[:, 1:] | _mask_pad[:, :-1]  # (ny+1, nx)
+        else:
+            self.u_coast_mask = None
+            self.v_coast_mask = None
 
         # Time window
         if self.flux:
             self.window = mywindow_flux
         else:
             self.window = mywindow
-
-        # Time dependancy 
-        self.time_dependant = config.BASIS.time_dependant 
-
+ 
         # For time normalization
         if self.normalize_fact:
             tt = np.linspace(-self.sigma_T,self.sigma_T)
@@ -1318,7 +1399,9 @@ class Basis_gauss3d:
         # Longitude unit
         self.lon_unit = State.lon_unit
         
-    
+        # For multi-basis
+        self.multi_mode = multi_mode
+         
     def set_basis(self,time,return_q=False,**kwargs):
         
         TIME_MIN = time.min()
@@ -1349,77 +1432,73 @@ class Basis_gauss3d:
         self.ENSLON = ENSLON
         
         # Coordinates in time
-        if self.time_dependant : 
-            ENST = np.arange(-self.sigma_T*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.sigma_T/self.facnlt , self.sigma_T/self.facnlt)
-            self.ENST = ENST
-
-        # BASIS PROPERTIES 
-        if self.time_dependant:
-            self.nbasis = ENST.size * ENSLAT.size
-            self.shape_basis = [ENST.size,ENSLAT.size]
-        else : 
-            self.nbasis = ENSLAT.size
-            self.shape_basis = [ENSLAT.size]
-        # PARAMETER PROPERTIES 
+        ENST = np.arange(-self.sigma_T*(1-1./self.facnlt),(TIME_MAX - TIME_MIN)+1.5*self.sigma_T/self.facnlt , self.sigma_T/self.facnlt)
+        self.ENST = ENST
+    
+        self.nbasis = ENST.size * ENSLAT.size
         self.nphys = self.lon1d.size
-        self.shape_phys = [self.ny, self.nx]
-        
+        if self.c_grid_var == 'U':
+            self.shape_phys = [self.ny, self.nx + 1]
+        elif self.c_grid_var == 'V':
+            self.shape_phys = [self.ny + 1, self.nx]
+        else:
+            self.shape_phys = [self.ny, self.nx]
+        self.shape_basis = [ENST.size,ENSLAT.size]
         
         # Fill Q matrix
         if self.flag_variable_Q:
-            Q = np.zeros(self.nbasis)
-            sad = xr.open_dataset(self.path_sad)[self.name_var_sad['var']]**2 # Std -> Variance
+            Q = []
+            sad = xr.open_dataset(self.path_sad)[self.name_var_sad['var']] 
             # Convert longitude 
-            if np.sign(sad[self.name_var_sad[self.name_var_sad['lon']]].data.min())==-1 and self.lon_unit=='0_360':
+            if np.sign(sad[self.name_var_sad['lon']].data.min())==-1 and self.lon_unit=='0_360':
                 sad = sad.assign_coords({self.name_var_sad['lon']:((self.name_var_sad['lon'], sad[self.name_var_sad['lon']].data % 360))})
-            elif np.sign(sad[self.name_var_sad[self.name_var_sad[self.name_var_sad['lon']]]].data.min())>=0 and self.lon_unit=='-180_180':
+            elif (np.sign(sad[self.name_var_sad['lon']].data.min())>=0  or sad[self.name_var_sad['lon']].data.max()>180) and self.lon_unit=='-180_180':
                 sad = sad.assign_coords({self.name_var_sad['lon']:((self.name_var_sad['lon'], (sad[self.name_var_sad['lon']].data + 180) % 360 - 180 ))})
             sad = sad.sortby(sad[self.name_var_sad['lon']])    
-            grid = pyinterp.Grid2D(pyinterp.Axis(sad[self.name_var_sad['lon']], is_circle=False), pyinterp.Axis(sad[self.name_var_sad['lat']]), sad.T)  # Note: Transpose required
-            i = 0
-            range_ENST = len(self.ENST) if self.time_dependant else 1
-            for _ in range(range_ENST):
-                for (lon,lat) in zip(ENSLON,ENSLAT):
-                    indphys = np.where(
-                            (np.abs((np.mod(self.lon1d - lon+180,360)-180) / self.km2deg * np.cos(lat * np.pi / 180.)) <= self.sigma_D) &
-                            (np.abs((self.lat1d - lat) / self.km2deg) <= self.sigma_D)
-                            )[0]
-                    xx = (np.mod(self.lon1d[indphys] - lon+180,360)-180) / self.km2deg * np.cos(lat * np.pi / 180.) 
-                    yy = (self.lat1d[indphys] - lat) / self.km2deg
-                    facS = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
-                    Q_tmp = pyinterp.bivariate(grid, self.lon1d[indphys],self.lat1d[indphys], bounds_error=False)
-                    if np.all(np.isnan(Q_tmp)):
-                        Q_tmp = 10**-10 # Not zero otherwise a ZeroDivisionError exception will be raised
-                    else:
-                        Q_tmp = (np.average(Q_tmp, weights=facS) * self.fcor / (self.facns*self.facnlt))**.5 
-                    Q[i] = Q_tmp 
-                    i += 1
+            for (lon,lat) in zip(ENSLON,ENSLAT):
+                # Precompute interpolation grid once
+                dlon = .5 * self.sigma_D/np.cos(lat*np.pi/180.)
+                dlat = .5 * self.sigma_D
+                elon = np.linspace(lon - dlon, lon + dlon, 10)
+                elat = np.linspace(lat - dlat, lat + dlat, 10)
+                elon2, elat2 = np.meshgrid(elon, elat)
+                std_tmp_values = sad.interp({self.name_var_sad['lon']:elon2.ravel(), 
+                                            self.name_var_sad['lat']:elat2.ravel()}).values
+                std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10
+                Q_tmp = std_tmp / ((self.facns*self.facnlt))**.5 
+                Q.append(Q_tmp) 
+            # Repeat for all time centers
+            Q = np.tile(Q, len(self.ENST))
         else:
-            if self.time_dependant :
-                Q = (self.fcor * self.sigma_Q**2 / (self.facns*self.facnlt))**.5   * np.ones((self.nbasis))
-            else : # not normalizing by self.facnlt 
-                Q = (self.fcor * self.sigma_Q**2 / (self.facns))**.5   * np.ones((self.nbasis))
+            Q = self.sigma_Q / ((self.facns*self.facnlt))**.5 * np.ones((self.nbasis))
+
+
         
-        size_ENST = ENST.size if self.time_dependant else 0
+        Xb = np.zeros_like(Q)
+        # Background
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print('gauss3d np.shape(Xb)',np.shape(Xb))
+                print('gauss3d np.shape(ds[self.var_background].values)',np.shape(ds[self.var_background].values))
+                print(f'Load background from file: {self.path_background}') 
+                Xb = ds[self.var_background].values[:len(Xb)] 
+
+        
         print(f'lambda={self.sigma_D:.1E}',
             f'nlocs={ENSLAT.size:.1E}',
             f'tdec={self.sigma_T:.1E}',
-            f'ntime={size_ENST:.1E}',
+            f'ntime={ENST.size:.1E}',
             f'Q={np.mean(Q):.1E}')
         
         print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n reduced factor: {int(time.size * self.nphys/self.nbasis)}')
 
         # Compute basis components
-        # In space 
         Gauss_xy = self._compute_component_space()
+        Gauss_t, Nt = self._compute_component_time(time)
         self.Gauss_xy = Gauss_xy
+        self.Gauss_t = Gauss_t
+        self.Nt = Nt
         self.Nx = ENSLAT.size
-        # In time 
-        if self.time_dependant:
-            Gauss_t, Nt = self._compute_component_time(time)
-            self.Gauss_t = Gauss_t
-            self.Nt = Nt
-        
 
         if return_q:
             return np.zeros_like(Q), Q
@@ -1441,7 +1520,11 @@ class Basis_gauss3d:
                     )[0]
             xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
             yy = (self.lat1d[indphys] - lat0) / self.km2deg
-
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
             sizes[i] = indphys.size
             indices[ind_tmp:ind_tmp+indphys.size] = indphys
             data[ind_tmp:ind_tmp+indphys.size] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
@@ -1476,6 +1559,56 @@ class Basis_gauss3d:
 
         return Gauss_t, Nt
 
+    def _ssh2uv(self, ssh):
+
+        """
+            Compute geostrophic velocities from SSH
+        """
+
+        _ssh = np.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
+
+        _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        if self.u_coast_mask is not None:
+            _u = np.where(self.u_coast_mask, 0., _u)
+            _v = np.where(self.v_coast_mask, 0., _v)
+
+        return _u, _v
+    
+    def _ssh2uv_adj(self, adu, adv):
+
+        """
+        Adjoint of geostrophic velocity computation.
+        Uses jnp so that JAX device arrays are kept on-device (no GPU→CPU transfer).
+        """
+
+        if self.u_coast_mask is not None:
+            adu = jnp.where(self.u_coast_mask, 0., adu)
+            adv = jnp.where(self.v_coast_mask, 0., adv)
+
+        # _adssh lives on padded grid: (ny+1, nx+1)
+        _adssh = jnp.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+
+        _adssh = _adssh.at[1:,:].add( -self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:-1,:].add(  self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:,1:].add(   self.g / self.f_on_v * adv / self.dx_on_v)
+        _adssh = _adssh.at[:,:-1].add( -self.g / self.f_on_v * adv / self.dx_on_v)
+
+        # map padded grid back to physical ssh grid:
+        # physical ssh[i,j] == _ssh[i+1,j+1]
+        adssh = _adssh[1:,1:]
+
+        # contributions from the padded first row/col (mode='edge' duplicates edge values)
+        # add the padded southern row (index 0) to physical southern row (adssh[0,:])
+        adssh = adssh.at[0,:].add(_adssh[0,1:])
+        # add the padded western column (index 0) to physical western column (adssh[:,0])
+        adssh = adssh.at[:,0].add(_adssh[1:,0])
+        # the padded corner (0,0) was duplicated as well — add it into adssh[0,0]
+        adssh = adssh.at[0,0].add(_adssh[0,0])
+
+        return adssh
+    
     def operg(self, t, X, State=None):
 
         """
@@ -1483,22 +1616,35 @@ class Basis_gauss3d:
         """
         
         phi = np.zeros(self.nphys)
-        if self.time_dependant:
-            GtX = self.Gauss_t[t] * X
-            ind0 = np.nonzero(self.Gauss_t[t])[0]
-            if ind0.size>0:
-                GtX = GtX[ind0].reshape(self.Nt[t],self.Nx)
-                phi += self.Gauss_xy.dot(GtX.sum(axis=0))
-        else: 
-            phi = self.Gauss_xy.dot(X)
-
+        GtX = self.Gauss_t[t] * X
+        ind0 = np.nonzero(self.Gauss_t[t])[0]
+        if ind0.size>0:
+            GtX = GtX[ind0].reshape(self.Nt[t],self.Nx)
+            phi += self.Gauss_xy.dot(GtX.sum(axis=0))
         phi = phi.reshape(self.shape_phys)
-    
-        if State is not None:
-            State.params[self.name_mod_var] = phi
-        else:
-            return phi
 
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
+    
+        # Update State
+        if State is not None:
+            if not self.multi_mode:
+                State[self.name_mod_var] = phi
+            else:
+                State[self.name_mod_var] += phi
+        else:
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
 
     def operg_transpose(self, t, adState):
         """
@@ -1507,39 +1653,48 @@ class Basis_gauss3d:
 
         if adState.params[self.name_mod_var] is None:
             adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+        
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros((self.nphys,))
+            adState[self.name_mod_v] = np.zeros((self.nphys,))
 
         adX = np.zeros(self.nbasis)
         adparams = adState.params[self.name_mod_var].ravel()
 
-        if self.time_dependant:
-            Gt = self.Gauss_t[t]
-            ind0 = np.nonzero(Gt)[0]
-            if ind0.size>0:
-                Gt = Gt[ind0].reshape(self.Nt[t],self.Nx)
-                adGtX = self.Gauss_xy.T.dot(adparams)
-                adGtX = np.repeat(adGtX[np.newaxis,:],self.Nt[t],axis=0)
-                adX[ind0] += (Gt*adGtX).ravel()
-        
-        else : 
-            adX += self.Gauss_xy.T.dot(adparams)
+        if self.compute_velocities:
+            adparams += self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v])
 
-        adState.params[self.name_mod_var] *= 0.
+        Gt = self.Gauss_t[t]
+        ind0 = np.nonzero(Gt)[0]
+        if ind0.size>0:
+            Gt = Gt[ind0].reshape(self.Nt[t],self.Nx)
+            adGtX = self.Gauss_xy.T.dot(adparams)
+            adGtX = np.repeat(adGtX[np.newaxis,:],self.Nt[t],axis=0)
+            adX[ind0] += (Gt*adGtX).ravel()
+
+        if not self.multi_mode:
+            adState[self.name_mod_var] *= 0.
 
         return adX
  
 class Basis_gauss3d_jax(Basis_gauss3d):
 
-    def __init__(self,config, State):
-        super().__init__(config, State)
+    def __init__(self,config, State, multi_mode=False):
+        super().__init__(config, State,multi_mode=multi_mode)
 
         self._operg_jit = jit(self._operg)
         self._operg_reduced_jit = jit(self._operg_reduced)
+        self._ssh2uv_adj_jit = jit(self._ssh2uv_adj)
+        self._ssh2uv_jit = jit(self._ssh2uv)
         
     def set_basis(self,time,return_q=False,**kwargs):
         res = super().set_basis(time,return_q=return_q,**kwargs)
 
         self.time = time
         self.vect_time = jnp.eye(time.size)
+
+        self.zero_basis = jnp.zeros((self.nbasis,))
+        self.zero_phys = jnp.zeros((self.nphys,))
 
         return res
     
@@ -1556,9 +1711,14 @@ class Basis_gauss3d_jax(Basis_gauss3d):
                     )[0]
             xx = (np.mod(self.lon1d[indphys] - lon0+180,360)-180) / self.km2deg * np.cos(lat0 * np.pi / 180.) 
             yy = (self.lat1d[indphys] - lat0) / self.km2deg
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
             Gauss_2d[i,indphys] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
         Gauss_2d = jnp.array(Gauss_2d)
-        return sparse.CSR.fromdense(Gauss_2d.T)
+        return sparse.CSR.fromdense(Gauss_2d.T)  
 
     def _compute_component_time(self, time):
 
@@ -1581,6 +1741,23 @@ class Basis_gauss3d_jax(Basis_gauss3d):
 
         return Gt, None
     
+    def _ssh2uv(self, ssh):
+
+        """
+            Compute geostrophic velocities from SSH
+        """
+
+        _ssh = jnp.pad(ssh, pad_width=((1,0),(1,0)), mode='edge')
+
+        _u = -self.g / self.f_on_u * (_ssh[1:,:] - _ssh[:-1,:]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:,1:] - _ssh[:,:-1]) / self.dx_on_v
+
+        if self.u_coast_mask is not None:
+            _u = jnp.where(self.u_coast_mask, 0., _u)
+            _v = jnp.where(self.v_coast_mask, 0., _v)
+
+        return _u, _v
+    
     def get_Gt_value(self, t):
 
         idt = jnp.where(self.time == t, size=1)[0]  # Find index
@@ -1594,22 +1771,15 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         """
 
         # Initialize phi
-        phi = jnp.zeros(self.nphys)
+        phi = self.zero_phys.ravel()
 
-        if self.time_dependant:
+        # Get Gt value
+        Gt = self.get_Gt_value(t)
+        GtX = Gt * X
 
-            # Get Gt value
-            Gt = self.get_Gt_value(t)
-            GtX = Gt * X
+        reshaped_GtX = GtX.reshape((-1, self.Nx))
 
-            reshaped_GtX = GtX.reshape((-1, self.Nx))
-
-            phi += self.Gauss_xy @ (reshaped_GtX.sum(axis=0))
-
-        else : 
-
-            phi += self.Gauss_xy @ X
-
+        phi += self.Gauss_xy @ (reshaped_GtX.sum(axis=0))
         
         phi = phi.reshape(self.shape_phys)
         
@@ -1632,7 +1802,7 @@ class Basis_gauss3d_jax(Basis_gauss3d):
             return self._operg_jit(t, X)
 
         # Compute the vector-Jacobian product (vjp) for the forward projection
-        _, vjp_func = jax.vjp(operg_func, jnp.zeros(self.nbasis))  # Provide a zero vector matching the reduced space shape
+        _, vjp_func = jax.vjp(operg_func, self.zero_basis)  # Provide a zero vector matching the reduced space shape
 
         # Use the vjp_func to compute the reduced space projection
         X_reduced, = vjp_func(phi_2d)
@@ -1648,11 +1818,28 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         # Projection
         phi = self._operg_jit(t, X)
 
+        # Compute geostrophic velocities
+        if self.compute_velocities:
+            u, v = self._ssh2uv_jit(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
+
         # Update State
         if State is not None:
-            State.params[self.name_mod_var] = phi
+            if not self.multi_mode:
+                State.params[self.name_mod_var] = phi
+            else:
+                State.params[self.name_mod_var] += phi
         else:
-            return phi
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
         
     def operg_transpose(self, t, adState):
         
@@ -1661,12 +1848,421 @@ class Basis_gauss3d_jax(Basis_gauss3d):
         """
 
         if adState.params[self.name_mod_var] is None:
-            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+            adState.params[self.name_mod_var] = self.zero_phys
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = self.zero_phys
+            adState[self.name_mod_v] = self.zero_phys
+
         adparams = adState.params[self.name_mod_var]
+        if self.compute_velocities:
+            adparams = adparams + self._ssh2uv_adj_jit(adState[self.name_mod_u], adState[self.name_mod_v])
         adX = self._operg_reduced_jit(t, adparams)
         
-        adState.params[self.name_mod_var] *= 0.
+        if not self.multi_mode:
+            adState.params[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
         
+        return adX
+
+class Basis_gauss2d:
+    """Purely spatial Gaussian radial-basis functions.
+
+    Each control coefficient multiplies one spatial Gaussian bell.
+    No time dimension — the same set of coefficients is applied at every
+    time step by ``operg``.
+    """
+
+    def __init__(self, config, State, multi_mode=False):
+
+        self.km2deg = 1. / 110
+
+        self.facns = config.BASIS.facns
+        self.sigma_D = config.BASIS.sigma_D
+        self.sigma_Q = config.BASIS.sigma_Q
+        self.name_mod_var = config.BASIS.name_mod_var
+        self.flag_variable_Q = config.BASIS.flag_variable_Q
+        self.path_sad = config.BASIS.path_sad
+        self.name_var_sad = config.BASIS.name_var_sad
+        self.path_background = config.BASIS.path_background
+        self.var_background = config.BASIS.var_background
+
+        # C-grid variable type (None, 'U', or 'V')
+        self.c_grid_var = getattr(config.BASIS, 'c_grid_var', None)
+
+        # Grid params
+        self.ny = State.ny
+        self.nx = State.nx
+        self.lon_min = State.lon_min
+        self.lon_max = State.lon_max
+        self.lat_min = State.lat_min
+        self.lat_max = State.lat_max
+
+        if self.c_grid_var == 'U':
+            self.shape_phys = (State.ny, State.nx + 1)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_u = np.zeros((State.ny, State.nx + 1))
+            lat_u = np.zeros((State.ny, State.nx + 1))
+            lon_u[:, 1:State.nx] = 0.5 * (lon_h[:, :-1] + lon_h[:, 1:])
+            lat_u[:, 1:State.nx] = 0.5 * (lat_h[:, :-1] + lat_h[:, 1:])
+            lon_u[:, 0] = lon_h[:, 0] - 0.5 * (lon_h[:, 1] - lon_h[:, 0])
+            lat_u[:, 0] = lat_h[:, 0] - 0.5 * (lat_h[:, 1] - lat_h[:, 0])
+            lon_u[:, State.nx] = lon_h[:, -1] + 0.5 * (lon_h[:, -1] - lon_h[:, -2])
+            lat_u[:, State.nx] = lat_h[:, -1] + 0.5 * (lat_h[:, -1] - lat_h[:, -2])
+            self.lon1d = lon_u.flatten()
+            self.lat1d = lat_u.flatten()
+        elif self.c_grid_var == 'V':
+            self.shape_phys = (State.ny + 1, State.nx)
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_v = np.zeros((State.ny + 1, State.nx))
+            lat_v = np.zeros((State.ny + 1, State.nx))
+            lon_v[1:State.ny, :] = 0.5 * (lon_h[:-1, :] + lon_h[1:, :])
+            lat_v[1:State.ny, :] = 0.5 * (lat_h[:-1, :] + lat_h[1:, :])
+            lon_v[0, :] = lon_h[0, :] - 0.5 * (lon_h[1, :] - lon_h[0, :])
+            lat_v[0, :] = lat_h[0, :] - 0.5 * (lat_h[1, :] - lat_h[0, :])
+            lon_v[State.ny, :] = lon_h[-1, :] + 0.5 * (lon_h[-1, :] - lon_h[-2, :])
+            lat_v[State.ny, :] = lat_h[-1, :] + 0.5 * (lat_h[-1, :] - lat_h[-2, :])
+            self.lon1d = lon_v.flatten()
+            self.lat1d = lat_v.flatten()
+        else:
+            self.shape_phys = (State.ny, State.nx)
+            self.lon1d = State.lon.flatten()
+            self.lat1d = State.lat.flatten()
+
+        self.nphys = self.lon1d.size
+
+        # Gravity
+        self.g = 9.81
+
+        # Geostrophic velocities
+        self.compute_velocities = config.BASIS.compute_velocities
+        self.name_mod_u = config.BASIS.name_mod_u
+        self.name_mod_v = config.BASIS.name_mod_v
+        pad = ((1, 0), (1, 0))
+        _f = np.pad(State.f, pad_width=pad, mode='edge')
+        self.f_on_v = 0.5 * (_f[:, 1:] + _f[:, :-1])
+        self.f_on_u = 0.5 * (_f[1:, :] + _f[:-1, :])
+
+        # Grid spacing
+        self.dx = np.pad(State.DX, pad_width=pad, mode='edge')
+        self.dy = np.pad(State.DY, pad_width=pad, mode='edge')
+        self.dx_on_v = 0.5 * (self.dx[:, 1:] + self.dx[:, :-1])
+        self.dy_on_u = 0.5 * (self.dy[1:, :] + self.dy[:-1, :])
+
+        # Mask
+        if State.mask is not None and np.any(State.mask):
+            if self.c_grid_var == 'U':
+                mask_u = np.zeros((State.ny, State.nx + 1), dtype=bool)
+                mask_u[:, 1:State.nx] = State.mask[:, :-1] | State.mask[:, 1:]
+                self.mask1d = mask_u.ravel()
+            elif self.c_grid_var == 'V':
+                mask_v = np.zeros((State.ny + 1, State.nx), dtype=bool)
+                mask_v[1:State.ny, :] = State.mask[:-1, :] | State.mask[1:, :]
+                self.mask1d = mask_v.ravel()
+            else:
+                self.mask1d = State.mask.ravel()
+        else:
+            self.mask1d = None
+
+        # Coastal face masks for C-grid geostrophic velocity masking
+        if State.mask is not None and np.any(State.mask):
+            _mask_pad = np.pad(State.mask.astype(bool), pad_width=((1,0),(1,0)), mode='edge')
+            self.u_coast_mask = _mask_pad[1:, :] | _mask_pad[:-1, :]  # (ny, nx+1)
+            self.v_coast_mask = _mask_pad[:, 1:] | _mask_pad[:, :-1]  # (ny+1, nx)
+        else:
+            self.u_coast_mask = None
+            self.v_coast_mask = None
+
+        # Longitude unit
+        self.lon_unit = State.lon_unit
+
+        # For multi-basis
+        self.multi_mode = multi_mode
+
+    def set_basis(self, time, return_q=False, **kwargs):
+
+        LON_MIN = self.lon_min
+        LON_MAX = self.lon_max
+        LAT_MIN = self.lat_min
+        LAT_MAX = self.lat_max
+        if LON_MAX < LON_MIN:
+            LON_MAX = LON_MAX + 360.
+
+        # Spatial Gaussian centres
+        dlat = self.sigma_D / self.facns * self.km2deg
+        lat0 = LAT_MIN - LAT_MIN % dlat - self.sigma_D * (1 - 1. / self.facns) * self.km2deg
+        lat1 = LAT_MAX + 1.5 * dlat
+        ENSLAT1 = np.arange(lat0, lat1, dlat)
+        ENSLAT = []
+        ENSLON = []
+        for I in range(len(ENSLAT1)):
+            dlon = self.sigma_D / self.facns / np.cos(ENSLAT1[I] * np.pi / 180.) * self.km2deg
+            lon0 = LON_MIN - LON_MIN % dlon - self.sigma_D * (1 - 1. / self.facns) / np.cos(ENSLAT1[I] * np.pi / 180.) * self.km2deg
+            lon1 = LON_MAX + dlon * 1.5
+            ENSLON1 = np.arange(lon0, lon1, dlon)
+            ENSLAT = np.concatenate(([ENSLAT, np.repeat(ENSLAT1[I], len(ENSLON1))]))
+            ENSLON = np.concatenate(([ENSLON, ENSLON1]))
+        self.ENSLAT = ENSLAT
+        self.ENSLON = ENSLON
+
+        self.nbasis = ENSLAT.size
+
+        if self.c_grid_var == 'U':
+            self.shape_phys = [self.ny, self.nx + 1]
+        elif self.c_grid_var == 'V':
+            self.shape_phys = [self.ny + 1, self.nx]
+        else:
+            self.shape_phys = [self.ny, self.nx]
+
+        # Fill Q matrix
+        if self.flag_variable_Q:
+            Q = []
+            sad = xr.open_dataset(self.path_sad)[self.name_var_sad['var']]
+            if np.sign(sad[self.name_var_sad['lon']].data.min()) == -1 and self.lon_unit == '0_360':
+                sad = sad.assign_coords({self.name_var_sad['lon']: ((self.name_var_sad['lon'], sad[self.name_var_sad['lon']].data % 360))})
+            elif (np.sign(sad[self.name_var_sad['lon']].data.min()) >= 0 or sad[self.name_var_sad['lon']].data.max() > 180) and self.lon_unit == '-180_180':
+                sad = sad.assign_coords({self.name_var_sad['lon']: ((self.name_var_sad['lon'], (sad[self.name_var_sad['lon']].data + 180) % 360 - 180))})
+            sad = sad.sortby(sad[self.name_var_sad['lon']])
+            for (lon, lat) in zip(ENSLON, ENSLAT):
+                dlon_h = .5 * self.sigma_D / np.cos(lat * np.pi / 180.)
+                dlat_h = .5 * self.sigma_D
+                elon = np.linspace(lon - dlon_h, lon + dlon_h, 10)
+                elat = np.linspace(lat - dlat_h, lat + dlat_h, 10)
+                elon2, elat2 = np.meshgrid(elon, elat)
+                std_tmp_values = sad.interp({self.name_var_sad['lon']: elon2.ravel(),
+                                             self.name_var_sad['lat']: elat2.ravel()}).values
+                std_tmp = np.nanmean(std_tmp_values) if not np.all(np.isnan(std_tmp_values)) else 10**-10
+                Q.append(std_tmp / self.facns**.5)
+            Q = np.array(Q)
+        else:
+            Q = self.sigma_Q / self.facns**.5 * np.ones((self.nbasis,))
+
+        Xb = np.zeros_like(Q)
+        if self.path_background is not None and os.path.exists(self.path_background):
+            with xr.open_dataset(self.path_background) as ds:
+                print(f'Load background from file: {self.path_background}')
+                Xb = ds[self.var_background].values[:len(Xb)]
+
+        print(f'sigma_D={self.sigma_D:.1E}',
+              f'nlocs={ENSLAT.size:.1E}',
+              f'Q={np.mean(Q):.1E}')
+        print(f'reduced order: {time.size * self.nphys} --> {self.nbasis}\n'
+              f' reduced factor: {int(time.size * self.nphys / self.nbasis)}')
+
+        # Compute spatial basis matrix
+        self.Gauss_xy = self._compute_component_space()
+
+        if return_q:
+            return Xb, Q
+
+    def _compute_component_space(self):
+        """Gaussian functions in space."""
+
+        data = np.empty((self.ENSLAT.size * self.lon1d.size,))
+        indices = np.empty((self.ENSLAT.size * self.lon1d.size,), dtype=int)
+        sizes = np.zeros((self.ENSLAT.size,), dtype=int)
+        ind_tmp = 0
+        for i, (lat0, lon0) in enumerate(zip(self.ENSLAT, self.ENSLON)):
+            indphys = np.where(
+                (np.abs((np.mod(self.lon1d - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.sigma_D) &
+                (np.abs((self.lat1d - lat0) / self.km2deg) <= self.sigma_D)
+            )[0]
+            xx = (np.mod(self.lon1d[indphys] - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)
+            yy = (self.lat1d[indphys] - lat0) / self.km2deg
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
+            sizes[i] = indphys.size
+            indices[ind_tmp:ind_tmp + indphys.size] = indphys
+            data[ind_tmp:ind_tmp + indphys.size] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
+            ind_tmp += indphys.size
+        indptr = np.zeros((i + 2,), dtype=int)
+        indptr[1:] = np.cumsum(sizes)
+        return csc_matrix((data, indices, indptr), shape=(self.lon1d.size, self.ENSLAT.size))
+
+    def _ssh2uv(self, ssh):
+        _ssh = np.pad(ssh, pad_width=((1, 0), (1, 0)), mode='edge')
+        _u = -self.g / self.f_on_u * (_ssh[1:, :] - _ssh[:-1, :]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:, 1:] - _ssh[:, :-1]) / self.dx_on_v
+        if self.u_coast_mask is not None:
+            _u = np.where(self.u_coast_mask, 0., _u)
+            _v = np.where(self.v_coast_mask, 0., _v)
+        return _u, _v
+
+    def _ssh2uv_adj(self, adu, adv):
+        """
+        Adjoint of geostrophic velocity computation.
+        Uses jnp so that JAX device arrays are kept on-device (no GPU→CPU transfer).
+        """
+        if self.u_coast_mask is not None:
+            adu = jnp.where(self.u_coast_mask, 0., adu)
+            adv = jnp.where(self.v_coast_mask, 0., adv)
+        _adssh = jnp.zeros((self.shape_phys[0] + 1, self.shape_phys[1] + 1))
+        _adssh = _adssh.at[1:, :].add( -self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:-1, :].add(  self.g / self.f_on_u * adu / self.dy_on_u)
+        _adssh = _adssh.at[:, 1:].add(   self.g / self.f_on_v * adv / self.dx_on_v)
+        _adssh = _adssh.at[:, :-1].add( -self.g / self.f_on_v * adv / self.dx_on_v)
+        adssh = _adssh[1:, 1:]
+        adssh = adssh.at[0, :].add(_adssh[0, 1:])
+        adssh = adssh.at[:, 0].add(_adssh[1:, 0])
+        adssh = adssh.at[0, 0].add(_adssh[0, 0])
+        return adssh
+
+    def operg(self, t, X, State=None):
+        """Project control vector to physical space."""
+
+        phi = self.Gauss_xy.dot(X).reshape(self.shape_phys)
+
+        if self.compute_velocities:
+            u, v = self._ssh2uv(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
+
+        if State is not None:
+            if not self.multi_mode:
+                State.params[self.name_mod_var] = phi
+            else:
+                State.params[self.name_mod_var] += phi
+        else:
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
+
+    def operg_transpose(self, t, adState):
+        """Project adjoint physical-space field to control space."""
+
+        if adState.params[self.name_mod_var] is None:
+            adState.params[self.name_mod_var] = np.zeros((self.nphys,))
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = np.zeros_like(adState[self.name_mod_var])
+            adState[self.name_mod_v] = np.zeros_like(adState[self.name_mod_var])
+
+        adparams = adState[self.name_mod_var].ravel()
+        if self.compute_velocities:
+            adparams = adparams + self._ssh2uv_adj(adState[self.name_mod_u], adState[self.name_mod_v]).ravel()
+
+        adX = self.Gauss_xy.T.dot(adparams)
+
+        if not self.multi_mode:
+            adState.params[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
+
+        return adX
+
+class Basis_gauss2d_jax(Basis_gauss2d):
+    """JAX-differentiable version of :class:`Basis_gauss2d`."""
+
+    def __init__(self, config, State, multi_mode=False):
+        super().__init__(config, State, multi_mode=multi_mode)
+        self._operg_jit = jit(self._operg)
+        self._operg_reduced_jit = jit(self._operg_reduced)
+        self._ssh2uv_adj_jit = jit(self._ssh2uv_adj)
+        self._ssh2uv_jit = jit(self._ssh2uv)
+
+    def set_basis(self, time, return_q=False, **kwargs):
+        res = super().set_basis(time, return_q=return_q, **kwargs)
+        self.zero_basis = jnp.zeros((self.nbasis,))
+        self.zero_phys = jnp.zeros((self.nphys,))
+        return res
+
+    def _compute_component_space(self):
+        """Gaussian functions in space (JAX sparse CSR)."""
+
+        Gauss_2d = np.zeros((self.ENSLAT.size, self.lon1d.size))
+        for i, (lat0, lon0) in enumerate(zip(self.ENSLAT, self.ENSLON)):
+            indphys = np.where(
+                (np.abs((np.mod(self.lon1d - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.sigma_D) &
+                (np.abs((self.lat1d - lat0) / self.km2deg) <= self.sigma_D)
+            )[0]
+            xx = (np.mod(self.lon1d[indphys] - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)
+            yy = (self.lat1d[indphys] - lat0) / self.km2deg
+            if self.mask1d is not None:
+                indmask = self.mask1d[indphys]
+                indphys = indphys[~indmask]
+                xx = xx[~indmask]
+                yy = yy[~indmask]
+            Gauss_2d[i, indphys] = mywindow(xx / self.sigma_D) * mywindow(yy / self.sigma_D)
+        return sparse.CSR.fromdense(jnp.array(Gauss_2d).T)
+
+    def _ssh2uv(self, ssh):
+        _ssh = jnp.pad(ssh, pad_width=((1, 0), (1, 0)), mode='edge')
+        _u = -self.g / self.f_on_u * (_ssh[1:, :] - _ssh[:-1, :]) / self.dy_on_u
+        _v = self.g / self.f_on_v * (_ssh[:, 1:] - _ssh[:, :-1]) / self.dx_on_v
+        if self.u_coast_mask is not None:
+            _u = jnp.where(self.u_coast_mask, 0., _u)
+            _v = jnp.where(self.v_coast_mask, 0., _v)
+        return _u, _v
+
+    def _operg(self, X):
+        """Forward projection (JAX traceable)."""
+        return (self.Gauss_xy @ X).reshape(self.shape_phys)
+
+    def _operg_reduced(self, phi_2d):
+        """Reverse-mode projection via VJP (JAX traceable)."""
+        _, vjp_func = jax.vjp(self._operg_jit, self.zero_basis)
+        X_reduced, = vjp_func(phi_2d)
+        return X_reduced
+
+    def operg(self, t, X, State=None):
+        """Project control vector to physical space."""
+
+        phi = self._operg_jit(X)
+
+        if self.compute_velocities:
+            u, v = self._ssh2uv_jit(phi)
+            if State is not None:
+                if not self.multi_mode:
+                    State[self.name_mod_u] = u
+                    State[self.name_mod_v] = v
+                else:
+                    State[self.name_mod_u] += u
+                    State[self.name_mod_v] += v
+
+        if State is not None:
+            if not self.multi_mode:
+                State.params[self.name_mod_var] = phi
+            else:
+                State.params[self.name_mod_var] += phi
+        else:
+            if self.compute_velocities:
+                return phi, u, v
+            else:
+                return phi
+
+    def operg_transpose(self, t, adState):
+        """Project adjoint physical-space field to control space."""
+
+        if adState.params[self.name_mod_var] is None:
+            adState.params[self.name_mod_var] = self.zero_phys
+        if self.compute_velocities and (adState[self.name_mod_u] is None or adState[self.name_mod_v] is None):
+            adState[self.name_mod_u] = self.zero_phys
+            adState[self.name_mod_v] = self.zero_phys
+
+        adparams = adState.params[self.name_mod_var]
+        if self.compute_velocities:
+            adparams = adparams + self._ssh2uv_adj_jit(adState[self.name_mod_u], adState[self.name_mod_v])
+
+        adX = self._operg_reduced_jit(adparams)
+
+        if not self.multi_mode:
+            adState.params[self.name_mod_var] *= 0.
+            if self.compute_velocities:
+                adState[self.name_mod_u] *= 0.
+                adState[self.name_mod_v] *= 0.
+
         return adX
 
 class Basis_bmaux:

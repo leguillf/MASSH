@@ -496,8 +496,12 @@ MOD_SW1L_JAX = dict(
 
     path_bathymetry = None, # path to read bathymetry netcdf file.   
 
-    name_var_bathy = {'lon':'','lat':'','var':''},
-
+    name_var_bathy = {'lon':'','lat':'','var':'','dvar_dx':'','dvar_dy':'','H':'','dH_dx':'','dH_dy':'',}, 
+    # 'var' is to prescribe bathymetry variable (defined negative)
+    # 'H' is to prescribe topography variables (defined positive)
+    # 'dvar_dx' and 'dvar_dy' are to prescribe bathymetry gradients components
+    # 'dH_dx' and 'dH_dy' are to prescribe topography gradients components
+    
     smooth_wavelength = None, # wavelength for the smoothing of bathymetry (in meters), if None no smoothing is applied 
 
     path_generation = None,  # path to read generation term netcdf file.
@@ -1170,9 +1174,15 @@ BASIS_GAUSS3D = dict(
 
     name_mod_var = '', # Name of the related model variable 
 
-    flux = False,
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
 
-    time_dependant = True, # True if gaussian basis is time dependant
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
+    flux = False,
 
     facns = 2., # Factor for gaussian spacing in space
 
@@ -1195,6 +1205,10 @@ BASIS_GAUSS3D = dict(
     path_sad = None,
 
     name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
+
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
 
 )
 
@@ -1202,9 +1216,15 @@ BASIS_GAUSS3D_JAX = dict(
 
     name_mod_var = '', # Name of the related model variable 
 
-    flux = False,
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
 
-    time_dependant = True, # True if gaussian basis is time dependant
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
+    flux = False,
 
     facns = 2., # Factor for gaussian spacing in space
 
@@ -1228,7 +1248,76 @@ BASIS_GAUSS3D_JAX = dict(
 
     name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Name of longitude,latitude and variable of depth netcdf file
 
+    path_background = None, # path netcdf file of a basis vector (e.g. coming from a previous run) to use as background
+
+    var_background = None # name of the variable of the basis vector
+
+) 
+
+BASIS_GAUSS2D = dict(
+
+    super = 'BASIS_GAUSS2D',
+
+    name_mod_var = '', # Name of the related model variable
+
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
+    facns = 2., # Factor for gaussian spacing in space (controls centre density relative to sigma_D)
+
+    sigma_D = 300, # Spatial scale (km): Gaussian half-width / truncation radius
+
+    sigma_Q = 0.01, # Prior standard deviation for each control coefficient
+
+    flag_variable_Q = False, # If True, read spatially varying std from *path_sad*
+
+    path_sad = None, # Path to a netcdf file with a spatially varying std field (used when flag_variable_Q=True)
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Variable names inside *path_sad*
+
+    path_background = None, # Path to a netcdf file with background control-vector values
+
+    var_background = None # Variable name inside *path_background*
+
 )
+
+BASIS_GAUSS2D_JAX = dict(
+
+    super = 'BASIS_GAUSS2D_JAX',
+
+    name_mod_var = '', # Name of the related model variable
+
+    c_grid_var = None, # C-grid variable type: None (default h-grid), 'U' (shape ny,nx+1), or 'V' (shape ny+1,nx)
+
+    compute_velocities = False, # Whether to compute geostrophic velocities associated to the SSH basis vectors
+
+    name_mod_u = 'u', # Name of the zonal-velocity model variable (if *compute_velocities* is True)
+
+    name_mod_v = 'v', # Name of the meridional-velocity model variable (if *compute_velocities* is True)
+
+    facns = 2., # Factor for gaussian spacing in space (controls centre density relative to sigma_D)
+
+    sigma_D = 300, # Spatial scale (km): Gaussian half-width / truncation radius
+
+    sigma_Q = 0.01, # Prior standard deviation for each control coefficient
+
+    flag_variable_Q = False, # If True, read spatially varying std from *path_sad*
+
+    path_sad = None, # Path to a netcdf file with a spatially varying std field (used when flag_variable_Q=True)
+
+    name_var_sad = {'lon':'', 'lat':'', 'var':''}, # Variable names inside *path_sad*
+
+    path_background = None, # Path to a netcdf file with background control-vector values
+
+    var_background = None # Variable name inside *path_background*
+
+)
+
 
 BASIS_GAUSS_ITG = dict(
 

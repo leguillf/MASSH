@@ -18,6 +18,8 @@ import jax
 
 from scipy.ndimage import gaussian_filter
 
+import xarray as xr
+
 class Swm: 
     
     ###########################################################################
@@ -994,20 +996,60 @@ class Swm:
 
             if u_bar is not None and v_bar is not None:
 
-                u_grad_H_x = u_bar*self.grad_bathymetry_x
-                u_grad_H_y = v_bar*self.grad_bathymetry_y
+                u_grad_H_x = u_bar*(-self.grad_bathymetry_x)
+                u_grad_H_y = v_bar*(-self.grad_bathymetry_y)
 
-                rhs_itg = (- self.generation * (u_grad_H_x+u_grad_H_y)) * jnp.where(itg_coeff<0,0,itg_coeff)
+                rhs_itg = (self.generation * (u_grad_H_x+u_grad_H_y)) * jnp.where(itg_coeff<0,0,itg_coeff)
+
+                def _plot_rhs_itg(rhs_itg, t):
+                    if int(t) == 219600:
+                        plt.figure()
+                        plt.title(f"rhs_itg (t={int(t)})")
+                        plt.pcolormesh(np.asarray(rhs_itg))
+                        plt.colorbar()
+                        plt.show()
+
+                def format(t):
+                    if t//1e6>0:
+                        return str(t)
+                    elif t//1e5>0:
+                        return "0"+str(t)
+                    elif t//1e4>0:
+                        return "00"+str(t)
+                    elif t//1e3>0:
+                        return "000"+str(t)
+                    elif t//1e2>0:
+                        return "0000"+str(t)
+                    elif t//1e1>0:
+                        return "00000"+str(t)
+                    else: 
+                        return "000000"+str(t)
+                    
+                def _save_rhs_itg(rhs_itg,t):
+                    if t%3600==0:
+                    
+                        _ds_out = xr.Dataset(
+                                    data_vars=dict(
+                                        rhs_itg=(["y","x","time"], np.asarray(rhs_itg)[:,:,None])),
+                                    coords=dict(
+                                        x=("x", self.X[0,:]),
+                                        y=("y", self.Y[:,0]),
+                                        time=("time", np.atleast_1d(t))))
+                        _ds_out.to_netcdf(f"/data2/dino/acores_generation/scratch/acores_SW_version1/config_SW_forward_coeff/rhs_itg_{format(t)}.nc")
+
+                debug.callback(_save_rhs_itg, rhs_itg, t)
+
+
             else:
                 for (i,(_freq,_phase_astr)) in enumerate(zip(self.freq,self.phase_astr)) : 
 
                     _u0 = self.tidal_Ua[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Ug[i]-_phase_astr) )
                     _v0 = self.tidal_Va[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
                     
-                    u_grad_H_x = _u0*self.grad_bathymetry_x
-                    u_grad_H_y = _v0*self.grad_bathymetry_y
+                    u_grad_H_x = _u0*(-self.grad_bathymetry_x)
+                    u_grad_H_y = _v0*(-self.grad_bathymetry_y)
 
-                    rhs_itg += (- self.generation * (u_grad_H_x+u_grad_H_y)) * jnp.where(itg_coeff<0,0,itg_coeff)
+                    rhs_itg += (self.generation * (u_grad_H_x+u_grad_H_y)) * jnp.where(itg_coeff<0,0,itg_coeff)
 
 
         else : 

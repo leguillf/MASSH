@@ -347,7 +347,7 @@ def Inv_forward(config,State,Model,Basis,X,Bc,Obsop,ssh_truth=None):
         # Propagation
         Model.step(State0,nstep,t=t)
 
-        if t%(15*24*3600)==0: # plotting everyn 15 days 
+        if t%(15*24*3600)==0: # plotting every 15 days 
             State0.plot(present_date)
             print(np.unique(State0.params["itg_coeff"]))
 
