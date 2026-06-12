@@ -3064,17 +3064,24 @@ class Model_qgsw(M):
                         var_init = var_init[0,:,:]
                     if config.GRID.subsampling is not None:
                         var_init = var_init[::config.GRID.subsampling,::config.GRID.subsampling]
-                    var_init.data[np.isnan(var_init)] = 0.
-                    State.var[self.name_var[name]] = var_init.values
+                    arr = var_init.values.copy()
+                    if name not in ('SSH', 'U', 'V') and np.any(np.isnan(arr)):
+                        # Tracer: extrapolate NaN land cells from nearest ocean value
+                        # (mirrors set_bc treatment in Model_qg1l_jax via _fill_nan_nearest)
+                        arr = _fill_nan_nearest(arr)
+                    else:
+                        arr[np.isnan(arr)] = 0.
+                    State.var[self.name_var[name]] = arr
                 else:
                     if name=='U':
                         State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx+1), dtype=self.dtype)
                     elif name=='V':
                         State.var[self.name_var[name]] = jnp.zeros((State.ny+1,State.nx), dtype=self.dtype)
-                    elif name=='SSH':
-                        State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
-                    else:  # Passive tracer
-                        State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
+                    else:  # SSH or passive tracer — h-grid (ny, nx)
+                        arr = np.zeros((State.ny, State.nx))
+                        if State.mask is not None:
+                            arr[State.mask] = np.nan
+                        State.var[self.name_var[name]] = jnp.asarray(arr, dtype=self.dtype)
             dsin.close()
             del dsin   
         else:
@@ -3083,10 +3090,11 @@ class Model_qgsw(M):
                     State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx+1), dtype=self.dtype)
                 elif name=='V':
                     State.var[self.name_var[name]] = jnp.zeros((State.ny+1,State.nx), dtype=self.dtype)
-                elif name=='SSH':
-                    State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
-                else:  # Passive tracer
-                    State.var[self.name_var[name]] = jnp.zeros((State.ny,State.nx), dtype=self.dtype)
+                else:  # SSH or passive tracer — h-grid (ny, nx)
+                    arr = np.zeros((State.ny, State.nx))
+                    if State.mask is not None:
+                        arr[State.mask] = np.nan
+                    State.var[self.name_var[name]] = jnp.asarray(arr, dtype=self.dtype)
 
         # For nl>1, also initialize per-layer storage in State
         if self.nl > 1:
@@ -3634,7 +3642,11 @@ class Model_qgsw(M):
             if name in var_bc:
                 for i, t in enumerate(time_bc):
                     c_bc_t = +var_bc[name][i]
-                    c_bc_t[np.isnan(c_bc_t)] = 0.
+                    # Extrapolate NaN land cells from nearest ocean value
+                    # (mirrors Model_qg1l_jax.set_bc — prevents spurious ~0 patches
+                    # from leaking into the ocean via advection/sponge relaxation)
+                    if np.any(np.isnan(c_bc_t)):
+                        c_bc_t = _fill_nan_nearest(c_bc_t)
                     self.bc[name][t] = c_bc_t
 
         self.bc_time = np.asarray(time_bc)
