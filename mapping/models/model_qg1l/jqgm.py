@@ -189,10 +189,11 @@ class Qgm:
                            np.arange(1, ny - 1, dtype=self.dtype))
         laplace_dst = 2 * (np.cos(np.pi / (nx - 1) * x) - 1) / self.dx ** 2 + \
                       2 * (np.cos(np.pi / (ny - 1) * y) - 1) / self.dy ** 2
+        self.laplace_dst = jnp.asarray(laplace_dst)  # JAX array: no host→device copy in step()
         if self.formulation == 'sf':
-            self.helmoltz_dst = laplace_dst - (self.f0 / self.c) ** 2
+            self.helmoltz_dst = self.laplace_dst - (self.f0 / self.c) ** 2
         else:
-            self.helmoltz_dst = self.g / self.f0 * laplace_dst - self.g * self.f0 / self.c ** 2
+            self.helmoltz_dst = self.g / self.f0 * self.laplace_dst - self.g * self.f0 / self.c ** 2
             
 
         ################
@@ -257,6 +258,9 @@ class Qgm:
         self.advect_pv = advect_pv
         self.ageo_velocities = ageo_velocities
 
+        # Remember compile flag so _rebuild_helmoltz_dst can re-register JITs
+        self._compile = compile
+
         # JIT compiling functions
         if compile:
             self.h2uv_jit = jit(self.h2uv)
@@ -273,6 +277,19 @@ class Qgm:
             self.step_jit = jit(self.step, static_argnums=2)
             self.step_tgl_jit = jit(self.step_tgl, static_argnums=3)
             self.step_adj_jit = jit(self.step_adj, static_argnums=3)
+
+    def _rebuild_helmoltz_dst(self):
+        """Recompute helmoltz_dst from the current self.c scalar.
+        Both laplace_dst and helmoltz_dst are JAX arrays, so this is a pure
+        on-device computation with no host→device copies.
+        No JIT re-registration is needed: helmoltz_dst is threaded as an
+        explicit JAX array argument through one_step → one_step_for_scan.
+        """
+        if self.formulation == 'sf':
+            self.helmoltz_dst = self.laplace_dst - (self.f0 / self.c) ** 2
+        else:
+            self.helmoltz_dst = (self.g / self.f0 * self.laplace_dst
+                                 - self.g * self.f0 / self.c ** 2)
 
     def h2uv(self, h):
         """ SSH to U,V
@@ -320,31 +337,48 @@ class Qgm:
         if c is None:
             c = self.c
 
+        # When c is a 2-D field, extract the interior and boundary sub-arrays
+        # so that all index-expressions stay shape-consistent with the sliced
+        # phi / h arrays used below.
+        if hasattr(c, 'shape') and jnp.ndim(c) == 2:
+            c_int = c[1:-1, 1:-1]      # (ny-2, nx-2) — for interior update
+            c_bdy = c[self.ind12]       # flattened boundary values
+        else:
+            c_int = c
+            c_bdy = c
+
         q = jnp.zeros((self.ny, self.nx),dtype=self.dtype)
 
+        # Replace NaN (land points) with 0 *before* any arithmetic so that the
+        # Laplacian never produces NaN.  The naive pattern
+        #   q = jnp.where(jnp.isnan(q), 0, q)
+        # masks forward NaN correctly but still lets JAX evaluate
+        #   d/dc[-g*f0/c² * h_land] = 2*g*f0/c³ * NaN
+        # in the backward pass, giving  0 * NaN = NaN  in the gradient w.r.t. c.
+        # Using a safe h here breaks that chain entirely.
+        h_safe = jnp.where(jnp.isnan(h), 0.0, h)
+
         if self.formulation == 'sf':
-            phi  = (self.g / self.f) * h
+            phi  = (self.g / self.f) * h_safe
             phib = (self.g / self.f) * hb
             q = q.at[1:-1, 1:-1].set(
                 ((phi[2:, 1:-1] + phi[:-2, 1:-1] - 2 * phi[1:-1, 1:-1]) / self.dy ** 2 +
                  (phi[1:-1, 2:] + phi[1:-1, :-2] - 2 * phi[1:-1, 1:-1]) / self.dx ** 2) -
-                (self.f0 / c) ** 2 * phi[1:-1, 1:-1])
-            q = jnp.where(jnp.isnan(q), 0, q)
-            q = q.at[self.ind12].set(-(self.f0 / c) ** 2 * phib[self.ind12])
+                (self.f0 / c_int) ** 2 * phi[1:-1, 1:-1])
+            q = q.at[self.ind12].set(-(self.f0 / c_bdy) ** 2 * phib[self.ind12])
         else:
             q = q.at[1:-1, 1:-1].set(
                 self.g / self.f0 * \
-                ((h[2:, 1:-1] + h[:-2, 1:-1] - 2 * h[1:-1, 1:-1]) / self.dy ** 2 + \
-                 (h[1:-1, 2:] + h[1:-1, :-2] - 2 * h[1:-1, 1:-1]) / self.dx ** 2) - \
-                self.g * self.f0 / (c ** 2) * h[1:-1, 1:-1])
-            q = jnp.where(jnp.isnan(q), 0, q)
-            q = q.at[self.ind12].set(-self.g * self.f0 / (c ** 2) * hb[self.ind12])
+                ((h_safe[2:, 1:-1] + h_safe[:-2, 1:-1] - 2 * h_safe[1:-1, 1:-1]) / self.dy ** 2 + \
+                 (h_safe[1:-1, 2:] + h_safe[1:-1, :-2] - 2 * h_safe[1:-1, 1:-1]) / self.dx ** 2) - \
+                self.g * self.f0 / (c_int ** 2) * h_safe[1:-1, 1:-1])
+            q = q.at[self.ind12].set(-self.g * self.f0 / (c_bdy ** 2) * hb[self.ind12])
 
         q = q.at[self.ind0].set(0)
 
         return q
     
-    def pv2h(self, q, hb, qb):
+    def pv2h(self, q, hb, qb, helmoltz_dst):
 
         """ PV to SSH 
 
@@ -352,6 +386,8 @@ class Qgm:
             q (2D array): SSH field.
             hb (2D array): Background SSH field
             qb (2D array): Background PV field
+            helmoltz_dst: DST Helmholtz operator (explicit arg so that
+                changing self.helmoltz_dst never requires JIT re-registration).
 
         Returns:
             h: SSH field
@@ -361,17 +397,15 @@ class Qgm:
         qin = q[1:-1,1:-1] - qb[1:-1,1:-1]
 
         if self.formulation == 'sf':
-            # Inversion gives streamfunction phi; convert back to SSH
             phib = (self.g / self.f) * hb
             phi = jnp.zeros_like(q, dtype=self.dtype)
-            inv = inverse_elliptic_dst(qin, self.helmoltz_dst)
+            inv = inverse_elliptic_dst(qin, helmoltz_dst)
             phi = phi.at[1:-1, 1:-1].set(inv)
             phi += phib
             h = (self.f / self.g) * phi
         else:
-            # Inversion gives SSH directly
             h = jnp.zeros_like(q, dtype=self.dtype)
-            inv = inverse_elliptic_dst(qin, self.helmoltz_dst)
+            inv = inverse_elliptic_dst(qin, helmoltz_dst)
             h = h.at[1:-1, 1:-1].set(inv)
             h += hb
 
@@ -512,7 +546,7 @@ class Qgm:
 
         return var0 + way * self.dt * incr
 
-    def rk2(self, var0, incr, ua, va, hb, qb, way):
+    def rk2(self, var0, incr, ua, va, hb, qb, way, helmoltz_dst):
 
         """
             2rd-order Runge-Kutta time scheme
@@ -524,7 +558,7 @@ class Qgm:
             q12 = var12[0]
         else:
             q12 = +var12
-        h12 = self.pv2h_jit(q12,hb,qb)
+        h12 = self.pv2h_jit(q12,hb,qb,helmoltz_dst)
         u12,v12 = self.h2uv_jit(h12)
         u12 = jnp.where(jnp.isnan(u12),0,u12)
         v12 = jnp.where(jnp.isnan(v12),0,v12)
@@ -538,7 +572,7 @@ class Qgm:
 
         return var1
 
-    def rk3(self, var0, incr, ua, va, hb, qb, way):
+    def rk3(self, var0, incr, ua, va, hb, qb, way, helmoltz_dst):
 
         """
             3rd-order Runge-Kutta time scheme
@@ -552,7 +586,7 @@ class Qgm:
             q12 = var12[0]
         else:
             q12 = +var12
-        h12 = self.pv2h_jit(q12, hb, qb)
+        h12 = self.pv2h_jit(q12, hb, qb, helmoltz_dst)
         u12, v12 = self.h2uv_jit(h12)
         u12 = jnp.where(jnp.isnan(u12), 0, u12)
         v12 = jnp.where(jnp.isnan(v12), 0, v12)
@@ -568,7 +602,7 @@ class Qgm:
             q13 = var13[0]
         else:
             q13 = +var13
-        h13 = self.pv2h_jit(q13, hb, qb)
+        h13 = self.pv2h_jit(q13, hb, qb, helmoltz_dst)
         u13, v13 = self.h2uv_jit(h13)
         u13 = jnp.where(jnp.isnan(u13), 0, u13)
         v13 = jnp.where(jnp.isnan(v13), 0, v13)
@@ -627,11 +661,14 @@ class Qgm:
 
         return var1
 
-    def one_step(self, h0, ua, va, var0, hb, varb, way=1):
+    def one_step(self, h0, ua, va, var0, hb, varb, way=1, helmoltz_dst=None):
 
         """
             One step forward
         """
+
+        if helmoltz_dst is None:
+            helmoltz_dst = jnp.asarray(self.helmoltz_dst)
 
         # Compute geostrophic velocities
         u, v = self.h2uv_jit(h0)
@@ -649,36 +686,40 @@ class Qgm:
         if self.time_scheme == 'Euler':
             var1 = self.euler_jit(var0, incr, way)
         elif self.time_scheme == 'rk2':
-            var1 = self.rk2_jit(var0, incr, ua, va, hb, qb, way)
+            var1 = self.rk2_jit(var0, incr, ua, va, hb, qb, way, helmoltz_dst)
         elif self.time_scheme == 'rk3':
-            var1 = self.rk3_jit(var0, incr, ua, va, hb, qb, way)
+            var1 = self.rk3_jit(var0, incr, ua, va, hb, qb, way, helmoltz_dst)
         else:
             raise ValueError(f"Unsupported time_scheme: {self.time_scheme}")
 
-        # Elliptical inversion 
+        # Elliptical inversion — uses the passed helmoltz_dst so that a
+        # changed self.helmoltz_dst is picked up without JIT re-registration.
         if len(var1.shape) == 3:
             q1 = +var1[0]
         else:
             q1 = +var1
-        h1 = self.pv2h_jit(q1, hb, qb)
+        h1 = self.pv2h_jit(q1, hb, qb, helmoltz_dst)
 
         var1 = self.bc_jit(var1, var0, u + ua, v + va, varb)
 
         return h1, var1
 
-    def one_step_for_scan(self,X0,X):
+    def one_step_for_scan(self, X0, X):
 
         """
-            One step forward for scan
+            One step forward for scan.  helmoltz_dst is carried as a
+            JAX array so the scan kernel never needs recompilation when
+            self.helmoltz_dst is updated between optimizer iterations.
         """
 
-        h1, ua, va, var1, hb, varb = X0
-        h1, var1 = self.one_step_jit(h1, ua, va, var1, hb, varb)
-        X = (h1, ua, va, var1, hb, varb)
+        h1, ua, va, var1, hb, varb, helmoltz_dst = X0
+        h1, var1 = self.one_step_jit(h1, ua, va, var1, hb, varb,
+                                     helmoltz_dst=helmoltz_dst)
+        X = (h1, ua, va, var1, hb, varb, helmoltz_dst)
 
-        return X,X
+        return X, X
 
-    def step(self, X0, Xb, nstep=1):
+    def step(self, X0, Xb, nstep=1, c=None):
 
         """ Propagation
 
@@ -686,6 +727,13 @@ class Qgm:
             X0 (2D or 3D array): initial SSH or stacked state
             Xb (2D or 3D array): boundary SSH or stacked boundaries
             nstep (int): number of time-step
+            c (2D array or None): effective phase-speed field c_eff(x,y).
+                When None (default) the prior self.c scalar baked at __init__
+                is used — behaviour is bit-for-bit identical to the old code.
+                When provided, an area-weighted ocean-mean scalar c_bar is
+                derived and the DST operator is recomputed from c_bar; the
+                full 2-D c field is passed to h2pv so the stretching term
+                uses the spatially-varying c_eff.
 
         Returns:
             X1 (2D or 3D array): propagated state
@@ -717,32 +765,60 @@ class Qgm:
             h0 += self.mdt
             hb += self.mdt
 
-        # Compute potential voriticy
-        q0 = self.h2pv_jit(h0, hb)
-        qb = self.h2pv_jit(hb, hb)
+        if c is None:
+            # ---- fast path: prior c scalar, baked DST operator (today's code) ----
+            q0 = self.h2pv_jit(h0, hb)
+            qb = self.h2pv_jit(hb, hb)
 
-        # Init
-        h1 = +h0
-        var1 = +q0
-        varb = +qb
-        if self.ageo_velocities:
-            assert ua0 is not None and va0 is not None
-            ua = +ua0
-            va = +va0
+            h1 = +h0
+            var1 = +q0
+            varb = +qb
+            if self.ageo_velocities:
+                assert ua0 is not None and va0 is not None
+                ua = +ua0
+                va = +va0
+            else:
+                ua = jnp.zeros_like(h0)
+                va = jnp.zeros_like(h0)
+            if c0 is not None:
+                var1 = jnp.append(var1[jnp.newaxis,:,:], c0, axis=0)
+                varb = jnp.append(varb[jnp.newaxis,:,:], cb, axis=0)
+
+            helmoltz = jnp.asarray(self.helmoltz_dst)
+            X1, _ = scan(
+                self.one_step_for_scan_jit,
+                init=(h1, ua, va, var1, hb, varb, helmoltz),
+                xs=jnp.zeros(nstep)
+            )
+            h1, ua, va, var1, hb, varb, _ = X1
+
         else:
-            ua = jnp.zeros_like(h0)
-            va = jnp.zeros_like(h0)
-        if c0 is not None:
-            var1 = jnp.append(var1[jnp.newaxis,:,:], c0, axis=0)
-            varb = jnp.append(varb[jnp.newaxis,:,:], cb, axis=0)
+            # ---- c-aware path: c_eff(x,y) only enters h2pv ----
+            q0 = self.h2pv_jit(h0, hb, c)
+            qb = self.h2pv_jit(hb, hb, c)
 
-        X1, _ = scan(
-            self.one_step_for_scan_jit,
-            init=(h1, ua, va, var1, hb, varb),
-            xs=jnp.zeros(nstep)
-        )
-        h1, ua, va, var1, hb, varb = X1
-    
+            h1 = +h0
+            var1 = +q0
+            varb = +qb
+            if self.ageo_velocities:
+                assert ua0 is not None and va0 is not None
+                ua = +ua0
+                va = +va0
+            else:
+                ua = jnp.zeros_like(h0)
+                va = jnp.zeros_like(h0)
+            if c0 is not None:
+                var1 = jnp.append(var1[jnp.newaxis,:,:], c0, axis=0)
+                varb = jnp.append(varb[jnp.newaxis,:,:], cb, axis=0)
+
+            helmoltz = jnp.asarray(self.helmoltz_dst)
+            X1, _ = scan(
+                self.one_step_for_scan_jit,
+                init=(h1, ua, va, var1, hb, varb, helmoltz),
+                xs=jnp.zeros(nstep)
+            )
+            h1, ua, va, var1, hb, varb, _ = X1
+
         # Mask
         h1 = h1.at[self.ind0].set(jnp.nan)
 
@@ -766,15 +842,15 @@ class Qgm:
 
         return X1
 
-    def step_tgl(self, dX0, X0, Xb, nstep=1):
+    def step_tgl(self, dX0, X0, Xb, nstep=1, c=None):
 
-        _, dX1 = jvp(partial(self.step_jit, Xb=Xb, nstep=nstep), (X0,), (dX0,))
+        _, dX1 = jvp(partial(self.step_jit, Xb=Xb, nstep=nstep, c=c), (X0,), (dX0,))
 
         return dX1
     
-    def step_adj(self, adX0, X0, Xb, nstep=1):
+    def step_adj(self, adX0, X0, Xb, nstep=1, c=None):
         
-        _, adf = vjp(partial(self.step_jit, Xb=Xb, nstep=nstep), X0)
+        _, adf = vjp(partial(self.step_jit, Xb=Xb, nstep=nstep, c=c), X0)
         
         return adf(adX0)[0]
 

@@ -759,6 +759,27 @@ class Model_qg1l_jax(M):
                          bathymetry_PV_term=self.bathymetry_PV_term,
                          formulation=config.MOD.formulation)
 
+        # Control parameters (mirrors Model_qgsw name_params contract)
+        self.name_params = config.MOD.name_params if config.MOD.name_params is not None else []
+        if 'c' in self.name_params:
+            # State.params['c'] holds the c-anomaly dc(x,y); the full effective
+            # phase-speed is c_eff = self.qgm.c (scalar prior) + dc.
+            # For GRID_FROM_FILE, warm-start dc from a previous 'c_anomaly'
+            # variable saved in the init file (same pattern as 'H' in
+            # Model_qgsw). Fall back to dc=0 when the variable is absent.
+            if config.GRID.super == 'GRID_FROM_FILE':
+                dsin = xr.open_dataset(config.GRID.path_init_grid)
+                if 'c_anomaly' in dsin:
+                    _dc_init = dsin['c_anomaly'].values.squeeze()
+                    _dc_init[np.isnan(_dc_init)] = 0.
+                    State.params['c'] = _dc_init
+                else:
+                    State.params['c'] = np.zeros((State.ny, State.nx))
+                dsin.close()
+                del dsin
+            else:
+                State.params['c'] = np.zeros((State.ny, State.nx))
+
         # Model functions initialization
         self.qgm_step = self.qgm.step_jit
         self.qgm_step_tgl = self.qgm.step_tgl_jit
@@ -768,11 +789,40 @@ class Model_qg1l_jax(M):
 
         # Tests tgl & adj
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
+
             print('QG1L_JAX Tangent test:')
             tangent_test(self,State,nstep=10)
             print('QG1L_JAX Adjoint test:')
             adjoint_test(self,State,nstep=10)
-    
+
+    def update_c_prior(self, dc):
+        """Update the elliptic inversion operator after an optimizer step.
+
+        Absorbs the spatial mean of the current effective c into self.qgm.c
+        and rebuilds helmoltz_dst (and re-registers all dependent JIT wrappers).
+        Re-centres the anomaly so that c_eff is preserved:
+            c_eff = self.qgm.c + dc  (unchanged effective field)
+            c_new = nanmean(c_eff)
+            dc_new = c_eff - c_new   (zero-mean anomaly)
+
+        Returns the re-centred anomaly array. The caller is responsible for
+        writing it back to State.params['c'] and/or the control vector.
+        """
+        if 'c' not in self.name_params:
+            return np.asarray(dc)
+        dc = np.asarray(dc)
+        c_eff = self.qgm.c + dc
+        c_new = float(np.nanmean(c_eff))
+        dc_new = c_eff - c_new
+        self.qgm.c = np.array(c_new, dtype=self.qgm.dtype)
+        self.qgm._rebuild_helmoltz_dst()
+        # Rebind model-level aliases (no JIT re-registration needed any more;
+        # kept for symmetry with Model_qgsw and future changes)
+        self.qgm_step     = self.qgm.step_jit
+        self.qgm_step_tgl = self.qgm.step_tgl_jit
+        self.qgm_step_adj = self.qgm.step_adj_jit
+        return dc_new
+
     def init(self, State, t0=0):
 
         if self.anomaly_from_bc:
@@ -833,6 +883,10 @@ class Model_qg1l_jax(M):
 
             if name_var is not None:
                 name_var_diag += ['ug', 'vg', 'uc', 'vc', 'Fssh']
+
+        if 'c' in self.name_params:
+            State0.var['c_anomaly'] = State.params['c']
+            name_var_diag += ['c_anomaly']
 
         State0.save_output(present_date, name_var+name_var_diag)#, save_params=self.save_params)
 
@@ -937,6 +991,12 @@ class Model_qg1l_jax(M):
         # Boundary feld
         Xb = self._apply_bc(t,int(t+nstep*self.dt))
 
+        # c-anomaly: c_eff = prior scalar (fixed throughout 4DVar) + 2-D anomaly dc.
+        # self.qgm.c is never modified here so the forward and adjoint sweeps
+        # see the same operator, keeping the gradient consistent.
+        c_eff = (self.qgm.c + State.params['c'].astype(self.qgm.dtype)
+                 ) if 'c' in self.name_params else None
+
         # Get state variable(s)
         X0 = State.getvar(name_var=self.name_var['SSH'])
         if self.advect_tracer:
@@ -957,7 +1017,7 @@ class Model_qg1l_jax(M):
         X1 = +X0
 
         # Time propagation
-        X1 = self.qgm_step(X1, Xb, nstep=nstep)
+        X1 = self.qgm_step(X1, Xb, nstep=nstep, c=c_eff)
         
         # Update state
         if self.name_var['SSH'] in State.params:
@@ -987,6 +1047,9 @@ class Model_qg1l_jax(M):
         # Boundary field
         Xb = self._apply_bc_jax(t,t+nstep*self.dt)
 
+        # c-anomaly: c_eff = prior scalar + 2-D anomaly dc (traced by JAX AD)
+        c_eff = (self.qgm.c + State_params['c']) if 'c' in self.name_params else None
+
         # Get state variable(s)
         X0 = State_vars[self.name_var['SSH']]
         if self.advect_tracer:
@@ -1007,7 +1070,7 @@ class Model_qg1l_jax(M):
         X1 = +X0
 
         # Time propagation
-        X1 = self.qgm_step(X1,Xb,nstep=nstep)
+        X1 = self.qgm_step(X1, Xb, nstep=nstep, c=c_eff)
 
         # Update state
         if self.name_var['SSH'] in State_params:
@@ -1041,7 +1104,11 @@ class Model_qg1l_jax(M):
 
         # Boundary field
         Xb = self._apply_bc(t,int(t+nstep*self.dt))
-        
+
+        # c-anomaly: c_eff = prior scalar + 2-D anomaly dc
+        c_eff = (self.qgm.c + State.params['c'].astype(self.qgm.dtype)
+                 ) if 'c' in self.name_params else None
+
         # Get state variable
         dX0 = dState.getvar(name_var=self.name_var['SSH']).astype('float64')
         X0 = State.getvar(name_var=self.name_var['SSH']).astype('float64')
@@ -1071,7 +1138,15 @@ class Model_qg1l_jax(M):
         X1 = +X0.astype('float64')
 
         # Time propagation
-        dX1 = self.qgm_step_tgl(dX1,X1,Xb,nstep=nstep)
+        if 'c' in self.name_params:
+            # Differentiate jointly w.r.t. (state, c_eff) so that the
+            # linearised effect of dc on h2pv is captured.
+            dc = jnp.asarray(dState.params['c'], dtype=self.qgm.dtype)
+            _, dX1 = jax.jvp(
+                lambda X, c: self.qgm.step_jit(X, Xb, nstep=nstep, c=c),
+                (X1, c_eff), (dX1, dc))
+        else:
+            dX1 = self.qgm_step_tgl(dX1, X1, Xb, nstep=nstep)
 
         # Convert to numpy and reshape
         dX1 = np.array(dX1).astype('float64')
@@ -1103,6 +1178,10 @@ class Model_qg1l_jax(M):
         # Boundary field
         Xb = self._apply_bc(t,int(t+nstep*self.dt))
 
+        # c-anomaly: c_eff = prior scalar + 2-D anomaly dc
+        c_eff = (self.qgm.c + State.params['c'].astype(self.qgm.dtype)
+                 ) if 'c' in self.name_params else None
+
         # Get state variable
         adSSH0 = adState.getvar(name_var=self.name_var['SSH'])#.astype('float64')
         SSH0 = State.getvar(name_var=self.name_var['SSH'])#.astype('float64')
@@ -1131,11 +1210,20 @@ class Model_qg1l_jax(M):
             X0 = SSH0
 
         # Init
-        adX1 = +adX0
         X1 = +X0
 
-        # Time propagation
-        adX1 = self.qgm_step_adj(adX1,X1,Xb,nstep=nstep)
+        # Time propagation — differentiate jointly w.r.t. (state, c_eff).
+        # Using a single vjp call with adX0 (the *incoming* adjoint) is
+        # correct: it avoids the bug of passing the already-propagated adjoint
+        # to the c-gradient vjp.
+        if 'c' in self.name_params:
+            _, vjp_fun = jax.vjp(
+                lambda X, c: self.qgm.step_jit(X, Xb, nstep=nstep, c=c),
+                X1, c_eff)
+            adX1, adc = vjp_fun(adX0)
+            adState.params['c'] = adState.params['c'] + np.array(adc)
+        else:
+            adX1 = self.qgm_step_adj(adX0, X1, Xb, nstep=nstep)
 
         # Update state and parameters
         if self.name_var['SSH'] in adState.params:

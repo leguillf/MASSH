@@ -339,6 +339,8 @@ MOD_QG1L_JAX = dict(
 
     name_var = {'SSH':"ssh"}, # Dictionnary of variable name (need to be at least SSH, and optionaly tracer variables SST, SSS etc. and/or ageostrophic velocities U, V)
 
+    name_params = None, # List of parameters to jointly estimate.  Recognised values: 'c' (effective phase-speed field c_eff(x,y)).
+
     name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file 
 
     dir_model = None, # directory of the model (if other than mapping/models/model_qg1l)
