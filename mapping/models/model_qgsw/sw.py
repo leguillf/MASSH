@@ -388,6 +388,7 @@ class SW:
 
         # Tracer diffusivity (m^2/s) — mirrors diff_coef for h
         self.tracer_diff_coef = param.get('diff_coef_trac', 0.)
+        self.tracer_adv_scheme = param.get('tracer_adv_scheme', 'weno')  # 'weno' | 'linear_upwind3' | 'linear_upwind5' | 'rusanov1'/'upwind1'
 
         # Momentum forcing mode: 'direct' uses Fu/Fv as given,
         # 'mass_consistent' derives Fu/Fv from Fh so that velocity is
@@ -557,16 +558,55 @@ class SW:
         else:
             area_x = self.area
             area_y = self.area
+        # Area-scaled velocity divergence at h-cells: area * div(u_phys).
+        # Needed for advective-form correction regardless of scheme.
+        vel_div_area = div_nofluxbc(area_x * U_surf[..., 1:-1, :],
+                                    area_y * V_surf[..., 1:-1])   # (1, 1, nx, ny)
+        if self.tracer_adv_scheme in ('rusanov1', 'upwind1'):
+            c_flux_y = area_y * self._h_flux_rusanov1(c_phys, V_surf[..., 1:-1], dim=-1)
+            c_flux_x = area_x * self._h_flux_rusanov1(c_phys, U_surf[..., 1:-1, :], dim=-2)
+            dt_c_fluxdiv = -div_nofluxbc(c_flux_x, c_flux_y)
+            return (dt_c_fluxdiv + c_phys * vel_div_area) * self.masks.h
+        if self.tracer_adv_scheme in ('linear_upwind3', 'linear3'):
+            c_flux_y = area_y * flux(
+                c_phys, V_surf[..., 1:-1], dim=-1, n_points=4,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.v_sten_hy_eq2[..., 1:-1],
+                mask_4=self.masks.v_sten_hy_eq4[..., 1:-1],
+                mask_6=self.masks.v_sten_hy_gt6[..., 1:-1])
+            c_flux_x = area_x * flux(
+                c_phys, U_surf[..., 1:-1, :], dim=-2, n_points=4,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.u_sten_hx_eq2[..., 1:-1, :],
+                mask_4=self.masks.u_sten_hx_eq4[..., 1:-1, :],
+                mask_6=self.masks.u_sten_hx_gt6[..., 1:-1, :])
+            dt_c_fluxdiv = -div_nofluxbc(c_flux_x, c_flux_y)
+            return (dt_c_fluxdiv + c_phys * vel_div_area) * self.masks.h
+        if self.tracer_adv_scheme in ('linear_upwind5', 'linear5'):
+            c_flux_y = area_y * flux(
+                c_phys, V_surf[..., 1:-1], dim=-1, n_points=6,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.v_sten_hy_eq2[..., 1:-1],
+                mask_4=self.masks.v_sten_hy_eq4[..., 1:-1],
+                mask_6=self.masks.v_sten_hy_gt6[..., 1:-1])
+            c_flux_x = area_x * flux(
+                c_phys, U_surf[..., 1:-1, :], dim=-2, n_points=6,
+                rec_func_2=linear2_centered, rec_func_4=linear4_left,
+                rec_func_6=linear6_left,
+                mask_2=self.masks.u_sten_hx_eq2[..., 1:-1, :],
+                mask_4=self.masks.u_sten_hx_eq4[..., 1:-1, :],
+                mask_6=self.masks.u_sten_hx_gt6[..., 1:-1, :])
+            dt_c_fluxdiv = -div_nofluxbc(c_flux_x, c_flux_y)
+            return (dt_c_fluxdiv + c_phys * vel_div_area) * self.masks.h
         # WENO upwind reconstruction of c_phys at faces times face velocity.
         c_flux_y = area_y * self.h_flux_y(c_phys, V_surf[..., 1:-1])   # (1, n_trac, nx, ny-1)
         c_flux_x = area_x * self.h_flux_x(c_phys, U_surf[..., 1:-1, :]) # (1, n_trac, nx-1, ny)
         # Flux-divergence tendency (would be correct for h*c, contains
         # spurious c*div(u) term for c alone).
         dt_c_fluxdiv = -div_nofluxbc(c_flux_x, c_flux_y)
-        # Area-scaled velocity divergence at h-cells: area * div(u_phys).
-        # Same discrete operator as above with c_face ≡ 1.
-        vel_div_area = div_nofluxbc(area_x * U_surf[..., 1:-1, :],
-                                    area_y * V_surf[..., 1:-1])   # (1, 1, nx, ny)
         # Cancel spurious c*div(u_phys) source -> pure advective form.
         return (dt_c_fluxdiv + c_phys * vel_div_area) * self.masks.h
 

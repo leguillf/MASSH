@@ -599,8 +599,9 @@ MOD_QGSW = dict(
     diff_coef_trac = 0., # diffusivity coefficient for passive tracers (in m^2/s). Typical values 50–200 m²/s
 
     time_scheme = 'rk3',      # temporal scheme: 'rk3' (SSP-RK3, default) | 'rk2' (explicit midpoint, matches Qgm) | 'rk2_ssp' (Heun)
-    h_adv_scheme = 'weno',    # h-continuity scheme: 'weno' (conservative WENO-6, default) | 'linear_upwind3'/'linear_upwind5' (fixed linear conservative fluxes for adjoint tests) | 'rusanov1'/'upwind1' (diffusive conservative option)
-    mom_adv_scheme = 'weno',  # momentum-advection scheme: 'weno' (WENO-6, default) | 'upwind3' | 'upwind5' (fixed linear vorticity face reconstruction)
+    h_adv_scheme = 'weno',       # h-continuity scheme: 'weno' (conservative WENO-6, default) | 'linear_upwind3'/'linear_upwind5' (fixed linear conservative fluxes for adjoint tests) | 'rusanov1'/'upwind1' (diffusive conservative option)
+    mom_adv_scheme = 'weno',     # momentum-advection scheme: 'weno' (WENO-6, default) | 'upwind3' | 'upwind5' (fixed linear vorticity face reconstruction)
+    tracer_adv_scheme = 'weno',  # tracer-advection scheme: 'weno' (WENO-6, default) | 'linear_upwind3'/'linear_upwind5' | 'rusanov1'/'upwind1'
     solver = 'dst_cmm',       # elliptic solver: 'dst_cmm' (DST + capacitance-matrix for irregular boundaries, default) | 'dst' (plain DST, matches inverse_elliptic_dst in Qgm)
 
     advect_tracer = None, # If True/False, override automatic tracer detection from name_var. None = auto.

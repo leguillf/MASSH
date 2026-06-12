@@ -3215,9 +3215,10 @@ class Model_qgsw(M):
             'H_max': getattr(config.MOD, 'H_max', None),
             'diff_coef_trac': getattr(config.MOD, 'diff_coef_trac', 0.),
             'time_scheme':    getattr(config.MOD, 'time_scheme',    'rk3'),
-            'h_adv_scheme':   getattr(config.MOD, 'h_adv_scheme',   'weno'),
-            'mom_adv_scheme': getattr(config.MOD, 'mom_adv_scheme', 'weno'),
-            'solver':         getattr(config.MOD, 'solver',         'dst_cmm'),
+            'h_adv_scheme':      getattr(config.MOD, 'h_adv_scheme',      'weno'),
+            'mom_adv_scheme':    getattr(config.MOD, 'mom_adv_scheme',    'weno'),
+            'tracer_adv_scheme': getattr(config.MOD, 'tracer_adv_scheme', 'weno'),
+            'solver':            getattr(config.MOD, 'solver',            'dst_cmm'),
         }
 
         self.model = model(params)
