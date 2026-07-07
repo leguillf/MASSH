@@ -33,7 +33,7 @@ class CrazyGradient(Exception):
     pass
 
 
-def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, Bc=None, *args, **kwargs):
+def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, Bc=None, X=None, *args, **kwargs):
 
     """
     NAME
@@ -42,9 +42,9 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
     DESCRIPTION
         Main function calling subfunctions for specific Inversion algorithms
     """
-    
+
     if config.INV is None:
-        return Inv_forward(config, State=State, Model=Model, Bc=Bc)
+        return Inv_forward(config, State=State, Model=Model, Basis=Basis, X=X, Bc=Bc)
     
     print(config.INV)
     
@@ -54,20 +54,27 @@ def Inv(config, State=None, Model=None, dict_obs=None, Obsop=None, Basis=None, B
     else:
         sys.exit(config.INV.super + ' not implemented yet')
         
-def Inv_forward(config,State,Model,Bc=None):
-    
+def Inv_forward(config,State,Model,Basis=None,X=None,Bc=None):
+
     """
     NAME
         Inv_forward
 
     DESCRIPTION
-        Run a model forward integration  
-    
+        Run a model forward integration.
+
+        If a reduced *Basis* is provided, the control vector *X* is projected
+        onto the model parameters (e.g. He_mean, hbcx/hbcy entering waves) at
+        every saved-output step through Basis.operg. *X* is expected to be the
+        full (already projected) control vector, i.e. the content of the
+        Xres.nc file written by the 4Dvar analysis; it is passed to operg as-is
+        (no background or preconditioning is re-applied here).
+
     """
 
     if 'JAX' in config.MOD.super:
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
-    
+
     present_date = config.EXP.init_date
     nstep = int(config.EXP.saveoutput_time_step.total_seconds()//Model.dt)
 
@@ -77,27 +84,54 @@ def Inv_forward(config,State,Model,Bc=None):
         var_bc = Bc.interp(time_bc)
         Model.set_bc(t_bc,var_bc)
 
+    # Set the reduced basis (time/space operators) and prepare the control vector
+    time_basis = None
+    if Basis is not None:
+        # Evaluate the basis at every saved-output step (in days). operg can
+        # only be called at these exact time nodes (they are the keys of Gt).
+        time_basis = np.arange(0, Model.T[-1] + nstep*Model.dt, nstep*Model.dt) / 24 / 3600
+        Xb, _ = Basis.set_basis(time_basis, return_q=True, State=State)
+        if X is None:
+            print('No control vector X provided --> using a null control vector.')
+            X = np.zeros((Xb.size,))
+        else:
+            X = np.asarray(X)
+            if X.size != Xb.size:
+                sys.exit(f'Provided control vector X has size {X.size} but the '
+                         f'reduced basis expects {Xb.size}.')
+            print('Prescribed control vector X will be applied through the reduced basis.')
+    elif X is not None:
+        print('Warning: a control vector X was provided but no Basis --> X is ignored.')
+
     t = 0
+    it = 0
     Model.init(State,t)
+    if Basis is not None:
+        Basis.operg(time_basis[it], X, State=State.params)
     Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
     State.plot(title='Start of forward integration')
 
     while present_date + timedelta(seconds=nstep*Model.dt) <= config.EXP.final_date :
-        
+
         # Propagation
         Model.step(State,nstep,t=t)
 
         # Time increment
         present_date += timedelta(seconds=nstep*Model.dt)
         t += nstep*Model.dt
+        it += 1
+
+        # Project the (time-dependent) control vector onto the model parameters
+        if Basis is not None and it < time_basis.size:
+            Basis.operg(time_basis[it], X, State=State.params)
 
         # Save
         if config.EXP.saveoutputs:
-            Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)    
+            Model.save_output(State,present_date,name_var=Model.var_to_save,t=t)
         State.plot(present_date)
-    
+
     State.plot(title='End of forward integration')
-        
+
     return
        
 

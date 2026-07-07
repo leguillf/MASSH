@@ -107,6 +107,164 @@ def Model(config, State, verbose=True):
     
 
 ###############################################################################
+#                  IT open-boundary sponge extension mixin                    #
+###############################################################################
+
+class _ITOpenBoundaryExtensionMixin:
+
+    def _init_it_open_boundary_extension(self, config_mod):
+        """Precompute S/N/W/E sponge extension weights on h-points.
+
+        The current implementation intentionally targets only open-boundary
+        sponge bands. Coast, island, and land-adjacent sponge extensions are a
+        separate future step because their interior-edge geometry is not a
+        simple S/N/W/E row or column.
+        """
+
+        self.extend_it_open_boundary_sponge = bool(
+            getattr(config_mod, 'extend_it_open_boundary_sponge', False))
+        self._it_open_boundary_extension_active = False
+        self._it_open_boundary_extension_shape = (self.ny, self.nx)
+        self._it_open_boundary_extension_active_mask = jnp.zeros((self.ny, self.nx), dtype=bool)
+        self._it_open_boundary_extension_wS = jnp.zeros((self.ny, self.nx))
+        self._it_open_boundary_extension_wN = jnp.zeros((self.ny, self.nx))
+        self._it_open_boundary_extension_wW = jnp.zeros((self.ny, self.nx))
+        self._it_open_boundary_extension_wE = jnp.zeros((self.ny, self.nx))
+        self._it_open_boundary_extension_iS = 0
+        self._it_open_boundary_extension_iN = self.ny - 1
+        self._it_open_boundary_extension_jW = 0
+        self._it_open_boundary_extension_jE = self.nx - 1
+
+        if not self.extend_it_open_boundary_sponge:
+            return
+        if not getattr(self, 'flag_bc_sponge', False):
+            return
+        mask_names = ('sponge_on_h_S', 'sponge_on_h_N',
+                      'sponge_on_h_W', 'sponge_on_h_E')
+        if not all(hasattr(self, name) for name in mask_names):
+            return
+
+        masks = [np.asarray(getattr(self, name), dtype=bool) for name in mask_names]
+        if not any(np.any(mask) for mask in masks):
+            return
+
+        yy, xx = np.indices((self.ny, self.nx))
+
+        def edge_weight(mask, distance):
+            if not np.any(mask):
+                return np.zeros((self.ny, self.nx), dtype=float)
+            width = np.nanmax(np.where(mask, distance, 0.0))
+            if not np.isfinite(width) or width <= 0:
+                width = 1.0
+            r = np.clip(distance / width, 0.0, 1.0)
+            smooth = r * r * r * (r * (r * 6.0 - 15.0) + 10.0)
+            return np.where(mask, 1.0 - smooth, 0.0)
+
+        wS = edge_weight(masks[0], yy.astype(float))
+        wN = edge_weight(masks[1], (self.ny - 1 - yy).astype(float))
+        wW = edge_weight(masks[2], xx.astype(float))
+        wE = edge_weight(masks[3], (self.nx - 1 - xx).astype(float))
+        power = float(getattr(config_mod, 'bc_it_corner_weight_power', 1.0))
+        if power != 1.0:
+            wS, wN, wW, wE = (wS**power, wN**power, wW**power, wE**power)
+        wsum = wS + wN + wW + wE
+        active = wsum > 0
+        wsum_safe = np.where(active, wsum, 1.0)
+        wS, wN, wW, wE = (wS / wsum_safe, wN / wsum_safe,
+                          wW / wsum_safe, wE / wsum_safe)
+
+        def sponge_interior_row(mask, from_south):
+            rows = np.where(np.any(mask, axis=1))[0]
+            if rows.size == 0:
+                return 0 if from_south else self.ny - 1
+            if from_south:
+                return int(rows.max())
+            return int(rows.min())
+
+        def sponge_interior_col(mask, from_west):
+            cols = np.where(np.any(mask, axis=0))[0]
+            if cols.size == 0:
+                return 0 if from_west else self.nx - 1
+            if from_west:
+                return int(cols.max())
+            return int(cols.min())
+
+        self._it_open_boundary_extension_active = True
+        self._it_open_boundary_extension_active_mask = jnp.asarray(active)
+        self._it_open_boundary_extension_wS = jnp.asarray(wS)
+        self._it_open_boundary_extension_wN = jnp.asarray(wN)
+        self._it_open_boundary_extension_wW = jnp.asarray(wW)
+        self._it_open_boundary_extension_wE = jnp.asarray(wE)
+        self._it_open_boundary_extension_iS = sponge_interior_row(masks[0], True)
+        self._it_open_boundary_extension_iN = sponge_interior_row(masks[1], False)
+        self._it_open_boundary_extension_jW = sponge_interior_col(masks[2], True)
+        self._it_open_boundary_extension_jE = sponge_interior_col(masks[3], False)
+
+    @staticmethod
+    def _fill_nan_along_axis(line, axis):
+        """Fill NaNs in a reference row/column by the nearest valid value
+        (forward fill, then backward fill) along ``axis``. Positions with no
+        finite value anywhere along ``axis`` are left as NaN."""
+        valid = jnp.isfinite(line)
+        n = line.shape[axis]
+        shape = [1] * line.ndim
+        shape[axis] = n
+        idx = jnp.broadcast_to(jnp.arange(n).reshape(shape), line.shape)
+        # Forward fill: index of the last valid sample seen so far.
+        fwd = jax.lax.cummax(jnp.where(valid, idx, -1), axis=axis)
+        # Backward fill: index of the next valid sample.
+        bwd = jnp.flip(jax.lax.cummin(jnp.flip(jnp.where(valid, idx, n), axis=axis), axis=axis), axis=axis)
+        take = jnp.clip(jnp.where(fwd >= 0, fwd, bwd), 0, n - 1)
+        return jnp.take_along_axis(line, take, axis=axis)
+
+    def _extend_it_open_boundary_field(self, field):
+        if field is None or not getattr(self, '_it_open_boundary_extension_active', False):
+            return field
+        field = jnp.asarray(field)
+        if field.shape != getattr(self, '_it_open_boundary_extension_shape', None):
+            return field
+
+        # Reference rows/columns at the interior edge of each sponge. NaNs in
+        # these lines (e.g. over land or interpolation gaps) are filled by the
+        # nearest valid value along the line so they no longer block the
+        # extension.
+        lineS = self._fill_nan_along_axis(field[self._it_open_boundary_extension_iS:self._it_open_boundary_extension_iS + 1, :], axis=1)
+        lineN = self._fill_nan_along_axis(field[self._it_open_boundary_extension_iN:self._it_open_boundary_extension_iN + 1, :], axis=1)
+        lineW = self._fill_nan_along_axis(field[:, self._it_open_boundary_extension_jW:self._it_open_boundary_extension_jW + 1], axis=0)
+        lineE = self._fill_nan_along_axis(field[:, self._it_open_boundary_extension_jE:self._it_open_boundary_extension_jE + 1], axis=0)
+
+        refS = jnp.broadcast_to(lineS, field.shape)
+        refN = jnp.broadcast_to(lineN, field.shape)
+        refW = jnp.broadcast_to(lineW, field.shape)
+        refE = jnp.broadcast_to(lineE, field.shape)
+
+        # NaN-aware weighted blend: drop any reference that is still NaN and
+        # renormalise the weights over the remaining valid references, so the
+        # sponge region gets extended even where some references are missing.
+        refs = (refS, refN, refW, refE)
+        wref = (self._it_open_boundary_extension_wS, self._it_open_boundary_extension_wN,
+                self._it_open_boundary_extension_wW, self._it_open_boundary_extension_wE)
+        valid = [jnp.isfinite(r) for r in refs]
+        eff_w = [jnp.where(v, w, 0.0) for v, w in zip(valid, wref)]
+        safe_r = [jnp.where(v, r, 0.0) for v, r in zip(valid, refs)]
+        wsum = eff_w[0] + eff_w[1] + eff_w[2] + eff_w[3]
+        wsum_safe = jnp.where(wsum > 0, wsum, 1.0)
+        extended = (eff_w[0] * safe_r[0] + eff_w[1] * safe_r[1]
+                    + eff_w[2] * safe_r[2] + eff_w[3] * safe_r[3]) / wsum_safe
+        # Where no valid reference exists at all, keep the original value.
+        extended = jnp.where(wsum > 0, extended, field)
+        return jnp.where(self._it_open_boundary_extension_active_mask, extended, field)
+
+    def _extend_it_open_boundary_static_field(self, field):
+        if field is None:
+            return None
+        arr = np.asarray(field)
+        if arr.shape != (self.ny, self.nx):
+            return field
+        return np.asarray(self._extend_it_open_boundary_field(jnp.asarray(arr)))
+
+
+###############################################################################
 #                            Mother Model                                     #
 ###############################################################################
 
@@ -1251,7 +1409,7 @@ class Model_qg1l_jax(M):
 #                         Shallow Water Models                                #
 ###############################################################################
 
-class Model_csw1l(M):
+class Model_csw1l(_ITOpenBoundaryExtensionMixin, M):
 
     def __init__(self,config,State):
 
@@ -1260,6 +1418,17 @@ class Model_csw1l(M):
         os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 
         self.config = config
+
+        # The two internal-tide generation controls 'itg' (per-constituent,
+        # time-dependent) and 'itg_coeff' ((ny,nx) coefficient) are two different
+        # formulations of the same rhs_itg source: they are mutually exclusive and
+        # cannot both be controlled. Fail early with an explicit message.
+        _name_params = config.MOD.name_params if config.MOD.name_params is not None else []
+        if 'itg' in _name_params and 'itg_coeff' in _name_params:
+            raise ValueError(
+                "'itg' and 'itg_coeff' cannot both be in config.MOD.name_params: "
+                "they are two mutually-exclusive formulations of the internal-tide "
+                "generation control (rhs_itg). Enable only one.")
 
         # Model specific libraries
         if config.MOD.dir_model is None:
@@ -1340,23 +1509,35 @@ class Model_csw1l(M):
                                    config.MOD.name_var_c,
                                    State.lon,
                                    State.lat)
-            
+
+            # Remove NaNs (e.g. over land) by nearest-neighbor interpolation
+            # (since c is only used for boundary conditions, this is better than leaving NaNs or filling with a constant.)
+            c_masked = np.ma.masked_invalid(self.c)
+            c_filled = c_masked.filled(np.nan)
+            from scipy import interpolate
+            x = np.arange(self.nx)
+            y = np.arange(self.ny)
+            xx, yy = np.meshgrid(x, y)
+            points = np.array([xx[~c_masked.mask], yy[~c_masked.mask]]).T
+            values = c_filled[~c_masked.mask]
+            self.c = interpolate.griddata(points, values, (xx, yy), method='nearest')
+
             if config.MOD.cmin is not None:
                 self.c[self.c<config.MOD.cmin] = config.MOD.cmin
-            
+
             if config.MOD.cmax is not None:
                 self.c[self.c>config.MOD.cmax] = config.MOD.cmax
-            
+
             if config.EXP.flag_plot>0:
                 plt.figure()
                 plt.pcolormesh(self.c)
                 plt.colorbar()
                 plt.title('Rossby phase velocity')
                 plt.show()
-                
+
         else:
             self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
-            
+
         # Equivalent depth
         self.Heb = self.c**2 / self.g
 
@@ -1378,7 +1559,55 @@ class Model_csw1l(M):
                                    config.MOD.name_var_H,
                                    State.lon,
                                    State.lat)
-            
+
+            # Remove NaNs (e.g. over land) by nearest-neighbor interpolation
+            H_masked = np.ma.masked_invalid(self.H)
+            H_filled = H_masked.filled(np.nan)
+            from scipy import interpolate
+            x = np.arange(self.nx)
+            y = np.arange(self.ny)
+            xx, yy = np.meshgrid(x, y)
+            points = np.array([xx[~H_masked.mask], yy[~H_masked.mask]]).T
+            values = H_filled[~H_masked.mask]
+            self.H = interpolate.griddata(points, values, (xx, yy), method='nearest')
+
+            # Depth gradient (dH/dx, dH/dy): either prescribed in the file and
+            # interpolated the same way as H, or computed by finite differences.
+            def compute_grad(field):
+                # X component of gradient
+                grad_x = np.zeros(State.X.shape)
+                grad_x[:,1:-1] = (field[:,2:]-field[:,0:-2])/(State.X[:,2:]-State.X[:,0:-2]) # inner part of gradient
+                grad_x[:,0] = (field[:,1]-field[:,0])/(State.X[:,1]-State.X[:,0])
+                grad_x[:,-1] = (field[:,-1]-field[:,-2])/(State.X[:,-1]-State.X[:,-2])
+
+                # Y component of gradient
+                grad_y = np.zeros(State.Y.shape)
+                grad_y[1:-1,:] = (field[2:,:]-field[0:-2,:])/(State.Y[2:,:]-State.Y[0:-2,:])
+                grad_y[0,:] = (field[1,:]-field[0,:])/(State.Y[1,:]-State.Y[0,:])
+                grad_y[-1,:] = (field[-1,:]-field[-2,:])/(State.Y[-1,:]-State.Y[-2,:])
+
+                return grad_x,grad_y
+
+            name_dvar_dx = config.MOD.name_var_H.get('dvar_dx','')
+            name_dvar_dy = config.MOD.name_var_H.get('dvar_dy','')
+            if name_dvar_dx != '' and name_dvar_dy != '': # Depth gradient is specified
+                self.dH_dx = grid.interp2d(ds,
+                                           dict(config.MOD.name_var_H, var=name_dvar_dx),
+                                           State.lon,
+                                           State.lat)
+                self.dH_dy = grid.interp2d(ds,
+                                           dict(config.MOD.name_var_H, var=name_dvar_dy),
+                                           State.lon,
+                                           State.lat)
+            else:
+                self.dH_dx,self.dH_dy = compute_grad(self.H)
+
+            # Fill NaNs (e.g. where the bathymetry field/gradient is undefined at
+            # the domain edges) with 0 so the internal-tide generation forcing
+            # rhs_itg = generation*(u_bar*dH_dx + v_bar*dH_dy) stays finite.
+            self.dH_dx = np.nan_to_num(self.dH_dx, nan=0.0)
+            self.dH_dy = np.nan_to_num(self.dH_dy, nan=0.0)
+
             if config.EXP.flag_plot>0:
                 plt.figure()
                 plt.pcolormesh(self.H)
@@ -1387,7 +1616,9 @@ class Model_csw1l(M):
                 plt.show()
 
         else:
-            self.H = config.MOD.H 
+            self.H = config.MOD.H
+            self.dH_dx = np.zeros((State.ny,State.nx))
+            self.dH_dy = np.zeros((State.ny,State.nx))
         
         # Boundary angles
         _ntheta = config.MOD.Ntheta
@@ -1415,10 +1646,10 @@ class Model_csw1l(M):
         
         # Open Boundary condition kind
         self.bc_kind = config.MOD.bc_kind
-        
+
         # Tide frequencies
         self.omegas = np.asarray(config.MOD.w_waves)
-        
+
         # CFL
         if config.MOD.cfl is not None:
             grid_spacing = min(np.nanmean(State.DX), np.nanmean(State.DY)) 
@@ -1441,6 +1672,9 @@ class Model_csw1l(M):
                 self.nt = 1
                 self.timestamps = np.array([config.EXP.init_date])
             self.T = np.arange(self.nt) * self.dt
+
+        # Barotropic tidal velocity
+        self.init_tidal_velocity(config,State)
 
         # Initialize model state
         self.name_var = config.MOD.name_var
@@ -1487,8 +1721,26 @@ class Model_csw1l(M):
             State.params['alpha_Uu'] = np.zeros((self.ny, self.nx))
         if 'alpha_Uz' in self.name_params: 
             State.params['alpha_Uz'] = np.zeros((self.ny, self.nx))
-        if 'alpha_Up' in self.name_params: 
+        if 'alpha_Up' in self.name_params:
             State.params['alpha_Up'] = np.zeros((self.ny, self.nx))
+        if 'itg_coeff' in self.name_params:
+            State.params['itg_coeff'] = np.zeros((self.ny, self.nx))
+        # Per-constituent internal-tide generation control 'itg', shape
+        # (n_omega, 4, ny, nx): 4 = cos/sin for the x and y bathymetry-gradient
+        # components. Mutually exclusive with the itg_coeff forcing (validated
+        # later in __init__).
+        if 'itg' in self.name_params:
+            State.params['itg'] = np.zeros((len(self.omegas), 4, self.ny, self.nx))
+        # itg_coeff-style internal-tide generation forcing (rhs_itg), implemented
+        # in the SW model equations from the prescribed barotropic tidal velocity
+        # u_bar_data/v_bar_data. It can be applied either as a controlled parameter
+        # ('itg_coeff' in name_params) or unconditionally via config.MOD.flag_itg
+        # (equivalent to a null itg coefficient); controlling 'itg_coeff' implies
+        # the forcing. It is mutually exclusive with the per-constituent 'itg'
+        # control, so config.MOD.flag_itg is only taken into account when 'itg' is
+        # NOT in name_params (and is redundant when 'itg_coeff' already is).
+        self.flag_itg = ('itg' not in self.name_params) and (
+            ('itg_coeff' in self.name_params) or bool(getattr(config.MOD, 'flag_itg', False)))
         if 'hbc' in self.name_params:
             self.shapehbcx = [len(self.omegas), # tide frequencies
                               2, # North/South
@@ -1629,8 +1881,172 @@ class Model_csw1l(M):
                 State.mask[self.sponge_on_h_N] = True
                 State.mask[self.sponge_on_h_W] = True
                 State.mask[self.sponge_on_h_E] = True
-        
+
         self.mask = State.mask
+
+        # Vertical structure functions phi_n(z) from the mode decomposition.
+        # The phase velocity c and equivalent depth Heb are already loaded and
+        # interpolated above; here we load the structure functions and build the
+        # internal-tide generation term.
+        #   phi_1_0 : phi_1(0)  -> first baroclinic mode at the surface
+        #   phi_1_H : phi_1(-H) -> first baroclinic mode at the bottom
+        #   phi_0_H : phi_0(-H) -> barotropic mode at the bottom
+        self.phi_1_0 = self.phi_1_H = self.phi_0_H = None
+        if config.MOD.file_mode_aux is not None and os.path.exists(config.MOD.file_mode_aux):
+
+            ds = xr.open_dataset(config.MOD.file_mode_aux)
+            name_lon = config.MOD.name_var_mode['lon']
+            lon = ds[name_lon]
+            # Convert longitude
+            if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+                ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
+                ds = ds.sortby(name_lon)
+            elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+                ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
+                ds = ds.sortby(name_lon)
+
+            for field in ('phi_1_0', 'phi_1_H', 'phi_0_H'):
+                name_var = {'lon': config.MOD.name_var_mode['lon'],
+                            'lat': config.MOD.name_var_mode['lat'],
+                            'var': config.MOD.name_var_mode[field]}
+                setattr(self, field, grid.interp2d(ds, name_var, State.lon, State.lat))
+
+            if config.EXP.flag_plot>0:
+                fig,ax = plt.subplots(1,3,figsize=(18,5))
+                plt_phi_1_0 = ax[0].pcolormesh(self.phi_1_0)
+                fig.colorbar(plt_phi_1_0,ax=ax[0])
+                ax[0].set_title(r"$\phi_1(0)$")
+                plt_phi_1_H = ax[1].pcolormesh(self.phi_1_H)
+                fig.colorbar(plt_phi_1_H,ax=ax[1])
+                ax[1].set_title(r"$\phi_1(-H)$")
+                plt_phi_0_H = ax[2].pcolormesh(self.phi_0_H)
+                fig.colorbar(plt_phi_0_H,ax=ax[2])
+                ax[2].set_title(r"$\phi_0(-H)$")
+                for _ax in ax:
+                    _ax.set_aspect('equal')
+                plt.show()
+
+        # Open-boundary sponge extension (S/N/W/E interior-edge extrapolation)
+        self._init_it_open_boundary_extension(config.MOD)
+        if self.extend_it_open_boundary_sponge:
+            
+            if self.H is not None:
+                self.H = self._extend_it_open_boundary_static_field(self.H)
+            if self.c is not None:
+                self.c = self._extend_it_open_boundary_static_field(self.c)
+                self.Heb = self._extend_it_open_boundary_static_field(self.Heb)
+            if self.phi_1_0 is not None and self.phi_1_H is not None and self.phi_0_H is not None:
+                self.phi_1_0 = self._extend_it_open_boundary_static_field(self.phi_1_0)
+                self.phi_1_H = self._extend_it_open_boundary_static_field(self.phi_1_H)
+                self.phi_0_H = self._extend_it_open_boundary_static_field(self.phi_0_H)
+
+        # Internal-tide generation term
+        if self.phi_1_0 is not None and self.phi_1_H is not None and self.phi_0_H is not None:
+
+            self.generation = -(self.c**2/(self.H))*(self.phi_1_0/self.g)*(self.phi_0_H*self.phi_1_H)
+
+            if getattr(self, 'sponge_on_h_S', None) is not None and \
+               getattr(self, 'sponge_on_h_N', None) is not None and \
+               getattr(self, 'sponge_on_h_W', None) is not None and \
+               getattr(self, 'sponge_on_h_E', None) is not None:
+
+                # Setting generation to 0 on sponge layers
+                self.generation[self.sponge_on_h_S] = 0
+                self.generation[self.sponge_on_h_N] = 0
+                self.generation[self.sponge_on_h_W] = 0
+                self.generation[self.sponge_on_h_E] = 0
+
+            if config.EXP.flag_plot>0:
+                fig, (ax1) = plt.subplots(1,1,figsize=(7,5))
+                n_min = np.min(self.generation[self.generation>0])
+                n_max = np.max(self.generation[self.generation>0])
+                im1 = ax1.pcolormesh(self.generation,vmin=n_min,vmax=+n_max,cmap='viridis')
+                plt.colorbar(im1, ax=ax1)
+                ax1.set_title('generation term')
+                plt.show()
+
+        else:
+            self.generation = None
+
+        # Validation for the itg_coeff internal-tide generation forcing (rhs_itg),
+        # required whenever it is applied (flag_itg), whether or not 'itg_coeff' is
+        # controlled. It requires (i) the vertical-mode structure functions
+        # phi_n(z) -> the generation term (from file_mode_aux) and (ii) a
+        # barotropic tidal velocity field u_bar/v_bar (from path_tidal_model or
+        # path_tidal_velocity). Fail early with an explicit message rather than
+        # producing silently wrong forcing.
+        if self.flag_itg:
+
+            if config.MOD.file_mode_aux is None or not os.path.exists(config.MOD.file_mode_aux):
+                raise ValueError(
+                    "The itg_coeff internal-tide generation forcing is requested "
+                    "(flag_itg or 'itg_coeff' in name_params) but config.MOD.file_mode_aux "
+                    "is not prescribed (or does not exist). The internal-tide generation "
+                    "term requires the vertical-mode structure functions phi_n(z).")
+
+            if config.MOD.path_tidal_model is None and config.MOD.path_tidal_velocity is None:
+                raise ValueError(
+                    "The itg_coeff internal-tide generation forcing is requested "
+                    "(flag_itg or 'itg_coeff' in name_params) but neither "
+                    "config.MOD.path_tidal_model nor config.MOD.path_tidal_velocity is "
+                    "prescribed. The internal-tide generation term requires a barotropic "
+                    "tidal velocity field.")
+
+            # Check the required fields are not entirely NaN (e.g. from an
+            # interpolation problem or wrong variable names in the aux files).
+            fields_to_check = {
+                'generation': self.generation,
+                'phi_1_0': self.phi_1_0,
+                'phi_1_H': self.phi_1_H,
+                'phi_0_H': self.phi_0_H,
+                'dH_dx': self.dH_dx,
+                'dH_dy': self.dH_dy,
+                'u_bar': next(iter(self.u_bar_data.values())) if self.u_bar_data else None,
+                'v_bar': next(iter(self.v_bar_data.values())) if self.v_bar_data else None,
+            }
+            for name_field, field in fields_to_check.items():
+                if field is None or np.all(np.isnan(np.asarray(field))):
+                    raise ValueError(
+                        f"The internal-tide generation forcing is requested but the "
+                        f"field '{name_field}' is missing or entirely NaN. This "
+                        f"usually indicates an interpolation problem; check the "
+                        f"corresponding auxiliary file and its variable names.")
+
+        # Validation for the per-constituent internal-tide generation control
+        # 'itg'. It is mutually exclusive with the itg_coeff forcing and requires
+        # the per-constituent barotropic tidal amplitude fields tidal_U/tidal_V
+        # (from path_tidal_model) and the topography gradient dH_dx/dH_dy.
+        if 'itg' in self.name_params:
+
+            # Mutual exclusivity with the itg_coeff-style forcing is enforced at
+            # the top of __init__ ('itg' and 'itg_coeff' cannot both be listed) and
+            # by self.flag_itg being forced False whenever 'itg' is controlled.
+
+            if config.MOD.path_tidal_model is None:
+                raise ValueError(
+                    "The 'itg' control is requested but config.MOD.path_tidal_model "
+                    "is not prescribed. The per-constituent internal-tide generation "
+                    "requires the per-constituent barotropic tidal amplitude atlas.")
+
+            if len(self.omega_names) != len(self.omegas):
+                raise ValueError(
+                    f"The 'itg' control requires one tidal constituent per frequency: "
+                    f"got {len(self.omega_names)} constituents in path_tidal_model but "
+                    f"{len(self.omegas)} frequencies in config.MOD.w_waves.")
+
+            fields_to_check = {
+                'tidal_U': self.tidal_U,
+                'tidal_V': self.tidal_V,
+                'dH_dx': self.dH_dx,
+                'dH_dy': self.dH_dy,
+            }
+            for name_field, field in fields_to_check.items():
+                if field is None or np.all(np.isnan(np.asarray(field))):
+                    raise ValueError(
+                        f"The 'itg' control is requested but the field '{name_field}' "
+                        f"is missing or entirely NaN. This usually indicates an "
+                        f"interpolation problem; check the tidal atlas / bathymetry "
+                        f"files and their variable names.")
 
         # Model initialization
         self.swm = model(X=X,
@@ -1672,8 +2088,103 @@ class Model_csw1l(M):
             self.swm.weight_sponge_v = self.weight_sponge_v
             self.swm.weight_sponge_h = self.weight_sponge_h
 
-        # IT wave-phase method for sponge BC
-        self.swm.bc_it_method = getattr(config.MOD, 'bc_it_method', 'plane_wave')
+            if getattr(self, 'tidal_U', None) is not None and \
+               getattr(self, 'tidal_V', None) is not None:
+                    
+                    for i, name in enumerate(self.omega_names):
+
+                        # Setting generation to 0 on sponge layers on tidal velocity amplitude
+                        self.tidal_U[i][self.sponge_on_h_S] = 0
+                        self.tidal_U[i][self.sponge_on_h_N] = 0
+                        self.tidal_U[i][self.sponge_on_h_W] = 0
+                        self.tidal_U[i][self.sponge_on_h_E] = 0
+
+                        # Setting generation to 0 on sponge layers on tidal velocity amplitude
+                        self.tidal_V[i][self.sponge_on_h_S] = 0
+                        self.tidal_V[i][self.sponge_on_h_N] = 0
+                        self.tidal_V[i][self.sponge_on_h_W] = 0
+                        self.tidal_V[i][self.sponge_on_h_E] = 0
+                    
+                    # Setting generation to 0 on sponge layers on topography gradient
+                    self.dH_dx[self.sponge_on_h_S] = 0
+                    self.dH_dx[self.sponge_on_h_N] = 0
+                    self.dH_dx[self.sponge_on_h_W] = 0
+                    self.dH_dx[self.sponge_on_h_E] = 0
+
+                    # Setting generation to 0 on sponge layers on topography gradient
+                    self.dH_dy[self.sponge_on_h_S] = 0
+                    self.dH_dy[self.sponge_on_h_N] = 0
+                    self.dH_dy[self.sponge_on_h_W] = 0
+                    self.dH_dy[self.sponge_on_h_E] = 0
+        
+        # Set attributes needed to compute the itg_coeff internal-tide generation
+        # forcing (rhs_itg) on the SW model, whenever the forcing is applied
+        # (flag_itg), whether or not 'itg_coeff' is a controlled parameter.
+        if self.flag_itg:
+            self.swm.flag_itg = True
+            self.swm.grad_H_x = self.dH_dx
+            self.swm.grad_H_y = self.dH_dy
+            self.swm.generation = self.generation
+
+        # Set attributes needed to compute the per-constituent internal-tide
+        # generation forcing (rhs_itg) on the SW model when 'itg' is controlled.
+        # This uses the topography gradient (grad_H_x/grad_H_y) in place of the
+        # bathymetry gradient, plus the per-constituent tidal amplitudes and the
+        # tidal frequencies. Mutually exclusive with flag_itg (validated above).
+        if 'itg' in self.name_params:
+            self.swm.flag_itg_omega = True
+            self.swm.grad_H_x = self.dH_dx
+            self.swm.grad_H_y = self.dH_dy
+            self.swm.tidal_U = jnp.asarray(self.tidal_U)
+            self.swm.tidal_V = jnp.asarray(self.tidal_V)
+            self.swm.omegas = np.asarray(self.omegas)
+
+        # Set attributes needed to account for a non-flat bottom in the SW
+        # equations. When enabled, rhs_u/rhs_v/rhs_h use the spatial derivatives
+        # of the topography H and the surface first-mode structure phi_1(0),
+        # interpolated on the u- and v-grids.
+        if config.MOD.flag_nonflat_bottom:
+            if self.H is None or self.phi_1_0 is None:
+                raise ValueError(
+                    "config.MOD.flag_nonflat_bottom is True but the topography H "
+                    "or the surface first-mode structure phi_1_0 is not "
+                    "prescribed. H requires a bathymetry field and phi_1_0 "
+                    "requires config.MOD.file_mode_aux.")
+            self.swm.flag_nonflat_bottom = True
+            self.swm.H = self.H
+            self.swm.H_u = self.swm.rho_on_u(self.H)
+            self.swm.H_v = self.swm.rho_on_v(self.H)
+            self.swm.phi_1_0 = self.phi_1_0
+            self.swm.phi_1_0_u = self.swm.rho_on_u(self.phi_1_0)
+            self.swm.phi_1_0_v = self.swm.rho_on_v(self.phi_1_0)
+
+            # Check the required fields are not entirely NaN (e.g. from an
+            # interpolation problem or wrong variable names in the aux files).
+            fields_to_check = {
+                'H': self.swm.H,
+                'H_u': self.swm.H_u,
+                'H_v': self.swm.H_v,
+                'phi_1_0': self.swm.phi_1_0,
+                'phi_1_0_u': self.swm.phi_1_0_u,
+                'phi_1_0_v': self.swm.phi_1_0_v,
+            }
+            for name_field, field in fields_to_check.items():
+                if field is None or np.all(np.isnan(np.asarray(field))):
+                    raise ValueError(
+                        f"config.MOD.flag_nonflat_bottom is True but the field "
+                        f"'{name_field}' is missing or entirely NaN. This usually "
+                        f"indicates an interpolation problem; check the bathymetry "
+                        f"and the vertical-mode auxiliary file and their variable "
+                        f"names.")
+
+        # IT wave-phase method for sponge BC (kept on both this model and its SW
+        # model: the SW model consumes them in its own compute_IT_2D, while the
+        # local _compute_IT_2D / _wave_phases / _it_boundary_weights below read
+        # them off self).
+        self.bc_it_method = getattr(config.MOD, 'bc_it_method', 'plane_wave')
+        self.bc_it_corner_weight_power = getattr(config.MOD, 'bc_it_corner_weight_power', self.swm.bc_it_corner_weight_power)
+        self.swm.bc_it_method = self.bc_it_method
+        self.swm.bc_it_corner_weight_power = self.bc_it_corner_weight_power
 
         # Compile jax-related functions
         self._jstep_jit = jit(self._jstep, static_argnames=['nstep'])
@@ -1695,12 +2206,348 @@ class Model_csw1l(M):
             self.swm_step_nstep = self.swm._step_rk4_nstep
             self.swm_step_tgl = self.swm.step_rk4_tgl_jit
             self.swm_step_adj = self.swm.step_rk4_adj_jit
+
+        # Path to save rhs_itg fields (for debug and analysis)
+        os.makedirs(config.EXP.tmp_DA_path, exist_ok=True)
+        self.swm.path_save_rhs_itg = config.EXP.tmp_DA_path
         
         if config.INV is not None and config.INV.super=='INV_4DVAR' and config.INV.compute_test:
             print('CSW1L Tangent test:')
             #tangent_test(self,State,nstep=10)
             print('CSW1L Adjoint test:')
             #adjoint_test(self,State,nstep=1)
+
+    def init_tidal_velocity(self,config,State):
+        """
+        NAME
+            init_tidal_velocity
+
+        DESCRIPTION
+            Reads tidal velocity file, interpolate it to the grid
+        """
+
+        # Default: no barotropic tidal velocity forcing
+        self.is_tidal_velocity = False
+        self.u_bar_data = None
+        self.v_bar_data = None
+        # Default: no per-constituent tidal amplitude fields (used by the 'itg'
+        # control). Built below from the per-constituent atlas in path_tidal_model.
+        self.tidal_U = None
+        self.tidal_V = None
+        self.omega_names = None
+
+        name_params = config.MOD.name_params if config.MOD.name_params is not None else []
+
+        # Two mutually-exclusive internal-tide generation controls drive what needs
+        # to be built here:
+        #   * flag_itg_omega ('itg' in name_params): the per-constituent control
+        #     relies on the tidal amplitude fields tidal_U/tidal_V (built in the
+        #     loop below), NOT on the barotropic tidal velocity u_bar_data/
+        #     v_bar_data, so the (possibly expensive) u_bar/v_bar computation is
+        #     skipped entirely in that case.
+        #   * flag_itg_coeff: the itg_coeff-style forcing (rhs_itg from u_bar_data/
+        #     v_bar_data) is applied, either as a controlled parameter ('itg_coeff'
+        #     in name_params) or unconditionally via config.MOD.flag_itg. It is
+        #     mutually exclusive with 'itg' (checked in __init__), so it is disabled
+        #     whenever 'itg' is controlled. When on, u_bar_data/v_bar_data MUST be
+        #     informed (pyFES atlas or prescribed files) or an error is raised below.
+        flag_itg_omega = 'itg' in name_params
+        flag_itg_coeff = (not flag_itg_omega) and (
+            ('itg_coeff' in name_params) or bool(getattr(config.MOD, 'flag_itg', False)))
+
+        # Prescribe tidal model and compute with pyFES
+        if flag_itg_coeff and config.MOD.path_tidal_model is not None:
+
+            print('Computing tidal velocity fields with pyFES... (this can take a while)')
+
+            import pyfes
+
+            # Write pyFES config files
+            os.makedirs(config.EXP.tmp_DA_path, exist_ok=True)
+            for comp, key in (('eastward', 'U'), ('northward', 'V')):
+                yaml_path = os.path.join(config.EXP.tmp_DA_path,
+                                         f'tide_{comp}.yaml')
+                with open(yaml_path, 'w') as f:
+                    f.write('engine: darwin\n')
+                    f.write('tide:\n')
+                    f.write('  cartesian:\n')
+                    f.write('    paths:\n')
+                    for name, path in config.MOD.path_tidal_model[key].items():
+                        f.write(f'      {name}: {path}\n')
+                setattr(self, f'path_tide_{comp}', yaml_path)
+
+            # Load pyFES config files
+            config_eastward = pyfes.config.load(os.path.join(config.EXP.tmp_DA_path,
+                                         f'tide_eastward.yaml'))
+            config_northward = pyfes.config.load(os.path.join(config.EXP.tmp_DA_path,
+                                         f'tide_northward.yaml'))
+
+            lon2d,lat2d = State.lon,State.lat
+            lon = State.lon[0,:]
+            lat = State.lon[:,0]
+            dates = np.array([np.datetime64(i) for i in self.timestamps])
+
+            array_dates = np.broadcast_to(dates[:, None, None], (len(dates), len(lat), len(lon)))
+            array_lon = np.broadcast_to(lon2d[None, :, :], (len(dates), len(lat), len(lon)))
+            array_lat = np.broadcast_to(lat2d[None, :, :], (len(dates), len(lat), len(lon)))
+
+            tide_eastward, lp_eastward, flags_eastward = pyfes.evaluate_tide(
+            config_eastward.models['tide'], array_dates.ravel(), array_lon.ravel(), array_lat.ravel(),
+            settings=config_eastward.settings,
+            )
+            u0_pyfes = 1e-2*(tide_eastward) # + lp_eastward )
+            u0_pyfes=u0_pyfes.reshape(array_lon.shape)
+            u0_pyfes = np.nan_to_num(u0_pyfes, nan=0.0)
+
+            tide_northward, lp_northward, flags_northward = pyfes.evaluate_tide(
+            config_northward.models['tide'], array_dates.ravel(), array_lon.ravel(), array_lat.ravel(),
+            settings=config_northward.settings,
+            )
+            v0_pyfes = 1e-2*(tide_northward)# + lp_northward)
+            v0_pyfes=v0_pyfes.reshape(array_lon.shape)
+            v0_pyfes = np.nan_to_num(v0_pyfes, nan=0.0)
+
+            self.u_bar_data = {t: u0_pyfes[i] for i, t in enumerate(self.T)}
+            self.v_bar_data = {t: v0_pyfes[i] for i, t in enumerate(self.T)}
+            self.is_tidal_velocity = True
+
+        # Prescribe tidal velocity
+        elif flag_itg_coeff and config.MOD.path_tidal_velocity is not None:
+
+            print(f'Loading tidal velocity fields from {config.MOD.path_tidal_velocity}... (this can take a while)')
+
+            u_bar,time = self.open_interpolate(State = State,path = config.MOD.path_tidal_velocity["U"],
+                                          name_var = config.MOD.name_var_tidal_velocity,comp = "U")
+            v_bar,time = self.open_interpolate(State = State,path = config.MOD.path_tidal_velocity["V"],
+                                          name_var = config.MOD.name_var_tidal_velocity,comp = "V")
+
+            # Build xarray for time interpolation
+            ds_bar = xr.Dataset({
+                'u': (['time', 'y', 'x'], u_bar),
+                'v':   (['time', 'y', 'x'], v_bar),
+            }, coords={'time': time})
+            ds_bar = ds_bar.interp(time=self.timestamps, method='linear',kwargs={"fill_value": "extrapolate"})
+
+            # Store per-timestep fields. After ds_bar.interp(time=self.timestamps),
+            # ds_bar is ordered by self.timestamps, so a single bulk .values + numpy
+            # slicing is much faster than 1 .sel(time=date).values per step.
+            u_arr = ds_bar['u'].values.astype(np.float32, copy=False)  # (nt, ny, nx)
+            v_arr = ds_bar['v'].values.astype(np.float32, copy=False)
+
+            self.u_bar_data = {t: u_arr[i] for i, t in enumerate(self.T)}
+            self.v_bar_data = {t: v_arr[i] for i, t in enumerate(self.T)}
+            self.is_tidal_velocity = True
+
+            if config.EXP.flag_plot>0:
+                fig, (ax1,ax2) = plt.subplots(1,2,figsize=(14,5))
+                im1 = ax1.pcolormesh(self.u_bar_data[0])
+                plt.colorbar(im1, ax=ax1)
+                ax1.set_title('U BAR at t=0s')
+                im2 = ax2.pcolormesh(self.v_bar_data[0])
+                plt.colorbar(im2, ax=ax2)
+                ax2.set_title('V BAR at t=0s')
+                plt.show()
+
+        # When the itg_coeff-style forcing (rhs_itg) is applied, the barotropic
+        # tidal velocity u_bar_data/v_bar_data it is built from must have been
+        # informed above, either with pyFES (config.MOD.path_tidal_model) or by
+        # loading prescribed files (config.MOD.path_tidal_velocity).
+        if flag_itg_coeff and (not self.is_tidal_velocity
+                               or self.u_bar_data is None or self.v_bar_data is None):
+            raise ValueError(
+                "The itg_coeff internal-tide generation forcing is requested "
+                "('itg_coeff' in name_params, or config.MOD.flag_itg is True while "
+                "'itg' is not controlled) but the barotropic tidal velocity "
+                "u_bar_data/v_bar_data could not be built. Prescribe either "
+                "config.MOD.path_tidal_model (computed with pyFES) or "
+                "config.MOD.path_tidal_velocity (prescribed files).")
+
+        # Per-constituent barotropic tidal amplitude fields for the 'itg' control.
+        # These are read from the same per-constituent atlas already configured in
+        # config.MOD.path_tidal_model (dict {'U':{name:path,...},'V':{...}}), so no
+        # new atlas path is introduced. Each atlas file holds the amplitude of the
+        # eastward/northward tidal velocity for one constituent; we interpolate it
+        # onto the model grid (like the c/H fields) and convert cm/s -> m/s.
+        if config.MOD.path_tidal_model is not None and 'itg' in name_params:
+
+            print('Loading per-constituent tidal amplitude fields for the itg control...')
+
+            # Amplitude variable names in the atlas files (FES default Ua/Va).
+            name_var_amp = getattr(config.MOD, 'name_var_tidal_amp', None) or \
+                {'lon': 'lon', 'lat': 'lat', 'U': 'Ua', 'V': 'Va'}
+
+            # Constituent names (parallel to config.MOD.w_waves / self.omegas).
+            self.omega_names = list(config.MOD.path_tidal_model['U'].keys())
+
+            self.tidal_U = np.zeros((len(self.omega_names), State.ny, State.nx))
+            self.tidal_V = np.zeros((len(self.omega_names), State.ny, State.nx))
+
+            for i, name in enumerate(self.omega_names):
+                self.tidal_U[i] = self._read_tidal_amplitude(
+                    State, config.MOD.path_tidal_model['U'][name], name_var_amp, 'U')
+                self.tidal_V[i] = self._read_tidal_amplitude(
+                    State, config.MOD.path_tidal_model['V'][name], name_var_amp, 'V')
+
+            if config.EXP.flag_plot > 0:
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+                im1 = ax1.pcolormesh(self.tidal_U[0])
+                plt.colorbar(im1, ax=ax1)
+                ax1.set_title(f'tidal_U ({self.omega_names[0]})')
+                im2 = ax2.pcolormesh(self.tidal_V[0])
+                plt.colorbar(im2, ax=ax2)
+                ax2.set_title(f'tidal_V ({self.omega_names[0]})')
+                plt.show()
+
+    def _read_tidal_amplitude(self, State, path, name_var_amp, comp):
+        """
+        Open a single-constituent tidal-velocity atlas file, align its longitude
+        convention to State, interpolate the amplitude onto the model grid, and
+        return it in m/s (atlas amplitudes are assumed in cm/s).
+
+        `name_var_amp` is a dict with 'lon', 'lat' and the amplitude variable name
+        under the component key (`comp`, 'U' or 'V').
+        """
+        name_lon = name_var_amp['lon']
+        name_lat = name_var_amp['lat']
+        name_amp = name_var_amp[comp]
+
+        ds = xr.open_dataset(path).squeeze()
+
+        # Align longitude convention to State (same idiom as the c/H loaders).
+        lon = ds[name_lon]
+        if np.sign(lon.data.min()) == -1 and State.lon_unit == '0_360':
+            ds = ds.assign_coords({name_lon: ((name_lon, lon.data % 360))})
+        elif np.sign(lon.data.min()) >= 0 and State.lon_unit == '-180_180':
+            ds = ds.assign_coords({name_lon: ((name_lon, (lon.data + 180) % 360 - 180))})
+        ds = ds.sortby(name_lon)
+
+        amp = grid.interp2d(ds,
+                            {'lon': name_lon, 'lat': name_lat, 'var': name_amp},
+                            State.lon,
+                            State.lat)
+        amp = np.nan_to_num(amp, nan=0.0)
+
+        return amp * 1e-2  # cm/s -> m/s
+
+    def open_interpolate(self,State,path,name_var,comp):
+        """
+        NAME
+            open_interpolate
+
+        DESCRIPTION
+            Opens and interpolates the tidal velocity files.
+
+            comp may be a single key in name_var (str) or a list/tuple of keys.
+            With a single key, returns (data, time) if the file has a time
+            dimension, else just data. With a list of keys, the spatial
+            interpolation is shared across variables and a tuple of arrays is
+            returned (in the order of comp); time is appended only when the
+            file has a time dimension.
+        """
+
+        from scipy.interpolate import griddata
+
+        multi = isinstance(comp, (list, tuple))
+        comps = list(comp) if multi else [comp]
+        var_names = [name_var[c] for c in comps]
+
+        # Detect single vs multi-file input. A list/tuple or glob pattern means
+        # multiple files (one per time step); a plain path string is a single file.
+        is_multi_file = isinstance(path, (list, tuple)) or (isinstance(path, str) and any(c in path for c in '*?[]'))
+
+        if is_multi_file:
+            ds = xr.open_mfdataset(path, chunks={'time': 1}, parallel=False)
+        else:
+            ds = xr.open_dataset(path)
+
+        name_lon = name_var['lon']
+        name_lat = name_var['lat']
+
+        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
+        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
+
+        has_time = 'time' in ds.dims
+
+        # 0) Time subset covering self.timestamps (with 1-step margin)
+        if has_time:
+            time_full = ds['time'].values
+            t_min = np.datetime64(self.timestamps.min())
+            t_max = np.datetime64(self.timestamps.max())
+            idx = np.where((time_full >= t_min) & (time_full <= t_max))[0]
+            if len(idx) > 0:
+                i0 = max(idx[0] - 1, 0)
+                i1 = min(idx[-1] + 1, len(time_full) - 1)
+                ds = ds.isel(time=slice(i0, i1 + 1))
+            # Refresh `time` from the (possibly subset) dataset so it matches
+            # the time length of the interpolated data arrays.
+            time = ds['time'].values
+
+        # 1) Spatial interpolation onto model grid (shared across all vars)
+        lon = ds[name_lon]
+        if len(lon.shape) == 1:
+            # 1D coords: boolean mask on lon/lat (works regardless of order), then
+            # sortby + fillna + interp on the small subset.
+            margin = 0.5
+            lon_min, lon_max = float(State.lon.min()) - margin, float(State.lon.max()) + margin
+            lat_min, lat_max = float(State.lat.min()) - margin, float(State.lat.max()) + margin
+            lon_arr = ds[name_lon].data
+            lat_arr = ds[name_lat].data
+            lon_sel = (lon_arr >= lon_min) & (lon_arr <= lon_max)
+            lat_sel = (lat_arr >= lat_min) & (lat_arr <= lat_max)
+            ds = ds.isel({name_lon: np.where(lon_sel)[0],
+                          name_lat: np.where(lat_sel)[0]})
+            ds = ds.sortby(ds[name_lon])
+            ds = ds.sortby(ds[name_lat])
+            ds = ds.fillna(0)
+            ds = ds.interp({name_lon: State.lon[0, :],
+                                 name_lat: State.lat[:, 0]},
+                                method='linear')
+            data_list = [ds[v].values for v in var_names]  # (nt, ny, nx) or (ny, nx)
+        else:
+            # 2D coordinates: use scipy griddata directly
+            lon_2d = ds[name_lon].values
+            lat_2d = ds[name_lat].values
+            if len(lon_2d.shape) == 1:
+                lon_2d, lat_2d = np.meshgrid(lon_2d, lat_2d)
+            if has_time:
+                nt = ds.sizes['time']
+                data_list = [np.full((nt, self.ny, self.nx), np.nan) for _ in var_names]
+                for it in range(nt):
+                    for k, v in enumerate(var_names):
+                        var_vals = ds[v].isel(time=it).values
+                        valid = ~np.isnan(var_vals) & ~np.isnan(lon_2d) & ~np.isnan(lat_2d)
+                        if not valid.any():
+                            continue
+                        data_list[k][it] = griddata(
+                            (lon_2d[valid], lat_2d[valid]),
+                            var_vals[valid],
+                            (State.lon, State.lat),
+                            method='linear').reshape(self.ny, self.nx)
+            else:
+                data_list = []
+                for v in var_names:
+                    var_vals = ds[v].values
+                    valid = ~np.isnan(var_vals) & ~np.isnan(lon_2d) & ~np.isnan(lat_2d)
+                    if valid.any():
+                        arr = griddata(
+                            (lon_2d[valid], lat_2d[valid]),
+                            var_vals[valid],
+                            (State.lon, State.lat),
+                            method='linear').reshape(self.ny, self.nx)
+                    else:
+                        arr = np.full((self.ny, self.nx), np.nan)
+                    data_list.append(arr)
+
+        if multi:
+            if has_time:
+                return tuple(data_list), time
+            return tuple(data_list)
+        else:
+            if has_time:
+                return data_list[0], time
+            return data_list[0]
 
     def save_output(self,State,present_date,name_var=None,t=None):
 
@@ -1914,6 +2761,21 @@ class Model_csw1l(M):
         name_lon_bm = name_var_bm['lon']
         name_lat_bm = name_var_bm['lat']
 
+        # Adapt longitude convention to match State.lon
+        lon = dsbm[name_lon_bm]
+        converted = False
+        if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+            dsbm = dsbm.assign_coords({name_lon_bm:((name_lon_bm, lon.data % 360))})
+            converted = True
+        elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+            dsbm = dsbm.assign_coords({name_lon_bm:((name_lon_bm, (lon.data + 180) % 360 - 180))})
+            converted = True
+        # Re-wrapping the longitude can leave the axis non-monotonic (it wraps
+        # around 0/360 or +/-180), which breaks the label-based slice below.
+        # Sort along the converted longitude to restore a monotonic index.
+        if converted and dsbm[name_lon_bm].ndim == 1:
+            dsbm = dsbm.sortby(name_lon_bm)
+
         # 0) Select time range covering self.timestamps (with 1-step margin)
         time_bm = dsbm['time'].values
         t_min = np.datetime64(self.timestamps.min())
@@ -2016,8 +2878,15 @@ class Model_csw1l(M):
             He2d = jnp.zeros((self.ny,self.nx))
         
         He2d = jnp.where(self.mask, 0., He2d)
-        
+
         return He2d
+
+    def _compute_it_open_boundary_He_total(self, He, alpha_He, h_bm):
+
+        Heb = self._extend_it_open_boundary_field(self.Heb)
+        He_bc = self._extend_it_open_boundary_field(He)
+        alpha_He_bc = self._extend_it_open_boundary_field(alpha_He)
+        return Heb + self._compute_He_from_bm(He_bc, alpha_He_bc, h_bm)
 
     def _compute_advective_terms_from_bm(self, alpha_Uu, alpha_Up, alpha_Uz, u_bm, v_bm):
 
@@ -2184,238 +3053,341 @@ class Model_csw1l(M):
         
         return w1ext
 
-    def _compute_IT_2D(self,t,He,h_SN,h_WE,flag_tangent=True):
+    def _wave_phases(self, w, He, He_on_u, He_on_v):
         """
-        Compute 2D plane wave IT fields 
+        Compute per-boundary phase and amplitude arrays for ALL angles in
+        self.bc_theta at once, for a given frequency w and equivalent depth He.
 
-        Parameters
-        ----------
-        t : float 
-            time in seconds
-        He : 2D array
-        h_SN : ND array
-            amplitude of SSH for southern/northern borders
-        h_WE : ND array
-            amplitude of SSH for western/eastern borders
+        Instead of iterating over theta in Python (which unrolls under jit/scan),
+        we vectorise over theta using standard broadcasting: theta has shape
+        (n_theta,) and grid arrays have shape (..., ny, nx).  This reduces the
+        XLA graph to O(1) nodes regardless of n_theta, dramatically cutting both
+        compile time and the number of dispatched kernels at runtime.
 
         Returns
         -------
-        u,v,h: 2D arrays
-            
+        For each of the 12 combinations (direction S/N/W/E x grid h/u/v):
+
+          phase  : array (n_theta, ny_g, nx_g)   -- phase kxy(theta)
+          amp    : array (n_theta, ny_g, nx_g)   -- amplitude correction (WKB) or 1.0
+          kx_g   : array (n_theta, ny_g, nx_g)   -- k_x component
+          ky_g   : array (n_theta, ny_g, nx_g)   -- k_y component
+
+        All returned as the compound dict:
+          out[direction][grid] = (phase, amp, kx, ky)
+
+        Method is controlled by self.bc_it_method (plane_wave / plane_wave_bdy / wkb).
         """
+        thetas = jnp.asarray(self.bc_theta)   # (n_theta,)
+        sin_t  = jnp.sin(thetas)               # (n_theta,)
+        cos_t  = jnp.cos(thetas)               # (n_theta,)
+        # add trailing spatial dims for broadcasting: (n_theta, 1, 1)
+        sin_t3 = sin_t[:, None, None]
+        cos_t3 = cos_t[:, None, None]
 
-        u_S = jnp.zeros((self.ny,self.nx-1))
-        v_S = jnp.zeros((self.ny-1,self.nx))
-        h_S = jnp.zeros((self.ny,self.nx))
-        u_N = jnp.zeros((self.ny,self.nx-1))
-        v_N = jnp.zeros((self.ny-1,self.nx))
-        h_N = jnp.zeros((self.ny,self.nx))
-        u_W = jnp.zeros((self.ny,self.nx-1))
-        v_W = jnp.zeros((self.ny-1,self.nx))
-        h_W = jnp.zeros((self.ny,self.nx))
-        u_E = jnp.zeros((self.ny,self.nx-1))
-        v_E = jnp.zeros((self.ny-1,self.nx))
-        h_E = jnp.zeros((self.ny,self.nx))
+        out = {d: {} for d in ('S', 'N', 'W', 'E')}
 
-        He_on_u = (He[:,1:] + He[:,:-1]) /2
-        He_on_v = (He[1:,:] + He[:-1,:]) /2
+        grids = [
+            ('h', He,      self.f,       self.Xh, self.Yh),
+            ('u', He_on_u, self.f_on_u,  self.Xu, self.Yu),
+            ('v', He_on_v, self.f_on_v,  self.Xv, self.Yv),
+        ]
 
-        for j,w in enumerate(self.omegas):
-            k_on_h = jnp.sqrt((w**2-self.f**2)/(self.g*He))
-            k_on_u = jnp.sqrt((w**2-self.f_on_u**2)/(self.g*(He_on_u)))
-            k_on_v = jnp.sqrt((w**2-self.f_on_v**2)/(self.g*(He_on_v)))
+        for gname, He_g, f_g, X_g, Y_g in grids:
+            ny_g, nx_g = He_g.shape
+            # wavenumber on this grid: (ny_g, nx_g)
+            k_g = jnp.sqrt((w**2 - f_g**2) / (self.g * He_g))
 
-            for i,theta in enumerate(self.bc_theta):
+            # k components for each (theta, y, x): (n_theta, ny_g, nx_g)
+            # Direction conventions:
+            #   S : (kx, ky) = ( sin theta,  cos theta) * k
+            #   N : (kx, ky) = ( sin theta, -cos theta) * k
+            #   W : (kx, ky) = ( cos theta,  sin theta) * k
+            #   E : (kx, ky) = (-cos theta,  sin theta) * k
+            kx_S =  sin_t3 * k_g;  ky_S =  cos_t3 * k_g
+            kx_N =  sin_t3 * k_g;  ky_N = -cos_t3 * k_g
+            kx_W =  cos_t3 * k_g;  ky_W =  sin_t3 * k_g
+            kx_E = -cos_t3 * k_g;  ky_E =  sin_t3 * k_g
 
-                ####################################
-                # South
-                ####################################
-                kx_on_h = jnp.sin(theta) * k_on_h
-                ky_on_h = jnp.cos(theta) * k_on_h
-                kx_on_u = jnp.sin(theta) * k_on_u
-                ky_on_u = jnp.cos(theta) * k_on_u
-                kx_on_v = jnp.sin(theta) * k_on_v
-                ky_on_v = jnp.cos(theta) * k_on_v
-                kxy_on_h = kx_on_h*self.Xh + ky_on_h*self.Yh
-                kxy_on_u = kx_on_u*self.Xu + ky_on_u*self.Yu
-                kxy_on_v = kx_on_v*self.Xv + ky_on_v*self.Yv
+            # default amplitude: 1.0 (no correction)
+            amp_ones = jnp.ones((len(thetas), ny_g, nx_g))
 
-                # h
-                h_S += self.sponge_on_h_S *(\
-                    h_SN[j,0,0,i]* jnp.cos(w*t-kxy_on_h)  +\
-                    h_SN[j,0,1,i]* jnp.sin(w*t-kxy_on_h)) 
-                
-                # v
-                h_cos_theta_on_v_S = h_SN[j,0,0,i]
-                h_sin_theta_on_v_S = h_SN[j,0,1,i]
-                v_S += self.sponge_on_v_S * (self.g/(w**2-self.f_on_v**2)*( \
-                    h_cos_theta_on_v_S * (w*ky_on_v*jnp.cos(w*t-kxy_on_v) \
-                                - self.f_on_v*kx_on_v*jnp.sin(w*t-kxy_on_v)
-                                    ) +\
-                    h_sin_theta_on_v_S * (w*ky_on_v*jnp.sin(w*t-kxy_on_v) \
-                                + self.f_on_v*kx_on_v*jnp.cos(w*t-kxy_on_v)
-                                    )
-                        ))
-                
-                # u
-                if flag_tangent:
-                    h_cos_theta_on_u_S = (h_cos_theta_on_v_S[1:] + h_cos_theta_on_v_S[:-1]) * 0.5
-                    h_sin_theta_on_u_S = (h_sin_theta_on_v_S[1:] + h_sin_theta_on_v_S[:-1]) * 0.5
-                    u_S += self.sponge_on_u_S * (self.g/(w**2-self.f_on_u**2)*( \
-                        h_cos_theta_on_u_S * (w*kx_on_u*jnp.cos(w*t-kxy_on_u) \
-                                    + self.f_on_u*ky_on_u*jnp.sin(w*t-kxy_on_u)
-                                        ) +\
-                        h_sin_theta_on_u_S * (w*kx_on_u*jnp.sin(w*t-kxy_on_u) \
-                                    - self.f_on_u*ky_on_u*jnp.cos(w*t-kxy_on_u)
-                                        )
-                            ))
-                
-                ####################################
-                # North
-                ####################################
-                kx_on_h = +jnp.sin(theta) * k_on_h
-                ky_on_h = -jnp.cos(theta) * k_on_h
-                kx_on_u = +jnp.sin(theta) * k_on_u
-                ky_on_u = -jnp.cos(theta) * k_on_u
-                kx_on_v = +jnp.sin(theta) * k_on_v
-                ky_on_v = -jnp.cos(theta) * k_on_v
-                kxy_on_h = kx_on_h*self.Xh + ky_on_h*self.Yh
-                kxy_on_u = kx_on_u*self.Xu + ky_on_u*self.Yu
-                kxy_on_v = kx_on_v*self.Xv + ky_on_v*self.Yv
+            if self.bc_it_method == 'plane_wave':
+                # phase = k(x,y) . (x, y)  [original, kept for back-compat]
+                phi_S =  sin_t3*k_g*X_g + cos_t3*k_g*Y_g
+                phi_N =  sin_t3*k_g*X_g - cos_t3*k_g*Y_g
+                phi_W =  cos_t3*k_g*X_g + sin_t3*k_g*Y_g
+                phi_E = -cos_t3*k_g*X_g + sin_t3*k_g*Y_g
+                amp_S = amp_N = amp_W = amp_E = amp_ones
 
-                # h
-                h_N += self.sponge_on_h_N *(\
-                    h_SN[j,1,0,i]* jnp.cos(w*t-kxy_on_h)  +\
-                    h_SN[j,1,1,i]* jnp.sin(w*t-kxy_on_h)) 
-                
-                # v
-                h_cos_theta_on_v_N = h_SN[j,1,0,i]
-                h_sin_theta_on_v_N = h_SN[j,1,1,i]
-                v_N += self.sponge_on_v_N * (self.g/(w**2-self.f_on_v**2)*( \
-                    h_cos_theta_on_v_N * (w*ky_on_v*jnp.cos(w*t-kxy_on_v) \
-                                - self.f_on_v*kx_on_v*jnp.sin(w*t-kxy_on_v)
-                                    ) +\
-                    h_sin_theta_on_v_N * (w*ky_on_v*jnp.sin(w*t-kxy_on_v) \
-                                + self.f_on_v*kx_on_v*jnp.cos(w*t-kxy_on_v)
-                                    )
-                        ))  
-                
-                # u
-                if flag_tangent:
-                    h_cos_theta_on_u_N = (h_cos_theta_on_v_N[1:] + h_cos_theta_on_v_N[:-1]) * 0.5
-                    h_sin_theta_on_u_N = (h_sin_theta_on_v_N[1:] + h_sin_theta_on_v_N[:-1]) * 0.5
-                    u_N += self.sponge_on_u_N * (self.g/(w**2-self.f_on_u**2)*( \
-                        h_cos_theta_on_u_N * (w*kx_on_u*jnp.cos(w*t-kxy_on_u) \
-                                    + self.f_on_u*ky_on_u*jnp.sin(w*t-kxy_on_u)
-                                        ) +\
-                        h_sin_theta_on_u_N * (w*kx_on_u*jnp.sin(w*t-kxy_on_u) \
-                                    - self.f_on_u*ky_on_u*jnp.cos(w*t-kxy_on_u)
-                                        )
-                            ))
-                
-                ####################################
-                # West
-                ####################################
-                kx_on_h = jnp.cos(theta) * k_on_h
-                ky_on_h = jnp.sin(theta) * k_on_h
-                kx_on_u = jnp.cos(theta) * k_on_u
-                ky_on_u = jnp.sin(theta) * k_on_u
-                kx_on_v = jnp.cos(theta) * k_on_v
-                ky_on_v = jnp.sin(theta) * k_on_v
-                kxy_on_h = kx_on_h*self.Xh + ky_on_h*self.Yh
-                kxy_on_u = kx_on_u*self.Xu + ky_on_u*self.Yu
-                kxy_on_v = kx_on_v*self.Xv + ky_on_v*self.Yv
+            elif self.bc_it_method == 'plane_wave_bdy':
+                # k evaluated at the boundary edge, broadcast inward
+                k_S_bdy = jnp.sqrt((w**2 - f_g[0 ,:]**2) / (self.g * He_g[0 ,:]))   # (nx_g,)
+                k_N_bdy = jnp.sqrt((w**2 - f_g[-1,:]**2) / (self.g * He_g[-1,:]))
+                k_W_bdy = jnp.sqrt((w**2 - f_g[:,0 ]**2) / (self.g * He_g[:,0 ]))   # (ny_g,)
+                k_E_bdy = jnp.sqrt((w**2 - f_g[:,-1]**2) / (self.g * He_g[:,-1]))
+                phi_S =  sin_t3*k_S_bdy[None,:]*X_g + cos_t3*k_S_bdy[None,:]*Y_g
+                phi_N =  sin_t3*k_N_bdy[None,:]*X_g - cos_t3*k_N_bdy[None,:]*Y_g
+                phi_W =  cos_t3*k_W_bdy[:,None]*X_g + sin_t3*k_W_bdy[:,None]*Y_g
+                phi_E = -cos_t3*k_E_bdy[:,None]*X_g + sin_t3*k_E_bdy[:,None]*Y_g
+                amp_S = amp_N = amp_W = amp_E = amp_ones
 
-                # h
-                h_W += self.sponge_on_h_W *(\
-                    h_WE[j,0,0,i][:,None]* jnp.cos(w*t-kxy_on_h)  +\
-                    h_WE[j,0,1,i][:,None]* jnp.sin(w*t-kxy_on_h)) 
-                
-                # u
-                h_cos_theta_on_u_W = h_WE[j,0,0,i][:,None]
-                h_sin_theta_on_u_W = h_WE[j,0,1,i][:,None]
-                u_W += self.sponge_on_u_W * (self.g/(w**2-self.f_on_u**2)*( \
-                    h_cos_theta_on_u_W * (w*kx_on_u*jnp.cos(w*t-kxy_on_u) \
-                                + self.f_on_u*ky_on_u*jnp.sin(w*t-kxy_on_u)
-                                    ) +\
-                    h_sin_theta_on_u_W * (w*kx_on_u*jnp.sin(w*t-kxy_on_u) \
-                                - self.f_on_u*ky_on_u*jnp.cos(w*t-kxy_on_u)
-                                    )
-                        ))
+            else:  # 'wkb'
+                DX_g = X_g[:,1:] - X_g[:,:-1]   # (ny_g, nx_g-1)
+                DY_g = Y_g[1:,:] - Y_g[:-1,:]   # (ny_g-1, nx_g)
 
-                # v
-                if flag_tangent:
-                    h_cos_theta_on_v_W = (h_cos_theta_on_u_W[1:] + h_cos_theta_on_u_W[:-1]) * 0.5
-                    h_sin_theta_on_v_W = (h_sin_theta_on_u_W[1:] + h_sin_theta_on_u_W[:-1]) * 0.5
-                    v_W += self.sponge_on_v_W * (self.g/(w**2-self.f_on_v**2)*( \
-                        h_cos_theta_on_v_W * (w*ky_on_v*jnp.cos(w*t-kxy_on_v) \
-                                    - self.f_on_v*kx_on_v*jnp.sin(w*t-kxy_on_v)
-                                        ) +\
-                        h_sin_theta_on_v_W * (w*ky_on_v*jnp.sin(w*t-kxy_on_v) \
-                                    + self.f_on_v*kx_on_v*jnp.cos(w*t-kxy_on_v)
-                                        )
-                            ))  
-                
-                
-                
-                ####################################
-                # East
-                ####################################
-                kx_on_h = -jnp.cos(theta) * k_on_h
-                ky_on_h = jnp.sin(theta) * k_on_h
-                kx_on_u = -jnp.cos(theta) * k_on_u
-                ky_on_u = jnp.sin(theta) * k_on_u
-                kx_on_v = -jnp.cos(theta) * k_on_v
-                ky_on_v = jnp.sin(theta) * k_on_v
-                kxy_on_h = kx_on_h*self.Xh + ky_on_h*self.Yh
-                kxy_on_u = kx_on_u*self.Xu + ky_on_u*self.Yu
-                kxy_on_v = kx_on_v*self.Xv + ky_on_v*self.Yv
+                # normal / tangential wavenumber components (n_theta, ny_g, nx_g)
+                abs_cos = jnp.abs(cos_t3);  abs_sin = jnp.abs(sin_t3)
 
-                # h
-                h_E += self.sponge_on_h_E *(\
-                    h_WE[j,1,0,i][:,None]* jnp.cos(w*t-kxy_on_h)  +\
-                    h_WE[j,1,1,i][:,None]* jnp.sin(w*t-kxy_on_h))
-                
-                # u
-                h_cos_theta_on_u_E = h_WE[j,1,0,i][:,None]
-                h_sin_theta_on_u_E = h_WE[j,1,1,i][:,None]
-                u_E += self.sponge_on_u_E * (self.g/(w**2-self.f_on_u**2)*( \
-                    h_cos_theta_on_u_E * (w*kx_on_u*jnp.cos(w*t-kxy_on_u) \
-                                + self.f_on_u*ky_on_u*jnp.sin(w*t-kxy_on_u)
-                                    ) +\
-                    h_sin_theta_on_u_E * (w*kx_on_u*jnp.sin(w*t-kxy_on_u) \
-                                - self.f_on_u*ky_on_u*jnp.cos(w*t-kxy_on_u)
-                                    )
-                        ))
-                
-                # v
-                if flag_tangent:
-                    h_cos_theta_on_v_E = (h_cos_theta_on_u_E[1:] + h_cos_theta_on_u_E[:-1]) * 0.5
-                    h_sin_theta_on_v_E = (h_sin_theta_on_u_E[1:] + h_sin_theta_on_u_E[:-1]) * 0.5
-                    v_E += self.sponge_on_v_E * (self.g/(w**2-self.f_on_v**2)*( \
-                        h_cos_theta_on_v_E * (w*ky_on_v*jnp.cos(w*t-kxy_on_v) \
-                                    - self.f_on_v*kx_on_v*jnp.sin(w*t-kxy_on_v)
-                                        ) +\
-                        h_sin_theta_on_v_E * (w*ky_on_v*jnp.sin(w*t-kxy_on_v) \
-                                    + self.f_on_v*kx_on_v*jnp.cos(w*t-kxy_on_v)
-                                        )
-                            ))
-        
-        u_it = (u_S + u_N + u_W + u_E) / self.weight_sponge_u
-        v_it = (v_S + v_N + v_W + v_E) / self.weight_sponge_v
-        h_it = (h_S + h_N + h_W + h_E) / self.weight_sponge_h
+                # S / N  (normal = y)
+                ky_n  = abs_cos * k_g;  kx_t = abs_sin * k_g
+                dPhi_y  = 0.5*(ky_n[:,:-1,:] + ky_n[:,1:,:]) * DY_g   # (n_t, ny_g-1, nx_g)
+                dPhi_x  = 0.5*(kx_t[:,:,:-1] + kx_t[:,:,1:]) * DX_g  # (n_t, ny_g, nx_g-1)
+                phi_yS  = jnp.concatenate([jnp.zeros((len(thetas),1,nx_g)),
+                                            jnp.cumsum(dPhi_y, axis=1)], axis=1)
+                phi_yN  = jnp.concatenate([jnp.flip(jnp.cumsum(
+                                            jnp.flip(dPhi_y, axis=1), axis=1), axis=1),
+                                            jnp.zeros((len(thetas),1,nx_g))], axis=1)
+                phi_xSN = jnp.concatenate([jnp.zeros((len(thetas),ny_g,1)),
+                                            jnp.cumsum(dPhi_x, axis=2)], axis=2)
+                phi_S   = phi_yS  + phi_xSN
+                phi_N   = phi_yN  + phi_xSN
 
+                # W / E  (normal = x)
+                kx_n  = abs_cos * k_g;  ky_t = abs_sin * k_g
+                dPhi_xWE = 0.5*(kx_n[:,:,:-1] + kx_n[:,:,1:]) * DX_g
+                dPhi_yWE = 0.5*(ky_t[:,:-1,:] + ky_t[:,1:,:]) * DY_g
+                phi_xW  = jnp.concatenate([jnp.zeros((len(thetas),ny_g,1)),
+                                            jnp.cumsum(dPhi_xWE, axis=2)], axis=2)
+                phi_xE  = jnp.concatenate([jnp.flip(jnp.cumsum(
+                                            jnp.flip(dPhi_xWE, axis=2), axis=2), axis=2),
+                                            jnp.zeros((len(thetas),ny_g,1))], axis=2)
+                phi_yWE = jnp.concatenate([jnp.zeros((len(thetas),1,nx_g)),
+                                            jnp.cumsum(dPhi_yWE, axis=1)], axis=1)
+                phi_W   = phi_xW + phi_yWE
+                phi_E   = phi_xE + phi_yWE
+
+                # WKB amplitude: He^{-1/4} normalised at boundary (n_theta broadcast)
+                amp_S = jnp.broadcast_to((He_g[0:1,:] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+                amp_N = jnp.broadcast_to((He_g[-1:,:] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+                amp_W = jnp.broadcast_to((He_g[:,0:1] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+                amp_E = jnp.broadcast_to((He_g[:,-1:] / He_g)**0.25, (len(thetas), ny_g, nx_g))
+
+            out['S'][gname] = (phi_S, amp_S, kx_S, ky_S)
+            out['N'][gname] = (phi_N, amp_N, kx_N, ky_N)
+            out['W'][gname] = (phi_W, amp_W, kx_W, ky_W)
+            out['E'][gname] = (phi_E, amp_E, kx_E, ky_E)
+
+        return out  # out[dir][grid] = (phase, amp, kx, ky)  all (n_theta, ny_g, nx_g)
+
+    def _smootherstep(self, x):
+        return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
+
+    def _edge_weight(self, dist, mask):
+        mask = jnp.asarray(mask, dtype=bool)
+        dist = jnp.asarray(dist)
+        width = jnp.max(jnp.where(mask, dist, 0.0))
+        width = jnp.maximum(width, 1e-12)
+        r = jnp.clip(dist / width, 0.0, 1.0)
+        weight = 1.0 - self._smootherstep(r)
+        if self.bc_it_corner_weight_power != 1.0:
+            weight = weight ** self.bc_it_corner_weight_power
+        return jnp.where(mask, weight, 0.0)
+
+    def _it_boundary_weights(self, grid):
+        """Smooth partition of unity for S/N/W/E sponge fields on one grid."""
+        if grid == 'h':
+            X, Y = self.Xh, self.Yh
+            names = ('sponge_on_h_S', 'sponge_on_h_N', 'sponge_on_h_W', 'sponge_on_h_E')
+        elif grid == 'u':
+            X, Y = self.Xu, self.Yu
+            names = ('sponge_on_u_S', 'sponge_on_u_N', 'sponge_on_u_W', 'sponge_on_u_E')
+        else:
+            X, Y = self.Xv, self.Yv
+            names = ('sponge_on_v_S', 'sponge_on_v_N', 'sponge_on_v_W', 'sponge_on_v_E')
+
+        if not all(hasattr(self, name) for name in names):
+            weight = 0.25 * jnp.ones_like(X)
+            return weight, weight, weight, weight
+
+        X = jnp.asarray(X)
+        Y = jnp.asarray(Y)
+        mask_S = getattr(self, names[0])
+        mask_N = getattr(self, names[1])
+        mask_W = getattr(self, names[2])
+        mask_E = getattr(self, names[3])
+
+        w_S = self._edge_weight(jnp.abs(Y - Y[0:1, :]), mask_S)
+        w_N = self._edge_weight(jnp.abs(Y[-1:, :] - Y), mask_N)
+        w_W = self._edge_weight(jnp.abs(X - X[:, 0:1]), mask_W)
+        w_E = self._edge_weight(jnp.abs(X[:, -1:] - X), mask_E)
+
+        weight_sum = w_S + w_N + w_W + w_E
+        active = weight_sum > 0.0
+        weight_sum = jnp.where(active, weight_sum, 1.0)
+        return tuple(jnp.where(active, w / weight_sum, 0.0)
+                     for w in (w_S, w_N, w_W, w_E))
+
+    def _compute_IT_2D(self, t, He, h_SN, h_WE, flag_tangent=True):
+        """
+        Compute 2D IT wave fields for sponge boundary conditions.
+
+        Vectorised over both omega and theta: no Python theta loop is unrolled in
+        the XLA graph, which dramatically reduces compile time and memory. Each
+        S/N/W/E wave field is blended with a smooth partition of unity, which
+        avoids the hard corner jumps produced by the previous boolean sponge-mask
+        + integer-count (weight_sponge_*) averaging while leaving the HBC
+        amplitudes untouched.
+
+        Parameters
+        ----------
+        t     : float   -- time in seconds
+        He    : (ny,nx) -- total equivalent depth (Heb + anomaly)
+        h_SN  : (n_omega, 2, 2, n_theta, nx) -- SSH amplitudes S/N borders [border,cos/sin,theta,x]
+        h_WE  : (n_omega, 2, 2, n_theta, ny) -- SSH amplitudes W/E borders [border,cos/sin,theta,y]
+        flag_tangent : bool -- compute tangential velocity components
+
+        Returns
+        -------
+        u_it, v_it, h_it : 2D arrays
+        """
+        He_on_u = (He[:,1:] + He[:,:-1]) / 2
+        He_on_v = (He[1:,:] + He[:-1,:]) / 2
+
+        # Smooth S/N/W/E partition of unity used to blend the boundary wave
+        # fields. This replaces the boolean sponge-mask + integer-count averaging
+        # and avoids the hard corner jumps it produced.
+        wh_S, wh_N, wh_W, wh_E = self._it_boundary_weights('h')
+        wu_S, wu_N, wu_W, wu_E = self._it_boundary_weights('u')
+        wv_S, wv_N, wv_W, wv_E = self._it_boundary_weights('v')
+
+        # Accumulate contributions from all omega/theta (as sums of 2D arrays)
+        u_S = jnp.zeros((self.ny,   self.nx-1))
+        v_S = jnp.zeros((self.ny-1, self.nx))
+        h_S = jnp.zeros((self.ny,   self.nx))
+        u_N = jnp.zeros_like(u_S);  v_N = jnp.zeros_like(v_S);  h_N = jnp.zeros_like(h_S)
+        u_W = jnp.zeros_like(u_S);  v_W = jnp.zeros_like(v_S);  h_W = jnp.zeros_like(h_S)
+        u_E = jnp.zeros_like(u_S);  v_E = jnp.zeros_like(v_S);  h_E = jnp.zeros_like(h_S)
+
+        for j, w in enumerate(self.omegas):
+            # --- compute phase/amp/kx/ky for all thetas at once (no theta loop) ---
+            phases = self._wave_phases(w, He, He_on_u, He_on_v)
+            # phases[dir][grid] = (phi, amp, kx, ky)  each (n_theta, ny_g, nx_g)
+
+            w2f2_v = w**2 - self.f_on_v**2   # used for v formula   (ny-1, nx)
+            w2f2_u = w**2 - self.f_on_u**2   # used for u formula   (ny, nx-1)
+
+            # Helpers (hc, hs already broadcast to (n_theta, ny_g, nx_g) by the caller):
+            def _h_field(phi, amp, hc, hs):
+                c = jnp.cos(w*t - phi)   # (n_theta, ny_g, nx_g)
+                s = jnp.sin(w*t - phi)
+                return jnp.sum(amp * (hc*c + hs*s), axis=0)
+
+            def _vel_field(phi, amp, kp, km, fp, hc, hs, w2f2):
+                c = jnp.cos(w*t - phi)
+                s = jnp.sin(w*t - phi)
+                return jnp.sum(
+                    amp * (self.g / w2f2) * (
+                        hc * (w*kp*c + fp*km*s) +
+                        hs * (w*kp*s - fp*km*c)
+                    ), axis=0)
+
+            # ------- South -------
+            # h_SN[j, border, cs, :, :] shape: (n_theta, nx)
+            hc_nx = h_SN[j,0,0,:]   # (n_theta, nx)
+            hs_nx = h_SN[j,0,1,:]
+            # broadcast to (n_theta, 1, nx) for h/v grids (ny or ny-1, nx)
+            hc_xb = hc_nx[:, None, :]
+            hs_xb = hs_nx[:, None, :]
+            # interpolate to nx-1 for u-grid, then broadcast to (n_theta, 1, nx-1)
+            hc_ub = ((hc_nx[:, :-1] + hc_nx[:, 1:]) * 0.5)[:, None, :]
+            hs_ub = ((hs_nx[:, :-1] + hs_nx[:, 1:]) * 0.5)[:, None, :]
+
+            phi_h, amp_h, kx_h, ky_h = phases['S']['h']
+            phi_v, amp_v, kx_v, ky_v = phases['S']['v']
+            h_S = h_S + _h_field(phi_h, amp_h, hc_xb, hs_xb)
+            v_S = v_S + _vel_field(
+                    phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_xb, hs_xb, w2f2_v)
+            if flag_tangent:
+                phi_u, amp_u, kx_u, ky_u = phases['S']['u']
+                u_S = u_S + _vel_field(
+                        phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_ub, hs_ub, w2f2_u)
+
+            # ------- North -------
+            hc_nx = h_SN[j,1,0,:]
+            hs_nx = h_SN[j,1,1,:]
+            hc_xb = hc_nx[:, None, :]
+            hs_xb = hs_nx[:, None, :]
+            hc_ub = ((hc_nx[:, :-1] + hc_nx[:, 1:]) * 0.5)[:, None, :]
+            hs_ub = ((hs_nx[:, :-1] + hs_nx[:, 1:]) * 0.5)[:, None, :]
+
+            phi_h, amp_h, kx_h, ky_h = phases['N']['h']
+            phi_v, amp_v, kx_v, ky_v = phases['N']['v']
+            h_N = h_N + _h_field(phi_h, amp_h, hc_xb, hs_xb)
+            v_N = v_N + _vel_field(
+                    phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_xb, hs_xb, w2f2_v)
+            if flag_tangent:
+                phi_u, amp_u, kx_u, ky_u = phases['N']['u']
+                u_N = u_N + _vel_field(
+                        phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_ub, hs_ub, w2f2_u)
+
+            # ------- West -------
+            # h_WE[j, border, cs, :, :] shape: (n_theta, ny)
+            hc_ny = h_WE[j,0,0,:]   # (n_theta, ny)
+            hs_ny = h_WE[j,0,1,:]
+            # broadcast to (n_theta, ny, 1) for h/u grids (ny, nx or nx-1)
+            hc_yb = hc_ny[:, :, None]
+            hs_yb = hs_ny[:, :, None]
+            # interpolate to ny-1 for v-grid, then broadcast to (n_theta, ny-1, 1)
+            hc_vb = ((hc_ny[:, :-1] + hc_ny[:, 1:]) * 0.5)[:, :, None]
+            hs_vb = ((hs_ny[:, :-1] + hs_ny[:, 1:]) * 0.5)[:, :, None]
+
+            phi_h, amp_h, kx_h, ky_h = phases['W']['h']
+            phi_u, amp_u, kx_u, ky_u = phases['W']['u']
+            h_W = h_W + _h_field(phi_h, amp_h, hc_yb, hs_yb)
+            u_W = u_W + _vel_field(
+                    phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_yb, hs_yb, w2f2_u)
+            if flag_tangent:
+                phi_v, amp_v, kx_v, ky_v = phases['W']['v']
+                v_W = v_W + _vel_field(
+                        phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_vb, hs_vb, w2f2_v)
+
+            # ------- East -------
+            hc_ny = h_WE[j,1,0,:]
+            hs_ny = h_WE[j,1,1,:]
+            hc_yb = hc_ny[:, :, None]
+            hs_yb = hs_ny[:, :, None]
+            hc_vb = ((hc_ny[:, :-1] + hc_ny[:, 1:]) * 0.5)[:, :, None]
+            hs_vb = ((hs_ny[:, :-1] + hs_ny[:, 1:]) * 0.5)[:, :, None]
+
+            phi_h, amp_h, kx_h, ky_h = phases['E']['h']
+            phi_u, amp_u, kx_u, ky_u = phases['E']['u']
+            h_E = h_E + _h_field(phi_h, amp_h, hc_yb, hs_yb)
+            u_E = u_E + _vel_field(
+                    phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_yb, hs_yb, w2f2_u)
+            if flag_tangent:
+                phi_v, amp_v, kx_v, ky_v = phases['E']['v']
+                v_E = v_E + _vel_field(
+                        phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_vb, hs_vb, w2f2_v)
+
+        u_it = wu_S * u_S + wu_N * u_N + wu_W * u_W + wu_E * u_E
+        v_it = wv_S * v_S + wv_N * v_N + wv_W * v_W + wv_E * v_E
+        h_it = wh_S * h_S + wh_N * h_N + wh_W * h_W + wh_E * h_E
 
         return u_it, v_it, h_it
     
-    def _jstep(self, t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=1):
+    def _jstep(self, t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=1):
 
         # Compute equivalent depth anomaly from control parameters (once, before scan)
         He2d = self._compute_He_from_bm(He_mean, alpha_He, h_bm)
+        # Total equivalent depth, with open-boundary sponge extension applied
+        # across the S/N/W/E bands when extend_it_open_boundary_sponge is set
+        # (behaviour-preserving fallback to self.Heb+He2d when inactive).
+        He_total = self._compute_it_open_boundary_He_total(He_mean, alpha_He, h_bm)
 
         # Compute advective terms from control parameters (once, before scan)
         u11u, v11u, u11p, v11p, u11z, v11z = self._compute_advective_terms_from_bm(alpha_Uu, alpha_Up, alpha_Uz, u_bm, v_bm)
-        
+
         # Compute characteristic variable from external data (once, before scan)
         if not self.flag_bc_sponge:
             w1ext = self._compute_w1_IT(t, self.Heb+He2d, h_SN, h_WE)
@@ -2426,8 +3398,9 @@ class Model_csw1l(M):
         u1, v1, h1 = self.swm_step_nstep(
             u, v, h, He2d, w1ext=w1ext,
             u11u=u11u, v11u=v11u, u11z=u11z, v11z=v11z, u11p=u11p, v11p=v11p,
-            nstep=nstep, t=t, He_total=self.Heb+He2d, h_SN=h_SN, h_WE=h_WE)
-    
+            nstep=nstep, t=t, He_total=He_total, h_SN=h_SN, h_WE=h_WE,
+            itg_coeff=itg_coeff, itg=itg, u_bar=u_bar, v_bar=v_bar)
+
         return u1, v1, h1
 
     def step(self,State,nstep=1,t=0):
@@ -2446,10 +3419,18 @@ class Model_csw1l(M):
             h_bm = None
             u_bm = None
             v_bm = None
-        
+
+        # Get barotropic tidal velocity field
+        if self.is_tidal_velocity:
+            u_bar = self.u_bar_data[t]
+            v_bar = self.v_bar_data[t]
+        else:
+            u_bar = None
+            v_bar = None
+
         # Get parameters
         if 'He_mean' in self.name_params:
-            He_mean = +State.params['He_mean'] 
+            He_mean = +State.params['He_mean']
         else:
             He_mean = jnp.zeros((self.ny,self.nx))
         if 'alpha_He' in self.name_params:
@@ -2482,9 +3463,17 @@ class Model_csw1l(M):
         else:
             h_SN = None
             h_WE = None
-            
+        if 'itg_coeff' in self.name_params:
+            itg_coeff = +State.params['itg_coeff']
+        else:
+            itg_coeff = None
+        if 'itg' in self.name_params:
+            itg = +State.params['itg']
+        else:
+            itg = None
+
         # Time stepping (scan + checkpoint inside swm model)
-        u, v, h = self._jstep_jit(t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=nstep)
+        u, v, h = self._jstep_jit(t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=nstep)
         
         # Update state
         State.setvar([u,v,h],[
@@ -2511,10 +3500,18 @@ class Model_csw1l(M):
             h_bm = None
             u_bm = None
             v_bm = None
-        
+
+        # Get barotropic tidal velocity field
+        if self.is_tidal_velocity:
+            u_bar = self.u_bar_data[t]
+            v_bar = self.v_bar_data[t]
+        else:
+            u_bar = None
+            v_bar = None
+
         # Get parameters
         if 'He_mean' in self.name_params:
-            dHe_mean = +dState.params['He_mean'] 
+            dHe_mean = +dState.params['He_mean']
             He_mean = +State.params['He_mean'] 
         else:
             He_mean = dHe_mean = jnp.zeros((self.ny,self.nx))
@@ -2558,11 +3555,21 @@ class Model_csw1l(M):
         else:
             dh_SN = dh_WE = None
             h_SN = h_WE = None
-            
+        if 'itg_coeff' in self.name_params:
+            ditg_coeff = +dState.params['itg_coeff']
+            itg_coeff = +State.params['itg_coeff']
+        else:
+            itg_coeff = ditg_coeff = None
+        if 'itg' in self.name_params:
+            ditg = +dState.params['itg']
+            itg = +State.params['itg']
+        else:
+            itg = ditg = None
+
         # Time stepping (JVP through _jstep with scan + checkpoint inside swm model)
         du, dv, dh = self._jstep_tgl_jit(
-            t, du, dv, dh, dHe_mean, dalpha_He, dalpha_Uu, dalpha_Up, dalpha_Uz, dh_SN, dh_WE,
-            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=nstep)
+            t, du, dv, dh, dHe_mean, dalpha_He, dalpha_Uu, dalpha_Up, dalpha_Uz, dh_SN, dh_WE, ditg_coeff, ditg,
+            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=nstep)
         
         # Update state
         dState.setvar([du,dv,dh],[
@@ -2570,15 +3577,15 @@ class Model_csw1l(M):
             self.name_var['V'],
             self.name_var['SSH']])
         
-    def _jstep_tgl(self, t, 
-                   du, dv, dh, dHe_mean, dalpha_He, dalpha_Uu, dalpha_Up, dalpha_Uz, dh_SN, dh_WE,
-                   u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=1):
-        
+    def _jstep_tgl(self, t,
+                   du, dv, dh, dHe_mean, dalpha_He, dalpha_Uu, dalpha_Up, dalpha_Uz, dh_SN, dh_WE, ditg_coeff, ditg,
+                   u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=1):
+
         def wrapped_jstep(x):
-            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE = x
-            return self._jstep(t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=nstep)
-        primals = ((u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE),)
-        tangents = ((du, dv, dh, dHe_mean, dalpha_He, dalpha_Uu, dalpha_Up, dalpha_Uz, dh_SN, dh_WE),)
+            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg = x
+            return self._jstep(t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=nstep)
+        primals = ((u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg),)
+        tangents = ((du, dv, dh, dHe_mean, dalpha_He, dalpha_Uu, dalpha_Up, dalpha_Uz, dh_SN, dh_WE, ditg_coeff, ditg),)
 
         _, dy = jax.jvp(wrapped_jstep, primals, tangents)
 
@@ -2603,10 +3610,18 @@ class Model_csw1l(M):
             h_bm = None
             u_bm = None
             v_bm = None
-        
+
+        # Get barotropic tidal velocity field
+        if self.is_tidal_velocity:
+            u_bar = self.u_bar_data[t]
+            v_bar = self.v_bar_data[t]
+        else:
+            u_bar = None
+            v_bar = None
+
         # Get parameters
         if 'He_mean' in self.name_params:
-            adHe_mean = +adState.params['He_mean'] 
+            adHe_mean = +adState.params['He_mean']
             He_mean = +State.params['He_mean'] 
         else:
             He_mean = adHe_mean = jnp.zeros((self.ny,self.nx))
@@ -2650,22 +3665,32 @@ class Model_csw1l(M):
         else:
             adh_SN = adh_WE = None
             h_SN = h_WE = None
-        
+        if 'itg_coeff' in self.name_params:
+            ad_itg_coeff = +adState.params['itg_coeff']
+            itg_coeff = +State.params['itg_coeff']
+        else:
+            itg_coeff = ad_itg_coeff = None
+        if 'itg' in self.name_params:
+            ad_itg = +adState.params['itg']
+            itg = +State.params['itg']
+        else:
+            itg = ad_itg = None
+
 
         # Forward trajectory (using JIT'd single-step for fast execution)
         u_list = [u]; v_list = [v]; h_list = [h]
         for it in range(nstep):
-            u, v, h = self._jstep_jit(t+it*self.dt, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=1)
+            u, v, h = self._jstep_jit(t+it*self.dt, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=1)
             u_list.append(u); v_list.append(v); h_list.append(h)
-            
+
         # Reverse-time adjoint loop
         for it in reversed(range(nstep)):
             u = u_list[it]
             v = v_list[it]
             h = h_list[it]
-            adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE = self._jstep_adj_jit(t+it*self.dt, 
-                                                                            adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE,
-                                                                            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm)
+            adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE, ad_itg_coeff, ad_itg = self._jstep_adj_jit(t+it*self.dt,
+                                                                            adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE, ad_itg_coeff, ad_itg,
+                                                                            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar)
 
         if 'He_mean' in self.name_params:
             adState.params['He_mean'] = adHe_mean
@@ -2691,26 +3716,30 @@ class Model_csw1l(M):
         if 'hbc' in self.name_params:
             adState.params['hbcx'] = adh_SN
             adState.params['hbcy'] = adh_WE
-        
+        if 'itg_coeff' in self.name_params:
+            adState.params['itg_coeff'] = ad_itg_coeff
+        if 'itg' in self.name_params:
+            adState.params['itg'] = ad_itg
+
         # Update state and parameters
         adState.setvar(adu,self.name_var['U'])
         adState.setvar(adv,self.name_var['V'])
         adState.setvar(adh,self.name_var['SSH'])
 
-    def _jstep_adj(self, t, 
-                  adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE,
-                  u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=1):
+    def _jstep_adj(self, t,
+                  adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE, ad_itg_coeff, ad_itg,
+                  u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=1):
 
         def wrapped_jstep(x):
-            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE = x
-            return self._jstep(t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, h_bm, u_bm, v_bm, nstep=nstep)
-        primals = ((u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE),)
-        cotangents = (adu, adv, adh)  
+            u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg = x
+            return self._jstep(t, u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg, h_bm, u_bm, v_bm, u_bar, v_bar, nstep=nstep)
+        primals = ((u, v, h, He_mean, alpha_He, alpha_Uu, alpha_Up, alpha_Uz, h_SN, h_WE, itg_coeff, itg),)
+        cotangents = (adu, adv, adh)
 
         _, vjp_fn = jax.vjp(wrapped_jstep, *primals)
         adjoints = vjp_fn(cotangents)
 
-        adu, adv, adh, _adHe_mean, _adalpha_He, _adalpha_Uu, _adalpha_Up, _adalpha_Uz, _adhSN, _adhWE = adjoints[0]
+        adu, adv, adh, _adHe_mean, _adalpha_He, _adalpha_Uu, _adalpha_Up, _adalpha_Uz, _adhSN, _adhWE, _ad_itg_coeff, _ad_itg = adjoints[0]
 
         if adHe_mean is not None:
             adHe_mean += _adHe_mean
@@ -2726,8 +3755,12 @@ class Model_csw1l(M):
             adh_SN += _adhSN
         if adh_WE is not None:
             adh_WE += _adhWE
+        if ad_itg_coeff is not None:
+            ad_itg_coeff += _ad_itg_coeff
+        if ad_itg is not None:
+            ad_itg += _ad_itg
 
-        return adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE
+        return adu, adv, adh, adHe_mean, adalpha_He, adalpha_Uu, adalpha_Up, adalpha_Uz, adh_SN, adh_WE, ad_itg_coeff, ad_itg
 
 
 ###############################################################################

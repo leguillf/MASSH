@@ -275,7 +275,7 @@ class Variational:
         else:
             X  = X0 - self.Xb
             Jb = 0
-        
+
         cost_misfit = []
         cost_basis = []
         cost_model = []
@@ -286,6 +286,8 @@ class Variational:
         Jo = 0.
 
         for i in range(len(self.checkpoints)-1):
+
+            # print(i," : ")
             
             t = self.M.T[self.checkpoints[i]]
             nstep = self.checkpoints[i+1] - self.checkpoints[i]
@@ -301,7 +303,7 @@ class Variational:
                 Jo += _m.dot(np.asarray(self.R.inv(misfit), dtype=np.float64))
                 if self.print_time:
                     cost_misfit.append(time.time()-time0)
-            
+
             # 2. Reduced basis
             if self.checkpoints[i]%self.dtbasis==0:
                 if self.print_time:
@@ -309,7 +311,7 @@ class Variational:
                 self.basis.operg(t/3600/24, X, State=State.params)
                 if self.print_time:
                     cost_basis.append(time.time()-time0)
-            
+
             State_dict[t] = State.copy()
 
             # 3. Run forward model
@@ -318,7 +320,7 @@ class Variational:
             self.M.step(t=t,State=State,nstep=nstep)
             if self.print_time:
                     cost_model.append(time.time()-time0)
-
+            
             if i==int(len(self.checkpoints)/2):
                 if self.it_plot % self.freq_it_plot == 0:
                     State.plot(title='State variables at the middle of cost function evaluation', name_save=f'state_cost_it{self.it_plot}')
@@ -334,7 +336,6 @@ class Variational:
         
         # Cost function (float64 for L-BFGS-B line-search stability)
         J = np.float64(0.5 * (Jo + Jb))
-
 
         ########################################
         # GRAD FUNCTION

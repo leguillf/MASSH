@@ -418,7 +418,7 @@ MOD_CSW1L = dict(
 
     name_var = {'U':'u','V':'v','SSH':'ssh'}, # Dictionnary of variable name 
 
-    name_params = ['He_mean', 'hbc', 'alpha'], # List of parameters to control (among 'He_mean', 'hbc', 'alpha', 'alpha_He', 'alpha_Uu', , 'alpha_Up', 'alpha_Uz')
+    name_params = ['He_mean', 'hbc', 'alpha'], # List of parameters to control (among 'He_mean', 'hbc', 'alpha', 'alpha_He', 'alpha_Uu', , 'alpha_Up', 'alpha_Uz', 'itg_coeff', 'itg'). 'itg_coeff' (a (ny,nx) coefficient) and 'itg' (per-constituent, time-dependent, shape (n_omega,4,ny,nx)) are two mutually-exclusive internal-tide generation controls and CANNOT both be listed (an error is raised if they are).
 
     name_init_var = {}, # Only if grid is a GRID_FROM_FILE type. Dictionnary of variable names to initialize from the file
 
@@ -448,7 +448,15 @@ MOD_CSW1L = dict(
 
     filec_aux = None, # auxilliary file to be used as phase velocity field (the spatial interpolation is handled inline)
 
-    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file 
+    name_var_c = {'lon':'','lat':'','var':''}, # Variable names for the phase velocity auxilliary file
+
+    file_mode_aux = None, # auxilliary file for the vertical structure functions phi_n(z) of the mode decomposition (the spatial interpolation is handled inline)
+
+    name_var_mode = {'lon':'','lat':'','phi_1_0':'','phi_1_H':'','phi_0_H':''}, # Variable names for the vertical structure functions auxilliary file
+
+    flag_itg = False, # if True, the internal-tide generation (itg) term (rhs_itg) is implemented in the SW model equations, computed from the prescribed barotropic tidal velocity u_bar_data/v_bar_data (built from config.MOD.path_tidal_model with pyFES, or loaded from config.MOD.path_tidal_velocity). This applies the forcing even when 'itg_coeff' is not a controlled parameter. NOTE: this flag is only valid/taken into account when 'itg' is NOT in name_params (mutually exclusive with the per-constituent 'itg' control) and is redundant when 'itg_coeff' is in name_params (which turns the forcing on automatically). When it is taken into account, u_bar_data and v_bar_data MUST be informed (via path_tidal_model or path_tidal_velocity), otherwise an error is raised.
+
+    flag_nonflat_bottom = False, # if True, the spatial derivatives in the SW model equations are computed without considering that the bottom is flat, it includes the spatial derivatives of H and first mode at the surface
 
     # Bathymetry parameters
 
@@ -456,11 +464,23 @@ MOD_CSW1L = dict(
 
     file_H_aux = None, # if H is None, netcdf file for spatially varying depth field. The spatial interpolation is handled inline.
 
-    name_var_H = {'lon':'','lat':'','var':''}, # Variable names for the depth netcdf file
+    name_var_H = {'lon':'','lat':'','var':'','dvar_dx':'','dvar_dy':''}, # Variable names for the depth netcdf file. 'dvar_dx' and 'dvar_dy' are to prescribe the depth gradient components; if left empty they are computed from 'var'.
 
     # IT parameters
 
     w_waves = [2*3.14/12/3600], # igw frequencies (in seconds)
+
+    # Barotropic tide velocity
+
+    path_tidal_model = None, # path to read tidal velocity model. If not None, tidal velocities are computed with pyFES
+
+    path_tidal_velocity = None, # path to read tidal velocity fields, if provided by model outputs for instance. Used if path_tidal_model is None
+
+    name_var_tidal_velocity = None, # name of variables in path_tidal_velocity
+
+    name_var_tidal_amp = {'lon':'lon','lat':'lat','U':'Ua','V':'Va'}, # Variable names in the per-constituent tidal-amplitude atlas files (path_tidal_model[...]), used by the 'itg' control. Amplitudes are assumed in cm/s.
+
+    # Entering waves
 
     Ntheta = 1, # Number of angles (computed from the normal of the border) of incoming waves.
                # Set to -1 to auto-compute the minimum Ntheta from the boundary tangential Nyquist:
@@ -514,6 +534,13 @@ MOD_CSW1L = dict(
                                  # 'plane_wave'     : original method — k(x,y)*coords (inconsistent with spatially varying He, kept for backward compatibility)
                                  # 'plane_wave_bdy' : k evaluated at the boundary edge (true 1D plane wave, recommended for smoothly varying He)
                                  # 'wkb'            : WKB cumulative-phase integral + He^{-1/4} amplitude correction (best for strongly varying He)
+
+    bc_it_corner_weight_power = 1.0, # Power applied to smooth S/N/W/E corner partition weights used by the open-boundary sponge extension
+
+    extend_it_open_boundary_sponge = False, # If True, extend IT-side Heb, He_mean, alpha* controls, and Bathymetry H
+                                            # from the Sponge Interior Edge across open-boundary S/N/W/E sponge bands
+                                            # before constructing entering-wave/generation media. Coast/island/land
+                                            # sponge extension is intentionally left for a future implementation.
 
 )
 
@@ -1201,6 +1228,22 @@ BASIS_GAUSS2D_JAX = dict(
     path_background = None, # Path to a netcdf file with background control-vector values
 
     var_background = None # Variable name inside *path_background*
+
+)
+
+BASIS_GAUSS_ITG = dict(
+
+    super = 'BASIS_GAUSS_ITG',
+
+    name_mod_var = 'itg', # Name of the related model variable (the per-constituent internal-tide generation control, shape (n_omega,4,ny,nx))
+
+    facns = 2., # Factor for gaussian spacing in space (controls centre density relative to D_itg)
+
+    D_itg = 300, # Spatial scale (km): Gaussian half-width / truncation radius
+
+    sigma_Q = 0.01, # Prior standard deviation for each control coefficient
+
+    Nwaves = 1, # Number of tidal frequency components (must equal len(config.MOD.w_waves))
 
 )
 

@@ -10,6 +10,8 @@ import jax
 from jax import checkpoint as jax_checkpoint
 from jax.lax import scan, dynamic_index_in_dim
 from functools import partial
+import xarray as xr
+from jax import debug
 
 import matplotlib.pylab as plt
 
@@ -121,12 +123,60 @@ class CSWm:
         self.flag_sponge_bc = False
         self.sponge_coef = 0.
 
+        # Path to save rhs_itg fields (for debug and analysis) - (attributes set externally by wrapper)
+        self.path_save_rhs_itg = None
+
+        # Internal-tide generation forcing (attributes set externally by wrapper).
+        # Two mutually-exclusive formulations of rhs_itg are supported:
+        #   1. itg_coeff (flag_itg): the generation term
+        #      generation*(u_bar*grad_H_x + v_bar*grad_H_y) modulated by the
+        #      (ny,nx) coefficient field 'itg_coeff', where u_bar/v_bar are the
+        #      prescribed barotropic tidal velocity fields (u_bar_data/v_bar_data
+        #      in the wrapper). flag_itg is True whenever this forcing is wanted,
+        #      whether or not 'itg_coeff' is a controlled parameter (when it is
+        #      not, the forcing uses a null coefficient). Mutually exclusive with
+        #      the per-constituent 'itg' formulation below.
+        #   2. itg (flag_itg_omega): the per-constituent, time-dependent forcing
+        #      sum_i grad_H_x*tidal_U[i]*(itg[i,0]cos(w_i t)+itg[i,1]sin(w_i t))
+        #            + grad_H_y*tidal_V[i]*(itg[i,2]cos(w_i t)+itg[i,3]sin(w_i t))
+        #      controlled by the (n_omega,4,ny,nx) parameter 'itg'.
+        self.flag_itg = False
+        self.grad_H_x = None
+        self.grad_H_y = None
+        self.generation = None
+        # Per-constituent (itg) generation forcing fields (set externally by
+        # wrapper when 'itg' is a controlled parameter). self.omegas is already
+        # set from the constructor argument above and is reused here.
+        self.flag_itg_omega = False
+        self.tidal_U = None
+        self.tidal_V = None
+
+        # Non-flat bottom (attributes set externally by wrapper when used).
+        # When flag_nonflat_bottom is True, the SW momentum/continuity equations
+        # account for the spatial derivatives of the topography H and the surface
+        # first-mode structure phi_1(0), instead of assuming a flat bottom.
+        #   H          : (ny,nx)  topography depth on the h-grid
+        #   H_u, H_v   : H interpolated on the u- and v-grids
+        #   phi_1_0    : (ny,nx)  phi_1(0), first baroclinic mode at the surface
+        #   phi_1_0_u, phi_1_0_v : phi_1_0 interpolated on the u- and v-grids
+        self.flag_nonflat_bottom = False
+        self.H = None
+        self.H_u = None
+        self.H_v = None
+        self.phi_1_0 = None
+        self.phi_1_0_u = None
+        self.phi_1_0_v = None
+
         # IT phase method for sponge boundary conditions
         # 'plane_wave'     : local k(x,y) * coords  (original, phase inconsistent with varying He)
         # 'plane_wave_bdy' : k from boundary row/col -> true 1D plane wave (recommended)
         # 'wkb'            : cumulative-path-integral phase + He^{-1/4} amplitude correction
         self.bc_it_method = 'plane_wave'
-        
+
+        # Power applied to the smooth S/N/W/E corner partition-of-unity weights
+        # used to blend the IT sponge boundary fields (1.0 = plain smootherstep).
+        self.bc_it_corner_weight_power = 1.0
+
         # JAX compiling — always-needed utilities
         self.u_on_v_jit = jit(self.u_on_v)
         self.v_on_u_jit = jit(self.v_on_u)
@@ -222,25 +272,54 @@ class CSWm:
     def rhs_u(self,u,v,h, u11u=None, v11u=None, u11z=None, v11z=None):
         
         rhs_u = jnp.zeros_like(u)
-        
+
         # --- Pressure gradient + Coriolis ---
-        rhs_u = rhs_u.at[1:-1,:].set(
-            self.f_on_u[1:-1,:] * self.v_on_u(v) -\
-            self.g * (h[1:-1,1:] - h[1:-1,:-1]) / self.DX[1:-1,:]
-            )
+        if not self.flag_nonflat_bottom:
+            rhs_u = rhs_u.at[1:-1,:].set(
+                self.f_on_u[1:-1,:] * self.v_on_u(v) -\
+                self.g * (h[1:-1,1:] - h[1:-1,:-1]) / self.DX[1:-1,:]
+                )
+        else:
+            # Non-flat bottom: the pressure gradient acts on h/phi_1(0) and is
+            # rescaled by phi_1(0) on the u-grid (spatial derivatives of the
+            # topography are carried by phi_1_0).
+            h_phi_1_0 = h / self.phi_1_0
+            rhs_u = rhs_u.at[1:-1,:].set(
+                self.f_on_u[1:-1,:] * self.v_on_u(v) -\
+                self.g * self.phi_1_0_u[1:-1,:] *
+                (h_phi_1_0[1:-1,1:] - h_phi_1_0[1:-1,:-1]) / self.DX[1:-1,:]
+                )
+            # Remove NaNs that may appear where H or phi_1_0 vanish.
+            rhs_u = jnp.nan_to_num(rhs_u, nan=0.0)
 
         # -----------------------------------------
         # Mean-flow advection (u11u, v11u)
         # -----------------------------------------
         if u11u is not None and v11u is not None:
-            # Shape u = (ny, nx-1)
-            u_on_T = self.u_on_rho(u) # (ny, nx)
+
+            if not self.flag_nonflat_bottom: 
+                # Shape u = (ny, nx-1)
+                u_on_T = self.u_on_rho(u) # (ny, nx)
+                
+                # --- split velocities into positive and negative parts ---
+                up = jnp.where(u11u < 0, 0, u11u) # (ny, nx)
+                um = jnp.where(u11u > 0, 0, u11u)
+                vp = jnp.where(v11u < 0, 0, v11u)
+                vm = jnp.where(v11u > 0, 0, v11u)
             
-            # --- split velocities into positive and negative parts ---
-            up = jnp.where(u11u < 0, 0, u11u) # (ny, nx)
-            um = jnp.where(u11u > 0, 0, u11u)
-            vp = jnp.where(v11u < 0, 0, v11u)
-            vm = jnp.where(v11u > 0, 0, v11u)
+            else:
+                # Non-flat bottom: the velocity gradient acts on u/phi_1(0) and is
+                # rescaled by phi_1(0) which is involved in the upwind scheme.
+
+                # Shape u = (ny, nx-1)
+                u_on_T = self.u_on_rho(u / self.phi_1_0_u) # (ny, nx)
+                
+                # --- split velocities into positive and negative parts ---
+                up = jnp.where(self.phi_1_0 * u11u < 0, 0, self.phi_1_0 * u11u) # (ny, nx)
+                um = jnp.where(self.phi_1_0 * u11u > 0, 0, self.phi_1_0 * u11u)
+                vp = jnp.where(self.phi_1_0 * v11u < 0, 0, self.phi_1_0 * v11u)
+                vm = jnp.where(self.phi_1_0 * v11u > 0, 0, self.phi_1_0 * v11u)
+
 
             # --- advection term on T points ---
             adv_term_on_T = self.adv(up, vp, um, vm, u_on_T) # shape (ny-4, nx-4)
@@ -266,26 +345,53 @@ class CSWm:
     def rhs_v(self,u,v,h, u11u=None, v11u=None, u11z=None, v11z=None):
         
         rhs_v = jnp.zeros_like(v)
-        
+
         # --- Pressure gradient + Coriolis ---
-        rhs_v = rhs_v.at[:,1:-1].set(
-            -self.f_on_v[:,1:-1] * self.u_on_v(u) -\
-            self.g * (h[1:,1:-1] - h[:-1,1:-1]) / self.DY[:,1:-1]
-            )
+        if not self.flag_nonflat_bottom:
+            rhs_v = rhs_v.at[:,1:-1].set(
+                -self.f_on_v[:,1:-1] * self.u_on_v(u) -\
+                self.g * (h[1:,1:-1] - h[:-1,1:-1]) / self.DY[:,1:-1]
+                )
+        else:
+            # Non-flat bottom: the pressure gradient acts on h/phi_1(0) and is
+            # rescaled by phi_1(0) on the v-grid.
+            h_phi_1_0 = h / self.phi_1_0
+            rhs_v = rhs_v.at[:,1:-1].set(
+                -self.f_on_v[:,1:-1] * self.u_on_v(u) -\
+                self.g * self.phi_1_0_v[:,1:-1] *
+                (h_phi_1_0[1:,1:-1] - h_phi_1_0[:-1,1:-1]) / self.DY[:,1:-1]
+                )
+            # Remove NaNs that may appear where H or phi_1_0 vanish.
+            rhs_v = jnp.nan_to_num(rhs_v, nan=0.0)
 
         # -----------------------------------------
         # Mean-flow advection (u11u, v11u)
         # -----------------------------------------
         if u11u is not None and v11u is not None:
 
-            # Shape v = (ny-1, nx)
-            v_on_T = self.v_on_rho(v) # (ny, nx)
+            if not self.flag_nonflat_bottom: 
+
+                # Shape v = (ny-1, nx)
+                v_on_T = self.v_on_rho(v) # (ny, nx)
+                
+                # --- split velocities into positive and negative parts ---
+                up = jnp.where(u11u < 0, 0, u11u) # (ny, nx) 
+                um = jnp.where(u11u > 0, 0, u11u)
+                vp = jnp.where(v11u < 0, 0, v11u)
+                vm = jnp.where(v11u > 0, 0, v11u)
             
-            # --- split velocities into positive and negative parts ---
-            up = jnp.where(u11u < 0, 0, u11u) # (ny, nx) 
-            um = jnp.where(u11u > 0, 0, u11u)
-            vp = jnp.where(v11u < 0, 0, v11u)
-            vm = jnp.where(v11u > 0, 0, v11u)
+            else:
+                # Non-flat bottom: the velocity gradient acts on v/phi_1(0) and is
+                # rescaled by phi_1(0) which is involved in the upwind scheme.
+
+                # Shape v = (ny-1, nx)
+                v_on_T = self.v_on_rho(v/self.phi_1_0_v) # (ny, nx)
+                
+                # --- split velocities into positive and negative parts ---
+                up = jnp.where(u11u * self.phi_1_0 < 0, 0, u11u * self.phi_1_0) # (ny, nx) 
+                um = jnp.where(u11u * self.phi_1_0 > 0, 0, u11u * self.phi_1_0)
+                vp = jnp.where(v11u * self.phi_1_0 < 0, 0, v11u * self.phi_1_0)
+                vm = jnp.where(v11u * self.phi_1_0 > 0, 0, v11u * self.phi_1_0)
 
             # --- advection term on T points ---
             adv_term_on_T = self.adv(up, vp, um, vm, v_on_T) # shape (ny-4, nx-4)
@@ -308,39 +414,118 @@ class CSWm:
             
         return rhs_v
     
-    def rhs_h(self,u,v,h, He, u11p=None, v11p=None):
+    def rhs_h(self,u,v,h, He, u11p=None, v11p=None, rhs_itg=None):
 
         rhs_h = jnp.zeros_like(h)
 
         # --- Continuity equation ---
-        rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
-                (u[1:-1,1:] - u[1:-1,:-1]) / self.DXu[1:-1,:] + \
-                (v[1:,1:-1] - v[:-1,1:-1]) / self.DYv[:,1:-1]))
+        if not self.flag_nonflat_bottom:
+            rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
+                    (u[1:-1,1:] - u[1:-1,:-1]) / self.DXu[1:-1,:] + \
+                    (v[1:,1:-1] - v[:-1,1:-1]) / self.DYv[:,1:-1]))
+        else:
+            # Non-flat bottom: the divergence is taken on H*u/phi_1(0) and
+            # H*v/phi_1(0), and the equivalent depth is rescaled by phi_1(0)/H
+            # (this carries the spatial derivatives of the topography H and phi_1(0)).
+            Hu_phi_1_0 = self.H_u * u / self.phi_1_0_u
+            Hv_phi_1_0 = self.H_v * v / self.phi_1_0_v
+            rhs_h = rhs_h.at[1:-1,1:-1].set(
+                - (He[1:-1,1:-1] * self.phi_1_0[1:-1,1:-1] / self.H[1:-1,1:-1]) * (\
+                    (Hu_phi_1_0[1:-1,1:] - Hu_phi_1_0[1:-1,:-1]) / self.DXu[1:-1,:] + \
+                    (Hv_phi_1_0[1:,1:-1] - Hv_phi_1_0[:-1,1:-1]) / self.DYv[:,1:-1]))
+            # Remove NaNs that may appear where H or phi_1_0 vanish.
+            rhs_h = jnp.nan_to_num(rhs_h, nan=0.0)
+
+        # --- Internal-tide generation forcing (itg) ---
+        if rhs_itg is not None:
+            rhs_h = rhs_h.at[1:-1,1:-1].add(rhs_itg[1:-1,1:-1])
 
         # -----------------------------------------
         # Mean-flow divergence (u11p, v11p)
         # -----------------------------------------
         if u11p is not None and v11p is not None:
 
-            # --- interpolate mean flow to h points ---
-            u11p_on_h = u11p
-            v11p_on_h = v11p
+            if not self.flag_nonflat_bottom: 
 
-            # --- split velocities into positive and negative parts ---
-            up = jnp.where(u11p_on_h < 0, 0, u11p_on_h)
-            um = jnp.where(u11p_on_h > 0, 0, u11p_on_h)
-            vp = jnp.where(v11p_on_h < 0, 0, v11p_on_h)
-            vm = jnp.where(v11p_on_h > 0, 0, v11p_on_h)
+                # --- interpolate mean flow to h points ---
+                u11p_on_h = u11p
+                v11p_on_h = v11p
+
+                # --- split velocities into positive and negative parts ---
+                up = jnp.where(u11p_on_h < 0, 0, u11p_on_h)
+                um = jnp.where(u11p_on_h > 0, 0, u11p_on_h)
+                vp = jnp.where(v11p_on_h < 0, 0, v11p_on_h)
+                vm = jnp.where(v11p_on_h > 0, 0, v11p_on_h)
+            
+            else: 
+                # Non-flat bottom: the pessure gradient acts on g*h/phi_1(0) and is
+                # rescaled by phi_1(0)/g which is involved in the upwind scheme.
+
+                # --- pressure field --- 
+                h = self.g*h/self.phi_1_0
+
+                # --- interpolate mean flow to h points ---
+                u11p_on_h = u11p
+                v11p_on_h = v11p
+
+                # --- split velocities into positive and negative parts ---
+                rescale_coeff = self.phi_1_0/self.g
+                up = jnp.where(rescale_coeff * u11p_on_h < 0, 0, rescale_coeff * u11p_on_h)
+                um = jnp.where(rescale_coeff * u11p_on_h > 0, 0, rescale_coeff * u11p_on_h)
+                vp = jnp.where(rescale_coeff * v11p_on_h < 0, 0, rescale_coeff * v11p_on_h)
+                vm = jnp.where(rescale_coeff * v11p_on_h > 0, 0, rescale_coeff * v11p_on_h)
+
 
             # --- advection term on T points ---
             adv_term_on_T = self.adv(up, vp, um, vm, h) # shape (ny-4, nx-4)
 
             # --- add advection term ---
             rhs_h = rhs_h.at[2:-2,2:-2].set(rhs_h[2:-2,2:-2] - adv_term_on_T)
-          
+
         return rhs_h
-    
-    
+
+    def compute_rhs_itg(self, u_bar, v_bar, itg_coeff=None):
+        """
+        Internal-tide generation forcing term for the continuity equation:
+            rhs_itg = generation * (u_bar*grad_H_x + v_bar*grad_H_y) * (1 + itg_coeff)
+        The optional (ny,nx) coefficient field `itg_coeff` modulates the amplitude.
+        When `itg_coeff` is None (forcing applied without controlling 'itg_coeff'),
+        it is treated as null, i.e.
+            rhs_itg = generation * (u_bar*grad_H_x + v_bar*grad_H_y).
+        Requires self.generation, self.grad_H_x and self.grad_H_y to be set
+        externally by the wrapper (Model_csw1l).
+        """
+        u_grad_H_x = u_bar * self.grad_H_x
+        u_grad_H_y = v_bar * self.grad_H_y
+        rhs_itg = self.generation * (u_grad_H_x + u_grad_H_y)
+        if itg_coeff is not None:
+            rhs_itg = rhs_itg * (jnp.ones_like(itg_coeff) + itg_coeff)
+        return rhs_itg
+
+    def compute_rhs_itg_omega(self, t, itg):
+        """
+        Per-constituent, time-dependent internal-tide generation forcing term for
+        the continuity equation (mirrors MASSH_val / Bellemin-Laponnaz_2026_JAMES):
+
+            rhs_itg = sum_i grad_H_x*tidal_U[i]*(itg[i,0]cos(w_i t)+itg[i,1]sin(w_i t))
+                          + grad_H_y*tidal_V[i]*(itg[i,2]cos(w_i t)+itg[i,3]sin(w_i t))
+
+        `itg` is the (n_omega, 4, ny, nx) control parameter (4 = cos/sin for the
+        x and y gradient components). Requires self.grad_H_x, self.grad_H_y,
+        self.tidal_U, self.tidal_V and self.omegas to be set externally by the
+        wrapper (Model_csw1l). The topography gradient (grad_H_x/grad_H_y) is used
+        in place of the bathymetry gradient.
+        """
+        rhs_itg = jnp.zeros((self.ny, self.nx))
+        for i, omega in enumerate(self.omegas):
+            cos_wt = jnp.cos(omega * jnp.asarray(t))
+            sin_wt = jnp.sin(omega * jnp.asarray(t))
+            rhs_itg = rhs_itg + self.grad_H_x * self.tidal_U[i] * \
+                (itg[i, 0, :, :] * cos_wt + itg[i, 1, :, :] * sin_wt)
+            rhs_itg = rhs_itg + self.grad_H_y * self.tidal_V[i] * \
+                (itg[i, 2, :, :] * cos_wt + itg[i, 3, :, :] * sin_wt)
+        return rhs_itg
+
     ###########################################################################
     #                      Open Boundary Conditions                           #
     ###########################################################################
@@ -657,8 +842,8 @@ class CSWm:
         """
         return q_n + nu * (q_nm1 - 2.0*q_n + q_np1)
             
-    def step_euler(self,u0, v0, h0, He=None, w1ext=None, u11u=None, v11u=None, u11p=None, v11p=None, dc2=None):
-        
+    def step_euler(self,u0, v0, h0, He=None, w1ext=None, u11u=None, v11u=None, u11p=None, v11p=None, dc2=None, rhs_itg=None):
+
         #######################
         #   Init local state  #
         #######################
@@ -677,7 +862,7 @@ class CSWm:
         #######################
         ku = self.rhs_u(u1,v1,h1)
         kv = self.rhs_v(u1,v1,h1)
-        kh = self.rhs_h(u1,v1,h1,He)
+        kh = self.rhs_h(u1,v1,h1,He, rhs_itg=rhs_itg)
         
         #######################
         #  Time propagation   #
@@ -693,8 +878,8 @@ class CSWm:
         
         return u, v, h
     
-    def step_rk4(self, u0, v0, h0, He=None, w1ext=None, u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None):
-        
+    def step_rk4(self, u0, v0, h0, He=None, w1ext=None, u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None, rhs_itg=None):
+
         #######################
         #   Init local state  #
         #######################
@@ -714,19 +899,19 @@ class CSWm:
         # k1  (use plain methods — inner jit is a no-op under the outer jit)
         ku1 = self.rhs_u(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
         kv1 = self.rhs_v(u1,v1,h1, u11u, v11u, u11z, v11z)*self.dt
-        kh1 = self.rhs_h(u1,v1,h1,He, u11p, v11p)*self.dt
+        kh1 = self.rhs_h(u1,v1,h1,He, u11p, v11p, rhs_itg)*self.dt
         # k2
         ku2 = self.rhs_u(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
         kv2 = self.rhs_v(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1, u11u, v11u, u11z, v11z)*self.dt
-        kh2 = self.rhs_h(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1,He, u11p, v11p)*self.dt
+        kh2 = self.rhs_h(u1+0.5*ku1,v1+0.5*kv1,h1+0.5*kh1,He, u11p, v11p, rhs_itg)*self.dt
         # k3
         ku3 = self.rhs_u(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
         kv3 = self.rhs_v(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2, u11u, v11u, u11z, v11z)*self.dt
-        kh3 = self.rhs_h(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2,He, u11p, v11p)*self.dt
+        kh3 = self.rhs_h(u1+0.5*ku2,v1+0.5*kv2,h1+0.5*kh2,He, u11p, v11p, rhs_itg)*self.dt
         # k4
         ku4 = self.rhs_u(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
         kv4 = self.rhs_v(u1+ku3,v1+kv3,h1+kh3, u11u, v11u, u11z, v11z)*self.dt
-        kh4 = self.rhs_h(u1+ku3,v1+kv3,h1+kh3,He, u11p, v11p)*self.dt
+        kh4 = self.rhs_h(u1+ku3,v1+kv3,h1+kh3,He, u11p, v11p, rhs_itg)*self.dt
         
         #######################
         #   Time propagation  #
@@ -911,6 +1096,54 @@ class CSWm:
 
         return out  # out[dir][grid] = (phase, amp, kx, ky)  all (n_theta, ny_g, nx_g)
 
+    def _smootherstep(self, x):
+        return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
+
+    def _edge_weight(self, dist, mask):
+        mask = jnp.asarray(mask, dtype=bool)
+        dist = jnp.asarray(dist)
+        width = jnp.max(jnp.where(mask, dist, 0.0))
+        width = jnp.maximum(width, 1e-12)
+        r = jnp.clip(dist / width, 0.0, 1.0)
+        weight = 1.0 - self._smootherstep(r)
+        if self.bc_it_corner_weight_power != 1.0:
+            weight = weight ** self.bc_it_corner_weight_power
+        return jnp.where(mask, weight, 0.0)
+
+    def _it_boundary_weights(self, grid):
+        """Smooth partition of unity for S/N/W/E sponge fields on one grid."""
+        if grid == 'h':
+            X, Y = self.X, self.Y
+            names = ('sponge_on_h_S', 'sponge_on_h_N', 'sponge_on_h_W', 'sponge_on_h_E')
+        elif grid == 'u':
+            X, Y = self.Xu, self.Yu
+            names = ('sponge_on_u_S', 'sponge_on_u_N', 'sponge_on_u_W', 'sponge_on_u_E')
+        else:
+            X, Y = self.Xv, self.Yv
+            names = ('sponge_on_v_S', 'sponge_on_v_N', 'sponge_on_v_W', 'sponge_on_v_E')
+
+        if not all(hasattr(self, name) for name in names):
+            weight = 0.25 * jnp.ones_like(X)
+            return weight, weight, weight, weight
+
+        X = jnp.asarray(X)
+        Y = jnp.asarray(Y)
+        mask_S = getattr(self, names[0])
+        mask_N = getattr(self, names[1])
+        mask_W = getattr(self, names[2])
+        mask_E = getattr(self, names[3])
+
+        w_S = self._edge_weight(jnp.abs(Y - Y[0:1, :]), mask_S)
+        w_N = self._edge_weight(jnp.abs(Y[-1:, :] - Y), mask_N)
+        w_W = self._edge_weight(jnp.abs(X - X[:, 0:1]), mask_W)
+        w_E = self._edge_weight(jnp.abs(X[:, -1:] - X), mask_E)
+
+        weight_sum = w_S + w_N + w_W + w_E
+        active = weight_sum > 0.0
+        weight_sum = jnp.where(active, weight_sum, 1.0)
+        return tuple(jnp.where(active, w / weight_sum, 0.0)
+                     for w in (w_S, w_N, w_W, w_E))
+
     def compute_IT_2D(self, t, He, h_SN, h_WE, flag_tangent=True):
         """
         Compute 2D IT wave fields for sponge boundary conditions.
@@ -932,6 +1165,13 @@ class CSWm:
         """
         He_on_u = (He[:,1:] + He[:,:-1]) / 2
         He_on_v = (He[1:,:] + He[:-1,:]) / 2
+
+        # Smooth S/N/W/E partition of unity used to blend the boundary wave
+        # fields. This replaces the boolean sponge-mask + integer-count averaging
+        # and avoids the hard corner jumps it produced.
+        wh_S, wh_N, wh_W, wh_E = self._it_boundary_weights('h')
+        wu_S, wu_N, wu_W, wu_E = self._it_boundary_weights('u')
+        wv_S, wv_N, wv_W, wv_E = self._it_boundary_weights('v')
 
         # Accumulate contributions from all omega/theta (as sums of 2D arrays)
         u_S = jnp.zeros((self.ny,   self.nx-1))
@@ -977,12 +1217,12 @@ class CSWm:
 
             phi_h, amp_h, kx_h, ky_h = phases['S']['h']
             phi_v, amp_v, kx_v, ky_v = phases['S']['v']
-            h_S = h_S + self.sponge_on_h_S * _h_field(phi_h, amp_h, hc_xb, hs_xb)
-            v_S = v_S + self.sponge_on_v_S * _vel_field(
+            h_S = h_S + _h_field(phi_h, amp_h, hc_xb, hs_xb)
+            v_S = v_S + _vel_field(
                     phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_xb, hs_xb, w2f2_v)
             if flag_tangent:
                 phi_u, amp_u, kx_u, ky_u = phases['S']['u']
-                u_S = u_S + self.sponge_on_u_S * _vel_field(
+                u_S = u_S + _vel_field(
                         phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_ub, hs_ub, w2f2_u)
 
             # ------- North -------
@@ -995,12 +1235,12 @@ class CSWm:
 
             phi_h, amp_h, kx_h, ky_h = phases['N']['h']
             phi_v, amp_v, kx_v, ky_v = phases['N']['v']
-            h_N = h_N + self.sponge_on_h_N * _h_field(phi_h, amp_h, hc_xb, hs_xb)
-            v_N = v_N + self.sponge_on_v_N * _vel_field(
+            h_N = h_N + _h_field(phi_h, amp_h, hc_xb, hs_xb)
+            v_N = v_N + _vel_field(
                     phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_xb, hs_xb, w2f2_v)
             if flag_tangent:
                 phi_u, amp_u, kx_u, ky_u = phases['N']['u']
-                u_N = u_N + self.sponge_on_u_N * _vel_field(
+                u_N = u_N + _vel_field(
                         phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_ub, hs_ub, w2f2_u)
 
             # ------- West -------
@@ -1016,12 +1256,12 @@ class CSWm:
 
             phi_h, amp_h, kx_h, ky_h = phases['W']['h']
             phi_u, amp_u, kx_u, ky_u = phases['W']['u']
-            h_W = h_W + self.sponge_on_h_W * _h_field(phi_h, amp_h, hc_yb, hs_yb)
-            u_W = u_W + self.sponge_on_u_W * _vel_field(
+            h_W = h_W + _h_field(phi_h, amp_h, hc_yb, hs_yb)
+            u_W = u_W + _vel_field(
                     phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_yb, hs_yb, w2f2_u)
             if flag_tangent:
                 phi_v, amp_v, kx_v, ky_v = phases['W']['v']
-                v_W = v_W + self.sponge_on_v_W * _vel_field(
+                v_W = v_W + _vel_field(
                         phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_vb, hs_vb, w2f2_v)
 
             # ------- East -------
@@ -1034,33 +1274,55 @@ class CSWm:
 
             phi_h, amp_h, kx_h, ky_h = phases['E']['h']
             phi_u, amp_u, kx_u, ky_u = phases['E']['u']
-            h_E = h_E + self.sponge_on_h_E * _h_field(phi_h, amp_h, hc_yb, hs_yb)
-            u_E = u_E + self.sponge_on_u_E * _vel_field(
+            h_E = h_E + _h_field(phi_h, amp_h, hc_yb, hs_yb)
+            u_E = u_E + _vel_field(
                     phi_u, amp_u, kx_u, ky_u, self.f_on_u, hc_yb, hs_yb, w2f2_u)
             if flag_tangent:
                 phi_v, amp_v, kx_v, ky_v = phases['E']['v']
-                v_E = v_E + self.sponge_on_v_E * _vel_field(
+                v_E = v_E + _vel_field(
                         phi_v, amp_v, ky_v, kx_v, self.f_on_v, hc_vb, hs_vb, w2f2_v)
 
-        u_it = (u_S + u_N + u_W + u_E) / self.weight_sponge_u
-        v_it = (v_S + v_N + v_W + v_E) / self.weight_sponge_v
-        h_it = (h_S + h_N + h_W + h_E) / self.weight_sponge_h
+        u_it = wu_S * u_S + wu_N * u_N + wu_W * u_W + wu_E * u_E
+        v_it = wv_S * v_S + wv_N * v_N + wv_W * v_W + wv_E * v_E
+        h_it = wh_S * h_S + wh_N * h_N + wh_W * h_W + wh_E * h_E
 
         return u_it, v_it, h_it
 
     def _step_euler_nstep(self, u0, v0, h0, He=None, w1ext=None,
                           u11u=None, v11u=None, u11p=None, v11p=None, dc2=None,
-                          nstep=1, t=0., He_total=None, h_SN=None, h_WE=None):
+                          nstep=1, t=0., He_total=None, h_SN=None, h_WE=None,
+                          itg_coeff=None, itg=None, u_bar=None, v_bar=None):
         """Multi-step Euler with lax.scan and checkpointing."""
+
+        # itg_coeff generation forcing (time-independent, constant over the scan)
+        if self.flag_itg and u_bar is not None and v_bar is not None:
+            rhs_itg_const = self.compute_rhs_itg(u_bar, v_bar, itg_coeff)
+        else:
+            rhs_itg_const = None
 
         def body(carry, _):
             u, v, h, tc = carry
-            u1, v1, h1 = self.step_euler(u, v, h, He, w1ext, u11u, v11u, u11p, v11p, dc2)
+            # The per-constituent 'itg' forcing is time-dependent and must be
+            # recomputed at each substep from the running time tc. It is mutually
+            # exclusive with the itg_coeff forcing (enforced by the wrapper).
+            if self.flag_itg_omega and itg is not None:
+                rhs_itg = self.compute_rhs_itg_omega(tc, itg)
+            else:
+                rhs_itg = rhs_itg_const
+
+            u1, v1, h1 = self.step_euler(u, v, h, He, w1ext, u11u, v11u, u11p, v11p, dc2, rhs_itg)
             if self.flag_sponge_bc:
-                _u_b, _v_b, _h_b = self.compute_IT_2D(tc, He_total, h_SN, h_WE)
+                if h_SN is not None and h_WE is not None:
+                    _u_b, _v_b, _h_b = self.compute_IT_2D(tc, He_total, h_SN, h_WE)
+                else:
+                    _u_b = jnp.zeros_like(u)
+                    _v_b = jnp.zeros_like(v)
+                    _h_b = jnp.zeros_like(h)
+
                 u1 = u1 + self.sponge_coef * self.sponge_u * (_u_b - u)
                 v1 = v1 + self.sponge_coef * self.sponge_v * (_v_b - v)
                 h1 = h1 + self.sponge_coef * self.sponge_h * (_h_b - h)
+
             return (u1, v1, h1, tc + self.dt), None
 
         body = jax_checkpoint(body)
@@ -1069,17 +1331,71 @@ class CSWm:
 
     def _step_rk4_nstep(self, u0, v0, h0, He=None, w1ext=None,
                          u11u=None, v11u=None, u11z=None, v11z=None, u11p=None, v11p=None,
-                         nstep=1, t=0., He_total=None, h_SN=None, h_WE=None):
+                         nstep=1, t=0., He_total=None, h_SN=None, h_WE=None,
+                         itg_coeff=None, itg=None, u_bar=None, v_bar=None):
         """Multi-step RK4 with lax.scan and checkpointing."""
+
+        # itg_coeff generation forcing (time-independent, constant over the scan)
+        if self.flag_itg and u_bar is not None and v_bar is not None:
+            rhs_itg_const = self.compute_rhs_itg(u_bar, v_bar, itg_coeff)
+        else:
+            rhs_itg_const = None
 
         def body(carry, _):
             u, v, h, tc = carry
-            u1, v1, h1 = self.step_rk4(u, v, h, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p)
+            # The per-constituent 'itg' forcing is time-dependent and must be
+            # recomputed at each substep from the running time tc. It is mutually
+            # exclusive with the itg_coeff forcing (enforced by the wrapper).
+            if self.flag_itg_omega and itg is not None:
+                rhs_itg = self.compute_rhs_itg_omega(tc, itg)
+            else:
+                rhs_itg = rhs_itg_const
+
+            # SAVING RHS_ITG
+            def format(t):
+                if t//1e6>0:
+                    return str(t)
+                elif t//1e5>0:
+                    return "0"+str(t)
+                elif t//1e4>0:
+                    return "00"+str(t)
+                elif t//1e3>0:
+                    return "000"+str(t)
+                elif t//1e2>0:
+                    return "0000"+str(t)
+                elif t//1e1>0:
+                    return "00000"+str(t)
+                else: 
+                    return "000000"+str(t)
+                
+            def _save_rhs_itg(rhs_itg,t):
+                if t%900==0:
+                
+                    _ds_out = xr.Dataset(
+                                data_vars=dict(
+                                    rhs_itg=(["y","x","time"], np.asarray(rhs_itg)[:,:,None])),
+                                coords=dict(
+                                    x=("x", self.X[0,:]),
+                                    y=("y", self.Y[:,0]),
+                                    time=("time", np.atleast_1d(t))))
+                    _ds_out.to_netcdf(f"{self.path_save_rhs_itg}/rhs_itg_{format(t)}.nc")
+
+            debug.callback(_save_rhs_itg, rhs_itg, tc)
+
+            u1, v1, h1 = self.step_rk4(u, v, h, He, w1ext, u11u, v11u, u11z, v11z, u11p, v11p, rhs_itg)
             if self.flag_sponge_bc:
-                _u_b, _v_b, _h_b = self.compute_IT_2D(tc, He_total, h_SN, h_WE)
+                
+                if h_SN is not None and h_WE is not None:
+                    _u_b, _v_b, _h_b = self.compute_IT_2D(tc, He_total, h_SN, h_WE)
+                else: 
+                    _u_b = jnp.zeros_like(u)
+                    _v_b = jnp.zeros_like(v)
+                    _h_b = jnp.zeros_like(h)
+
                 u1 = u1 + self.sponge_coef * self.sponge_u * (_u_b - u)
                 v1 = v1 + self.sponge_coef * self.sponge_v * (_v_b - v)
                 h1 = h1 + self.sponge_coef * self.sponge_h * (_h_b - h)
+
             return (u1, v1, h1, tc + self.dt), None
 
         body = jax_checkpoint(body)

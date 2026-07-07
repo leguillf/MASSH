@@ -63,6 +63,9 @@ def Basis(config, State, verbose=True, multi_mode=False, *args, **kwargs):
 
         elif config.BASIS.super=='BASIS_GAUSS2D_JAX':
             return Basis_gauss2d_jax(config,State,multi_mode=multi_mode)
+
+        elif config.BASIS.super=='BASIS_GAUSS_ITG':
+            return Basis_gauss_itg(config,State)
           
         elif config.BASIS.super=='BASIS_GAUSSV2':
             return Basis_gaussv2(config, State) 
@@ -2215,8 +2218,130 @@ class Basis_gauss2d_jax(Basis_gauss2d):
         return adX
 
 
+class Basis_gauss_itg:
+    """
+    Reduced Gaussian basis for the per-constituent internal-tide generation
+    control 'itg' (physical shape (n_omega, 4, ny, nx)). Ported from
+    Bellemin-Laponnaz_2026_JAMES (Basis_gauss_itg) and adapted to this repo's
+    JAX basis API.
+
+    The Gaussian decomposition acts on the spatial (ny*nx) axis only; the
+    leading (n_omega, 4) axes (tidal constituent and cos/sin components for the
+    x and y bathymetry-gradient terms) are stacked and share the same spatial
+    Gaussian basis.
+    """
+
+    def __init__(self, config, State):
+
+        self.km2deg = 1./110
+
+        self.facns = config.BASIS.facns
+        self.D_itg = config.BASIS.D_itg
+        self.sigma_Q = config.BASIS.sigma_Q
+        self.name_mod_var = config.BASIS.name_mod_var
+        self.Nwaves = config.BASIS.Nwaves
+
+        # Physical-space shape of the controlled parameter: (n_omega, 4, ny, nx)
+        self.shape_phys = State.params[self.name_mod_var].shape
+        self.nphys = int(np.prod(self.shape_phys))
+        self.ny = State.ny
+        self.nx = State.nx
+        self.lon_min = State.lon_min
+        self.lon_max = State.lon_max
+        self.lat_min = State.lat_min
+        self.lat_max = State.lat_max
+        self.lon1d = State.lon.flatten()
+        self.lat1d = State.lat.flatten()
+
+        self._operg_jit = jit(self._operg)
+        self._operg_reduced_jit = jit(self._operg_reduced)
+
+    def set_basis(self, time, return_q=False, **kwargs):
+
+        LON_MIN = self.lon_min
+        LON_MAX = self.lon_max
+        LAT_MIN = self.lat_min
+        LAT_MAX = self.lat_max
+        if (LON_MAX < LON_MIN): LON_MAX = LON_MAX + 360.
+
+        # Ensemble of reduced-basis (Gaussian centre) coordinates
+        ENSLAT1 = np.arange(
+            LAT_MIN - self.D_itg*(1-1./self.facns)*self.km2deg,
+            LAT_MAX + 1.5*self.D_itg/self.facns*self.km2deg,
+            self.D_itg/self.facns*self.km2deg)
+        ENSLAT_itg = []
+        ENSLON_itg = []
+        for I in range(len(ENSLAT1)):
+            ENSLON1 = np.mod(np.arange(
+                LON_MIN - self.D_itg*(1-1./self.facns)/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                LON_MAX + 1.5*self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg,
+                self.D_itg/self.facns/np.cos(ENSLAT1[I]*np.pi/180.)*self.km2deg), 360)
+            ENSLAT_itg = np.concatenate(([ENSLAT_itg, np.repeat(ENSLAT1[I], len(ENSLON1))]))
+            ENSLON_itg = np.concatenate(([ENSLON_itg, ENSLON1]))
+        self.ENSLAT_itg = ENSLAT_itg
+        self.ENSLON_itg = ENSLON_itg
+
+        # Gaussian supports of the reduced-basis elements: (n_centres, ny*nx)
+        itg_xy_gauss = np.zeros((ENSLAT_itg.size, self.lon1d.size))
+        for i, (lat0, lon0) in enumerate(zip(ENSLAT_itg, ENSLON_itg)):
+            iobs = np.where(
+                (np.abs((np.mod(self.lon1d - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)) <= self.D_itg) &
+                (np.abs((self.lat1d - lat0) / self.km2deg) <= self.D_itg))[0]
+            xx = (np.mod(self.lon1d[iobs] - lon0 + 180, 360) - 180) / self.km2deg * np.cos(lat0 * np.pi / 180.)
+            yy = (self.lat1d[iobs] - lat0) / self.km2deg
+            itg_xy_gauss[i, iobs] = mywindow(xx / self.D_itg) * mywindow(yy / self.D_itg)
+
+        itg_xy_gauss = jnp.array(itg_xy_gauss)
+
+        # CSR operator mapping reduced spatial coefficients -> physical grid:
+        # shape (ny*nx, n_centres).
+        self.G = sparse.CSR.fromdense(itg_xy_gauss.T)
+
+        # Shape / number of basis elements: (n_omega, 4, n_centres).
+        self.shape_basis = [self.Nwaves, 4, int(self.ENSLAT_itg.size)]
+        self.nbasis = int(np.prod(self.shape_basis))
+
+        self.zero_basis = jnp.zeros((self.nbasis,))
+
+        # Background std for each control coefficient
+        Q = self.sigma_Q / self.facns * np.ones((self.nbasis,))
+
+        if return_q:
+            return np.zeros_like(Q), Q
+
+    def _operg(self, X):
+        """Project reduced control vector to physical space (JAX traceable)."""
+        X = X.reshape(self.shape_basis)                                   # (Nwaves, 4, n_centres)
+        X = X.reshape(self.shape_basis[0]*self.shape_basis[1], self.shape_basis[2])  # (Nwaves*4, n_centres)
+        result = sparse.csr_matmat(self.G, X.T)                           # (ny*nx, Nwaves*4)
+        result = result.T                                                 # (Nwaves*4, ny*nx)
+        return result.reshape(self.shape_phys)                            # (n_omega, 4, ny, nx)
+
+    def _operg_reduced(self, phi):
+        """Reverse-mode projection via VJP (JAX traceable)."""
+        _, vjp_func = jax.vjp(self._operg_jit, self.zero_basis)
+        adX, = vjp_func(phi)
+        return adX
+
+    def operg(self, t, X, State=None):
+        """Project control vector to physical space (time-independent basis)."""
+        phi = self._operg_jit(X)
+        if State is not None:
+            State[self.name_mod_var] = phi
+        else:
+            return phi
+
+    def operg_transpose(self, t, adState):
+        """Project adjoint physical-space field to reduced control space."""
+        if adState[self.name_mod_var] is None:
+            adState[self.name_mod_var] = jnp.zeros(self.shape_phys)
+        adX = self._operg_reduced_jit(adState[self.name_mod_var])
+        adState[self.name_mod_var] *= 0.
+        return adX
+
+
 class Basis_bmaux:
-   
+
     def __init__(self,config,State,multi_mode=False):
 
         self.km2deg=1./110
