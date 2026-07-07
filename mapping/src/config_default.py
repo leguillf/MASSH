@@ -504,7 +504,7 @@ MOD_SW1L_JAX = dict(
     
     smooth_wavelength = None, # wavelength for the smoothing of bathymetry (in meters), if None no smoothing is applied 
 
-    path_generation = None,  # path to read generation term netcdf file.
+    flag_nonflat_bottom = False, # if True, the spatial derivatives in the SW model equations is computed withouth considering that the bottom is flat, it includes the spatial derivatives of H and first mode at the surface 
 
     name_var_generation = {'lon':'','lat':'','var':''},   
 
@@ -520,6 +520,10 @@ MOD_SW1L_JAX = dict(
 
     c0=None, # Constant phase velocity prescription
 
+    file_mode_aux = None, # auxilliary file for the vertical structure functions phi_n(z) of the mode decomposition (the spatial interpolation is handled inline)
+
+    name_var_mode = {'lon':'','lat':'','phi_1_0':'','phi_1_H':'','phi_0_H':''}, # Variable names for the vertical structure functions auxilliary file
+
     He_init = 0.9, # Mean height (in m)
 
     He_data = None, # He external data that will be used as apriori for the inversion. If path is None, *He_init* will be used
@@ -531,6 +535,24 @@ MOD_SW1L_JAX = dict(
     phase_inform = False, # DEV as to wether phase is informed from FES
 
     no_generation = False, # DEV, not inform teh genration term in the ITG coeff 
+
+    # BOUNDARY LAYER CONDITIONS
+
+    periodic_x = False,
+
+    periodic_y = False,
+
+    flag_bc_sponge = False,
+
+    dist_sponge_bc = None,
+
+    sponge_coef = 0.05,
+
+    use_sponge_on_coast = True,
+
+    tangential_sponge_factor = 1.,
+
+    mask_sponge_bc = True, # Whether to set the mask to True in the sponge boundary areas (i.e. to avoid assimilating observations in these areas)
 
 )
 

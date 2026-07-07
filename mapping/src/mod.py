@@ -1744,7 +1744,7 @@ class Model_sw1l_jax(M):
 
         # List of parameter names
         self.name_params = config.MOD.name_params
-                
+
         # Initializing model params
         self.init_params(config,State)
 
@@ -1756,8 +1756,11 @@ class Model_sw1l_jax(M):
 
         self.phase_inform = config.MOD.phase_inform
 
-        # Generation term 
-        self.init_generation(config,State)
+        # Sponge layer 
+        self.init_sponge_layer(config,State)
+
+        # Vertical mode decomposition (phase velocity c)
+        self.init_vertical_modes(config,State)
 
         #################################
         ### LOADING MODEL PYTHON FILE ### 
@@ -1785,8 +1788,10 @@ class Model_sw1l_jax(M):
                            g=self.g,
                            f=self.f,
                            Heb=self.Heb,
-                           grad_bathymetry_x=self.grad_bathymetry_x,
-                           grad_bathymetry_y=self.grad_bathymetry_y,
+                           grad_H_x=self.grad_H_x,
+                           grad_H_y=self.grad_H_y,
+                           flag_nonflat_bottom=config.MOD.flag_nonflat_bottom,
+                           phi_1_0=getattr(self, 'phi_1_0', None),
                            generation=self.generation,
                            omegas=self.omegas,
                            omega_names=self.omega_names,
@@ -1804,8 +1809,13 @@ class Model_sw1l_jax(M):
                            phase_astr=getattr(self, 'phase_astr', None),
                            jc_T0=getattr(self, 'jc_T0', None),
                            day_offset=getattr(self, 'day_offset', None), 
-                           phase_inform = self.phase_inform
-                           )
+                           phase_inform = self.phase_inform,
+                           flag_bc_sponge = config.MOD.flag_bc_sponge,
+                           sponge_coef = getattr(self, 'sponge_coef', None),
+                           sponge_u = getattr(self, 'sponge_u', None),
+                           sponge_v = getattr(self, 'sponge_v', None),
+                           sponge_h = getattr(self, 'sponge_h', None),
+                           H = getattr(self, 'H', None))
 
         # Model functions initialization
         if config.INV is not None and config.INV.super in ['INV_4DVAR','INV_4DVAR_PARALLEL']:
@@ -2113,7 +2123,7 @@ class Model_sw1l_jax(M):
         Returns the frequency and phase of the specified tidal constituent. 
         The frequency and phase comes from a table by M. Tchilibou.  
         """
-        names = ['M2','S2','N2','K1','O1','P1']
+        names = ['m2','s2','n2','k1','o1','p1']
         freq = [1.9322736168,2.0,1.895981969,1.002737909,0.929535705,0.997262091] # in cycles per day
         phase_astr = [1.7319,0.0,6.050618023,0.172994524,1.558431243,-0.172984130] # at jc_T0 in radians
         
@@ -2143,79 +2153,6 @@ class Model_sw1l_jax(M):
             v0 += self.tidal_Va[i] * jnp.cos( 2*np.pi*_freq*(self.day_offset+t/(24*3600)-15340) - (self.tidal_Vg[i]-_phase_astr) )
 
         return u0,v0
-
-    def init_generation(self,config,State):
-        """
-        NAME
-            init_generation
-
-        DESCRIPTION
-            Reads generation term file, interpolate it to the grid
-        """
-        # Read generation term
-        if config.MOD.path_generation is not None and os.path.exists(config.MOD.path_generation):
-            ds = xr.open_dataset(config.MOD.path_generation).squeeze()
-            name_lon = config.MOD.name_var_generation['lon']
-            name_lat = config.MOD.name_var_generation['lat']
-            name_generation = config.MOD.name_var_generation['var']
-
-        else: # No generation file prescripted
-            warnings.warn("No generation field prescribed.")
-            return None 
-
-        # Convert longitudes to State convention (only updates the 1D lon coord).
-        # After conversion lon may be non-monotonic, so we boolean-mask subset
-        # BEFORE sortby + interp — this avoids sorting/interp on the full file.
-        if np.sign(ds[name_lon].data.min())==-1 and State.lon_unit=='0_360':
-            ds = ds.assign_coords({name_lon:((name_lon, ds[name_lon].data % 360))})
-        elif np.sign(ds[name_lon].data.min())==1 and State.lon_unit=='-180_180':
-            ds = ds.assign_coords({name_lon:((name_lon, (ds[name_lon].data + 180) % 360 - 180))})
-
-        # Native grid spacing from a sorted copy of the 1D coords so the
-        # wrap-around discontinuity does not pollute the diff.
-        lon_arr = ds[name_lon].data
-        lat_arr = ds[name_lat].data
-        dlon = np.nanmax(State.lon[:,1:] - State.lon[:,:-1])
-        dlat = np.nanmax(State.lat[1:,:] - State.lat[:-1,:])
-        dlon += np.nanmax(np.diff(np.sort(lon_arr)))
-        dlat += np.nanmax(np.diff(np.sort(lat_arr)))
-
-        # Boolean mask on 1D coords (works regardless of order).
-        lon_mask = (lon_arr >= State.lon_min - dlon) & (lon_arr <= State.lon_max + dlon)
-        lat_mask = (lat_arr >= State.lat_min - dlat) & (lat_arr <= State.lat_max + dlat)
-        ds = ds.isel({name_lon: np.where(lon_mask)[0],
-                      name_lat: np.where(lat_mask)[0]})
-
-        # sortby on the (small) subset so .interp gets a monotonic index.
-        ds = ds.sortby(ds[name_lon])
-        ds = ds.sortby(ds[name_lat])
-
-        ds = ds.interp(coords={name_lon:State.lon[0,:],name_lat:State.lat[:,0]},method='linear')
-
-        # self.generation = ds[name_generation].values
-
-        ds[name_generation] = ds[name_generation].fillna(0)
-
-        self.generation = -(self.c**2/(-self.bathymetry))*ds[name_generation].values
-        
-        # NOT INFORM GENERATION
-        if config.MOD.no_generation:
-            self.generation = np.ones_like(self.generation)#*np.mean(self.generation)
-
-        # Applying bathymetry smoothing if prescribed 
-        if config.MOD.smooth_wavelength != None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0 :
-            N_pixel_x = config.MOD.smooth_wavelength/State.dx
-            N_pixel_y = config.MOD.smooth_wavelength/State.dy
-            print(f"Smoothing generation with a gaussian kernel of {N_pixel_x} pixels along x and {N_pixel_y} pixels along y ... ")
-            self.generation = gaussian_filter(self.generation,sigma=(N_pixel_y,N_pixel_x))
-
-        fig, (ax1) = plt.subplots(1,1,figsize=(7,5))
-        n_min = np.min(self.generation)
-        n_max = np.max(self.generation)
-        im1 = ax1.pcolormesh(self.generation,vmin=n_min,vmax=+n_max,cmap='viridis')
-        plt.colorbar(im1, ax=ax1)
-        ax1.set_title('generation term')
-        plt.show()
 
     def init_bathy(self,config,State):
 
@@ -2438,10 +2375,173 @@ class Model_sw1l_jax(M):
                 self.auxvar["uE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
                 self.auxvar["hE"] = np.zeros(idxcoastE[0].shape,dtype='float64')
 
+    def _load_aux_dataset(self, path, name_var, State):
+
+        """
+        Opens an auxiliary file and prepares it for interpolation onto the model grid:
+        longitude convention matching, spatial subsetting (when lon/lat are 1D coords)
+        and NaN interpolation. Returns the prepared dataset.
+
+        Args:
+        -----
+            path (str): Path to the auxiliary netcdf file.
+            name_var (dict): Variable-name mapping, providing at least 'lon' and 'lat'.
+            State (State): A State object used to define the target grid.
+
+        """
+
+        name_lon = name_var['lon']
+        name_lat = name_var['lat']
+        ds = xr.open_dataset(path)
+        lon = ds[name_lon]
+        # Convert longitude (cheap: only updates the 1D lon coord). After this
+        # lon may be non-monotonic, so we boolean-mask subset BEFORE sortby +
+        # interpolate_na — those run on the full global file otherwise.
+        if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
+            ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
+        elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
+            ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
+
+        # Spatial subset BEFORE the heavy ops, when lon/lat are 1D coords.
+        lon_arr = ds[name_lon].data
+        lat_arr = ds[name_lat].data
+        if lon_arr.ndim == 1 and lat_arr.ndim == 1:
+            margin = 0.5
+            lon_sel = (lon_arr >= State.lon_min - margin) & (lon_arr <= State.lon_max + margin)
+            lat_sel = (lat_arr >= State.lat_min - margin) & (lat_arr <= State.lat_max + margin)
+            ds = ds.isel({name_lon: np.where(lon_sel)[0],
+                          name_lat: np.where(lat_sel)[0]})
+            ds = ds.sortby(name_lon)
+            ds = ds.sortby(name_lat)
+        else:
+            # 2D coord fallback: keep the original sortby (grid.interp2d does the
+            # spatial subset via .where(drop=True) for 2D coords).
+            ds = ds.sortby(name_lon)
+
+        # interpolating nans on the small subset
+        return ds.interpolate_na(dim=name_lon)
+
+    def init_vertical_modes(self,config,State):
+
+        """
+        Initializes the fields stemming from the vertical mode decomposition of the
+        stratification, namely the phase velocity ``c`` (Rossby phase velocity), which
+        is the eigenvalue of the vertical mode problem.
+
+        Args:
+        -----
+            config (Config): The configuration file.
+            State (State): A State object used to define the target grid.
+
+        """
+
+        # Phase velocity c (Rossby phase velocity): eigenvalue of the mode problem
+        if config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
+
+            ds = self._load_aux_dataset(config.MOD.filec_aux, config.MOD.name_var_c, State)
+            self.c = grid.interp2d(ds, config.MOD.name_var_c, State.lon, State.lat)
+
+            if config.MOD.cmin is not None:
+                self.c[self.c<config.MOD.cmin] = config.MOD.cmin
+            if config.MOD.cmax is not None:
+                self.c[self.c>config.MOD.cmax] = config.MOD.cmax
+                
+        else:
+            self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
+
+        # Vertical structure functions phi_n(z) from the mode decomposition:
+        #   phi_1_0 : phi_1(0)  -> first baroclinic mode at the surface
+        #   phi_1_H : phi_1(-H) -> first baroclinic mode at the bottom
+        #   phi_0_H : phi_0(-H) -> barotropic mode at the bottom
+        self.phi_1_0 = self.phi_1_H = self.phi_0_H = None
+        if config.MOD.file_mode_aux is not None and os.path.exists(config.MOD.file_mode_aux):
+
+            ds = self._load_aux_dataset(config.MOD.file_mode_aux, config.MOD.name_var_mode, State)
+
+            for field in ('phi_1_0', 'phi_1_H', 'phi_0_H'):
+                name_var = {'lon': config.MOD.name_var_mode['lon'],
+                            'lat': config.MOD.name_var_mode['lat'],
+                            'var': config.MOD.name_var_mode[field]}
+                setattr(self, field, grid.interp2d(ds, name_var, State.lon, State.lat))
+
+        if config.EXP.flag_plot>0:
+
+            fig,ax = plt.subplots(1,4,figsize=(24,5))
+
+            plt_c = ax[0].pcolormesh(self.c)   
+            fig.colorbar(plt_c,ax=ax[0])
+            ax[0].set_title("Rossby phase velocity c")
+
+            plt_phi_1_0 = ax[1].pcolormesh(self.phi_1_0)
+            fig.colorbar(plt_phi_1_0,ax=ax[1])
+            ax[1].set_title(r"$\phi_1(0)$")
+
+            plt_phi_1_H = ax[2].pcolormesh(self.phi_1_H)
+            fig.colorbar(plt_phi_1_H,ax=ax[2])
+            ax[2].set_title(r"$\phi_1(-H)$")
+
+            plt_phi_0_H = ax[3].pcolormesh(self.phi_0_H)
+            fig.colorbar(plt_phi_0_H,ax=ax[3])
+            ax[3].set_title(r"$\phi_0(-H)$")
+
+            for _ax in ax:
+                _ax.set_aspect('equal')
+
+        ########################
+        # - Equivalent depth - #
+        ########################
+
+        self.Heb = self.c**2 / self.g
+        
+        if self.c is None: # prescribing Heb from He values 
+
+            # - Equivalent Height He background 
+            if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
+                ds = xr.open_dataset(config.MOD.He_data['path'])
+                self.Heb = ds[config.MOD.He_data['var']].values
+            else:
+                self.Heb = config.MOD.He_init
+
+        #######################
+        # - Generation term - #
+        #######################
+
+        self.generation = -(self.c**2/(self.H))*(self.phi_1_0/self.g)*(self.phi_0_H*self.phi_1_H)
+
+        if getattr(self, 'sponge_on_h_S', None) is not None and \
+           getattr(self, 'sponge_on_h_N', None) is not None and \
+           getattr(self, 'sponge_on_h_W', None) is not None and \
+           getattr(self, 'sponge_on_h_E', None) is not None:
+
+            # Setting generation to 0 on sponge layers 
+            self.generation[self.sponge_on_h_S] = 0
+            self.generation[self.sponge_on_h_N] = 0
+            self.generation[self.sponge_on_h_W] = 0
+            self.generation[self.sponge_on_h_E] = 0
+        
+        # NOT INFORM GENERATION
+        if config.MOD.no_generation:
+            self.generation = np.ones_like(self.generation)#*np.mean(self.generation)
+
+        # Applying bathymetry smoothing if prescribed 
+        if config.MOD.smooth_wavelength != None and np.round(config.MOD.smooth_wavelength/State.dx).astype(np.int32) > 0 :
+            N_pixel_x = config.MOD.smooth_wavelength/State.dx
+            N_pixel_y = config.MOD.smooth_wavelength/State.dy
+            print(f"Smoothing generation with a gaussian kernel of {N_pixel_x} pixels along x and {N_pixel_y} pixels along y ... ")
+            self.generation = gaussian_filter(self.generation,sigma=(N_pixel_y,N_pixel_x))
+
+        fig, (ax1) = plt.subplots(1,1,figsize=(7,5))
+        n_min = np.min(self.generation[self.generation>0])
+        n_max = np.max(self.generation[self.generation>0])
+        im1 = ax1.pcolormesh(self.generation,vmin=n_min,vmax=+n_max,cmap='viridis')
+        plt.colorbar(im1, ax=ax1)
+        ax1.set_title('generation term')
+        plt.show()
+        
     def init_params(self,config,State) :
 
         """
-        Initializes the model controlled parameters information based on the configuration file. 
+        Initializes the model controlled parameters information based on the configuration file.
         This method also initializes the parameters in the State object. 
 
         Args:
@@ -2467,73 +2567,6 @@ class Model_sw1l_jax(M):
         #######################################
         ### - INITIALIZING SPECIFICATIONS - ###
         #######################################
-
-        # Open Rossby Radius if provided
-        if config.MOD.filec_aux is not None and os.path.exists(config.MOD.filec_aux):
-
-            ds = xr.open_dataset(config.MOD.filec_aux)
-            name_lon = config.MOD.name_var_c['lon']
-            name_lat = config.MOD.name_var_c['lat']
-            lon = ds[name_lon]
-            # Convert longitude (cheap: only updates the 1D lon coord). After this
-            # lon may be non-monotonic, so we boolean-mask subset BEFORE sortby +
-            # interpolate_na — those run on the full global file otherwise.
-            if np.sign(lon.data.min())==-1 and State.lon_unit=='0_360':
-                ds = ds.assign_coords({name_lon:((name_lon, lon.data % 360))})
-            elif np.sign(lon.data.min())>=0 and State.lon_unit=='-180_180':
-                ds = ds.assign_coords({name_lon:((name_lon, (lon.data + 180) % 360 - 180))})
-
-            # Spatial subset BEFORE the heavy ops, when lon/lat are 1D coords.
-            lon_arr = ds[name_lon].data
-            lat_arr = ds[name_lat].data
-            if lon_arr.ndim == 1 and lat_arr.ndim == 1:
-                margin = 0.5
-                lon_sel = (lon_arr >= State.lon_min - margin) & (lon_arr <= State.lon_max + margin)
-                lat_sel = (lat_arr >= State.lat_min - margin) & (lat_arr <= State.lat_max + margin)
-                ds = ds.isel({name_lon: np.where(lon_sel)[0],
-                              name_lat: np.where(lat_sel)[0]})
-                ds = ds.sortby(name_lon)
-                ds = ds.sortby(name_lat)
-            else:
-                # 2D coord fallback: keep the original sortby (grid.interp2d does the
-                # spatial subset via .where(drop=True) for 2D coords).
-                ds = ds.sortby(name_lon)
-
-            # interpolating nans on the small subset
-            ds = ds.interpolate_na(dim=name_lon)
-
-            self.c = grid.interp2d(ds,
-                                   config.MOD.name_var_c,
-                                   State.lon,
-                                   State.lat)
-            
-            if config.MOD.cmin is not None:
-                self.c[self.c<config.MOD.cmin] = config.MOD.cmin
-            
-            if config.MOD.cmax is not None:
-                self.c[self.c>config.MOD.cmax] = config.MOD.cmax
-            
-            if config.EXP.flag_plot>0:
-                plt.figure()
-                plt.pcolormesh(self.c)
-                plt.colorbar()
-                plt.title('Rossby phase velocity')
-                plt.show()
-                
-        else:
-            self.c = config.MOD.c0 * np.ones((State.ny,State.nx))
-        
-        # Equivalent depth
-        self.Heb = self.c**2 / self.g
-        
-        if self.c is None: # prescribing Heb from He values 
-
-            # - Equivalent Height He background 
-            if config.MOD.He_data is not None and os.path.exists(config.MOD.He_data['path']):
-                ds = xr.open_dataset(config.MOD.He_data['path'])
-                self.Heb = ds[config.MOD.He_data['var']].values
-            else:
-                self.Heb = config.MOD.He_init
         
         # Height boundary condition hbc structure  
         if 'HBCX' in self.name_params and 'HBCY' in self.name_params :
@@ -2681,6 +2714,119 @@ class Model_sw1l_jax(M):
                 mask_v[np.logical_and(mask[1:,:],mask[:-1,:])]=np.nan
                 mask_v[self._detect_coast(mask,"y")]=0
                 self.mask[config.MOD.name_var[varname]] = mask_v
+
+    def init_sponge_layer(self,config,State):
+
+                # Sponge layer
+        self.sponge_width = config.MOD.dist_sponge_bc
+        self.sponge_coef = config.MOD.sponge_coef
+        self.flag_bc_sponge = config.MOD.flag_bc_sponge and self.sponge_width is not None and self.sponge_width > 0
+        if self.flag_bc_sponge:
+            self.Xh = State.X
+            self.Yh = State.Y
+            self.Xu = 0.5 * (State.X[:, :-1] + State.X[:, 1:])
+            self.Yu = 0.5 * (State.Y[:, :-1] + State.Y[:, 1:])
+            self.Xv = 0.5 * (State.X[:-1, :] + State.X[1:, :])
+            self.Yv = 0.5 * (State.Y[:-1, :] + State.Y[1:, :])
+
+            # Sponge profile via grid.compute_sponge_components
+            lon_h = State.lon
+            lat_h = State.lat
+            lon_u = 0.5 * (lon_h[:, :-1] + lon_h[:, 1:])
+            lat_u = 0.5 * (lat_h[:, :-1] + lat_h[:, 1:])
+            lon_v = 0.5 * (lon_h[:-1, :] + lon_h[1:, :])
+            lat_v = 0.5 * (lat_h[:-1, :] + lat_h[1:, :])
+
+            if config.MOD.use_sponge_on_coast:
+                mask_h = State.mask.copy()
+                mask_u = mask_h[:, :-1] & mask_h[:, 1:]
+                mask_v = mask_h[:-1, :] & mask_h[1:, :]
+            else:
+                mask_h = np.zeros_like(lon_h, dtype=bool)
+                mask_u = np.zeros_like(lon_u, dtype=bool)
+                mask_v = np.zeros_like(lon_v, dtype=bool)
+
+            alpha = config.MOD.tangential_sponge_factor
+
+            # h: isotropic sponge
+            wc_h, wNS_h, wWE_h = grid.compute_sponge_components(lon_h, lat_h, mask_h, config.MOD.dist_sponge_bc)
+            if config.MOD.periodic_y:
+                wNS_h[:] = 0.0
+            if config.MOD.periodic_x:
+                wWE_h[:] = 0.0
+            self.sponge_h = 1.0 - (1.0 - wc_h) * (1.0 - wNS_h) * (1.0 - wWE_h)
+
+            # u: normal at W/E (full), tangential at N/S (reduced)
+            wc_u, wNS_u, wWE_u = grid.compute_sponge_components(lon_u, lat_u, mask_u, config.MOD.dist_sponge_bc)
+            if config.MOD.periodic_y:
+                wNS_u[:] = 0.0
+            if config.MOD.periodic_x:
+                wWE_u[:] = 0.0
+            self.sponge_u = 1.0 - (1.0 - wc_u) * (1.0 - alpha * wNS_u) * (1.0 - wWE_u)
+
+            # v: normal at N/S (full), tangential at W/E (reduced)
+            wc_v, wNS_v, wWE_v = grid.compute_sponge_components(lon_v, lat_v, mask_v, config.MOD.dist_sponge_bc)
+            if config.MOD.periodic_y:
+                wNS_v[:] = 0.0
+            if config.MOD.periodic_x:
+                wWE_v[:] = 0.0
+            self.sponge_v = 1.0 - (1.0 - wc_v) * (1.0 - wNS_v) * (1.0 - alpha * wWE_v)
+
+            if config.EXP.flag_plot > 0:
+                _, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(20, 5))
+                im1 = ax1.pcolormesh(self.sponge_h)
+                plt.colorbar(im1, ax=ax1)
+                ax1.set_title('Sponge SSH')
+                im2 = ax2.pcolormesh(self.sponge_u)
+                plt.colorbar(im2, ax=ax2)
+                ax2.set_title('Sponge U')
+                im3 = ax3.pcolormesh(self.sponge_v)
+                plt.colorbar(im3, ax=ax3)
+                ax3.set_title('Sponge V')
+                plt.show()
+
+            if not config.MOD.periodic_y:
+                self.sponge_on_h_S = (np.abs(self.Yh-self.Yh[0,:][None,:])<=config.MOD.dist_sponge_bc*1e3) 
+                self.sponge_on_u_S = (np.abs(self.Yu-self.Yu[0,:][None,:])<=config.MOD.dist_sponge_bc*1e3)
+                self.sponge_on_v_S = (np.abs(self.Yv-self.Yv[0,:][None,:])<=config.MOD.dist_sponge_bc*1e3)
+                self.sponge_on_h_N = (np.abs(self.Yh-self.Yh[-1,:][None,:])<=config.MOD.dist_sponge_bc*1e3) 
+                self.sponge_on_u_N = (np.abs(self.Yu-self.Yu[-1,:][None,:])<=config.MOD.dist_sponge_bc*1e3) 
+                self.sponge_on_v_N = (np.abs(self.Yv-self.Yv[-1,:][None,:])<=config.MOD.dist_sponge_bc*1e3) 
+            else:
+                self.sponge_on_h_S = np.zeros_like(self.Yh, dtype=bool)
+                self.sponge_on_u_S = np.zeros_like(self.Yu, dtype=bool)
+                self.sponge_on_v_S = np.zeros_like(self.Yv, dtype=bool)
+                self.sponge_on_h_N = np.zeros_like(self.Yh, dtype=bool)
+                self.sponge_on_u_N = np.zeros_like(self.Yu, dtype=bool)
+                self.sponge_on_v_N = np.zeros_like(self.Yv, dtype=bool)
+            if not config.MOD.periodic_x:
+                self.sponge_on_h_W = (np.abs(self.Xh-self.Xh[:,0][:,None])<=config.MOD.dist_sponge_bc*1e3) 
+                self.sponge_on_u_W = (np.abs(self.Xu-self.Xu[:,0][:,None])<=config.MOD.dist_sponge_bc*1e3)
+                self.sponge_on_v_W = (np.abs(self.Xv-self.Xv[:,0][:,None])<=config.MOD.dist_sponge_bc*1e3)
+                self.sponge_on_h_E = (np.abs(self.Xh-self.Xh[:,-1][:,None])<=config.MOD.dist_sponge_bc*1e3) 
+                self.sponge_on_u_E = (np.abs(self.Xu-self.Xu[:,-1][:,None])<=config.MOD.dist_sponge_bc*1e3)
+                self.sponge_on_v_E = (np.abs(self.Xv-self.Xv[:,-1][:,None])<=config.MOD.dist_sponge_bc*1e3)
+            else:
+                self.sponge_on_h_W = np.zeros_like(self.Yh, dtype=bool)
+                self.sponge_on_u_W = np.zeros_like(self.Yu, dtype=bool)
+                self.sponge_on_v_W = np.zeros_like(self.Yv, dtype=bool)
+                self.sponge_on_h_E = np.zeros_like(self.Yh, dtype=bool)
+                self.sponge_on_u_E = np.zeros_like(self.Yu, dtype=bool)
+                self.sponge_on_v_E = np.zeros_like(self.Yv, dtype=bool)
+            
+            self.weight_sponge_u = np.array(self.sponge_on_u_S, dtype=float) + np.array(self.sponge_on_u_N, dtype=float) + np.array(self.sponge_on_u_W, dtype=float) + np.array(self.sponge_on_u_E, dtype=float)
+            self.weight_sponge_v = np.array(self.sponge_on_v_S, dtype=float) + np.array(self.sponge_on_v_N, dtype=float) + np.array(self.sponge_on_v_W, dtype=float) + np.array(self.sponge_on_v_E, dtype=float)
+            self.weight_sponge_h = np.array(self.sponge_on_h_S, dtype=float) + np.array(self.sponge_on_h_N, dtype=float) + np.array(self.sponge_on_h_W, dtype=float) + np.array(self.sponge_on_h_E, dtype=float)
+            self.weight_sponge_u[self.weight_sponge_u==0] = 1
+            self.weight_sponge_v[self.weight_sponge_v==0] = 1
+            self.weight_sponge_h[self.weight_sponge_h==0] = 1
+
+            # Update mask (for avoiding assimilation in sponge regions)
+            if config.MOD.mask_sponge_bc:
+                State.mask[self.sponge_on_h_S] = True
+                State.mask[self.sponge_on_h_N] = True
+                State.mask[self.sponge_on_h_W] = True
+                State.mask[self.sponge_on_h_E] = True
 
     def step(self,State,nstep=1,t=0):
 

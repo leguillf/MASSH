@@ -416,18 +416,79 @@ def boundary_conditions(file_bc, dist_bc, name_var_bc, timestamps,
 
     
     
-def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
+# def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
+    
+#     #####################
+#     # Compute weights map
+#     #####################
+#     coords = np.column_stack((lon2d.ravel(), lat2d.ravel()))
+#     # construct KD-tree
+#     ground_pixel_tree = spatial.cKDTree(geo2cart(coords))
+#     subdomain = geo2cart(coords)[:100]
+#     eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
+#     dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
+#     # Add boundary pixels to mask
+#     if bc:
+#         mask[0,:] = True
+#         mask[-1,:] = True
+#         mask[:,0] = True
+#         mask[:,-1] = True
+    
+#     # get boundary coordinates
+#     lon_bc = lon2d[mask]
+#     lat_bc = lat2d[mask]
+#     coords_bc = np.column_stack((lon_bc, lat_bc))
+#     bc_tree = spatial.cKDTree(geo2cart(coords_bc))
+    
+#     # Compute distance between model pixels and boundary pixels
+#     dist_mx = ground_pixel_tree.sparse_distance_matrix(bc_tree,2*dist_scale)
+    
+#     # Initialize weight map
+#     bc_weight = np.zeros(lon2d.size)
+#     #
+#     keys = np.array(list(dist_mx.keys()))
+#     ind_mod = keys[:, 0]
+#     dist = np.array(list(dist_mx.values()))
+#     dist = np.maximum(dist-0.5*dist_threshold, 0)
+#     # Dataframe initialized without nan values in var
+#     df = pd.DataFrame({'ind_mod': ind_mod,
+#                        'dist': dist,
+#                        'weight':np.ones_like(dist)})
+#     # Remove external values in the boundary pixels
+#     ind_dist = (df.dist == 0)
+#     df = df[np.logical_or(ind_dist,
+#                           np.isin(df.ind_mod,
+#                                   df[ind_dist].ind_mod,
+#                                   invert=True))]
+#     # Compute tapering
+#     df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*dist_scale)**2)))
+#     # Nudge values out of pixels
+#     df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
+#     # Compute weight average and save it
+#     df['tapering'] = df['tapering']**10
+#     wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
+#     dfg = df.groupby('ind_mod')
+#     weights = dfg['weight'].apply(wa)
+#     bc_weight[weights.index] = np.array(weights)
+#     bc_weight = bc_weight.reshape(lon2d.shape)
+    
+#     return bc_weight
+
+def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True,slope=10):
     
     #####################
     # Compute weights map
     #####################
     coords = np.column_stack((lon2d.ravel(), lat2d.ravel()))
+    coords_cart = geo2cart(coords)
     # construct KD-tree
-    ground_pixel_tree = spatial.cKDTree(geo2cart(coords))
-    subdomain = geo2cart(coords)[:100]
-    eucl_dist = cdist(subdomain, subdomain, metric="euclidean")
-    dist_threshold = np.min(eucl_dist[np.nonzero(eucl_dist)])
-    # Add boundary pixels to mask
+    ground_pixel_tree = spatial.cKDTree(coords_cart)
+    # Compute dist_threshold (≈ half a grid spacing) via nearest-neighbor query
+    n_probe = min(100, len(coords_cart))
+    dd, _ = ground_pixel_tree.query(coords_cart[:n_probe], k=2)
+    dist_threshold = dd[:, 1].min()
+    # Add boundary pixels to mask (work on a copy to avoid mutating caller's array)
+    mask = mask.copy()
     if bc:
         mask[0,:] = True
         mask[-1,:] = True
@@ -440,38 +501,64 @@ def compute_weight_map(lon2d,lat2d,mask,dist_scale,bc=True):
     coords_bc = np.column_stack((lon_bc, lat_bc))
     bc_tree = spatial.cKDTree(geo2cart(coords_bc))
     
-    # Compute distance between model pixels and boundary pixels
-    dist_mx = ground_pixel_tree.sparse_distance_matrix(bc_tree,2*dist_scale)
-    
-    # Initialize weight map
-    bc_weight = np.zeros(lon2d.size)
-    #
-    keys = np.array(list(dist_mx.keys()))
-    ind_mod = keys[:, 0]
-    dist = np.array(list(dist_mx.values()))
-    dist = np.maximum(dist-0.5*dist_threshold, 0)
-    # Dataframe initialized without nan values in var
-    df = pd.DataFrame({'ind_mod': ind_mod,
-                       'dist': dist,
-                       'weight':np.ones_like(dist)})
-    # Remove external values in the boundary pixels
-    ind_dist = (df.dist == 0)
-    df = df[np.logical_or(ind_dist,
-                          np.isin(df.ind_mod,
-                                  df[ind_dist].ind_mod,
-                                  invert=True))]
-    # Compute tapering
-    df['tapering'] = np.exp(-(df['dist']**2/(2*(0.5*dist_scale)**2)))
-    # Nudge values out of pixels
-    df.loc[df.dist > 0, "weight"] *= df.loc[df.dist > 0, "tapering"]
-    # Compute weight average and save it
-    df['tapering'] = df['tapering']**10
-    wa = lambda x: np.average(x, weights=df.loc[x.index, "tapering"])
-    dfg = df.groupby('ind_mod')
-    weights = dfg['weight'].apply(wa)
-    bc_weight[weights.index] = np.array(weights)
+    # For each pixel find its distance to the NEAREST boundary pixel.
+    # Shifting by half a grid-spacing ensures the first row/column of interior 
+    # pixels (immediately adjacent to the boundary) is treated as distance 0,
+    # i.e. they receive weight = 1 — no discontinuous jump from land/boundary.
+    dist_to_bc, _ = bc_tree.query(coords_cart, k=1)
+    dist_to_bc = np.maximum(dist_to_bc - 0.5 * dist_threshold, 0.0)
+
+    # Quintic smoothstep (C² at both ends):
+    #   weight = 1  at the boundary  (dist = 0)
+    #   weight = 0  at dist_scale    (interior)
+    # Zero first AND second derivatives at both endpoints, giving a more
+    # progressive transition than a cosine taper — the gradient is smallest
+    # at the inner edge where interior waves first encounter the sponge,
+    # reducing spurious reflections.
+    x = np.clip(dist_to_bc / dist_scale, 0.0, 1.0)
+    bc_weight = 1.0 - x**3 * (10.0 - 15.0 * x + 6.0 * x**2)
+
     bc_weight = bc_weight.reshape(lon2d.shape)
     
     return bc_weight
 
+def compute_sponge_components(lon2d, lat2d, mask, dist_scale):
+    """Compute separate sponge weight maps for coast, N/S edges, and W/E edges.
+
+    Returns three C² (quintic smoothstep) weight fields in [0, 1].
+    These can be combined with a product formula for smooth corner blending.
+
+    Parameters
+    ----------
+    lon2d, lat2d : ndarray (ny, nx)
+    mask : bool ndarray (ny, nx)   True on land / coast pixels.
+    dist_scale : float              Sponge width in km.
+
+    Returns
+    -------
+    w_coast, w_NS, w_WE : ndarray (ny, nx)
+    """
+    w_coast = compute_weight_map(lon2d, lat2d, mask, dist_scale, bc=False)
+
+    mask_NS = np.zeros_like(mask)
+    mask_NS[0, :] = True;  mask_NS[-1, :] = True
+    w_NS = compute_weight_map(lon2d, lat2d, mask_NS, dist_scale, bc=False)
+
+    mask_WE = np.zeros_like(mask)
+    mask_WE[:, 0] = True;  mask_WE[:, -1] = True
+    w_WE = compute_weight_map(lon2d, lat2d, mask_WE, dist_scale, bc=False)
+
+    return w_coast, w_NS, w_WE
+
+
+def smooth_weight_map(lon2d, lat2d, mask, dist_scale):
+    """Isotropic sponge weight with smooth corner blending.
+
+    Combines coast, N/S edge, and W/E edge weight maps via:
+        w = 1 - (1 - w_coast) * (1 - w_NS) * (1 - w_WE)
+    """
+    w_coast, w_NS, w_WE = compute_sponge_components(lon2d, lat2d, mask, dist_scale)
+    return 1.0 - (1.0 - w_coast) * (1.0 - w_NS) * (1.0 - w_WE)
+
     
+

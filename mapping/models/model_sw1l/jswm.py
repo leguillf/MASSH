@@ -26,7 +26,7 @@ class Swm:
     #                             Initialization                              #
     ###########################################################################
     
-    def __init__(self,X=None,Y=None,dx=None,dy=None,dt=None,time_scheme='rk4',bc_kind='1d',bc_island = "radiative",g=9.81,f=1e-4,Heb=0.7,grad_bathymetry_x=None,grad_bathymetry_y=None,generation=None,omegas=None,omega_names=None, bc_theta=None,idxcoast = None,nparams=None,name_params=None,slice_params=None,shape_params=None,tidal_Ua=None,tidal_Va=None,tidal_Ug=None,tidal_Vg=None,freq=None,phase_astr=None,jc_T0=None,day_offset=None,phase_inform=False,**arr_kwargs):
+    def __init__(self,X=None,Y=None,dx=None,dy=None,dt=None,time_scheme='rk4',bc_kind='1d',bc_island = "radiative",g=9.81,f=1e-4,Heb=0.7,grad_H_x=None,grad_H_y=None,flag_nonflat_bottom=False,phi_1_0=None,generation=None,omegas=None,omega_names=None, bc_theta=None,idxcoast = None,nparams=None,name_params=None,slice_params=None,shape_params=None,tidal_Ua=None,tidal_Va=None,tidal_Ug=None,tidal_Vg=None,freq=None,phase_astr=None,jc_T0=None,day_offset=None,phase_inform=False,flag_bc_sponge=False,sponge_coef=None, sponge_u = None, sponge_v = None, sponge_h =  None, H = None,  **arr_kwargs):
         
         ###############
         # COORDINATES #
@@ -43,15 +43,24 @@ class Swm:
         ########
         # DATA #
         ########
+         
+        # Topography H #
+        self.H = H
+        self.H_u = self.rho_on_u(self.H)
+        self.H_v = self.rho_on_v(self.H)
 
         # Bathymetry gradient # 
+        self.grad_H_x = grad_H_x
+        self.grad_H_y = grad_H_y
+        self.grad_bathymetry_x = -self.grad_H_x
+        self.grad_bathymetry_y = -self.grad_H_y
 
-        self.grad_bathymetry_x = grad_bathymetry_x
-        self.grad_bathymetry_y = grad_bathymetry_y
-
-        # Generation # 
-
+        # Generation and vertical modes # 
         self.generation = generation
+        self.flag_nonflat_bottom = flag_nonflat_bottom
+        self.phi_1_0 = phi_1_0
+        self.phi_1_0_u = self.rho_on_u(self.phi_1_0)
+        self.phi_1_0_v = self.rho_on_v(self.phi_1_0)
 
         # Barotropic tide # 
         self.tidal_Ua=tidal_Ua
@@ -64,6 +73,13 @@ class Swm:
         self.jc_T0 = jc_T0
         self.day_offset = day_offset
         self.phase_inform = phase_inform
+
+        # Sponge layer # 
+        self.flag_bc_sponge = flag_bc_sponge
+        self.sponge_coef = sponge_coef
+        self.sponge_u = sponge_u
+        self.sponge_v = sponge_v
+        self.sponge_h = sponge_h
 
         ##############
         # PARAMETERS #
@@ -237,8 +253,20 @@ class Swm:
         
         rhs_u = jnp.zeros(self.Xu.shape)
 
-        rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
-            self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+        if not self.flag_nonflat_bottom: 
+
+            rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
+                self.g * (h[1:-1,2:-1] - h[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+
+        else:
+
+            h_phi_1_0 = h/self.phi_1_0
+
+            rhs_u = rhs_u.at[1:-1,1:-1].set((self.f[1:-1,2:-1]+self.f[1:-1,1:-2])/2 * vm -\
+                self.g * self.phi_1_0_u[1:-1,1:-1] * (h_phi_1_0[1:-1,2:-1] - h_phi_1_0[1:-1,1:-2]) / ((self.X[1:-1,2:-1]-self.X[1:-1,1:-2])))
+            
+            #setting nans that could have appeared due to H or phi_1_0 equal to 0 
+            rhs_u = jnp.nan_to_num(rhs_u, nan=0.0)
 
         ### Test with coast ##
         if self.bc_island=="dirichlet":
@@ -257,9 +285,20 @@ class Swm:
     def rhs_v(self,um,h,hN,hS):
         
         rhs_v = jnp.zeros_like(self.Xv)
+
+        if not self.flag_nonflat_bottom: 
         
-        rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
-            self.g * (h[2:-1,1:-1] - h[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
+            rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
+                self.g * (h[2:-1,1:-1] - h[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
+        
+        else:
+            h_phi_1_0 = h/self.phi_1_0
+            
+            rhs_v = rhs_v.at[1:-1,1:-1].set(-(self.f[2:-1,1:-1]+self.f[1:-2,1:-1])/2 * um -\
+                self.g * self.phi_1_0_v[1:-1,1:-1] * (h_phi_1_0[2:-1,1:-1] - h_phi_1_0[1:-2,1:-1]) / ((self.Y[2:-1,1:-1]-self.Y[1:-2,1:-1])))
+            
+            #setting nans that could have appeared due to H or phi_1_0 equal to 0 
+            rhs_v = jnp.nan_to_num(rhs_v, nan=0.0)
 
         ### Test with coast ##
         if self.bc_island=="dirichlet":
@@ -276,13 +315,27 @@ class Swm:
         
     
     def rhs_h(self,u,v,He,uE,uW,vN,vS,rhs_itg):
+
         rhs_h = jnp.zeros_like(self.X)
 
-        rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
-                (u[1:-1,1:] - u[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
-                (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
+        if not self.flag_nonflat_bottom:     
+            rhs_h = rhs_h.at[1:-1,1:-1].set(- He[1:-1,1:-1] * (\
+                    (u[1:-1,1:] - u[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
+                    (v[1:,1:-1] - v[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
+                    rhs_itg[1:-1,1:-1])
+            
+        else: 
+            Hu_phi_1_0 = self.H_u*u/self.phi_1_0_u
+            Hv_phi_1_0 = self.H_v*v/self.phi_1_0_v
+
+            rhs_h = rhs_h.at[1:-1,1:-1].set(- (He[1:-1,1:-1]*self.phi_1_0[1:-1,1:-1]/self.H[1:-1,1:-1]) * (\
+                (Hu_phi_1_0[1:-1,1:] - Hu_phi_1_0[1:-1,:-1]) / (self.Xu[1:-1,1:] - self.Xu[1:-1,:-1]) + \
+                (Hv_phi_1_0[1:,1:-1] - Hv_phi_1_0[:-1,1:-1]) / (self.Yv[1:,1:-1] - self.Yv[:-1,1:-1]))+ \
                 rhs_itg[1:-1,1:-1])
-        
+
+            #setting nans that could have appeared due to H or phi_1_0 equal to 0 
+            rhs_h = jnp.nan_to_num(rhs_h, nan=0.0)
+            
         ### Test with coast ### 
         if self.bc_island=="dirichlet":
             u_right = u.copy() # right side of u 
@@ -996,16 +1049,17 @@ class Swm:
 
             if u_bar is not None and v_bar is not None:
 
-                u_grad_H_x = u_bar*(-self.grad_bathymetry_x)
-                u_grad_H_y = v_bar*(-self.grad_bathymetry_y)
+                u_grad_H_x = u_bar*self.grad_H_x
+                u_grad_H_y = v_bar*self.grad_H_y
 
-                rhs_itg = (self.generation * (u_grad_H_x+u_grad_H_y)) * jnp.where(itg_coeff<0,0,itg_coeff)
+                rhs_itg = (self.generation * (u_grad_H_x+u_grad_H_y)) * (jnp.ones_like(itg_coeff)+itg_coeff) #* jnp.where(itg_coeff<0,0,itg_coeff)
 
                 def _plot_rhs_itg(rhs_itg, t):
                     if int(t) == 219600:
+                        v_ex = np.max(rhs_itg)
                         plt.figure()
                         plt.title(f"rhs_itg (t={int(t)})")
-                        plt.pcolormesh(np.asarray(rhs_itg))
+                        plt.pcolormesh(np.asarray(rhs_itg),vmin=-v_ex,vmax=v_ex,cmap='bwr')
                         plt.colorbar()
                         plt.show()
 
@@ -1083,15 +1137,22 @@ class Swm:
         ###   BOUNDARY CONDITIONS ###
         #############################
 
-        # -- External boarder -- # 
-        # 1. if external boundary conditions are controled 
-        if 'HBCX' in self.name_params and 'HBCY' in self.name_params: 
-            u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
-        # 2. if external boundary conditions aren't controled, but internal tide generation yes, entering wave in set to zero to enable generated waves exiting the domain 
-        elif 'ITG' in self.name_params :  
-            w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
-            u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
-
+        if self.flag_bc_sponge:
+            # -- Sponge Layers -- #
+            u = u + self.sponge_coef * self.sponge_u * (- u0)
+            v = v + self.sponge_coef * self.sponge_v * (- v0)
+            h = h + self.sponge_coef * self.sponge_h * (- h0)
+            
+        else: 
+            # -- External boarder -- # 
+            # 1. if external boundary conditions are controled 
+            if 'HBCX' in self.name_params and 'HBCY' in self.name_params: 
+                u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
+            # 2. if external boundary conditions aren't controled, but internal tide generation yes, entering wave in set to zero to enable generated waves exiting the domain 
+            elif 'ITG' in self.name_params or 'ITG_COEFF' in self.name_params :  
+                w1S,w1N,w1W,w1E = jnp.zeros(self.nx),jnp.zeros(self.nx),jnp.zeros(self.ny),jnp.zeros(self.ny)
+                u,v,h = self.obcs_jit(u,v,h,u0,v0,h0,He,w1ext=(w1S,w1N,w1W,w1E))
+        
         ########################
         ###   OUTPUT ARRAY   ###
         ########################
